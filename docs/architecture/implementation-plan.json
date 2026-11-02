@@ -10,9 +10,9 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "942a49745f2fbfced5cb3eb337b3920b01faf840778e9d53bc3dbcaa930ed59f",
+    "implementation-slices.json": "7edf58ac90088913de9e06331a563c0348de1caf1931b4379a839981987fb843",
     "devworks-capability-catalog.json": "52be38907d23a6a800ca03072e0504cbef164f4a6d873dc27b6e714e8ec0476a",
-    "devworks-requirements-traceability.json": "d07d2330edd8f2dbcbfe3cbc06c491e7a70b7cd0dfdf23b4cb21158d7e50e31f",
+    "devworks-requirements-traceability.json": "70839bfdf69283d87c07431857cca677db9c0e5442e9b8a1d62bd8c8ab56d4b4",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
@@ -23,9 +23,9 @@
     "slices": 63,
     "operationFamilies": 48,
     "operations": 353,
-    "requirements": 350,
+    "requirements": 353,
     "requirementsByStatus": {
-      "Confirmed": 209,
+      "Confirmed": 212,
       "Proposed": 141
     },
     "inputSchemaCandidates": 353,
@@ -681,6 +681,7 @@
         "G04"
       ],
       "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Feature implementation dispatch requires current readiness evidence for the affected approved scope, independently of plan approval. Start permits planning; Continue reuses current assessments. Changed scope/evidence fences affected dispatch without clearing pauses or blocking unaffected assessed work. UI, tools, schedules and delegated entry paths cannot bypass the gate.",
       "dependsOn": [
         "DW-003",
         "DW-008",
@@ -730,6 +731,9 @@
         "AGENT-15",
         "AGENT-16",
         "AGENT-17",
+        "AGENT-18",
+        "AGENT-19",
+        "AGENT-20",
         "WORK-01",
         "WORK-02",
         "WORK-03",
@@ -985,6 +989,7 @@
         "G11"
       ],
       "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Shared native work detail and agent tools retain revision-bound readiness assessments, requirement-linked findings, resolved decisions with confidence/evidence, investigation limits/dependent-work gates, attempted resolutions, specific questions/recommendations and closure evidence. Present remaining findings together; approval is visibly distinct from readiness. Reuse current evidence and invalidate only affected scope on material change.",
       "dependsOn": [
         "DW-011",
         "DW-008",
@@ -1040,6 +1045,10 @@
         "WORK-17"
       ],
       "supportingRequirements": [
+        "AGENT-12",
+        "AGENT-18",
+        "AGENT-19",
+        "AGENT-20",
         "UI-01",
         "UI-02",
         "UI-03",
@@ -1103,6 +1112,7 @@
         "G11"
       ],
       "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Automatic allocation skips incomplete/unapproved plans and wholly blocked roots without eligible independent work. An otherwise eligible approved feature with missing/stale assessment can activate its coordinator to assess readiness, but cannot dispatch implementation until cleared. Locally blocked roots may allocate assessed independent tasks. Activation/dispatch rechecks changed readiness and finding revisions; keep-working and schedules preserve the shared gate and independent holds.",
       "dependsOn": [
         "DW-012",
         "DW-009"
@@ -1128,6 +1138,10 @@
         "COORD-06",
         "COORD-07",
         "COORD-08",
+        "AGENT-12",
+        "AGENT-18",
+        "AGENT-19",
+        "AGENT-20",
         "WORK-01",
         "WORK-02",
         "WORK-03",
@@ -1179,6 +1193,7 @@
         "G10"
       ],
       "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Generic plan approval or notification acknowledgment cannot close readiness findings. Finding-specific human risk acceptance binds the finding/scope/revision and rationale, preserves history and still requires actual prerequisites, enforced permissions and required verification; stale decisions cannot clear changed findings or make incomplete work complete.",
       "dependsOn": [
         "DW-005",
         "DW-012",
@@ -1201,6 +1216,10 @@
         "NOTIFY-04"
       ],
       "supportingRequirements": [
+        "AGENT-12",
+        "AGENT-18",
+        "AGENT-19",
+        "AGENT-20",
         "CONTROL-01",
         "CONTROL-02",
         "CONTROL-03",
@@ -1261,6 +1280,7 @@
         "G04"
       ],
       "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Before escalation, coordinators inspect current requirements, code, knowledge and conventions and resolve routine in-scope choices or bounded authorized investigations, recording evidence/rationale/confidence. Hold vague approved outcomes; block only material threats lacking reasonable autonomous resolution before dependent implementation. Questions identify attempted resolution, concrete consequence and exact closure condition with a recommendation. Keep independent work moving. Ready with zero findings, consolidated closure, reuse on Continue and evidence-based reopening pass deterministic scripted cases without model inference.",
       "dependsOn": [
         "DW-009",
         "DW-013",
@@ -1300,6 +1320,9 @@
         "AGENT-15",
         "AGENT-16",
         "AGENT-17",
+        "AGENT-18",
+        "AGENT-19",
+        "AGENT-20",
         "COORD-09",
         "COORD-10"
       ],
@@ -1703,7 +1726,6 @@
         "AGENT-09",
         "AGENT-10",
         "AGENT-11",
-        "AGENT-12",
         "AGENT-13",
         "AGENT-14",
         "AGENT-15",
@@ -5828,7 +5850,7 @@
     {
       "requirement": "AGENT-12",
       "requirementStatus": "Confirmed",
-      "statement": "Features should ideally be fully planned before execution. On Start, the feature coordinator must review the feature and its existing plan. If planning is incomplete, develop what can be planned from the available information, identify gaps, and ask the user for plan approval or more input before executing unapproved work. A complete existing plan must not trigger redundant planning or repeated approval requests where authorization already exists.",
+      "statement": "Before feature implementation starts, its coordinator must assess execution readiness even when the user has already approved the plan. Review the intended outcome and scope, observable acceptance, implementation coverage, dependencies, access and resources, verification and delivery path, and material uncertainties across the whole feature. Every implementation detail need not be settled, but each material uncertainty needs a credible resolution path. On Start, develop incomplete planning from available evidence and seek required plan approval before implementing unapproved scope. Apply AGENT-18\u201320 to resolve gaps, justify blockers and reuse current assessments. An approved, ready plan must proceed without redundant planning or repeated approval requests.",
       "sourceSection": "8 Feature coordinators and autonomous execution",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "AgentSupervisor and work activation",
@@ -5838,8 +5860,10 @@
       "designStatus": "Proposed architecture mapping; not an implementation/test result",
       "primarySlice": "delegation",
       "supportingSlices": [
-        "tool_turn",
-        "controls"
+        "work",
+        "workflow",
+        "controls",
+        "approvals"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
@@ -5930,6 +5954,66 @@
       "supportingSlices": [
         "tool_turn",
         "controls"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "AGENT-18",
+      "requirementStatus": "Confirmed",
+      "statement": "The coordinator must resolve what it reasonably can before escalating readiness gaps to the user: inspect current requirements, repository code, project knowledge and conventions; use available evidence and ordinary engineering judgment; and perform bounded investigation within existing authority and budgets. Record the decision and its confidence. A gap blocks affected implementation only when it materially threatens delivery or verification of an approved requirement and cannot reasonably be resolved through those means before that implementation proceeds. Routine reversible technical choices, stylistic preferences and requests for extra detail without a concrete consequence are not blockers. Escalate only remaining material choices or constraints requiring user input, authority or resources, with a specific question and recommended answer. Do not silently narrow approved scope, replace acceptance criteria or invent product intent to avoid escalation.",
+      "sourceSection": "8 Feature coordinators and autonomous execution",
+      "architectureSection": "coordinator-execution-and-concurrency",
+      "owner": "AgentSupervisor and work activation",
+      "validationFamily": "Activation, root concurrency and fresh-session tests",
+      "validationGate": "G07",
+      "plannedCase": "AT-AGENT-18",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "delegation",
+      "supportingSlices": [
+        "work",
+        "workflow",
+        "controls",
+        "approvals"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "AGENT-19",
+      "requirementStatus": "Confirmed",
+      "statement": "Record readiness findings against the feature and relevant requirements as resolved decisions, bounded investigations, or matters needing a user decision. Each blocking finding must identify the missing or contradictory requirement/evidence, concrete delivery or verification consequence, affected work, what the coordinator checked or attempted, why autonomous resolution is insufficient, and the specific answer or evidence that closes it. Investigations must have a bounded objective, authority/resource limits, closure evidence and dependent-work gate; they do not authorize unapproved implementation. Keep unrelated eligible work moving. An undefined overall outcome may block the whole feature; a local gap must block only affected work and its dependents. Show the assessment, findings, resolutions and remaining questions through the shared work UI, agent tools and history.",
+      "sourceSection": "8 Feature coordinators and autonomous execution",
+      "architectureSection": "coordinator-execution-and-concurrency",
+      "owner": "AgentSupervisor and work activation",
+      "validationFamily": "Activation, root concurrency and fresh-session tests",
+      "validationGate": "G07",
+      "plannedCase": "AT-AGENT-19",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "delegation",
+      "supportingSlices": [
+        "work",
+        "workflow",
+        "controls",
+        "approvals"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "AGENT-20",
+      "requirementStatus": "Confirmed",
+      "statement": "Readiness review has no finding quota; ready with no blockers is valid. Present remaining findings together after reasonable autonomous resolution, then check their closure without repeatedly reopening settled choices. Additional blockers require newly discovered material evidence or changed scope or assumptions. Reuse an assessment while its reviewed plan/scope and relevant evidence remain current; Continue alone does not require another full review. Material changes trigger reassessment of affected scope without invalidating unaffected approved work. Plan approval alone does not clear findings: record resolution or explicit, finding-specific human acceptance of an identified risk. Risk acceptance cannot supply missing prerequisites, make contradictory criteria achievable, waive enforced permissions or required verification, or authorize incomplete work to be reported complete. The feature coordinator remains accountable; a separate reviewer is not universally required.",
+      "sourceSection": "8 Feature coordinators and autonomous execution",
+      "architectureSection": "coordinator-execution-and-concurrency",
+      "owner": "AgentSupervisor and work activation",
+      "validationFamily": "Activation, root concurrency and fresh-session tests",
+      "validationGate": "G07",
+      "plannedCase": "AT-AGENT-20",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "delegation",
+      "supportingSlices": [
+        "work",
+        "workflow",
+        "controls",
+        "approvals"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },

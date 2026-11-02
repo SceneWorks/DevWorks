@@ -74,6 +74,7 @@ reqowners = {
 overrides = {**{f'MCP-{n:02}':'mcp_server mcp_server_access authority graph work knowledge' for n in range(7,12)}, 'ROUTE-18':'systemone router credentials usage',
  'ROUTE-19':'router chat settings', 'ROUTE-20':'router chat transports',
  'ROUTE-16':'usage router', 'ROUTE-17':'usage router',
+ **{r:'delegation work workflow controls approvals' for r in ['AGENT-12','AGENT-18','AGENT-19','AGENT-20']},
  'UI-10':'chat router systemone settings'}
 requirements = []
 for r in read('devworks-requirements-traceability.json')['requirements']:
@@ -200,7 +201,7 @@ for s in slices:
 lines += ['', '## Concrete outcomes and acceptance', '']
 for s in slices:
     lines += [f'### {s["id"]}', '', f'**{s["title"]}** · {s["type"]} · {s["status"]}.', '',
-        s['acceptance'], '', s['commonAcceptance'], '',
+        s['acceptance'], '', *([s['readinessAcceptance'], ''] if s.get('readinessAcceptance') else []), s['commonAcceptance'], '',
         '**Operations:** ' + (', '.join('`'+o+'`' for o in s['ownedOperations']) or
           'Cross-cutting implementation/qualification; no separate public operation.') + '', '',
         '**Primary requirement cases:** ' + (', '.join('AT-'+r for r in s['primaryRequirements']) or 'See supporting and integration obligations.') + '', '',

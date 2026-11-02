@@ -157,7 +157,8 @@
         "G01",
         "G04"
       ],
-      "status": "Planned; implementation not authorized or started"
+      "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Feature implementation dispatch requires current readiness evidence for the affected approved scope, independently of plan approval. Start permits planning; Continue reuses current assessments. Changed scope/evidence fences affected dispatch without clearing pauses or blocking unaffected assessed work. UI, tools, schedules and delegated entry paths cannot bypass the gate."
     },
     {
       "key": "shell",
@@ -228,7 +229,8 @@
         "G07",
         "G11"
       ],
-      "status": "Planned; implementation not authorized or started"
+      "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Shared native work detail and agent tools retain revision-bound readiness assessments, requirement-linked findings, resolved decisions with confidence/evidence, investigation limits/dependent-work gates, attempted resolutions, specific questions/recommendations and closure evidence. Present remaining findings together; approval is visibly distinct from readiness. Reuse current evidence and invalidate only affected scope on material change."
     },
     {
       "key": "workflow",
@@ -248,7 +250,8 @@
         "G01",
         "G11"
       ],
-      "status": "Planned; implementation not authorized or started"
+      "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Automatic allocation skips incomplete/unapproved plans and wholly blocked roots without eligible independent work. An otherwise eligible approved feature with missing/stale assessment can activate its coordinator to assess readiness, but cannot dispatch implementation until cleared. Locally blocked roots may allocate assessed independent tasks. Activation/dispatch rechecks changed readiness and finding revisions; keep-working and schedules preserve the shared gate and independent holds."
     },
     {
       "key": "approvals",
@@ -269,7 +272,8 @@
         "G04",
         "G10"
       ],
-      "status": "Planned; implementation not authorized or started"
+      "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Generic plan approval or notification acknowledgment cannot close readiness findings. Finding-specific human risk acceptance binds the finding/scope/revision and rationale, preserves history and still requires actual prerequisites, enforced permissions and required verification; stale decisions cannot clear changed findings or make incomplete work complete."
     },
     {
       "key": "delegation",
@@ -289,7 +293,8 @@
         "G03",
         "G04"
       ],
-      "status": "Planned; implementation not authorized or started"
+      "status": "Planned; implementation not authorized or started",
+      "readinessAcceptance": "Before escalation, coordinators inspect current requirements, code, knowledge and conventions and resolve routine in-scope choices or bounded authorized investigations, recording evidence/rationale/confidence. Hold vague approved outcomes; block only material threats lacking reasonable autonomous resolution before dependent implementation. Questions identify attempted resolution, concrete consequence and exact closure condition with a recommendation. Keep independent work moving. Ready with zero findings, consolidated closure, reuse on Continue and evidence-based reopening pass deterministic scripted cases without model inference."
     },
     {
       "key": "chat",
