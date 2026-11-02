@@ -1,0 +1,33 @@
+{
+  "title": "Activation ownership direction and proposed boundary contracts",
+  "date": "2026-11-01",
+  "accepted": "Five-step atomic activation/ownership direction",
+  "proposed": "Concrete activation phases, idempotency receipt binding, Pause/admission ordering, pending-activation reopen and supervisor-only recovery cases",
+  "requirements": 334,
+  "diagrams": 17,
+  "structural": {
+    "unmapped": 0,
+    "missingAnchors": 0,
+    "missingAssets": 0,
+    "svgXMLValid": true
+  },
+  "readerChecks": {
+    "widths": [
+      1440,
+      800
+    ],
+    "newSectionAndCasesPresent": true,
+    "brokenImages": 0,
+    "horizontalOverflow": false
+  },
+  "diagram": "Locally rendered with Mermaid 11.12.0; standalone PNG and inline reader captures reviewed",
+  "runtime": "No native application implementation or application tests/inference executed",
+  "documentSha256": {
+    "docs/architecture/devworks-architecture.md": "107740be8ec3f5473544daee250c51f66b97335a37d8b15cf8eb453c4a5543bc",
+    "docs/architecture/devworks-architecture.html": "a3109f744a446828ae0b54cbb293b669cba12af76cf3b55df483577fdbb7d4d5",
+    "docs/architecture/architecture-diagrams/17-activation-races.mmd": "3c66149c899c257092102e4f37ae10a903b491c469fcb0cdb803701d1383392a",
+    "docs/architecture/architecture-diagrams/17-activation-races.svg": "d31ff2f8f3a0b40207dfc09cce654f7683b9fb18851eeabeebe12d70d9c8f413",
+    "docs/architecture/architecture-diagrams/manifest.json": "1c9b41420baf58e6176d1569326a17adecd832b75e13cfd42d49cbab4e83f78b",
+    "docs/planning/requirements-interview.json": "93070eea4f53106db20098cf317b3c9158a7614cd21b9ef8ddcc270b9b283122"
+  }
+}

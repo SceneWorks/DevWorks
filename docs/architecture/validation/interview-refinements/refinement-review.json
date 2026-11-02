@@ -1,0 +1,176 @@
+{
+  "date": "2026-11-02",
+  "status": "Architecture and candidate-contract refinements verified; native application not implemented",
+  "findings": [
+    "AR-04",
+    "AR-05",
+    "AR-06",
+    "AR-07",
+    "AR-08"
+  ],
+  "confidence": "High in recorded decisions, source alignment and bounded fixture results; native behavior and enforcement are unqualified.",
+  "successCriteria": [
+    "Keep all explicit interview decisions in the canonical requirements and architecture without requiring a repository-wide issue-owning project.",
+    "Give membership, paced intake, review completion/fallback, atomic event handling and instruction precedence concrete contracts and accountable implementation acceptance.",
+    "Verify candidate shape/pure invariants, relevant SQLite/reference boundaries, source/generated document alignment and retained regressions without inference."
+  ],
+  "verification": {
+    "candidateFixtures": 1099,
+    "schemas": 44,
+    "operations": 353,
+    "domainTypes": 210,
+    "sqliteAndReferenceChecks": 28,
+    "earlierRegressionChecks": {
+      "optionalFeature": 8,
+      "activePendingPlan": 9,
+      "priorityDependencies": 13
+    },
+    "nativeModelScenarios": 12,
+    "nativeModelSteps": 26,
+    "htmlReaders": 13,
+    "readerWidths": [
+      1440,
+      800
+    ],
+    "wordRequirementsMatched": 350,
+    "wordPages": 66,
+    "wordChangedPages": [
+      "page-11.png",
+      "page-19.png",
+      "page-22.png",
+      "page-28.png",
+      "page-29.png",
+      "page-32.png",
+      "page-33.png",
+      "page-36.png",
+      "page-37.png",
+      "page-50.png",
+      "page-54.png"
+    ],
+    "wordUnchangedPixelIdenticalPages": 55,
+    "implementationPlanDigestsMatched": 8,
+    "allPassed": true,
+    "noInference": true,
+    "codegraphPlan": {
+      "date": "2026-11-02",
+      "project": "DW",
+      "architectureFeature": "DW-F1",
+      "deliveryFeatures": [
+        {
+          "key": "DW-F2",
+          "title": "Durable runtime and persistence",
+          "items": 5,
+          "sourceRequirements": 31
+        },
+        {
+          "key": "DW-F3",
+          "title": "Execution controls and permissions",
+          "items": 4,
+          "sourceRequirements": 27
+        },
+        {
+          "key": "DW-F4",
+          "title": "Workspace and project experience",
+          "items": 4,
+          "sourceRequirements": 24
+        },
+        {
+          "key": "DW-F5",
+          "title": "Work planning and agent coordination",
+          "items": 3,
+          "sourceRequirements": 47
+        },
+        {
+          "key": "DW-F6",
+          "title": "Models, routing and usage",
+          "items": 6,
+          "sourceRequirements": 41
+        },
+        {
+          "key": "DW-F7",
+          "title": "Code and database intelligence",
+          "items": 9,
+          "sourceRequirements": 28
+        },
+        {
+          "key": "DW-F8",
+          "title": "Knowledge, documents and instructions",
+          "items": 6,
+          "sourceRequirements": 39
+        },
+        {
+          "key": "DW-F9",
+          "title": "GitHub and autonomous delivery",
+          "items": 5,
+          "sourceRequirements": 43
+        },
+        {
+          "key": "DW-F10",
+          "title": "Packages and external harnesses",
+          "items": 5,
+          "sourceRequirements": 22
+        },
+        {
+          "key": "DW-F11",
+          "title": "Agent tools and automation",
+          "items": 6,
+          "sourceRequirements": 18
+        },
+        {
+          "key": "DW-F12",
+          "title": "Application operations and acceptance",
+          "items": 10,
+          "sourceRequirements": 30
+        }
+      ],
+      "nativeItems": 63,
+      "sourceRequirements": 350,
+      "dependencyEdges": 250,
+      "identitiesAcceptanceAndDependenciesPreserved": true,
+      "nativeStatus": "backlog",
+      "publicationItem": "DW-64",
+      "allPassed": true
+    }
+  },
+  "evidence": [
+    "schema-model-results.json",
+    "sqlite-reference-model-results.json",
+    "reader-checks.json",
+    "document-checks.json",
+    "optional-feature-regression",
+    "active-plan-regression",
+    "dependencies-regression",
+    "codegraph-plan-checks.json"
+  ],
+  "sourceSha256": {
+    "tools/planning/requirements_content.py": "88436a63ac00b104a213087c8b03edae3efa5a51b2802da531d3b21bb78b81c5",
+    "tools/planning/requirements_expansion.py": "2b7125510389863c2e65d1df3111a1c33e23eff20e4b52a09e8ab30216a468ff",
+    "docs/planning/requirements-interview.json": "8a14d45c576e66ba6b609c69988ce72e1aa359e84a6d79a078ebe35aabe5ebc5",
+    "docs/planning/requirements-content.json": "5a2af2803ebcda95367c80c368363e473fd0e590ee5bd8c946e432f8f5faaced",
+    "docs/planning/devworks-requirements.docx": "6b966f04b845f5eae87a20fb4aa7df95b82a1e84af5ca5813bd090afc4387ba2",
+    "docs/architecture/devworks-architecture.md": "1cff85cbce9a95b8f08fe2be74e4972ade8bf89b0422b50082723b54d3a05daa",
+    "docs/architecture/provider-session-package-contracts.md": "956dc68b9b73dc761f96e025acda50b08ed0cf340c98c4746ca7640b297fb94e",
+    "docs/architecture/persistence-schema.sql": "8a775ae5d9bb60e1bd61283b9091a768784c5d359475acbd659a0446dd64a7fa",
+    "docs/architecture/architecture-contracts.json": "876685bb7ac655ccd44754d84dfcbd4381f0ed2433660b967bf9523a4e9a953c",
+    "docs/architecture/implementation-slices.json": "942a49745f2fbfced5cb3eb337b3920b01faf840778e9d53bc3dbcaa930ed59f",
+    "docs/architecture/implementation-plan.json": "7a27929d9b4a2faa6827aa430f941f9c11d6b14b6afc94ba2b3dcf539e4b8602",
+    "tools/contracts-eval/domain-spec.json": "ef14d6ef2bd69b7566341b8b8276a5825767f4d86d8a77404e0dacb53e38b094",
+    "tools/contracts-eval/src/domain_rules.rs": "cfafa6b523928643a334a091565f2ff06d7ce4a6dae6d35fbb26ede18600e092",
+    "tools/contracts-eval/src/package.rs": "4ba7fec57f9430618570cd64c21a5f4291fd4e2aa5fff872b295c993155a8c8e",
+    "tools/contracts-eval/probe_interview_refinements.py": "a5bd700e3db5f7bcc6c758932869e1acb26ae7d847de5c4ac760394976602d4f"
+  },
+  "limits": [
+    "DTO/schema checks do not prove live domain/authority enforcement or providers.",
+    "SQLite/scripted reference transitions and declarative instruction examples are not native services, actual process-kill recovery or agent behavior.",
+    "No live GitHub changes, inference calls or application execution were performed.",
+    "The interactive workbench was not extended in this pass; native/shared UI and all runtime acceptance remain explicitly owned by local implementation slices.",
+    "The 900-second automated-review wait is a configurable engineering default, not a newly confirmed user requirement."
+  ],
+  "tracking": {
+    "system": "CodeGraph",
+    "project": "DW",
+    "architectureFeature": "DW-F1",
+    "publicationItem": "DW-64",
+    "nativeDeliveryFeatures": 11
+  }
+}

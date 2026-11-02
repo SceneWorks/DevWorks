@@ -1,0 +1,17 @@
+stateDiagram-v2
+ [*] --> IntentRecorded
+ IntentRecorded --> Preflighted: eligible and authorized
+ Preflighted --> Dispatching: current admission committed
+ Dispatching --> ObservedComplete: effect confirmed
+ Dispatching --> SafeFailure: no effect
+ Dispatching --> OutcomeUnknown: effect uncertain
+ OutcomeUnknown --> Reconciling
+ Reconciling --> ObservedComplete: effect confirmed
+ Reconciling --> SafeFailure: retry proven safe
+ Reconciling --> NeedsInput: needs decision
+ NeedsInput --> Reconciling: new evidence
+ SafeFailure --> RetryPending: retry policy allows
+ SafeFailure --> Failed: retry refused
+ RetryPending --> Preflighted: current eligibility rechecked
+ ObservedComplete --> [*]
+ Failed --> [*]

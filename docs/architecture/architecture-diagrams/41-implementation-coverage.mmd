@@ -1,0 +1,16 @@
+flowchart TB
+  R["350 requirements<br/>209 Confirmed and 141 Proposed"]
+  O["351 public operations<br/>48 families"]
+  S["558 frozen source entries<br/>494 retained and 64 excluded"]
+  P["63 active implementation slices<br/>primary owners and dependency order"]
+  R --> P
+  O --> P
+  S --> P
+  P --> C["Architecture baseline 1.1<br/>351 input and qualified result candidates<br/>production conformance remains required"]
+  C --> I["Actual native implementation<br/>shared UI, services and tool authority"]
+  I --> A["Production acceptance<br/>AT cases, 33 CAP groups, 12 workloads<br/>all target and retained capability checks"]
+  A --> REVIEW["Review release readiness<br/>coverage accounting alone cannot pass"]
+  X["64 explicit exclusions<br/>preserve reasons and audit"]
+  S -.-> X
+  classDef pending fill:#fff5df,stroke:#b3843f,color:#4f3a1a;
+  class C,REVIEW pending;

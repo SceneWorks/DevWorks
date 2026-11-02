@@ -1,0 +1,35 @@
+{
+  "date": "2026-11-01",
+  "status": "Local native evaluation completed; GraphQLite selection open",
+  "commonCases": 36,
+  "commonChecks": 906276,
+  "commonProcessFailures": 0,
+  "commonCorrectnessFailures": 0,
+  "nativeCacheProfiles": 18,
+  "nativeCacheChecks": 272076,
+  "rawNativeCacheStalenessObserved": true,
+  "finalGuardedFreshnessRepetitions": 3,
+  "finalFaultProbesPassed": 4,
+  "sharedOracleTestsPassed": 3,
+  "inference": false,
+  "reportLayout": {
+    "sizes": [
+      [
+        1280,
+        950
+      ],
+      [
+        750,
+        950
+      ]
+    ],
+    "tables": 6,
+    "documentOverflow": false,
+    "pageErrors": [],
+    "brokenLocalLinks": [],
+    "screenshotsVisuallyInspected": true
+  },
+  "scope": "Local Mac arm64 fixture-based evaluation; no full production, power-loss or cross-platform claim",
+  "architectureReconciliation": "SQLite decision notice recorded; older detailed HelixDB storage contracts and diagrams require follow-up reconciliation before implementation planning",
+  "confidence": "High for observed results; moderate generalization beyond these workloads"
+}

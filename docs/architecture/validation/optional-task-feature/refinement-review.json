@@ -1,0 +1,117 @@
+{
+  "date": "2026-11-02",
+  "finding": "AR-01",
+  "status": "Resolved architecture and candidate contracts under explicit user correction; no native application implemented",
+  "decision": "Every task belongs to a project. Feature association is optional; standalone tasks use the issue view and existing issue policies. Assignment parentage is separate from feature membership.",
+  "changes": [
+    "Optional tasks.create parentId with project still required.",
+    "Removed WorkRecord and SQLite mandatory feature-parent constraints.",
+    "Task result candidates accept Task/Issue representations of one work identity.",
+    "Issue delegation can use root scope and a brief without feature cards.",
+    "Requirements/HTML/Word/interview, domain references, scope rules and DW-012/015 acceptance synchronized."
+  ],
+  "schemaChecks": {
+    "schemaFiles": 44,
+    "catalogOperations": 351,
+    "allMessageFixtures": 1055,
+    "newMessageFixtures": 733,
+    "newNegativeFixtures": 55,
+    "scenarios": 12,
+    "scenarioSteps": 26,
+    "allPassed": true
+  },
+  "focusedCases": [
+    {
+      "id": "accept-task-without-feature",
+      "entry": "domain-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "accept-task-null-feature",
+      "entry": "domain-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-task-without-project",
+      "entry": "domain-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "accept-issue-delegation-without-cards",
+      "entry": "domain-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "accept-standalone-task-record",
+      "entry": "operation-result",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "accept-issue-through-task-operation",
+      "entry": "operation-result",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-delegation-without-root",
+      "entry": "domain-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    }
+  ],
+  "sqliteChecks": [
+    "feature-linked task accepted",
+    "task without a feature accepted",
+    "standalone issue accepted",
+    "project is still required",
+    "unknown feature refused",
+    "cross-project feature refused",
+    "feature cannot become a child task",
+    "duplicate stable work identity refused"
+  ],
+  "documents": {
+    "wordSourceRequirementsMatched": 350,
+    "wordPages": 66,
+    "changedPagesVisuallyReviewed": [
+      4,
+      12,
+      19
+    ],
+    "unchangedPageImages": 63,
+    "readerDocuments": 13,
+    "readerPageErrors": [],
+    "visibleTabsOpened": 0
+  },
+  "limits": [
+    "Schema/DTO/model and SQLite fixture evidence only; actual root ownership, queue membership, feature type validation, delegation, control, accounting and delivery enforcement remain DW-012/013/015 and integrated implementation acceptance.",
+    "AR-02 and subsequent review findings remain open. In particular AR-04 still owns editable association transitions; no unrelated review item is declared resolved."
+  ],
+  "noInference": true,
+  "sourceSha256": {
+    "tools/planning/requirements_content.py": "378f537fbdfe6cdcedb3224086179be2e2c00c3b2522d96b7ac7baffc33946ab",
+    "docs/planning/requirements-interview.json": "c565eec08a5f46db18b8b9bb9eaae72f398587e26903957bdd03ebe8d6181ceb",
+    "docs/planning/requirements-content.json": "0f0141f74f1b76c112a401db681c621c95ed0b7ebbce4c56b5b53b493539e7fd",
+    "docs/planning/devworks-requirements.docx": "9cb0154a90c8c76853dc8db74feff15fac8d27fd25eec850d2dcd79df8b053fc",
+    "docs/architecture/devworks-architecture.md": "02a92f5f0180abd7cd32231deb4f2009633f9a8310a41452fb864de86f525c99",
+    "docs/architecture/domain-operation-contracts.md": "4fdc0155e4158ef0321607414e99f9c2bde887ff502077cef2a08978621b6888",
+    "docs/architecture/persistence-schema.sql": "5f3cfb64b7ec1fea6a437842bbf8fd409c6bd1d0df3f22bb303628bfe73d26d3",
+    "tools/contracts-eval/domain-spec.json": "fc8dd56f9d760b8ff344d7f2c447cc6bdb54c211ffce87f6f33e2e6126a72058",
+    "tools/contracts-eval/src/domain_rules.rs": "42c8449dfd313bbb0c73a7f1ae2af7d4161f8c81852e1059ad40ecd43ae37156",
+    "tools/contracts-eval/make_domain_fixtures.py": "98857ed797baf8bd11990a1257cbfe67edac10af0b06fd25e48e85d448edb5bb",
+    "tools/contracts-eval/probe_optional_task_feature.py": "fbaad078bae33d56e90b3753c79f8059755c2126df296b1b47b9d25185e4d744",
+    "docs/architecture/implementation-slices.json": "0c7a537f05fb2d570fb31b168efb4ea2a5fff6ecb7bc50bb50febca49d0c5411",
+    "docs/architecture/implementation-plan.json": "66d0c6a7ab76588335348bd18fc1529b36684f3104becab6fa59928bd72a2052"
+  }
+}

@@ -1,0 +1,290 @@
+{
+  "title": "Retained capability acceptance contracts",
+  "date": "2026-11-01",
+  "status": "Design contracts, not passed tests",
+  "sourceRevision": "afe73560215bbe7593fc59451de5cc3237e3eeca",
+  "normalSuiteRule": "Actual native services/adapters with deterministic external/provider fixtures; no real inference including tiny/synthetic models",
+  "cases": [
+    {
+      "id": "CAP-GRAPH",
+      "title": "Search, traversal, architecture and impact",
+      "positiveAndScope": "Ambiguous equal names, cycles, hubs and cross-repo edges: assert exact starting identity, bounded deterministic traversal, every consolidated operation mode and scope before expansion.",
+      "failureAndRecovery": "Missing/stale views never fall back to another revision or worktree.",
+      "sourceEntries": 23,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-SOURCE",
+      "title": "Revision-bound node and source inspection",
+      "positiveAndScope": "Read file nodes, spans/snippets, trust and content digests across baseline, branch and local edits.",
+      "failureAndRecovery": "Deleted/renamed/denied source is unavailable, never silently redirected.",
+      "sourceEntries": 10,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-REPOSITORIES",
+      "title": "Repository catalog and metadata",
+      "positiveAndScope": "Assert filters, pagination, URLs, memberships, summaries, README, freshness and language coverage.",
+      "failureAndRecovery": "Removing an index preserves local source/history; primary source deletion needs the dedicated user action.",
+      "sourceEntries": 15,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-INDEXING",
+      "title": "Discovery and incremental publication",
+      "positiveAndScope": "Exercise add/edit/delete/rename/untracked, ignore/case/size rules, missing toolchains, progress and replayed batches.",
+      "failureAndRecovery": "Kill staging/publication; partial or failed extraction cannot become complete/current or orphan helpers.",
+      "sourceEntries": 27,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-LANGUAGES",
+      "title": "Structural and semantic coverage",
+      "positiveAndScope": "Golden inputs cover C/C++, C#, JS/TS/JSX/TSX, Python, Go, Java, Ruby, PHP, Bash, Rust, Swift, SQL, Terraform/HCL, Ansible/YAML and ColdFusion. Assert spans, calls/imports and domain edges; qualify .NET/TS/Swift/Rust packs separately.",
+      "failureAndRecovery": "Grammar loading alone is not semantic evidence. Unsupported configurations report partial/text coverage. Malicious build/restore fixtures run only inside qualified disposable boundaries.",
+      "sourceEntries": 35,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-LINKING",
+      "title": "Cross-repository and frontend/backend links",
+      "positiveAndScope": "Golden positive/negative HTTP/messaging, NuGet/npm/Cargo/Swift package identities, TS module slices, Swift type/import scope, backend registrations and Tauri bindings identify both source snapshots.",
+      "failureAndRecovery": "Ambiguous destinations remain unresolved/inferred; rebinding/deletion cannot retain confident stale or cross-worktree edges.",
+      "sourceEntries": 24,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-OVERLAY",
+      "title": "Branch and uncommitted views",
+      "positiveAndScope": "Compare every search/source/traversal/impact operation on baseline and two divergent worktrees with adds, edits, deletes and renames; request/reuse/refresh/retire.",
+      "failureAndRecovery": "Move the base during publication and expire a pin; reject incompatible reuse and retain explicit unavailable state.",
+      "sourceEntries": 6,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-ANALYSIS",
+      "title": "Health, security, hotspots and synthesis",
+      "positiveAndScope": "Check deterministic metrics, secret/advisory and community fixtures. Drive project/batch/synthesis stages through real router codecs with scripted responses.",
+      "failureAndRecovery": "Failed synthesis preserves project results and reports partial failure; downstream docs cannot claim success. No live model/advisory service is required.",
+      "sourceEntries": 30,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-KNOWLEDGE",
+      "title": "Unified entities, claims, evidence and lessons",
+      "positiveAndScope": "Assert query/search/subgraph/bundles/frontier/summary, scoped evidence, normalization, recurrence, contradiction, promote/challenge, revision and explicit deletion.",
+      "failureAndRecovery": "Conflicts retain evidence; no silent merge or migration of excluded legacy knowledge/memory/lessons.",
+      "sourceEntries": 72,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-CONVENTIONS",
+      "title": "Versioned guidance and retrieval",
+      "positiveAndScope": "Exercise list/read/edit/move/import/resources, applicability, revision-bound retrieval and lexical/vector publication of fresh content.",
+      "failureAndRecovery": "No legacy convention migration, wiki server dependency, scope leak or stale-embedding substitution.",
+      "sourceEntries": 34,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-DREAMING",
+      "title": "Checkpointed consolidation and proposals",
+      "positiveAndScope": "Script no-signal skip, nonconflicting writes, contradictory evidence, proposal review, changed instructions, usage and continuation checkpoints; guarded revert.",
+      "failureAndRecovery": "Crash/replay cannot duplicate consolidation or erase later edits; partial/budget-exhausted runs stay distinguishable.",
+      "sourceEntries": 22,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-WORK",
+      "title": "All work kinds and allocation",
+      "positiveAndScope": "Create/read/filter/edit/order/status/DAG/plan operations cover project, feature, issue and task; strict argument schemas, plan reconciliation and next_work races.",
+      "failureAndRecovery": "One live owner; cycles, stale plan approval, feature eligibility and root pauses prevent invalid dispatch.",
+      "sourceEntries": 17,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-SESSIONS",
+      "title": "Conversations, briefings and messages",
+      "positiveAndScope": "Check paging, native transcript order, attachments, inbox/ack/heartbeats and shared Home/sidebar identity under scripted streaming.",
+      "failureAndRecovery": "Cancel/restart retains acknowledged history and native tool envelopes, with no duplicate Home session or lost durable messages.",
+      "sourceEntries": 25,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-HISTORY",
+      "title": "Lineage and evidence",
+      "positiveAndScope": "Follow imported/new work, plans, agents, sessions, decisions, Git/check/review links and artifacts through edits/restarts/deletion using stable cursors.",
+      "failureAndRecovery": "Stale results remain historical evidence and cannot complete superseding work.",
+      "sourceEntries": 8,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-RESOURCES",
+      "title": "Enforced canonical reservations",
+      "positiveAndScope": "Race two projects for the same physical capacity; renew/release with fences and inspect holders/waiters. Verify desktop consent separately.",
+      "failureAndRecovery": "Expired leases cannot transfer a live process/device; wrong owners cannot release grants.",
+      "sourceEntries": 6,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-DECISIONS",
+      "title": "Human and agent decisions",
+      "positiveAndScope": "Bind decisions to target/revision/authority and retain independent blockers; host-bound human receipts.",
+      "failureAndRecovery": "Read/dismiss is not resolution; agents cannot impersonate a user and changed proposals invalidate old receipts.",
+      "sourceEntries": 2,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-ROLES",
+      "title": "Versioned prompts and roles",
+      "positiveAndScope": "Read base/project instructions, propose/edit/reset and adopt approved versions at safe boundaries.",
+      "failureAndRecovery": "Unapproved agent content cannot activate or broaden reviewer/tool authority.",
+      "sourceEntries": 3,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-ROUTER",
+      "title": "Native provider contracts",
+      "positiveAndScope": "Drive the router acceptance suite against actual codecs and controlled HTTP fixtures, including native tools, pins, caching, failover, usage and pricing. Include direct Max/High/Mid/Low editable pools and custom members, round-robin allocation with durable pins, independent requested/effective effort, direct named models and distinct Open Router Auto. Exercise native SystemOne model/capability discovery and structured choice/noul/score/box decisions with supported media, usage and host authority (ROUTE-18\u201320).",
+      "failureAndRecovery": "Scripted text is not live endpoint/auth/cache qualification; no real inference in the normal suite. Reject unsupported decision/effort/media capabilities before send; keep decision models outside chat tiers; no silent empty-pool cross-tier fallback or dropped explicit effort.",
+      "sourceEntries": 9,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-USAGE",
+      "title": "Usage and activity attribution",
+      "positiveAndScope": "Assert attempt/event dedupe, reporting filters, observed/estimated/free/untracked cost and cache counters per work.",
+      "failureAndRecovery": "No double count, missing-price false zero or retroactive repricing; subscription estimates remain labeled.",
+      "sourceEntries": 10,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-DATABASE",
+      "title": "Schema and separately permitted data tools",
+      "positiveAndScope": "Cover SQLite, MariaDB, MySQL, PostgreSQL and SQL Server metadata, shared-connection/project scope, sensitive-column rules and schema-change provenance; reject the removed HelixDB reader target.",
+      "failureAndRecovery": "Schema indexing never stores rows; connection writes require enablement and reviewer reads cannot cause indirect mutation.",
+      "sourceEntries": 23,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-MCP",
+      "title": "Outgoing MCP client and tool selection",
+      "positiveAndScope": "Protocol fixtures cover local/remote discovery, resources/prompts/tools, credentials, routed sampling, changed schemas and missing optional runtimes.",
+      "failureAndRecovery": "Outgoing annotations alone do not verify reads; excluded legacy integrations stay absent. User-added incoming MCP support has separate DW-063/064 acceptance; it is not part of these 19 frozen-source entries.",
+      "sourceEntries": 19,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-GITHUB",
+      "title": "Observed linked issues and delivery evidence",
+      "positiveAndScope": "Replay typed polling/provider fixtures with durable cursors and dedupe across personal/organization repositories and exact PR heads.",
+      "failureAndRecovery": "No inbound webhook server dependency, sync loop or stale-check acceptance.",
+      "sourceEntries": 1,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-REVIEWS",
+      "title": "Repository/project review and delivery",
+      "positiveAndScope": "Inspect findings/severity/source heads and transcripts; external/in-app review, response/fix/adjudication and exact-head readiness.",
+      "failureAndRecovery": "Every actionable finding is resolved; disputed/unavailable reviews do not become success, and all required repository heads must be ready before merge.",
+      "sourceEntries": 8,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-JOBS",
+      "title": "Manual and scheduled jobs",
+      "positiveAndScope": "Create/edit/enable/disable/delete/run_now with saved timezone/scope/history; test skip-overlap, missed occurrences and recovery classes. Report per-run observed/estimated/free/untracked usage without job spending limits under JOB-09; dispatched feature-owned work retains feature-budget admission and no double charge.",
+      "failureAndRecovery": "No catch-up storm, implicit feature Continue or autoactivation of restored schedules/keep-working. No job-cap hold or budget bypass by relabeling feature requests as job work.",
+      "sourceEntries": 9,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-QUEUE",
+      "title": "Local durable event delivery",
+      "positiveAndScope": "Atomic state/event/delivery, lost wakeup, bounded saturation, fan-out, ordered partitions, poison failure and duplicate ack against the actual runtime/store.",
+      "failureAndRecovery": "Lost external result requires reconciliation; stale leases or resolved delivery failure never grant Continue.",
+      "sourceEntries": 2,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-DOCS",
+      "title": "Capability Help and repository docs",
+      "positiveAndScope": "Generate version-matched Help from the registry while preserving authored sections. Separately generate repository docs from exact index/analysis evidence through normal Git work/review.",
+      "failureAndRecovery": "Partial analysis is labeled; generation cannot overwrite unrelated edits or bypass delivery gates.",
+      "sourceEntries": 3,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-IMPORT",
+      "title": "Selected existing CodeGraph work/history",
+      "positiveAndScope": "Consistent export includes projects/features/tasks, memberships/statuses/plans/dependencies, agents/sessions/transcripts/decisions/Git/review/evidence and attachments. Preview counts/ID maps and resume without duplicates.",
+      "failureAndRecovery": "Exclude derived indexes and legacy memory/knowledge/lessons/conventions. Historical Shortcut links stay inert; no live Shortcut/Kanban importer or autoexecution.",
+      "sourceEntries": 7,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-MAINTENANCE",
+      "title": "Controlled bookkeeping retention",
+      "positiveAndScope": "Preview eligible diagnostics/run/session records with active pins/references and durable checkpoints; destructive pruning needs explicit selection.",
+      "failureAndRecovery": "Do not copy legacy destructive default schedules or erase required history/artifacts/unresolved effects for disk pressure.",
+      "sourceEntries": 4,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-DIAGNOSTICS",
+      "title": "Local errors, logs and health",
+      "positiveAndScope": "Inspect scoped operation/process/storage/queue health with bounded reviewed export and source/run links.",
+      "failureAndRecovery": "Scrub known credentials before ordinary persistence/export; optional failures cannot prevent offline browsing.",
+      "sourceEntries": 4,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-NAVIGATION",
+      "title": "Native workspaces",
+      "positiveAndScope": "Visit repository/node/schema/graph/cluster/impact and Home/feature/issue views through shared operation IDs and versioned Help, preserving selections/drafts.",
+      "failureAndRecovery": "Navigation cannot grant authority, duplicate conversations or expose another project.",
+      "sourceEntries": 12,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-SETTINGS",
+      "title": "Typed scoped settings",
+      "positiveAndScope": "Exercise inherited values, expected revisions, validation, source explanations and saved schema/Help versions.",
+      "failureAndRecovery": "Repository text cannot broaden authority; revocation wins over cached forms.",
+      "sourceEntries": 5,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-SERVER_REPLACEMENT",
+      "title": "Native single-user replacement",
+      "positiveAndScope": "Native diagnostics and local permissions replace legacy server readiness, service login and administrator membership. Optional incoming MCP uses explicit per-client registration through the application gateway, with separate DW-063/064 acceptance.",
+      "failureAndRecovery": "No mandatory app server/background daemon, service HMAC login or OS user switching; offline core use succeeds. The optional desktop-owned MCP listener/bridge is an explicit baseline 1.1 addition, not a restored legacy server deployment.",
+      "sourceEntries": 19,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    },
+    {
+      "id": "CAP-EXCLUDED",
+      "title": "Explicit source exclusions",
+      "positiveAndScope": "Assert no bundled Shortcut/RabbitMQ tools/configuration/jobs or selected legacy-memory import; retain source inventory disposition and decision provenance.",
+      "failureAndRecovery": "Never count excluded rows as parity or remove their historical references from imported work.",
+      "sourceEntries": 64,
+      "fixtureStatus": "Specification only; actual native assertions not implemented/run"
+    }
+  ],
+  "mcpServerAmendment": {
+    "source": "User MCP server correction, 2026-11-02; AD76\u201378",
+    "requirements": [
+      "MCP-07",
+      "MCP-08",
+      "MCP-09",
+      "MCP-10",
+      "MCP-11"
+    ],
+    "slices": [
+      "DW-063",
+      "DW-064"
+    ],
+    "contract": "mcp-server-contracts.html",
+    "acceptance": "Two independent clients, both transports/protocol profiles; complete code/work/Knowledge query projection, scope/citation parity, default-denied and granted commands, authenticated revocation/publication and durable retry/close/restore recovery. New scope is not falsely counted as frozen-source server parity.",
+    "status": "Planned; no production MCP server acceptance"
+  }
+}

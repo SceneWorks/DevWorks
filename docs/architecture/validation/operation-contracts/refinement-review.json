@@ -1,0 +1,125 @@
+{
+  "title": "Shared operation architecture refinement verification",
+  "date": "2026-11-01",
+  "status": "Candidate contracts, native DTO/schema checks and SQLite contract model verified; production gateway/authority/SDK/platform qualification pending",
+  "adoptedDecisions": [
+    "AD-48",
+    "AD-49",
+    "AD-50",
+    "AD-51"
+  ],
+  "requirements": {
+    "count": 342,
+    "confirmed": 205,
+    "proposed": 137,
+    "unchanged": true,
+    "inputSha256": "d12aafc3f4ac5a4dc5b765dd82a85aefcbdb3ee271b966ea4b8f0c779aaa9096",
+    "wordUnchanged": true
+  },
+  "schemaCandidates": {
+    "protocol": "1.0-draft.1",
+    "schemas": 5,
+    "messageFixtures": 60,
+    "fingerprintChecks": 6,
+    "extraOversizedFrameCheck": true,
+    "passed": true,
+    "nativeJcsQualified": false
+  },
+  "receiptModel": {
+    "checks": 23,
+    "sqliteVersion": "3.53.1",
+    "productionGateway": false
+  },
+  "operationCoverage": {
+    "familyCount": 47,
+    "operationCount": 345,
+    "concreteInputCandidates": 8,
+    "domainInputsPending": 337
+  },
+  "readers": {
+    "reader-checks.json": {
+      "checks": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": [],
+          "diagramCount": 34
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": [],
+          "diagramCount": 34
+        }
+      ],
+      "browser": "local headless Chromium; no user-facing tab opened",
+      "decisionRows": 51,
+      "anchors": 3,
+      "localLinksValid": true,
+      "sectionSearch": true,
+      "requirementSearch": true,
+      "statusFilter": true,
+      "pageErrors": []
+    },
+    "contract-reader-checks.json": {
+      "checks": [
+        {
+          "width": 1440,
+          "overflow": false
+        },
+        {
+          "width": 800,
+          "overflow": false
+        }
+      ],
+      "visibleTabsOpened": 0,
+      "localLinksValid": true,
+      "pageErrors": []
+    },
+    "capability-reader-checks.json": {
+      "status": "Passed documentation interaction checks only",
+      "entries": 558,
+      "acceptanceGroups": 33,
+      "workloads": 12,
+      "widths": [
+        {
+          "width": 1440,
+          "overflow": false
+        },
+        {
+          "width": 800,
+          "overflow": false
+        }
+      ],
+      "excludedFilter": 64,
+      "rabbitMqFilter": 3,
+      "searchAndDetails": true,
+      "localLinksAndAnchorsValid": true,
+      "pageErrors": [],
+      "visibleTabsOpened": 0
+    }
+  },
+  "diagram": {
+    "added": "34-command-receipts",
+    "total": 34,
+    "fullSizeAnd800pxReaderVisuallyReviewed": true
+  },
+  "noInferenceExecuted": true,
+  "noVisibleBrowserTabOpened": true,
+  "noProductionApplicationStarted": true,
+  "limitations": [
+    "Domain DTOs other than the eight concretized inputs remain explicitly pending.",
+    "Host contexts and policy in SQLite scenarios are scripted contract models.",
+    "No actual native authority, dispatcher, OS cancellation, full framing or event-consumer implementation is certified."
+  ],
+  "sourceSha256": {
+    "docs/architecture/devworks-architecture.md": "2c5403c11a3a926946c88cb8a045ee5a544e970c940934eb173e641359dec8cc",
+    "docs/architecture/shared-operation-contracts.md": "6dc2d4caff23ff6616bbe25e062d3d978dcfe3c74f00eed25b0d6b0f1352c89f",
+    "docs/architecture/architecture-handoff.md": "dc04f30db922858c359a6bc75e49addeebba53abe277a1759964d419005f449e",
+    "tools/contracts-eval/src/lib.rs": "7cc696108bd2fb75a3a0b2636785c5156858db3adeb29bb4023109bb440c06a9",
+    "tools/contracts-eval/src/main.rs": "38424dafea60034fd2c6beba7998e207c7ed1210b3f82ec7af4b896178491a6e",
+    "tools/contracts-eval/probe_receipts.py": "d84f7a979784eb7a9fa83ea8893f1939cb6e6a8cfd5708173e4a4b77622cfef5",
+    "tools/contracts-eval/verify_contracts.py": "87b424e991b485e93819f01b1016ab8d1af34374f687d80051dd248df1a57e67",
+    "tools/contracts-eval/Cargo.lock": "6bea011d529adaa06ee0f552465fc8a08abba39a9674e94b375f12cf9a912b1c"
+  }
+}

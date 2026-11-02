@@ -1,0 +1,536 @@
+{
+  "increment": "1pt",
+  "cssPixelEquivalent": 1.3333333333333333,
+  "fontSamples": {
+    "harness-workbench.html?page=chat&project=sw": {
+      "bodyDelta": 1.3332999999999995,
+      "checked": 42,
+      "mismatches": []
+    },
+    "devworks-architecture.html": {
+      "bodyDelta": 1.3332999999999995,
+      "checked": 57,
+      "mismatches": []
+    },
+    "devworks-requirements.html": {
+      "bodyDelta": 1.3333000000000013,
+      "checked": 60,
+      "mismatches": []
+    },
+    "mockup-gallery.html": {
+      "bodyDelta": 1.3332999999999995,
+      "checked": 49,
+      "mismatches": []
+    }
+  },
+  "desktopScreens": {
+    "results": [
+      {
+        "title": "Workspace coordinator",
+        "preview": "ui-07/01-chat.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Workspace coordinator beside Dreaming",
+        "preview": "ui-07/42-dreaming-coordinator.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Multi-repository project",
+        "preview": "ui-07/02-project.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Feature backlog",
+        "preview": "ui-07/03-features.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Feature workspace",
+        "preview": "ui-07/04-feature-board.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Standalone issues",
+        "preview": "ui-07/07-issues.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Issue coordinator",
+        "preview": "ui-07/08-issue-workspace.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Changes across repositories",
+        "preview": "ui-07/05-feature-changes.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Feature delivery",
+        "preview": "ui-07/06-feature-delivery.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Agents and sessions",
+        "preview": "ui-07/24-agents.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Inspect and redirect an agent",
+        "preview": "ui-07/27-agent-transcript.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Project artifacts",
+        "preview": "ui-07/22-artifacts.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Workspace and feature coordinators",
+        "preview": "ui-07/43-feature-global-chat.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Unified Knowledge",
+        "preview": "ui-07/09-knowledge.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Dreaming",
+        "preview": "ui-07/25-dreaming.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Approvals and required input",
+        "preview": "ui-07/10-approvals.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Repository home",
+        "preview": "ui-07/11-repository.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Code graph navigation",
+        "preview": "ui-07/12-code-graph.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Repository health",
+        "preview": "ui-07/13-repository-health.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Database schema exploration",
+        "preview": "ui-07/14-database-schema.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Shared database access",
+        "preview": "ui-07/15-database-access.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Indexing diagnostics",
+        "preview": "ui-07/23-indexing.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Providers and router",
+        "preview": "ui-07/17-settings-routing.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Review and delivery policy",
+        "preview": "ui-07/18-settings-delivery.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Agent tool selection",
+        "preview": "ui-07/19-settings-tools.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Skills and shared overrides",
+        "preview": "ui-07/20-settings-skills.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Scheduled inference and maintenance",
+        "preview": "ui-07/16-jobs.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Usage, costs and prompt caches",
+        "preview": "ui-07/21-usage.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Resource reservations",
+        "preview": "ui-07/26-resources.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Managed knowledge documents",
+        "preview": "ui-07/28-documents.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Passages and source citations",
+        "preview": "ui-07/29-document-passages.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Partial extraction and retry history",
+        "preview": "ui-07/30-document-partial.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Language packs and harness extensions",
+        "preview": "ui-07/31-addons.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Add-on access and contributions",
+        "preview": "ui-07/32-addon-access.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Agent access and safety",
+        "preview": "ui-07/33-safety.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Preferred container runtimes",
+        "preview": "ui-07/34-containers.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Repository paths and project lifecycle",
+        "preview": "ui-07/35-project-defaults.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Document ingestion and retrieval",
+        "preview": "ui-07/36-document-settings.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "App updates and restart approval",
+        "preview": "ui-07/37-app-updates.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Searchable offline Help",
+        "preview": "ui-07/38-help.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Local plugin developer guide",
+        "preview": "ui-07/39-plugin-guide.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Architecture and test guidance",
+        "preview": "ui-07/40-testing-guide.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      },
+      {
+        "title": "Projects and archived work",
+        "preview": "ui-07/41-project-lifecycle.png",
+        "documentOverflow": false,
+        "clippedControls": []
+      }
+    ],
+    "errors": []
+  },
+  "compactLayout": {
+    "results": [
+      {
+        "title": "Workspace coordinator",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Workspace coordinator beside Dreaming",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Multi-repository project",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Feature backlog",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Feature workspace",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Standalone issues",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Issue coordinator",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Changes across repositories",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Feature delivery",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Agents and sessions",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Inspect and redirect an agent",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Project artifacts",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Workspace and feature coordinators",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Unified Knowledge",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Dreaming",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Approvals and required input",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Repository home",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Code graph navigation",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Repository health",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Database schema exploration",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Shared database access",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Indexing diagnostics",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Providers and router",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Review and delivery policy",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Agent tool selection",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Skills and shared overrides",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Scheduled inference and maintenance",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Usage, costs and prompt caches",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Resource reservations",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Managed knowledge documents",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Passages and source citations",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Partial extraction and retry history",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Language packs and harness extensions",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Add-on access and contributions",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Agent access and safety",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Preferred container runtimes",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Repository paths and project lifecycle",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Document ingestion and retrieval",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "App updates and restart approval",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Searchable offline Help",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Local plugin developer guide",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Architecture and test guidance",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "Projects and archived work",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "devworks-architecture.html",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "devworks-requirements.html",
+        "overflow": false,
+        "clipped": []
+      },
+      {
+        "title": "mockup-gallery.html",
+        "overflow": false,
+        "clipped": []
+      }
+    ],
+    "errors": []
+  },
+  "previews": {
+    "screens": 43,
+    "overflow": [],
+    "freshContextPerScreen": true
+  },
+  "visuallyReviewed": [
+    "Workspace chat",
+    "Feature with both coordinator panes",
+    "Provider/router settings"
+  ],
+  "scope": "HTML UI demo, gallery and HTML review readers; authoring styles updated so rebuilds preserve the change",
+  "confidence": "High for the checked font deltas and layouts"
+}

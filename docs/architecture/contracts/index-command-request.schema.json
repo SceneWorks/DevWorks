@@ -1,0 +1,130 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "IndexCommand": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedSourceRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "RefreshOverlay",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "worktreeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId",
+            "worktreeId",
+            "expectedSourceRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Cancel",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedContentDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "SetTrust",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "trusted": {
+              "type": "boolean"
+            },
+            "viewId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId",
+            "nodeId",
+            "expectedRevision",
+            "viewId",
+            "expectedContentDigest",
+            "trusted"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:index-command-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/IndexCommand"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "requestKey": {
+      "$ref": "#/$defs/Id"
+    }
+  },
+  "required": [
+    "protocol",
+    "requestKey",
+    "command"
+  ],
+  "title": "IndexCommandRequest",
+  "type": "object"
+}

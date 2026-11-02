@@ -1,0 +1,3689 @@
+{
+  "date": "2026-11-02",
+  "status": "Architecture baseline 1.0 reconciled; production acceptance remains open",
+  "scope": "All document families and current design/requirements/prototype/contract/plan sources; generated mirrors, structural bindings, reader QA and evidence classification. Not a rerun of historical benchmarks or source-method semantic parity.",
+  "counts": {
+    "slices": 61,
+    "operationFamilies": 47,
+    "operations": 347,
+    "requirements": 345,
+    "requirementsByStatus": {
+      "Confirmed": 208,
+      "Proposed": 137
+    },
+    "inputSchemaCandidates": 347,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "architectureDecisions": 75,
+  "diagrams": 43,
+  "htmlDocumentsChecked": 16,
+  "localTargetsChecked": 397,
+  "imagesChecked": 98,
+  "schemaFixtureChecks": 1036,
+  "frozenSourceFilesVerified": 111,
+  "jsonFilesParsed": 471,
+  "invalidJsonFiles": [],
+  "word": {
+    "pages": 65,
+    "sourceParagraphsVerified": 345,
+    "visualReview": "Page contact sheets and full-size changed pages reviewed; unchanged pages across final iterations compared byte-for-byte. Final diagram page inspected separately.",
+    "sha256": "adf891a45a11538ecff53805fae15d9e9cfb7ed2faafee0bc50bda33b12ef9b2"
+  },
+  "userDecisions": [
+    "Optional direct simple-router Claude subscription at user risk, plus separate Anthropic API-key access. No external Claude CLI.",
+    "External HelixDB reader removed; DW-038 retired; internal indexes remain SQLite/FTS5/sqlite-vec."
+  ],
+  "remaining": "G01–G12 actual application/adapter/SDK/provider/platform/correctness/recovery/parity/performance/installer acceptance. No real inference or broad application implementation run.",
+  "documents": [
+    {
+      "path": "docs/architecture/README.md",
+      "bytes": 10854,
+      "sha256": "2e7f940acbe221637670f8feadcba90e7ae4c6965c1b5a9b07a96eee628d278e",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/architecture-contracts.json",
+      "bytes": 48578,
+      "sha256": "41bfb34206b2afe6b1ec4f50a8e08ddc8694b3f2058adc16d1d11e85487def10",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/01-components.mmd",
+      "bytes": 680,
+      "sha256": "4e8938e7970e433edfded5bca07e51ef7da17e8607dc6590af32fc4b9c8292fd",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/01-components.svg",
+      "bytes": 26828,
+      "sha256": "37dbdc8553562e0dd1ca80ade4509967a4d6a8b5bbf85bbbad22b4c16dc17917",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/02-domain.mmd",
+      "bytes": 944,
+      "sha256": "aad5536bf8943737cfa4573512c7927574195c02e63b97a3ed9a837e5f41a15f",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/02-domain.svg",
+      "bytes": 76270,
+      "sha256": "e8e56734f109ecb17fcba084807a9fd985af77ff1681600a14940e6eefc05155",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/03-storage.mmd",
+      "bytes": 770,
+      "sha256": "e1b91ef8af3c14136e2bd7f5c4aa9cc76f6ce5f6dcdb245318d264d44e398763",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/03-storage.svg",
+      "bytes": 29871,
+      "sha256": "ac783ad66c01b48b47d89fa9b67d1d4a57aec3268e2a8a03327992a319fdef6d",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/04-operation-state.mmd",
+      "bytes": 708,
+      "sha256": "9120a35ea6027cd25d91b710a3b8a78565bfbc709dbfd7d0d7a5420467d5b912",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/04-operation-state.svg",
+      "bytes": 401422,
+      "sha256": "a7b3d2ff607c553c24f27359f4135858f3b274d355857e86f9cfba5b872abcb6",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/05-execution.mmd",
+      "bytes": 983,
+      "sha256": "5aedfa7300ce34c41a46e940e04279f2f20d48f11d12684bc5fc5732b699bf83",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/05-execution.svg",
+      "bytes": 30718,
+      "sha256": "071f0e522e462f604d8a455a1b9181c0f79c9f62c4d5a0d8c6aea84a8b2b3347",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/06-screen-context.mmd",
+      "bytes": 926,
+      "sha256": "15f943e65f15940d1bd37e331a6b70685c5193420e621aface299249e5f18a73",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/06-screen-context.svg",
+      "bytes": 29390,
+      "sha256": "4d9e4095f932e89e4698502f9af9b2e9ed32f56b9bd7b494f5b0a4ccb7ff47db",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/07-routing.mmd",
+      "bytes": 1006,
+      "sha256": "72a41d4925e9d6906a8c2cb1572bbe954c103bf0ccc88023fc6dec5a3efb85e0",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/07-routing.svg",
+      "bytes": 34773,
+      "sha256": "3840423a8a7c9cbda4ff54165e6c40383c1d237a03ea197c45f00a1d196adfc8",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/08-policy.mmd",
+      "bytes": 976,
+      "sha256": "1f5f8ef34914c3effff3a7726fbae3709f26b60a5b52f58da69fa2899aff59a2",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/08-policy.svg",
+      "bytes": 38134,
+      "sha256": "94b243f1641481c23e08595523f8311ab2278effc7702167876176062fe10bc6",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/09-delivery.mmd",
+      "bytes": 1092,
+      "sha256": "79f59a1abc1a17ee4833f288fb4dd10ca1b7522ef70a19490b9295387b7a1fff",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/09-delivery.svg",
+      "bytes": 28505,
+      "sha256": "bdcc150d3dc977f66cca897f9a6d889236dea3272318d870f1ae2afc362c0854",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/10-indexing.mmd",
+      "bytes": 770,
+      "sha256": "c408e12f3568e75a1ac92b38cdb99b8f4a3667b0db07b904d8b8e5bf83164680",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/10-indexing.svg",
+      "bytes": 21434,
+      "sha256": "3028bc6e0bb80aa1613e386c976175f7dbb5c28f1adf0a9c6eb5e8e716fa33ca",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/11-knowledge.mmd",
+      "bytes": 883,
+      "sha256": "a95ba47876268da7a6acc0a90360404d4c225052c2f9c1d3363f54dc8f339f4f",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/11-knowledge.svg",
+      "bytes": 33967,
+      "sha256": "674ec8f02fc9fb6e938b6768be280eb07d13beb28deac92fa8e9d564f92d5eb3",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/12-extension-interfaces.mmd",
+      "bytes": 1889,
+      "sha256": "0a7d0faf4cdd5907a9d164b049363bc3c621e0cc11394348e43bee00a27bf735",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/12-extension-interfaces.svg",
+      "bytes": 71023,
+      "sha256": "9ff1acbfea2d88f6f962e6e96854af4b28a7571e16e3023b64e361e9d25dc250",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/13-extension-lifecycle.mmd",
+      "bytes": 868,
+      "sha256": "bf61996a5fee9629a5e8ba16dc02efda9c05e48c1fb00c30a340ea877574d031",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/13-extension-lifecycle.svg",
+      "bytes": 547116,
+      "sha256": "98183ec6f5882e128ba6480eef1d1224f9be0345ebb37fa50cdebcb82636f096",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/14-lifecycle.mmd",
+      "bytes": 863,
+      "sha256": "ab6e1a411b63eafd136fb8a0fff6d83b20deb13628a3edad194f1cc26a2eb080",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/14-lifecycle.svg",
+      "bytes": 22953,
+      "sha256": "67c465b6190dda0561c7fa448649cef6b8e3bed4eab22d30c9095e6190584630",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/15-testing.mmd",
+      "bytes": 588,
+      "sha256": "3d7ad38a794cfb4853bc5c1468bb82ee16a6782e4eb1c7235f082bc0a9437dc7",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/15-testing.svg",
+      "bytes": 22254,
+      "sha256": "b17a99b61c003443b9a0455a829cd2981fd027488a6363414676939838e4c84d",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/16-persistence-interfaces.mmd",
+      "bytes": 1444,
+      "sha256": "b018f7378675ba80520b30f375380235628aad28485ee58ee2271394ba1ffd90",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/16-persistence-interfaces.svg",
+      "bytes": 50039,
+      "sha256": "f245a40f417bbd217ed706afbd474d655ed5e8ad9cbdfef15fb2417be585a5b9",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/17-activation-races.mmd",
+      "bytes": 1879,
+      "sha256": "3c66149c899c257092102e4f37ae10a903b491c469fcb0cdb803701d1383392a",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/17-activation-races.svg",
+      "bytes": 38996,
+      "sha256": "d31ff2f8f3a0b40207dfc09cce654f7683b9fb18851eeabeebe12d70d9c8f413",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/18-parallel-tool-turn.mmd",
+      "bytes": 1670,
+      "sha256": "b3a8a48725c12f0b391204637582beab6b45bc418dbe776ed8f2835b7ba94d8d",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/18-parallel-tool-turn.svg",
+      "bytes": 37852,
+      "sha256": "2f56363ad0e5e8c0e33086d7b218b4ce103454beef92f7cf58e8144dc5e55d21",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/19-control-and-wakeups.mmd",
+      "bytes": 1355,
+      "sha256": "b519b8202c95279601b58877a58565abcd4e8ddf7cf14dd894801fe50ba5f709",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/19-control-and-wakeups.svg",
+      "bytes": 36069,
+      "sha256": "897aa0a7bebc13f5108bd50e094c680bfbf4b28d6e78ffa24cd5efa0743dd8ea",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/20-shutdown-recovery.mmd",
+      "bytes": 1371,
+      "sha256": "5094b2aa2879b0b41e67ca5e35470a9b8a03597300b3db00c62449ac545d69ec",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/20-shutdown-recovery.svg",
+      "bytes": 44681,
+      "sha256": "69b6f0ae3cdd3ef189cc1e767231d3a234aae5b344cebae258d1721ed61a986d",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/21-persistence-transactions.mmd",
+      "bytes": 910,
+      "sha256": "33ac1ee73fb34de00163ca330ec4b8a7a7b33e0527331803b6f22f6094e74072",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/21-persistence-transactions.svg",
+      "bytes": 35626,
+      "sha256": "d6c56769ba62cdd28d7cb4501d27604597ce9be79bea82084e5d476ef39e18c6",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/22-overlay-publication.mmd",
+      "bytes": 1011,
+      "sha256": "b84c9b063f0da3663e548f44e92eb6799d062cb71467001746d6b51cc14011c5",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/22-overlay-publication.svg",
+      "bytes": 35359,
+      "sha256": "acbfadf44f57a502a9fbd437d78a206ba874b2f8af30d2e258b7b9bb2aa6527a",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/23-backup-restore.mmd",
+      "bytes": 1345,
+      "sha256": "158962d4a95150528967d6c6a9bfe2c972f5c6e5930e2dec1b3ae1ab75cb2661",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/23-backup-restore.svg",
+      "bytes": 41657,
+      "sha256": "8193ebb220e80373f1e1e555dbe2768a6328fa278505d3c8f9c98912ae195a1d",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/24-provider-turn.mmd",
+      "bytes": 853,
+      "sha256": "6d69546122fedc6a5d114cdb032653b71a3d8ba47b07fa8ee9550682c146f506",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/24-provider-turn.svg",
+      "bytes": 28689,
+      "sha256": "66d06b55b0733a111810cea91f3208ef04e6ab6dbdfa540ec4e02cc9e9be69c0",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/25-provider-recovery.mmd",
+      "bytes": 1107,
+      "sha256": "d6990cec0d685af0a45e974cb96938502a1c88fd4627cf5933518a78309f2065",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/25-provider-recovery.svg",
+      "bytes": 35954,
+      "sha256": "cace4ce9ad5908c4f0e9f45ead0f84ea6bc85c692b1f3be514b8adb6c3d9ab23",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/26-pricing-ledger.mmd",
+      "bytes": 1231,
+      "sha256": "359e21ad56ffb8537bc9983e767abce6b0a8e3e9d8e7698a86ca279c4f0c6608",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/26-pricing-ledger.svg",
+      "bytes": 37778,
+      "sha256": "0fe6cba19bf350a29e87ae584fc3a5b0c77141ca43f961846c4cb3d82130ce6a",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/27-package-invocation.mmd",
+      "bytes": 1117,
+      "sha256": "ba5e3c2eb28a2453a59104757c844c76b65f45469e7e7e28f4d0fd2c2983e52e",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/27-package-invocation.svg",
+      "bytes": 31994,
+      "sha256": "e41b64299a7e8fa18858d5eb1c55ee3c189d7534a3c686637068aa9b7b31c087",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/28-package-update.mmd",
+      "bytes": 1501,
+      "sha256": "d20609b9451ef53551d337364587ddea649c8d85f652b0809980527d9e483c21",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/28-package-update.svg",
+      "bytes": 36019,
+      "sha256": "e9cd4cb2f0e8c4bdea415e752dac00f188882be6a9bbeddbbe250aa091892f68",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/29-authority-revocation.mmd",
+      "bytes": 1013,
+      "sha256": "d1d101d01ce80d34f45a2b10c4505387f6f17a5cd4c1d8d30db4840d4e91a800",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/29-authority-revocation.svg",
+      "bytes": 31677,
+      "sha256": "c8bdc33e336c4dd3f423cac784617a751712bb6f0afa401dc2a28e8f23b61e39",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/30-repository-deletion.mmd",
+      "bytes": 1416,
+      "sha256": "d10e85cc6d963a681c9edb39c31eea78570cfc67e064a9171268c22e92e3cc85",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/30-repository-deletion.svg",
+      "bytes": 34802,
+      "sha256": "efbd056ad79d832ebc385f5d1ccac1ab8fe0956e569e647197af96554d8e0b27",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/31-local-event-delivery.mmd",
+      "bytes": 1038,
+      "sha256": "77389a94de4d6e8b0d35fbc68dd35bf204399092e945155670e24e60b4f5142a",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/31-local-event-delivery.svg",
+      "bytes": 31292,
+      "sha256": "fcb4d3f1660ff929258441eba88e6fffa66ae61aeb68f94c267dc33b14cdd5ea",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/32-capability-validation.mmd",
+      "bytes": 1048,
+      "sha256": "6d9fae3408258144e842309268140a463a48ce04ff3e0ac30c535c1b6a85034b",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/32-capability-validation.svg",
+      "bytes": 32462,
+      "sha256": "0f73f15be0fea59be54f89c39ed701d5cdd0e9727a8e58f940513b797f5abfca",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/33-app-update.mmd",
+      "bytes": 1289,
+      "sha256": "c5d3e4e221ae36fd931ac206b4085e8d0825f4903d3f671b047b7c7a74d4f884",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/33-app-update.svg",
+      "bytes": 34216,
+      "sha256": "422cfe67cbfa4ed6dba71df7dfa04dd59981e088fb4a1a155dca005ff39929e3",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/34-command-receipts.mmd",
+      "bytes": 1149,
+      "sha256": "7460617e6bffaae06b2790a1befa8cb9455a229b0504f63bd59d469566d2fd28",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/34-command-receipts.svg",
+      "bytes": 32780,
+      "sha256": "07d9405544b782725e0b707e7ba3145b36af3dd65e69ec70ff22cd56ad3b5540",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/35-provider-session-boundary.mmd",
+      "bytes": 1252,
+      "sha256": "e2fe58774797cef5b9709112fbf047ab5c30814ec71f2ac7d52cf6cf47ca7f0d",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/35-provider-session-boundary.svg",
+      "bytes": 32958,
+      "sha256": "001ebf282da52a9ecf98e733c4a27228c25ddf0f492270c0f712ed2e5b54319a",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/36-package-wire-boundary.mmd",
+      "bytes": 1298,
+      "sha256": "7b808f6be1eff23c7a8fff7a965391cd749e1146d2503ae114cf37d462c806fc",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/36-package-wire-boundary.svg",
+      "bytes": 32588,
+      "sha256": "89294acc1b6af2bfd26ad7f2bb8be04bfd02f8f9f4c1b957ffb721de0ad0e389",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/37-exact-graph-view.mmd",
+      "bytes": 878,
+      "sha256": "eacda8f04acb569f60748908959547dd0e08be3e130a66aeaaf1798338c858f8",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/37-exact-graph-view.svg",
+      "bytes": 30900,
+      "sha256": "dd91033b8162d6b5fe4ae57efd918b0c4619ffbba087a0bc8b2ce7781f127521",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/38-artifact-version-lifecycle.mmd",
+      "bytes": 835,
+      "sha256": "1849d8245a3cfd95dffc72f99156dd505dc50a73870d67ba579bdb7b130282c6",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/38-artifact-version-lifecycle.svg",
+      "bytes": 34178,
+      "sha256": "1fa03b03baa083f8d971117385f75598c6c38acdc80fc5daab19bfad6e1fae0a",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/39-delivery-reconciliation.mmd",
+      "bytes": 886,
+      "sha256": "de8c3d70dfa25ee67e02c827ab171e98c335ae70d46005501a62484e0f7a5f86",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/39-delivery-reconciliation.svg",
+      "bytes": 30794,
+      "sha256": "419da65686e2f15c95ff508373707369508d94b2e866bbd4993ea6ca2c55b350",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/40-native-backend-boundaries.mmd",
+      "bytes": 1013,
+      "sha256": "ffc8023f61a9a5b8613edbffa1d8816a181cbcac4ea0943757388c991b0e683c",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/40-native-backend-boundaries.svg",
+      "bytes": 31744,
+      "sha256": "388905c18de1e82f15710f1870945a92219d275025656761e80d0abb69c7f586",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/41-implementation-coverage.mmd",
+      "bytes": 874,
+      "sha256": "e9273dc1d3c55b6e74944afb6791be4fdf4530a9ee84ef1f04f892f5a455f8d2",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/41-implementation-coverage.svg",
+      "bytes": 27682,
+      "sha256": "c837290c51de2df559829858d5d1039bfcc1763ce1dca9c843372778156c2c38",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/42-domain-operation-admission.mmd",
+      "bytes": 970,
+      "sha256": "67b355774f3c56f42d397a0a832999b3368a8cfaa6ce10590a829920697fbb16",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/42-domain-operation-admission.svg",
+      "bytes": 33020,
+      "sha256": "71e417da6ea10a6af971992b549ea1870a0a9c150a40051b5aa62f1e527e98e9",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/43-structured-decision-contract.mmd",
+      "bytes": 815,
+      "sha256": "e169381f2a8ea78f843a7ab6eb8f4bcd8ee13250644cc1837f707a0ac8f8aa60",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/43-structured-decision-contract.svg",
+      "bytes": 27115,
+      "sha256": "93cca7725270e52bb2f8b41f8cda7a84e34b357b0d006248000ccd1609a2aeaa",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-diagrams/manifest.json",
+      "bytes": 12145,
+      "sha256": "d5bdf5e2173da0b5ec913d796ab60bd821a9c1cde2a25236242c66b100a5a259",
+      "role": "Editable or rendered architecture diagram"
+    },
+    {
+      "path": "docs/architecture/architecture-feasibility-review.html",
+      "bytes": 19509,
+      "sha256": "09112f8683024ee86eb0b47faf379ee9bf928141f0feafd35a645a0391a50b15",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/architecture-feasibility-review.md",
+      "bytes": 12616,
+      "sha256": "85385f52df8eca4ce0282cc31107f431c99169a98b8b9f558bca1ab31b11b8db",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/architecture-handoff.html",
+      "bytes": 13965,
+      "sha256": "5fe145ec2f5ad76d046285d8c91d82ca59563daa23276fc925900157419f4d0a",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/architecture-handoff.md",
+      "bytes": 7193,
+      "sha256": "8f05bd84776fdaca7de6542c22befd26222de8409ddae9576ea41bf7cb20dc3e",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/architecture-review-verification.json",
+      "bytes": 3058,
+      "sha256": "114f1bf191cac5b54f9d95979c79df44292c9c001e215b87ebc16696d1b3e475",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/architecture-validation.json",
+      "bytes": 562,
+      "sha256": "fca877177f6b995fcbfdff204b49aa6457ff63099ea40eb7b5965ce6452edcd9",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/async-queue-options.md",
+      "bytes": 9278,
+      "sha256": "ad9bb92d842f4bdc6f57cd6f63b10bb5aa8b4186667705f4eed3e448bf76f07d",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/capability-inventory-validation.json",
+      "bytes": 740,
+      "sha256": "f8385094495d7ea8a0ec9afff80d5a03417924776b6e367ad85918c0b9fa77b4",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/capability-review.html",
+      "bytes": 413198,
+      "sha256": "ae3fc13a8c3437fb4218b9b066fb48952a5de0fd5c5a7c0ae8179dd794613f5e",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/capability-validation-contracts.json",
+      "bytes": 18507,
+      "sha256": "4ec152536aa178927b56ba35fe968e71aa5a6c4a5b7d577eb003f34bd7fccecd",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/codegraph-capability-inventory.json",
+      "bytes": 532360,
+      "sha256": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/addon-command-reply.schema.json",
+      "bytes": 7961,
+      "sha256": "637eee3780cc14573e10702b4aadbc09db930094e920f21e4aebf3380952085a",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/addon-command-request.schema.json",
+      "bytes": 5536,
+      "sha256": "1e50cc8d48544e561378d4e5d3f83e94258b0d9dccd2d3d59a349de4760a5f7e",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/artifact-command-reply.schema.json",
+      "bytes": 8222,
+      "sha256": "b206db3d40608fdc2e641e69504865691d273ba03c9206413b6b61931ba96f2c",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/artifact-command-request.schema.json",
+      "bytes": 10710,
+      "sha256": "733fedefbc5215e983255c0883b4f5c1a43462cf77f0bd730d804b96e22f426b",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/artifact-deletion-request.schema.json",
+      "bytes": 3395,
+      "sha256": "017deb36675a1241cbe34edbb218b6115a65a65fd776a42b8b211c5629af0c85",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/artifact-query-request.schema.json",
+      "bytes": 12454,
+      "sha256": "ab542e20f1f0738e29466c3360176c494e4f2c24af80e6ec1fa762def92db078",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/attempt-envelope.schema.json",
+      "bytes": 9865,
+      "sha256": "fc2fa155875ecc3910b6d98e1b78184b79299b7987f713e9a7b8bfe158d948b7",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/capability-snapshot.schema.json",
+      "bytes": 3094,
+      "sha256": "311cff64bfa457b12d1d13671d66528e5176823e012dc3d9bf6d000516a4d649",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/command-reply.schema.json",
+      "bytes": 12388,
+      "sha256": "c718d37915e0029d7c98e1b33980e633f9d35923f98ab470be9fc9cd3ba84627",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/command-request.schema.json",
+      "bytes": 3349,
+      "sha256": "4ae635d9f6ac948f68e8eafb156064e92f9e74ba7ed01239718b30592707f736",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/data-delivery-fixtures.json",
+      "bytes": 75422,
+      "sha256": "54fc2fac8841b1591c0f2653f7548dbf5a79a16b4e4958b194be739d277083b6",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/delivery-barrier.schema.json",
+      "bytes": 4697,
+      "sha256": "25aaa75a46cef7a0e3d055b8dff1a76fc25325f0a2efe5202abd80e3c28a72c2",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/delivery-snapshot.schema.json",
+      "bytes": 3808,
+      "sha256": "a5b59fd9d7dbed631c1445dbbda361b53a7c799f98717b9f9d131d6fee42806b",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/domain-command-reply.schema.json",
+      "bytes": 336119,
+      "sha256": "bd8781101e9abfd432760dcbcd46a0175fec1777b5b6b4257cb25333810b8a7e",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/domain-fixtures.json",
+      "bytes": 818311,
+      "sha256": "9e7f3ad70df611fe03fa440cc61aef6bca95659e2a9d7f0fd28a700766f49e60",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/domain-query-reply.schema.json",
+      "bytes": 332796,
+      "sha256": "5c38dd1ac7fc57abce1eed3f7c0733314ac1647e54014f4832f07713aa668990",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/domain-request.schema.json",
+      "bytes": 281805,
+      "sha256": "562bdaf41dc769bded10ffba3dc8923511abbfd394b437921b8c9ba728de641c",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/event.schema.json",
+      "bytes": 9180,
+      "sha256": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/family-coverage.json",
+      "bytes": 718213,
+      "sha256": "bc7d2ade85f1b0d4565ebac513738abf0bee9e2a3d48c2b59dd734b4ff0ccdad",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/fixtures.json",
+      "bytes": 31752,
+      "sha256": "c1d57d26dc0767eeb9ae180f03be7290bb9f8921ee4fc634e0406ac6b6fc936b",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/git-command-request.schema.json",
+      "bytes": 6428,
+      "sha256": "a3ecd93b8f261d3536978d4a9e3739c101da9925ffd0e16e3fde36c26b6ec318",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/graph-page.schema.json",
+      "bytes": 18093,
+      "sha256": "aca9af7d0e3c8615e00434eadc5556085108c08ee2a4edc2c8279a14c6439231",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/graph-read-request.schema.json",
+      "bytes": 11825,
+      "sha256": "5eacbde85e8366c95ba683d14b5fafe865b0ee39dd042cf97cefaad6275efe0b",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/helper-fixture.json",
+      "bytes": 2281,
+      "sha256": "9bf355065d3a44dd450ec6d9f8a1d47dd257a3455f1d20f22bc033f4dba2f318",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/index-command-request.schema.json",
+      "bytes": 3152,
+      "sha256": "b058cdb9e5b60123b8c05683216990f3c818ae4eece06eb8f96102561269f63b",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/inference-request.schema.json",
+      "bytes": 11704,
+      "sha256": "303b3a3d4bd49a39c44148658c2bc6320a4e77453960b75f07cfeb2051da8211",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/inference-spec.schema.json",
+      "bytes": 7182,
+      "sha256": "e4734b6a32933313adcdf74f07ada57c2a20f7d911eb676c7c63d44f1225d516",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/manifest.json",
+      "bytes": 7986,
+      "sha256": "6b3598ff3dee4a0e2f1d9231b61f96821978f340b145d11272bee824292ecfb9",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/operation-completion.schema.json",
+      "bytes": 333517,
+      "sha256": "a9b847c548a8ed545426a195d155a176f1b9c6966802bf4a286e89a483458954",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/operation-result.schema.json",
+      "bytes": 304995,
+      "sha256": "dc494d76b07a0848b6446b1a684dc29f6a90974bbe06081ffbf731da9cdf1c50",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/package-host-request.schema.json",
+      "bytes": 10663,
+      "sha256": "190beae90c974720523774ca4cb366033ba74ba104dc46dbcdd780b30811f5b9",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/package-manifest.schema.json",
+      "bytes": 20132,
+      "sha256": "7f5989387bc31c599cb97ffe0b43dc52227aa2e36c075c54be55e69d6edd8b21",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/package-notification.schema.json",
+      "bytes": 16407,
+      "sha256": "d19320d2683b3bb226c9e65c88c83842d60702c8d6de6d4df889b05aa0d29a9d",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/package-request.schema.json",
+      "bytes": 8515,
+      "sha256": "da31004c60eea368d2b478e0d04326e372d835132ab96b514b872910e9536b8a",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/package-response.schema.json",
+      "bytes": 9994,
+      "sha256": "3f1cfa65356527daa9a24ee61559897c572fd7c293200e955288309ec5319905",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/provider-codec-event.schema.json",
+      "bytes": 8968,
+      "sha256": "16d1f63f42babd80f5840c16644706abd37a74b4c7ac9859463b86a8f06b31f9",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/provider-event.schema.json",
+      "bytes": 11239,
+      "sha256": "de1ac95963613ec2144471a56c55f6b88d1f1091a58e1839e153b07065c2a9c8",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/provider-package-fixtures.json",
+      "bytes": 138850,
+      "sha256": "58fce718ae4cfe34f244f29a0f5bffca19008aaf3321b6ef7ae73bd8087050bc",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/provider-package-scenarios.json",
+      "bytes": 30607,
+      "sha256": "37f7a8efc09becb29e0f8c31854185c890e16f95a0ab77d9ff880686b35094a5",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/publication-request.schema.json",
+      "bytes": 5716,
+      "sha256": "416f189e19c7926c05f6fe4d979478036ce586336e59550b2577629e2944008c",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/query-reply.schema.json",
+      "bytes": 22108,
+      "sha256": "5e62392bbd693563a8dc1de57fe40e9a3025ae9d5cde4b3fe87c438a05ec802f",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/query-request.schema.json",
+      "bytes": 4296,
+      "sha256": "33e3ed9f91f1981b65c7102263bbe9a17e1f965142ff6389f2e0ce4119d46469",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/release-command-request.schema.json",
+      "bytes": 3154,
+      "sha256": "8c1ff3b64d926dd8b49da66fb1bbb7589162d27c414f13d06ad90dfb35b587be",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/resolved-view-set.schema.json",
+      "bytes": 6213,
+      "sha256": "38585a4d25f0dfdc6d03012c2d6f0e048c3f88729712dd63233b67ca1796d17e",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/retrieval-page.schema.json",
+      "bytes": 12705,
+      "sha256": "c54381130a251caccfcdd675820894a03073cf72915e2bff330b82f64c85b4da",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/retrieval-request.schema.json",
+      "bytes": 6505,
+      "sha256": "9a7faaac8e7c31cc3f70f33f94509d56780f992e60998122f21c02f9a8cc15bb",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/route-decision.schema.json",
+      "bytes": 4935,
+      "sha256": "3cbba022c46345fc38a9e64ffdc14cafb85358dfbbefd7a60eb91a4d9e22e38f",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/session-command-reply.schema.json",
+      "bytes": 8709,
+      "sha256": "a1db7ae3130a65b45c457687039220fd016677acedfb52ab5852f0045c2846da",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/session-command-request.schema.json",
+      "bytes": 3114,
+      "sha256": "e0a66d6d36586b39b6a518fdd0d006a04765c8fe0fea390cc5860cac7019cc86",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/session-query-request.schema.json",
+      "bytes": 1116,
+      "sha256": "c24d63c61e590546b82b7311078e486bad45245f9a61de716972c484f1899339",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/transcript-batch.schema.json",
+      "bytes": 13527,
+      "sha256": "fd9643a8069ac9f9098902cc41a4be1ae7e4463c92a26be523ced0a80eb65d1a",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/contracts/transcript-page.schema.json",
+      "bytes": 14186,
+      "sha256": "a8d9783c980489d9121986f906766bcd8492537c78670ecf7e34b5531fb143e4",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/data-retrieval-delivery-contracts.html",
+      "bytes": 25328,
+      "sha256": "99e22eab144798cdd0badd2f767c89dd96179a738e96bac98a40aadef69f0186",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/data-retrieval-delivery-contracts.md",
+      "bytes": 17748,
+      "sha256": "5a1103e2daef85799f970d4470d15cb3bb348b9bee433ad0e548ab88b3a7995b",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/devworks-architecture.html",
+      "bytes": 810120,
+      "sha256": "0fc9df9cd606e002db895059ddf9a9139fad7b24a931ac383e32fcdb8a794eff",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/devworks-architecture.md",
+      "bytes": 297282,
+      "sha256": "0d6c0eb8f4744cb5f34fba7e18b2089834172d644d545094e7ebf31364077f62",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/devworks-capability-catalog.json",
+      "bytes": 20955,
+      "sha256": "217f8a11e22761586de0c166d59f19c7ab83f7d636683c2d14b171762c15e8ab",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/devworks-graphqlite-evaluation.html",
+      "bytes": 28143,
+      "sha256": "fe34f1b5406f48c67e69bd5e04d13a21ed0bb07f9fb8abb86d39ba1db22a19f8",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/devworks-graphqlite-evaluation.md",
+      "bytes": 17490,
+      "sha256": "110fb943821e0d272a6855fd897316c13c44d0e47cccb2622315f0c48c98d5c5",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/devworks-requirements-traceability.json",
+      "bytes": 338946,
+      "sha256": "e29428166425ea8efa0bc37b00608a53f9cbf1bb8dcd93be910ce164fededa2e",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/devworks-storage-evaluation.html",
+      "bytes": 35979,
+      "sha256": "9a6dd6d72ed2c48f19e7553d439821dd1942f5dd2bab9fdbe2ce61da9cba4c93",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/devworks-storage-evaluation.md",
+      "bytes": 26690,
+      "sha256": "78bb9860646851a0c8a9aa588a5c8c0aa7e61154cb2e1efd1585f42ceae5172b",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/domain-operation-contracts.html",
+      "bytes": 28518,
+      "sha256": "1c665bdcf2d776426ff0e796d45fb810b0cd8a4978b134b325a384bcf8610d29",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/domain-operation-contracts.md",
+      "bytes": 20267,
+      "sha256": "eac296ac75167b23f3aaf9f2e549eefbed71b3e8e57d7e06ed7ca306eccb47c3",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/domain-operation-reference.html",
+      "bytes": 218556,
+      "sha256": "7338c69bbc8f345a2d217f4dd0d7f2d5eef6dda3996e6a26b9f7a9e5a2cd4961",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/domain-operation-reference.md",
+      "bytes": 103534,
+      "sha256": "7e14dff20a3a1003bddbf660d8a020590f046ccbef9982f2e90f5ae7ac26df25",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/graphqlite-evaluation-results.json",
+      "bytes": 182313,
+      "sha256": "8c9bcf21b6e8cddb0a70b3e05d8e48a813ed069e82b7bf2d6016c9f9ed7a46b8",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/graphqlite-evaluation-verification.json",
+      "bytes": 1103,
+      "sha256": "c88c292127c079360c6f2d86b0ca7b8c51944bb6c3e1df0c34043b03a43faf87",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/helix-embedding-validation.json",
+      "bytes": 4687,
+      "sha256": "c0a324e251f64f7c4c74604b2f29d56f568687b441fe15af03ae940aa629945d",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/implementation-plan.html",
+      "bytes": 125318,
+      "sha256": "061b2798ef0b35ad66a439130597a087423e98cd68dde24b027f201c7c8accb5",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/implementation-plan.json",
+      "bytes": 1518236,
+      "sha256": "d01b397614b309b1e42274f37cc138036bf224ec62836154a8da5dc8909f6775",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/implementation-plan.md",
+      "bytes": 102767,
+      "sha256": "79ea16d9ce71b3e65634aa12a12c9517d02b40c7003dda5863a5d7634d63543f",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/implementation-slices.json",
+      "bytes": 46409,
+      "sha256": "1b54f82116c963fd83c6ae6bab0882e1571a5e79421f17480d5bccd8bd156b2f",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/native-backend-feasibility.html",
+      "bytes": 25550,
+      "sha256": "8ad03860181d2d50686fad78874d02a4af8b898537539f2080259f28f7808c25",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/native-backend-feasibility.md",
+      "bytes": 18058,
+      "sha256": "47dfa2ed5a70cf210284270c4ad8971d0e61ad59e4cf98dc45c72532373f6df7",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/persistence-schema.sql",
+      "bytes": 24705,
+      "sha256": "e7558ecde52496b171bfd8a05acc205a0122b4b1b4b132391dc44a3e8232a508",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/provider-session-package-contracts.html",
+      "bytes": 31777,
+      "sha256": "4e4395bc34b6703d6d9fc3f1e9b0f9d6f0ebc42cd2ee01579b413e6e8e41a0c8",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/provider-session-package-contracts.md",
+      "bytes": 23658,
+      "sha256": "d07b7735e08ac85ec96d52755ef25f4c947b349e51b5dbd3b2c081dd975376b3",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/shared-operation-contracts.html",
+      "bytes": 26975,
+      "sha256": "9a588c7f627d93a6206bad051f000d2da1c6917d7bcc881dc18912cee0585054",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/shared-operation-contracts.md",
+      "bytes": 19356,
+      "sha256": "93d3a698c60d1d1b765d0456b0e7ecc8419063a94005ea7501037aff7044536c",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/storage-evaluation-results.json",
+      "bytes": 130942,
+      "sha256": "f0247b2d83befa7ce0b4a911ca903a948b5f531bfb42b46ef9fa02d8e97894a5",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/storage-evaluation-status.json",
+      "bytes": 7558,
+      "sha256": "9fe35d832a776e2eadb8afd27b4c5914ecf8dd3f596e6fc6bb5097d93dc39f25",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/architecture/validation/activation-ownership-review.json",
+      "bytes": 1637,
+      "sha256": "09d157472c73a10ad2806af1001d0e071a085fb7f4bbbdfca5dda6f7343dbbb0",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/approved-feature-allocation-decision.json",
+      "bytes": 1873,
+      "sha256": "fb3cbecce045cb0f3347fbcb82d799f587325cc3f3d98a86101c9b713510c011",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/README.md",
+      "bytes": 3162,
+      "sha256": "13a717f7c26025aea57b20dcd533be0fa816f987408b1f4bcfc6547399dc0472",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/all-document-links.json",
+      "bytes": 2548,
+      "sha256": "b7fb4c44130ce135ab60bb95832b62f474c6584c2f35fc5b9b70e28c4e5fd0f6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/evidence.json",
+      "bytes": 2707,
+      "sha256": "ea6eff8a5d9654eac2544f214dd75f838ff3d01d49c6e8e5c4d411d5809796bb",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/native-results.json",
+      "bytes": 664349,
+      "sha256": "5055df64034ef6e146ab014d1aa79a8111d461be93ce7e1a56aa2d96748c646e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/process.json",
+      "bytes": 320,
+      "sha256": "7d6a11653bb67d1e9b7dc4da66f368d246ced64309280f1890ab67c28f4550ac",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/prototype-checks.json",
+      "bytes": 431,
+      "sha256": "744c3e38fc5b89dffb7281abc34e94a0feb49e83943c150167c728db3249b2ee",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/reader-checks.json",
+      "bytes": 4395,
+      "sha256": "3f6e14deed665cf16d2df9282accc4088bf02d7ecfd0f21cf779828ccbc2eeac",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/scenario-results.json",
+      "bytes": 3759,
+      "sha256": "44e26b27826d15946ef1af3dd63c9a69f9754ef411c8ae958ef1d77825df43cf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/schema-model-results.json",
+      "bytes": 292321,
+      "sha256": "acecc60fd99034f7c233a0413ae0f2a64a3eda6f580c52b4b08f66c1d58c24e8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/secret.json",
+      "bytes": 337,
+      "sha256": "e3002c0ea4a1ac449711b52f2c3900c039a5d61bb23498cb4471fd9a64b9ba81",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/source-binding-results.json",
+      "bytes": 393955,
+      "sha256": "29fcf4c137ea5a90a0e4a95a94e796814860838a087f920ec827067d2a51fdd1",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-gates/ui.json",
+      "bytes": 224,
+      "sha256": "70f5430a29c39d15476698d49f9a9682dd0e5599e124071591e497efbb478a34",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/architecture-review-before-sqlite-ports.json",
+      "bytes": 7413,
+      "sha256": "f61769aafb6af1e080d2eb10823009fcac230eaad65d720ef4fd637f466d4d70",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/capability-refinement-review.json",
+      "bytes": 6334,
+      "sha256": "68e8d6e5b581c0440980f2b06ca9baa8c8ec63f76b3c9117c9bc24bdcc22e5ac",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/continue-authorization-decision.json",
+      "bytes": 1683,
+      "sha256": "882c770fbbe1e2c88b7aca3c631a28ccfb47a2a008fe31eec0dba4639c700fe5",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/continue-descendant-scope-decision.json",
+      "bytes": 1814,
+      "sha256": "8b646bca9b4f45810bd3dd9fe6c09771041a925de46c2c27eed2552b2e0a597f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/data-delivery-contracts/README.md",
+      "bytes": 7024,
+      "sha256": "95cd56f23288e1bb8b9be9a980c72877921251c630a47286cc1cfbc97533f7b5",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/data-delivery-contracts/git-delivery-results.json",
+      "bytes": 1482,
+      "sha256": "622b4af6d3431fcd06e0badcca266598212aa0db523c62e47cc33fa0d19de438",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/data-delivery-contracts/native-results.json",
+      "bytes": 236233,
+      "sha256": "eed31becfce8000933e990b7669830f7b257a2077e37d5349174c89bbf40cb2f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/data-delivery-contracts/native-store-results.json",
+      "bytes": 1631,
+      "sha256": "1e64434b50a3704f24818b8ffd30ef3dea612d58892301a21d68c251f935e596",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/data-delivery-contracts/refinement-review.json",
+      "bytes": 5880,
+      "sha256": "747b2b634f13cd0198e7e2f8f5ad3c616f06e0d83964757bcb1bbace3551a447",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/data-delivery-contracts/scenario-results.json",
+      "bytes": 3759,
+      "sha256": "44e26b27826d15946ef1af3dd63c9a69f9754ef411c8ae958ef1d77825df43cf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/data-delivery-contracts/schema-model-results.json",
+      "bytes": 58756,
+      "sha256": "7da8db67f7b3b17401048cecaf3184b479f0beebb9a8570f71002c6f95f55bd9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/document-extraction-probe/README.md",
+      "bytes": 2292,
+      "sha256": "32a5a8c885c49fe45198f9e58a2f01a2617e72d4339d0af60c63b92f096a2c16",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/document-extraction-probe/results.json",
+      "bytes": 3352,
+      "sha256": "4f4f8da633da58c9f23fd1097cc06af884329f87697bcc14d9154aa8ecc4f298",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/domain-contracts/README.md",
+      "bytes": 5407,
+      "sha256": "674b89c6a61302d6057e005bb6bfab35c895c9e9cc7ddbd3658996d54155fef0",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/domain-contracts/native-results.json",
+      "bytes": 660852,
+      "sha256": "e1bdfefdd85447a4b2b891a012114cf1a0bcfeeb32dfe86d073f87eeb8510873",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/domain-contracts/reader-checks.json",
+      "bytes": 2684,
+      "sha256": "87ed525d515c47ae68cf4533c0d2136aa124a11f193a4d96999cbf681726b97c",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/domain-contracts/refinement-review.json",
+      "bytes": 10045,
+      "sha256": "3c4cd7bf18b27e9c2549654864263117fafc355ef68443068205732fa32237f4",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/domain-contracts/scenario-results.json",
+      "bytes": 3759,
+      "sha256": "44e26b27826d15946ef1af3dd63c9a69f9754ef411c8ae958ef1d77825df43cf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/domain-contracts/schema-model-results.json",
+      "bytes": 290990,
+      "sha256": "7c7f5ae4300d4581a9499c7c5f8ca9e41f4cc8d7c264cd51b65bb93e8e8dcfac",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/domain-contracts/source-binding-results.json",
+      "bytes": 393955,
+      "sha256": "6c3a43a0746d7464ea90da26a3e7a054f3da4b12692135e60660493cb90f9c6f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/explicit-continue-decision.json",
+      "bytes": 1869,
+      "sha256": "343a80bd5ffbd08b4a58f393f8ba6c2c43c96c29bc11b1bbbcfd0a055b3602ed",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/README.md",
+      "bytes": 1990,
+      "sha256": "1129a4dc7a6258c0196a3a31682bfeb8cd76e24feb9b11a82db9fe4e2542405b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/execution-ledger.md",
+      "bytes": 6850,
+      "sha256": "24665f2f02b9c6573348b23d2a1401cacf44f2dd4d291b344346449b3943568b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/graphqlite-results-indexed.json",
+      "bytes": 59238,
+      "sha256": "2d7cdb15a382f357d27bdcd1aa7fa06d43e6ea3d2e18e8f2302d6a18f2ea669b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/graphqlite-results-initial.json",
+      "bytes": 59150,
+      "sha256": "ebd04fcfc04fd516f61b5c06ed8aa3936fa23efcc9057f750b5ff5dc3bbb6345",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/harness-final/README.md",
+      "bytes": 9786,
+      "sha256": "ac5cceb0978ffb15fbfc1d301ee9d357000cf2b0bb1e269766216287887586ff",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/harness-final-sha256.json",
+      "bytes": 3083,
+      "sha256": "ac33f86cac8db408b4fa86ae90ae6e1c60f4d5d6de4870e4571f64b87c77c098",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/logs/graphqlite-environment-final.json",
+      "bytes": 2379,
+      "sha256": "6628ab6926a7defcd4c24fb9f79ba810cb0b1f1da2facadaa4b21d475cf23f4e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/logs/graphqlite-environment-key.json",
+      "bytes": 2722,
+      "sha256": "148a6986e6f959cf42e52ea51f5127656dc8794cd02803a793fac04e836bdc01",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/logs/graphqlite-query-probe.json",
+      "bytes": 104088,
+      "sha256": "2285bdef11e189db4e58bd37f21f770607f10995aac0f63d50019a4eb0dd95ab",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-001/result.json",
+      "bytes": 10356,
+      "sha256": "cceabb2978a4ce690ef27cef75c3e57052a5b2e63560348e197ed08fb9ed9fee",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-002/result.json",
+      "bytes": 10353,
+      "sha256": "76f4bc3bf172b90038473d31e92f8b4bf3549317657b0753bae5db281dbbb788",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-003/result.json",
+      "bytes": 10353,
+      "sha256": "05a08b1b8ca605de85dc371e2cd3dc9b53edae54faab6b855c6c70cfd0abaab4",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-004/result.json",
+      "bytes": 10354,
+      "sha256": "49ea26c453d31384c23c2ffb84f17a876490f180b255926a48380d00499cef87",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-005/result.json",
+      "bytes": 11487,
+      "sha256": "88363c733fb8ab71ce7142374347291a9a28327e6ce1a47df4c0b79003a918ce",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-006/result.json",
+      "bytes": 11488,
+      "sha256": "3cabd598f3817362f3b1c82ba3757049b23cc2f9731b4e968c765da645fa81aa",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-007/result.json",
+      "bytes": 11486,
+      "sha256": "69203d9daf60e6eca5ae996cd70d9fea0f1cdeef5e1105fad4a2e897b6b09487",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-008/result.json",
+      "bytes": 12637,
+      "sha256": "83c6fbfd7824d7cf274adeee3f946bb074db00cb6f16fd6688a672c00759b00f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-009/result.json",
+      "bytes": 12628,
+      "sha256": "53ee8f2d456be747b0dcb30cb653df52600552870e02d15a68ca26072f748abe",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-010/result.json",
+      "bytes": 12629,
+      "sha256": "4c99bfd585768fd8de42b7ea2cf5d748057ff4226ee438093249f7c646284275",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-final-manifest.json",
+      "bytes": 2535,
+      "sha256": "2745237471576da0ac8d7ded94d1b565109ed12a198e66564ba657c558ef8dd6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/freshness-guard-final-manifest.json",
+      "bytes": 2839,
+      "sha256": "96537479c7b7ed115939c745bf9be14206dfa499f7fb15db831f96a56da31c53",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/manifest.json",
+      "bytes": 4814,
+      "sha256": "3eab301375ce5ffa2e05c30e051b06a651f8fb3e587a772d5676ae1a88b876a8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-1-graphqlite/config.json",
+      "bytes": 520,
+      "sha256": "18f106dc883920f4a3255c5655930746cb9d772512ed1ffabb0505f4b3f6947b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-1-graphqlite/result.json",
+      "bytes": 1817,
+      "sha256": "0ea9d4bc825d3c66f1343c74f685d2bc9ed42480f8a1cfa34a9836deef06b219",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-2-graphqlite/config.json",
+      "bytes": 520,
+      "sha256": "bbf2da6a96ff3adaf23b06b54356104797ba6a83c2f398b2632ed0c9bb2ec652",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-2-graphqlite/result.json",
+      "bytes": 1817,
+      "sha256": "73c1df96b1dd1a35f5e6ab1cae4b74f8e1c357c6b9779be6ea3cc7769e4726ab",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-3-graphqlite/config.json",
+      "bytes": 520,
+      "sha256": "2313868bf986cffd259206aa8a469a08a6952ff4f1b85702f66bfaaadef3add8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-3-graphqlite/result.json",
+      "bytes": 1810,
+      "sha256": "4d1abdc5ef19208ffae5224c7162af6877c04826390f629de8e624691b1e75e1",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/small-1-graphqlite/config.json",
+      "bytes": 502,
+      "sha256": "a39cb78a7c39855988bbe70bbf9b4120871bd51d28067d84e5b58a8243e8a52d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/small-1-graphqlite/result.json",
+      "bytes": 1772,
+      "sha256": "4f6a47ef59af0a6bc5762558c37b26d3122076bafa3c78a7359b424eed5d125a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/small-2-graphqlite/config.json",
+      "bytes": 502,
+      "sha256": "5aa3509842ee3a25b9b953b01ddb0a41dff2a03b5e20e3d04d0729847932f4e4",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/small-2-graphqlite/result.json",
+      "bytes": 1769,
+      "sha256": "768d3b4b1b80cec8f9f4f631b2c8800fabef32cb0e9de60528b4cc191c786422",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/small-3-graphqlite/config.json",
+      "bytes": 502,
+      "sha256": "5a75f98d781b8b20476c32d105f8266d1fa44bc68289889017702bc234de2b58",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/small-3-graphqlite/result.json",
+      "bytes": 1772,
+      "sha256": "e22f3c410b4f9b1ccb44dc553977a7abbeee989c0ed764e6dead86872a9d0533",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/source-1-graphqlite/config.json",
+      "bytes": 519,
+      "sha256": "c8d1e31cf14d0dadb43bdc58fe9e90882fa57738c1c41fcfc8fa4b04749ab4e6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/source-1-graphqlite/result.json",
+      "bytes": 1816,
+      "sha256": "d899b25c43e521cc999f9a1db8e76a03c18ee14e9f47329dffe3e5ee32251003",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/source-2-graphqlite/config.json",
+      "bytes": 519,
+      "sha256": "9de50a415fb050df2d5eb10d32d8ca0139a24538e185d1fd3594a064445512e5",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/source-2-graphqlite/result.json",
+      "bytes": 1814,
+      "sha256": "507a08dd09c7b35e66cf22a4b35b0c8832415f7377b5fa1f7d206c089d09d783",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/source-3-graphqlite/config.json",
+      "bytes": 519,
+      "sha256": "1a2be26493110e609542a6caff11adf91ec599f55fe0a354265d60d1b3fc1e02",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/cache-profiles/source-3-graphqlite/result.json",
+      "bytes": 1821,
+      "sha256": "f1bfb5deadf0a5f5baac30b12eadc1b4eddbd1dd48aef2fa9b18404af79bab6b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/manifest.json",
+      "bytes": 19070,
+      "sha256": "aabb9f51d42d8cc013810072038efb5e83f218e150ff08e15add45c9e165be48",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-1-graphqlite/config.json",
+      "bytes": 505,
+      "sha256": "b00e512df68e5e5e51de5bc102441ebf6f28b4cc27083f2f3f45ca45697e512b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-1-graphqlite/result.json",
+      "bytes": 182247,
+      "sha256": "e6a00f0e6375aa1810c180bcc85163c971f27b45383b3ee46f0f93699d5b0a96",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-1-sqlite/config.json",
+      "bytes": 497,
+      "sha256": "a375f8befb8428bb794fdf6144372d2cb2fc9f9e2ea7d3a6288c642391b658b7",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-1-sqlite/result.json",
+      "bytes": 161913,
+      "sha256": "c6c8bc28f2b522ce910db0d6dc6ae95d051c2d3464d62032b8cb5710616741bf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-2-graphqlite/config.json",
+      "bytes": 505,
+      "sha256": "c9dfc0c83e764caea7648b047f02a794ba34ef8fdc8eb0fc880ef9f5882a1301",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-2-graphqlite/result.json",
+      "bytes": 182298,
+      "sha256": "c0bf621241e233aea8ed8968b695a258eeea206668cd8c1963ef87e68a547189",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-2-sqlite/config.json",
+      "bytes": 497,
+      "sha256": "f9a2f5040f91f4ccc9d0aa92a21ddda0e7341d3707741e80fa203ae5818778cd",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-2-sqlite/result.json",
+      "bytes": 161769,
+      "sha256": "3c325d4b9304efbce7ac41495a0c7eedda2ae06a18a533b8e75a7e1a357ece21",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-3-graphqlite/config.json",
+      "bytes": 505,
+      "sha256": "42787b9bf2ca38b2a84b685fe3b7377023a703e0bcddb5a47bb5d8ffeb9fbd15",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-3-graphqlite/result.json",
+      "bytes": 182446,
+      "sha256": "9a7bb10f7620878f89369789dac1c5ac8dded3bce775011ff920a061a82a236c",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-3-sqlite/config.json",
+      "bytes": 497,
+      "sha256": "56c0216a2d9b263cdd0e0185390c4e1eedb484fe026720ff844bafcecbb261ed",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/overlay-3-sqlite/result.json",
+      "bytes": 162234,
+      "sha256": "a82922bc16b94057e744e8b8b3d7b7afccb5cd44aad6f62135b3693027246e48",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-1-graphqlite/config.json",
+      "bytes": 487,
+      "sha256": "03eb5fb3ec8097cff6467157a8157eb615c0fce4e97a11558f1e6604815e6387",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-1-graphqlite/result.json",
+      "bytes": 180770,
+      "sha256": "ba2d43c0f51e5ab76607e4589b4e7156a874a069066965cdeae74fe06ece5614",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-1-sqlite/config.json",
+      "bytes": 479,
+      "sha256": "86f2e565f4f4f393162b8999c20c9c1b5a96c838ae11583a82d35672194b934b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-1-sqlite/result.json",
+      "bytes": 154871,
+      "sha256": "1712f05a34d88fe6ec7c9f3df42ba08ababfafcf058d7484946aee441d338889",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-2-graphqlite/config.json",
+      "bytes": 487,
+      "sha256": "d87da999b9e4a11b9c78e399186d1ea775cf5c7c3e7fe86712398042b4e821a4",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-2-graphqlite/result.json",
+      "bytes": 180647,
+      "sha256": "4eb3ed9e9f2933b12ab28b5a7d1708ed3200bca9e6500ceca673121d0595730b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-2-sqlite/config.json",
+      "bytes": 479,
+      "sha256": "3817e83e56eb0a74431d82d19ab6ed7c9ce450723db65ef3b208a805dd7468c3",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-2-sqlite/result.json",
+      "bytes": 154818,
+      "sha256": "d87135f8008f53b8d771f18356757353eb80a040ffdb9d0ae3e6c608cf6df878",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-3-graphqlite/config.json",
+      "bytes": 487,
+      "sha256": "9cce16b73acd437eae450ca6e484c77bf866142c8f41abf38661087a781f0d9f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-3-graphqlite/result.json",
+      "bytes": 180734,
+      "sha256": "2c1c1facce237785ef38cc8904e3a4de9d3cd5df27bbdda59931f8b0b767df7b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-3-sqlite/config.json",
+      "bytes": 479,
+      "sha256": "9e2e59fd35038a16285292d540f3c5f0b564fa9674c64b87b3366f6691e30c9a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/small-3-sqlite/result.json",
+      "bytes": 154044,
+      "sha256": "6477e2ed2e3ee809cb1d4b49ddc7f31356cc85ac76b21f18622e85cf061438ca",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-1-graphqlite/config.json",
+      "bytes": 504,
+      "sha256": "e59e270717859ccc97fb434e5d835765ed2aaf998fe2bc58ff82a5e0172dc803",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-1-graphqlite/result.json",
+      "bytes": 181373,
+      "sha256": "46067da722575741527c0571b41456af84f8094f77a4ff6d916c1293be49e17e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-1-sqlite/config.json",
+      "bytes": 496,
+      "sha256": "d2fc0dc8825cf1a01323866b7c90e5e6f0967b95e2a7f633988af2d77c1ddb9a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-1-sqlite/result.json",
+      "bytes": 160487,
+      "sha256": "100e994becb0a59cde4b1ab936e251cfb4448ced96d8bb479acfb9c32ac9f7f9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-2-graphqlite/config.json",
+      "bytes": 504,
+      "sha256": "c0e7de6d1bddef2fa4b58d336be74bc089d2591ea83b55ff656b0c399ad4271f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-2-graphqlite/result.json",
+      "bytes": 181390,
+      "sha256": "cdf6408d61db436df616b87ccc4eee397b2154462da1bb3dbb672d85746daea6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-2-sqlite/config.json",
+      "bytes": 496,
+      "sha256": "442ed5e446ebd31f0b5dff4f7912d8995e7c49b7ce460d37c000d79398f45989",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-2-sqlite/result.json",
+      "bytes": 160007,
+      "sha256": "f5ed948d7806adf533db5b23cdb516cff38018cf4d987086e9394b1c7118ed93",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-3-graphqlite/config.json",
+      "bytes": 504,
+      "sha256": "4a611ee7ba786be0bfbd59a82f26771b65c2e99bc55eaccf853ea6fd8e6632e3",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-3-graphqlite/result.json",
+      "bytes": 181372,
+      "sha256": "92bccaeaad31c40a7e0d2a0e414d6490dd5002f33d2b527feb4b3eacd5017de3",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-3-sqlite/config.json",
+      "bytes": 496,
+      "sha256": "ce446e97d4a7062a2b37dd037cf39c1ea25cc0cb499c88ab6308f459770dca0e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-measured/20261101T194050977085Z/source-3-sqlite/result.json",
+      "bytes": 159826,
+      "sha256": "cfaa9608ebf2bddb951baa02d147cb156c1eaa5b3a2b573d3cbf3e22390e8a00",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-pilots/20261101T193936412740Z/manifest.json",
+      "bytes": 2998,
+      "sha256": "c75ede204e48b0e1374db6be004209979154f0134c19ad68baad44a4e824cd22",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-pilots/20261101T193936412740Z/pilot-1-graphqlite/config.json",
+      "bytes": 481,
+      "sha256": "87990afff2d26f7adf7a8335767f6d9eed2547b11aa9ec125b73099c6430119d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-pilots/20261101T193936412740Z/pilot-1-graphqlite/result.json",
+      "bytes": 110655,
+      "sha256": "b2222045082a1eca023309bc732aee7a10b1e8196eaeee0cb0a1f5b7b46a65c6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-pilots/20261101T193936412740Z/pilot-1-sqlite/config.json",
+      "bytes": 473,
+      "sha256": "886be60b9264247ea3d5107a8a98cb6c19684315dc5833c6a7d5d0588b987e04",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/key-pilots/20261101T193936412740Z/pilot-1-sqlite/result.json",
+      "bytes": 89931,
+      "sha256": "b0a394a353c84d5a21fd4d32a51a25a3fb1f3c8004882e576d8351f09beb49b2",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/manifest.json",
+      "bytes": 4651,
+      "sha256": "a63738f2e7b43a0dda8e46692685585167bde29a667d947814d55469dc17f0df",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/overlay-1-graphqlite/config.json",
+      "bytes": 512,
+      "sha256": "207e728fea491374ccea59dcee1f5c7e5390d874eee1fee37bd8261c6b321361",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/overlay-1-graphqlite/result.json",
+      "bytes": 1823,
+      "sha256": "e783ac9120b598292c30849afd54b41de1a292d1c9cd860ef7f213f4dacd370b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/overlay-2-graphqlite/config.json",
+      "bytes": 512,
+      "sha256": "33bfe1cbf52b1df50efa647c125c722269cfa9a8be7fc9fe2dd0f7589beb6632",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/overlay-2-graphqlite/result.json",
+      "bytes": 1817,
+      "sha256": "569424deaf7c520c0e085e7488b99db65ecac662cab428e32280276502a118ab",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/overlay-3-graphqlite/config.json",
+      "bytes": 512,
+      "sha256": "7e0ae5663370d4ef59dd631785dd87329b64ec17a98fe9fc44c761352e8c6145",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/overlay-3-graphqlite/result.json",
+      "bytes": 1820,
+      "sha256": "de1454101f2180d046cc8e490e41fa3fabc127c19ce8d6500b68b77966e45a79",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/small-1-graphqlite/config.json",
+      "bytes": 494,
+      "sha256": "3795f95f9ed9196cca342c9e1bb15e0bd3aca1fb177263e07cdc01eddd70700d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/small-1-graphqlite/result.json",
+      "bytes": 1774,
+      "sha256": "10509b1f2754f4af1fb2b9e6d8076e2e332b01cdf3380325ff546974cb5dc861",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/small-2-graphqlite/config.json",
+      "bytes": 494,
+      "sha256": "11d3a9e6be787890e47fdd8bfadd8956e6a9e83b81f0dd9c4b374c96fefc6670",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/small-2-graphqlite/result.json",
+      "bytes": 1771,
+      "sha256": "109b354174a9d6e304ac9372db20525f9d6aea943525a1e6d759b63d3e350418",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/small-3-graphqlite/config.json",
+      "bytes": 494,
+      "sha256": "82a1a0d84e99bb45a9e736fe4d66354722d953ce523d13d9bdc716f7a4453ef2",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/small-3-graphqlite/result.json",
+      "bytes": 1768,
+      "sha256": "cf7707f3a11d817d3e3c6ded84360ce39b2b587ec8ad05c9c089e3ea17d6aaa2",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/source-1-graphqlite/config.json",
+      "bytes": 511,
+      "sha256": "a0fa0f5c50fe8f4146d59287d752902db9de11eedcdf4ede94c675528234194d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/source-1-graphqlite/result.json",
+      "bytes": 1832,
+      "sha256": "bf880361e0c636806a773163400f4f2ea94d54b79afda21f1d51196fb482f35d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/source-2-graphqlite/config.json",
+      "bytes": 511,
+      "sha256": "737d891adb6adb0efcd9e8cef0bb21ed14f7364bfd84ca540f0a8343a8f57aec",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/source-2-graphqlite/result.json",
+      "bytes": 1810,
+      "sha256": "414b21a923e70b3682e78b85d2d62cd1f706606f7b099cd82b488af4e94c46ea",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/source-3-graphqlite/config.json",
+      "bytes": 511,
+      "sha256": "58891e7ded82d1e31a0b9a3d2869e54a9ab0547b6f3832a4714a66b5459f53ee",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/cache-profiles/source-3-graphqlite/result.json",
+      "bytes": 1817,
+      "sha256": "e501085a8280caeb59fa792ba4642327e7e4dffaa73b3490e9e689e81f67b081",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/manifest.json",
+      "bytes": 18920,
+      "sha256": "0eeecee3d4eb35939b0ffd2612e1a9249415116e1d411fb6bdca47efc5d05c55",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-1-graphqlite/config.json",
+      "bytes": 497,
+      "sha256": "1b83414513fb21208c0cf49c64f5c0234f1195e03fd1e9676f3f577992549631",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-1-graphqlite/result.json",
+      "bytes": 184076,
+      "sha256": "a3cbe1721579230765b18f3cf90d745c0bfae95aa664a90557bea5095d1e1c17",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-1-sqlite/config.json",
+      "bytes": 489,
+      "sha256": "9dc720cf8ae148f6dcbfabd8edb2fd992d1615b313fbfdf91794ff33e6b83aad",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-1-sqlite/result.json",
+      "bytes": 161704,
+      "sha256": "8d770608e2af4558a0864b79b9206ec22dfd0a4e68b92680cc8912b2bc213f97",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-2-graphqlite/config.json",
+      "bytes": 497,
+      "sha256": "57c8f3fc3dae4f4d0d3f2d52142d8484584ef8cecd64831d8920b1b028bc08df",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-2-graphqlite/result.json",
+      "bytes": 183647,
+      "sha256": "a8f40d96daf2c476b2a6fd8b16421bea0c1a963fa38debcc0b31acbbcf780a6a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-2-sqlite/config.json",
+      "bytes": 489,
+      "sha256": "f0d9be976b8c0c893625d0a8046306a665de03aab7c8dd3093e46ad5389d8bb9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-2-sqlite/result.json",
+      "bytes": 162086,
+      "sha256": "fe6cae35f44f63d8a8686885be9ee802ece76913e2f438b60ea4b57a8847a50b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-3-graphqlite/config.json",
+      "bytes": 497,
+      "sha256": "9318efa021cfc3a00d8cc9072433f7c5aaef94927842e34ac4e05c024a6302ef",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-3-graphqlite/result.json",
+      "bytes": 183034,
+      "sha256": "56b83a10e745a7ea139fb41e24665de7c4bc6d9e7f2f0f41fe7924193207d77f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-3-sqlite/config.json",
+      "bytes": 489,
+      "sha256": "e5f573b06f7323ff4de229beee86d5726d2cc17c25970f5d8dabca83f798ed7f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/overlay-3-sqlite/result.json",
+      "bytes": 161037,
+      "sha256": "bebbc3bf1f8482dcf4482ae217677f3c96ba109c146f1c0f432acd1e0a6dddfd",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-1-graphqlite/config.json",
+      "bytes": 479,
+      "sha256": "0a22ffd47ecaa9389d507fdb167e64c6d31e4d2ba4775e5f2cb8bc0a94bb7dc9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-1-graphqlite/result.json",
+      "bytes": 168841,
+      "sha256": "801bdff2c6cd378172c72de41ccb4458183c7d45f7e2c9a09549805efdd38d92",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-1-sqlite/config.json",
+      "bytes": 471,
+      "sha256": "0f269243a4e10efe0923b64c3afe59a4cb767d8b475f436b389b3862d4bf3370",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-1-sqlite/result.json",
+      "bytes": 154230,
+      "sha256": "ccc8af1634067babf0429ee2a87cb85890d1fb57dc2ea81246c158058fb389b8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-2-graphqlite/config.json",
+      "bytes": 479,
+      "sha256": "1078586433fd06182deed815bd3c1dfcd4fab3af77961cf8e024f56617cbddb6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-2-graphqlite/result.json",
+      "bytes": 168884,
+      "sha256": "1c75a8c1ad1f7fb2d4dfae46285574c7aaaf5ae90a778285d6c21df5d8a68524",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-2-sqlite/config.json",
+      "bytes": 471,
+      "sha256": "68b4e5f8ca9fc618b61287ea9a913ec32d89ca02d76ee276c9c9a1d7df1b7ff1",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-2-sqlite/result.json",
+      "bytes": 153915,
+      "sha256": "c766de39a3a9e02d7b36d621e2e1143a8ac8338f0c9b04a64061af57a1a129a3",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-3-graphqlite/config.json",
+      "bytes": 479,
+      "sha256": "327c4507bed2c4fd90adfd0fbdc083811bef6090fcd2398404bf4c218e78b082",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-3-graphqlite/result.json",
+      "bytes": 168725,
+      "sha256": "4e1b39624774cf42fee279fbc3ea9df923660e5423dba7f0546785a3e776f1ba",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-3-sqlite/config.json",
+      "bytes": 471,
+      "sha256": "3f89dbd2750a69df78c1421dcab01f08839fa7921e4f46a67acb326ebca93649",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/small-3-sqlite/result.json",
+      "bytes": 154960,
+      "sha256": "8e81e307f8310f1d6e6db4d66d883bfb205ceff56f2c5b509a1d935b088df1ee",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-1-graphqlite/config.json",
+      "bytes": 496,
+      "sha256": "69b20e6ae3b281cb7b243abfc22d23cf131b9288e5a71b277472aed2ae393851",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-1-graphqlite/result.json",
+      "bytes": 178507,
+      "sha256": "72265ea6a452a972b59dcf2245f2cbed0803a566f106b18049753b35e219f740",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-1-sqlite/config.json",
+      "bytes": 488,
+      "sha256": "8be7c5b27fb7d134d1c3f0b949a343bf4bb865979744376895ee63141de23c0d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-1-sqlite/result.json",
+      "bytes": 159808,
+      "sha256": "6a8fccf96e463866775c5d06ec32bfe2abf41286ab004b2eaec81b03c03437cd",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-2-graphqlite/config.json",
+      "bytes": 496,
+      "sha256": "dae4a90c95729b0ff5fe5d6c8e90724fa20c0a1700fbe2c6c09b9e7d15bb051e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-2-graphqlite/result.json",
+      "bytes": 178478,
+      "sha256": "e01699cfed36813dfb242d305ca0d0f40bb3420ed0dda7c449ca74f299d00b84",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-2-sqlite/config.json",
+      "bytes": 488,
+      "sha256": "8b8592c7fe5358150b89b2f901f9cb02b79ab0f7fd2fa7c4dee18e9817fdbf2d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-2-sqlite/result.json",
+      "bytes": 159845,
+      "sha256": "528eb0ecdc7ad7c0de5add0869b4baa0f8d1553d935a49f84f25741cd6aac117",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-3-graphqlite/config.json",
+      "bytes": 496,
+      "sha256": "8b7f5e32abae35778e54391cd67398a2d4eec5fe24f0fa087136267af8e670c2",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-3-graphqlite/result.json",
+      "bytes": 178786,
+      "sha256": "7ebbc10f3a6b494b5f7a3e04bbb2858635c272afe53713d0212e7b490e43cdff",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-3-sqlite/config.json",
+      "bytes": 488,
+      "sha256": "111d1abdc3d8406bec099ff47b5155bc92b543b80a87ff1bdac6191a002d61ba",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/measured/20261101T192949196362Z/source-3-sqlite/result.json",
+      "bytes": 160387,
+      "sha256": "b81b6d2a8927a0d04d42a00916bd4e35fc685881e5fd5ed8e614a298af6b7afb",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192134472756Z/manifest.json",
+      "bytes": 2750,
+      "sha256": "9aa961ff7b96982dcb9e0884e246b6f23d864ca631895c111fdfabe8b696a985",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192134472756Z/pilot-1-graphqlite/config.json",
+      "bytes": 473,
+      "sha256": "bd3c310289784bdc89d3c18d70bbcac3e28ea7e94f408e2d29f7de14e15e1e83",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192134472756Z/pilot-1-graphqlite/result.json",
+      "bytes": 97350,
+      "sha256": "f01a7fdd6f6ba0f0a7a8878ba60ac76f23ac9771993c999ea0e96dfedc7a8248",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192134472756Z/pilot-1-sqlite/config.json",
+      "bytes": 465,
+      "sha256": "2fa654350e573c181746230bc4376a135a3f624ddbe06ba6d14d8b45b3b9a83f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192134472756Z/pilot-1-sqlite/result.json",
+      "bytes": 89748,
+      "sha256": "b5369ecdf7f2ee6ce8f7d2f251a253669705a72d360c9aca34393957610cc000",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192631305393Z/cache-profiles/manifest.json",
+      "bytes": 628,
+      "sha256": "79ab7b13a82155a733b5d6ca993c21dfd1f06ac24e73a4bbb1adb7109448b964",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192631305393Z/cache-profiles/pilot-1-graphqlite/config.json",
+      "bytes": 488,
+      "sha256": "ceca158937d95d8d2ae6faf3af811df6b59eebda6dfbbfe28788c202b4a6980a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192631305393Z/cache-profiles/pilot-1-graphqlite/result.json",
+      "bytes": 1774,
+      "sha256": "5288425cf51d2fa7c5ec28fbcb4268391418d98cf36c13ce931d9dc31ccca67b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192631305393Z/manifest.json",
+      "bytes": 2752,
+      "sha256": "23d390786a8b7125dc2c5a3a029728ac9957756722d00f333e16da090e0da4dc",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192631305393Z/pilot-1-graphqlite/config.json",
+      "bytes": 473,
+      "sha256": "3298e3218c0177f5ea0efb04f0bb1932e53b36ccee6e104e6836524d443d4e73",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192631305393Z/pilot-1-graphqlite/result.json",
+      "bytes": 97387,
+      "sha256": "fe9f89592e555489b1f5dc16989bb81ae20fbfc742730e049ceb29027f204550",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192631305393Z/pilot-1-sqlite/config.json",
+      "bytes": 465,
+      "sha256": "2f89f5d5992c604ced8c2b9ce1c44e18075e16e7e08e70791c3c90c33886293e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/pilots/20261101T192631305393Z/pilot-1-sqlite/result.json",
+      "bytes": 88884,
+      "sha256": "d0beda042e70455a2158ec61f26ddc812ec6241a920b5abe20d7fb73c61f20bd",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/graphqlite-interrupted_writer/config.json",
+      "bytes": 639,
+      "sha256": "280e7f2cfa53a5d600aed3014a6ad6e61ecba22a27d119892a04bb6f5be13ad7",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/graphqlite-interrupted_writer/result.json",
+      "bytes": 126,
+      "sha256": "867029da55e248a5139ba655b06396d339684459c6c1f9ec42ae52fae5e1815a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/graphqlite-interrupted_writer/verify.json",
+      "bytes": 637,
+      "sha256": "529a51d46566275f313d6b88f4a027c7f533dca3c80fc8958e364c96c91954f8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/graphqlite-recovery_writer/config.json",
+      "bytes": 612,
+      "sha256": "a3e5967d5e69ab626cc8af5cb9cb5b4f4fa9fe9051102dde0e990fe532843d12",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/graphqlite-recovery_writer/result.json",
+      "bytes": 128,
+      "sha256": "43d9be9461b819c4d4bc25ef33451b75296767962782086307603dca32503234",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/graphqlite-recovery_writer/verify.json",
+      "bytes": 611,
+      "sha256": "9b246e2b95f26928fcc45e5cd6d7c0d45f5868fdfd683fea66a64118c56b68ba",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/manifest.json",
+      "bytes": 2810,
+      "sha256": "8da53d64663926d82b67131aee268269291bc8146bec3036528d3e8d03bad117",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/sqlite-interrupted_writer/config.json",
+      "bytes": 627,
+      "sha256": "8d7fc2a144ce1f34ff4f181cd9e025c329606036d1cd6f30715b966d0380dc65",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/sqlite-interrupted_writer/result.json",
+      "bytes": 121,
+      "sha256": "c519c2427e8e44a50d7e33a067ba4e1916b13b3671a49c4599063399729d9411",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/sqlite-interrupted_writer/verify.json",
+      "bytes": 625,
+      "sha256": "c9c382957736810ee3786b0f42beb08b5c962b961abc689c359063ccd2a97976",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/sqlite-recovery_writer/config.json",
+      "bytes": 600,
+      "sha256": "fcb37d7972cb7575bc2b545af6f23ec7a451b4c27a0b79abc97a01e0644ad550",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/sqlite-recovery_writer/result.json",
+      "bytes": 122,
+      "sha256": "88307da12fddab22f9de5b822b6a3aed5e322374473a109774dec2df47a394c2",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192723418505Z/sqlite-recovery_writer/verify.json",
+      "bytes": 599,
+      "sha256": "c29e684be52b8eae4bca90acc02cb72895a9aa6f16bde8000ef682d7651a31c0",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/graphqlite-interrupted_writer/config.json",
+      "bytes": 639,
+      "sha256": "c30d4fad30305c14ea6bfc64522294c2d8c01cdb9bbf899b0c741a86fb3b3b28",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/graphqlite-interrupted_writer/result.json",
+      "bytes": 126,
+      "sha256": "af5689865fe8c5bfc767e42a3d2f228b53aecd379a052750fc6af50ade7df3dd",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/graphqlite-interrupted_writer/verify.json",
+      "bytes": 637,
+      "sha256": "4dd3782ffd6a0db8257ff76c8720554505cee460bce7e8b5f5a3f774a783eda1",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/graphqlite-recovery_writer/config.json",
+      "bytes": 612,
+      "sha256": "0679e425e83c0307483743bbd1d7947076cfbfc93134f6033b2da44edf050636",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/graphqlite-recovery_writer/result.json",
+      "bytes": 128,
+      "sha256": "8e2b1c08bc01ce8ea1e17dfe8e06f8f585487b2d35ad3d7cefa365eb304262f1",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/graphqlite-recovery_writer/verify.json",
+      "bytes": 611,
+      "sha256": "f4580aef0d660e3e60f74cd4eb3688b3c58305f64d9b45945bb626420895b200",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/manifest.json",
+      "bytes": 2811,
+      "sha256": "15e55bca19e62ce6a23463f37a1a3f6a7abd82882cbc5f8956690338d6e3895b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/sqlite-interrupted_writer/config.json",
+      "bytes": 627,
+      "sha256": "2870b392fdd8259061adff4914c7d0ac30cd301f03e10197fe5759e60e144b53",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/sqlite-interrupted_writer/result.json",
+      "bytes": 122,
+      "sha256": "19eae692fa158987aea5540e44e0b0a6a6b6c332a1d558edba1dae95985d698b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/sqlite-interrupted_writer/verify.json",
+      "bytes": 625,
+      "sha256": "32c59767ecea8521ea2e27fa38fc7a54a7d053cb18fb5a7ed7e8d7a31a605282",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/sqlite-recovery_writer/config.json",
+      "bytes": 600,
+      "sha256": "d026dc4f7ba1fc84d039978ee0854d7e7f317bccfbef9155d6b1807375fa1fd2",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/sqlite-recovery_writer/result.json",
+      "bytes": 122,
+      "sha256": "61ffff0a33ffa9852683926b00a6fb3814bcde7912c303c6e303cccc1c3c547e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery/20261101T192934552466Z/sqlite-recovery_writer/verify.json",
+      "bytes": 599,
+      "sha256": "7a80453ec13143c7a57f4919095600763d1e5008e2107c95fc9e162f13309f40",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/graphqlite-interrupted_writer/config.json",
+      "bytes": 657,
+      "sha256": "4a9282753c69f7d2db0ba3f5057e45e16edeb91007e6c40d42b305abfc07a08f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/graphqlite-interrupted_writer/result.json",
+      "bytes": 126,
+      "sha256": "4454b5742b62324468783f552b38c28a565376bf4fb0a03714b9b91f9fc12bea",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/graphqlite-interrupted_writer/verify.json",
+      "bytes": 655,
+      "sha256": "98a401d779f82a14ad34f74955387450c402c7b79108ef7d1e27a379878df2e3",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/graphqlite-recovery_writer/config.json",
+      "bytes": 630,
+      "sha256": "240528c94563c856f4c2a16cbb5f770f40c09ddf5f0e33352ac706a150d6606e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/graphqlite-recovery_writer/result.json",
+      "bytes": 128,
+      "sha256": "f9dc0a47e6ed59ea25b66213a3b98730b7fdea7d6cc18f43ee721a44e921651d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/graphqlite-recovery_writer/verify.json",
+      "bytes": 629,
+      "sha256": "67b6aec3778510760d6b67b769e9310ce31bdd982dbe1718bdca645924becc20",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/manifest.json",
+      "bytes": 2655,
+      "sha256": "71db9663e90f1990d75ff786b3dbecd76cb9aeef96ff3f69076e8f788dfa3788",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/sqlite-interrupted_writer/config.json",
+      "bytes": 645,
+      "sha256": "4458a0e6dc5e2028cb0eecac13a913d0b48d80ab0971163913d1aa73ac42f3b6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/sqlite-interrupted_writer/result.json",
+      "bytes": 122,
+      "sha256": "7661f1b6d7ecbdcd046a99b6597799bf58270cc7a7d0c9984ae1b84dd2dda0a1",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/sqlite-interrupted_writer/verify.json",
+      "bytes": 643,
+      "sha256": "acd4002df4a63cd3fbf073aa8b3ab8d7d7d65651dc00eee229ebcac2ef3c2b29",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/sqlite-recovery_writer/config.json",
+      "bytes": 618,
+      "sha256": "9ab27fbdb518f7e81e3697a764bcc19e7f7c4d0f74061ea69a5a43cb9514d352",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/sqlite-recovery_writer/result.json",
+      "bytes": 122,
+      "sha256": "67a149368ddb1db753b25c8e6e29e57f75dfcf1c4a183631bbb1ec94422c6256",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/runs/recovery-final/20261101T194854608653Z/sqlite-recovery_writer/verify.json",
+      "bytes": 617,
+      "sha256": "02046de0940cef7ad195cf23e79bd28f526ebf6c1e1d61e4a8f79daaf0391fe6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/graphqlite-evaluation/verification.json",
+      "bytes": 1248,
+      "sha256": "58ff0329092cc2180c8f86d93974ea54c66d9550bb484dfe73046679bf178246",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/helix-direct-engine/README.md",
+      "bytes": 602,
+      "sha256": "882d4d29ca5de8d16ca077883db15301692f88f5b09ea00dd6a108f0ae02d4d0",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/native-boundaries/README.md",
+      "bytes": 4055,
+      "sha256": "0a2bc468ac70c02293e0234e48f2b26b07dd221f061149319e7ccc7e0cce003b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/native-boundaries/browser-results.json",
+      "bytes": 937,
+      "sha256": "ef99facef13f8f6c1c3e11110c65102bfe16a7aaee03f7035f116a4d7a45ec14",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/native-boundaries/decision-results.json",
+      "bytes": 1149,
+      "sha256": "82f2316287918c32bafd5aa49d4c3d103997483271433feff3470d9eace9dd77",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/native-boundaries/evidence.json",
+      "bytes": 5011,
+      "sha256": "6bb4caed5ead71dcf071b5ffb3a3056a6b521d6175bb5d25684b0b89688e96a5",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/native-boundaries/guards-results.json",
+      "bytes": 865,
+      "sha256": "2e406f27c12bfc83456f2b75d278674bf3cedc18fb4dc20f128874886920ac71",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/native-boundaries/pdf-results.json",
+      "bytes": 779,
+      "sha256": "21aed517588187dc041d93c4c812211b3b9a9332ce0b8da413fdd60cd3d94a85",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/native-boundaries/reader-checks.json",
+      "bytes": 1329,
+      "sha256": "063d46733ac4f84c79e82263d223795f3fd702650bea79e99c1378afd3671139",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/native-boundaries/ui-results.json",
+      "bytes": 686,
+      "sha256": "3c2a749860433da0ffab41c519f1b96ef43286654da6b42e8ab439f6414d4d33",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/no-manual-child-pauses-clarification.json",
+      "bytes": 1652,
+      "sha256": "bea742c9bad9561c7758b14d3b9d5f5a37b3f637d18333661d06990b08917f36",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/operation-contracts/README.md",
+      "bytes": 4274,
+      "sha256": "5386df49ae5a1a59e41e2a7bc77ed57558a59ffbfd607169265a7f893364e8ee",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/operation-contracts/native-results.json",
+      "bytes": 31240,
+      "sha256": "d0e945bd093fe1300c850e3325d05bcefb470e2a516a388daa4df73d86bca335",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/operation-contracts/receipt-model-results.json",
+      "bytes": 1498,
+      "sha256": "c15d4c719f163766d4f17cd0b6ff54369416cffc9da4b49b3270bc1c778e0882",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/operation-contracts/refinement-review.json",
+      "bytes": 3962,
+      "sha256": "491dba71b6419fe16132441a9ef0f41aec4fe21655229bae1bbe40a5d3d5e75e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/operation-contracts/schema-dto-results.json",
+      "bytes": 11127,
+      "sha256": "c2d401aea7c7633f2203f4a62c52096eb9062391ef7ecf5f559f44e1e52e27b8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/parallel-tool-turn-review.json",
+      "bytes": 2772,
+      "sha256": "d18582cc4873295e142d8fa477db7d0c23cdf5b4db3d91587e6f06fa261912ba",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/pending-activation-manual-resume-decision.json",
+      "bytes": 1845,
+      "sha256": "623effd3727a225b7865d425f923e77b62281b80e71ad666e3fe8e345314cedf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/persistence-refinement/README.md",
+      "bytes": 2947,
+      "sha256": "29e509e4fcf6b491b3236983cb09a41ea48d6744b774afa40dc2e322a46092e7",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/persistence-refinement/schema-at-review.sql",
+      "bytes": 22053,
+      "sha256": "eef17888c985db43d986560ef6a1b0a627036111f5441dc7d926f47a92c25c0b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/persistence-refinement/sqlite-mechanics.json",
+      "bytes": 1757,
+      "sha256": "eab5f09c064b6ff468b08364f0c8e54128add6b4ea113079d06ba3806018af53",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/persistence-refinement/vector-distance.json",
+      "bytes": 402,
+      "sha256": "b7370accc3cdc38e9640d823596d019402ed534c180c71e350e145a3a85e9c18",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/persistence-refinement-review.json",
+      "bytes": 5996,
+      "sha256": "c2fafd0be6d3c36eaeaab3ff109eb0f0d54ddc43a66dc66158c7173b683d33f5",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/plugin-refinement-review.json",
+      "bytes": 5892,
+      "sha256": "d6eca414076698b35c265b34f2a641b15c7bd89fecda7672e31d415276ac364e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/product-choice-refinement-review.json",
+      "bytes": 3609,
+      "sha256": "85821e1fdf181efdb109eb1f10dd93a579738f9b5b7a24ba572c7968ad783f46",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/provider-package-contracts/README.md",
+      "bytes": 5536,
+      "sha256": "1683201765602d36bf3964e6359f3c3f9a0e8c1f59d0c99449d0bf0e6c09f6e9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/provider-package-contracts/actual-frame-fixtures.json",
+      "bytes": 21243,
+      "sha256": "a8e38cbf3a4ccf3b957a32b2733b3db1e98ae9ee12b97d339447d51f73ab729e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/provider-package-contracts/native-results.json",
+      "bytes": 172761,
+      "sha256": "23394d3280a96b3eaabf49068b3bc4b9729e733ee6d7e77e056dcbfc421c53f6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/provider-package-contracts/package-process-results.json",
+      "bytes": 2428,
+      "sha256": "ffb3ac502243b485cb3b063d46bace4b0e50113284dccd2284235c9c80ac3eae",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/provider-package-contracts/refinement-review.json",
+      "bytes": 4627,
+      "sha256": "6ca6e2daf0ba9e53a499aee58f0af6a06f1f5525da61946ed586ab06deb9e9b6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/provider-package-contracts/scenario-results.json",
+      "bytes": 3759,
+      "sha256": "44e26b27826d15946ef1af3dd63c9a69f9754ef411c8ae958ef1d77825df43cf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/provider-package-contracts/schema-model-results.json",
+      "bytes": 40833,
+      "sha256": "018264bb8e55450743a0ffbbd7093164b67345f7c023dcf5755d7b97cc95bd8b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/queue-dependency-review.json",
+      "bytes": 3521,
+      "sha256": "715a7fb43231a9671f09f796719f1cf2e241553be28472cb8cd9a98be80b0081",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/router-refinement/README.md",
+      "bytes": 2679,
+      "sha256": "a1fb796a442cdefb61941a0147993bde393c68afc8733f6717d4b4028eb10893",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/router-refinement/contract-probe.json",
+      "bytes": 1928,
+      "sha256": "1510ed84ad281ab53ad14c6c07f5cadb0ae4d9b3750cb91946167de64992fdfd",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/router-refinement/source-audit.json",
+      "bytes": 3763,
+      "sha256": "77f641aa7824148cb6c40c0a06e4237e3e5b54822455b9c707b5b808d898724b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/router-refinement/sqlite-mechanics.json",
+      "bytes": 1757,
+      "sha256": "0c9a8950b05fb767979fc78cd542fa818af191973dc9a81e5920fd3bddd34346",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/router-refinement/vector-schema-check.json",
+      "bytes": 402,
+      "sha256": "b7370accc3cdc38e9640d823596d019402ed534c180c71e350e145a3a85e9c18",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/router-refinement-review.json",
+      "bytes": 7204,
+      "sha256": "56bcbff9fc6941855aa626bf50e0d1a6a615508838efb23a9caae8dbc57d1e25",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/router-selection-review.json",
+      "bytes": 5863,
+      "sha256": "887d25f513cf2efb2944584eb38e97d627b567063b671e93d63fbabeda06382d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/runtime-refinement-review.json",
+      "bytes": 3660,
+      "sha256": "0cdba2625bfc72e18bde81bfda3ada66316ae7449466e838c1760ced44131b90",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/security-refinement-review.json",
+      "bytes": 6994,
+      "sha256": "71ceb16b8e5b99255f3793e8e2f0515d8c1f2d65da888ebae7f32a8cc4517a41",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/sqlite-ports-word-pixel-verification.json",
+      "bytes": 2187,
+      "sha256": "257524f9cc6c399bab2d9a626d9c9bd3e679de82529138f9871087785521f747",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/README.md",
+      "bytes": 2023,
+      "sha256": "0039dc14047876faec789357510b0f6458a57c65de497109b162811996ecc8c4",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/direct-overgraph-attribution/attribution.json",
+      "bytes": 1095,
+      "sha256": "943d04138ef81db2725bdc5d26d555028a15d12fec53bf9f51633dd4db2c02b7",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/direct-overgraph-attribution/run-001.json",
+      "bytes": 3377,
+      "sha256": "a9d3d911fe5b514db21c003fec581ec0086b84ee40289a1e2e0dee27017f753d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/direct-overgraph-attribution/run-002.json",
+      "bytes": 3377,
+      "sha256": "a9d3d911fe5b514db21c003fec581ec0086b84ee40289a1e2e0dee27017f753d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/direct-overgraph-attribution/run-003.json",
+      "bytes": 3377,
+      "sha256": "a9d3d911fe5b514db21c003fec581ec0086b84ee40289a1e2e0dee27017f753d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/direct-overgraph-attribution/run-004.json",
+      "bytes": 3377,
+      "sha256": "a9d3d911fe5b514db21c003fec581ec0086b84ee40289a1e2e0dee27017f753d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/logs/environment-final.json",
+      "bytes": 4467,
+      "sha256": "48b2969d3e3fde4f71ade2dcd8d95c424fdb30b96242a396022bb8aef2ce4f7c",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/manifest.json",
+      "bytes": 37070,
+      "sha256": "c9f944accd68ee1650e4eb849c84c9b4db498d378704401a7b7980915d7d30c6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-1-grafeo/config.json",
+      "bytes": 483,
+      "sha256": "8699d2f61a82e0e87232086c97972c05421cc9972af7c6e86049e54f164ff167",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-1-grafeo/result.json",
+      "bytes": 155384,
+      "sha256": "7e422f83ae344dbb5c27163e919f5a7171d228c56fe37e3d783c2e511d6192d6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-1-helix/config.json",
+      "bytes": 481,
+      "sha256": "cd53c2c86c472103b7834e3f9cbc3d266bb4ebcad4fe593a4b22b2120ed7a29c",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-1-helix/result.json",
+      "bytes": 183893,
+      "sha256": "d1421d1e99133fdbb76c244710a97916bb87755f5a285ed1e908cb123cee5ca7",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-1-overgraph/config.json",
+      "bytes": 489,
+      "sha256": "553c6174e155e14e14e2317ed420afa87c88df73921b7e79c0c568f7b4ec64d1",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-1-overgraph/result.json",
+      "bytes": 158476,
+      "sha256": "1c27665d66c5013e6551333cce09c64833990459ffecb07f9f8147736a0e2c52",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-1-sqlite/config.json",
+      "bytes": 483,
+      "sha256": "65ce42537d6d020207da6738f2d91dee2c1d56cc9ef8391d6bc70af2fe539111",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-1-sqlite/result.json",
+      "bytes": 161662,
+      "sha256": "a706737f92640ee772c0bbe9ae17e7e7bff31865eda4c7a9c9165e3aff0ea56d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-2-grafeo/config.json",
+      "bytes": 483,
+      "sha256": "7960470c5282b878cad867013388d7fc04accbd41a057ddabc75b616de838bbe",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-2-grafeo/result.json",
+      "bytes": 155196,
+      "sha256": "e510a92430821407b017b823183a77d12bd697978b3b34255464c3b4143e698a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-2-helix/config.json",
+      "bytes": 481,
+      "sha256": "e95b91b5e107fc19048cf0ff348ebc27655e0a1836fcd48c321473abe674cfa8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-2-helix/result.json",
+      "bytes": 183830,
+      "sha256": "c1b271b54c31a7147c35d5bdb598704f9700dfedd1a1915d9e99c48962d76473",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-2-overgraph/config.json",
+      "bytes": 489,
+      "sha256": "1277aa49abdecbc787cda9e2a7090050a3af2a1211e6699fd497076fb426b567",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-2-overgraph/result.json",
+      "bytes": 158528,
+      "sha256": "d56500965cba5e46343438ae77ac81f51c4a3f112e4f1e2fa9d0b8bb61d50a44",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-2-sqlite/config.json",
+      "bytes": 483,
+      "sha256": "4916548024dddab8a5a8fee32b0a6898a79dfc544b2a0676acb4a2db4436c914",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-2-sqlite/result.json",
+      "bytes": 161864,
+      "sha256": "5474b9591aae86741b299fe550cba191052a9e382e8db263768e0845321c1d90",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-3-grafeo/config.json",
+      "bytes": 483,
+      "sha256": "65f31242147c1edc7044c02deb7bfa8ede81dd50e5fc188bd3b9186b3a61e6e7",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-3-grafeo/result.json",
+      "bytes": 154898,
+      "sha256": "ec46fd491827cba732829fec4d09542f40dc35192facdedd1bd84198042773c9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-3-helix/config.json",
+      "bytes": 481,
+      "sha256": "f961d373f04654a786c3a9ec1e020bbd06faf284a917e6d86897c6df88524e92",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-3-helix/result.json",
+      "bytes": 183802,
+      "sha256": "ee0209fa67d7e1422b220e412c068f0485d6f4e939bb53d537c14bb50b24d5c9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-3-overgraph/config.json",
+      "bytes": 489,
+      "sha256": "087630b5e79b932b84ef0a6ce06061692178d7b23d4a6ba13d36c4d09f2c232c",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-3-overgraph/result.json",
+      "bytes": 158453,
+      "sha256": "1f08eabda23d0bf8bae2231bc79e57d00e8c6871d27770a5b53a81a2c48ed31f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-3-sqlite/config.json",
+      "bytes": 483,
+      "sha256": "48f6a913f458867101d0fc8d2adb9c81b8d4b44e312994480781fb20c860f83c",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/overlay-3-sqlite/result.json",
+      "bytes": 161520,
+      "sha256": "e863a6e45c884dfae2c647faa99a4393462eb36a930962d2931444b878dec484",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-1-grafeo/config.json",
+      "bytes": 465,
+      "sha256": "993dbe2935d3dfe71cc20b345272bb4c7d7ca44d25b6bed2aa199ad0c9b45fc9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-1-grafeo/result.json",
+      "bytes": 152578,
+      "sha256": "86d9f58d3054ce73303cd3bb6c70a5bee5841f21e0c07a49dc2bca6d875116c8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-1-helix/config.json",
+      "bytes": 463,
+      "sha256": "9e07b9ace074e460ce9a098f81f8bd95cdc57a7dc9afc7213acaf1daa63f57bf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-1-helix/result.json",
+      "bytes": 173969,
+      "sha256": "7a0f42cb2cddbdeb2d83582154b6e82bed7d70e553eb9eae4e3503358255e143",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-1-overgraph/config.json",
+      "bytes": 471,
+      "sha256": "5b0d4da2bbe424f6f366266735a68e72a9078ab754e07d7a3be3764497f2d085",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-1-overgraph/result.json",
+      "bytes": 155484,
+      "sha256": "5f81b14d6caf83d7751f990fc06b1422633c0a93f457196c44ef2ee52b893822",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-1-sqlite/config.json",
+      "bytes": 465,
+      "sha256": "3f681f22bdbba919279f15ffa4a1123f3c0e2bd7d4024cb58401bddf8347de6c",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-1-sqlite/result.json",
+      "bytes": 154716,
+      "sha256": "2e00f262285f4952fbd2cd67fa03eb14ef601c30ebc92f06575847007beaf896",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-2-grafeo/config.json",
+      "bytes": 465,
+      "sha256": "8323b83e8649c60eff203df06a60788b38c3fef215caa115262c57477f0b293a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-2-grafeo/result.json",
+      "bytes": 152089,
+      "sha256": "63351b599f9beb2963a49c323ebc5e527e48866c1447e17584c870febe385062",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-2-helix/config.json",
+      "bytes": 463,
+      "sha256": "cc776d64a6c589fa148533159621e62b41738664e533673f145420c027bd0677",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-2-helix/result.json",
+      "bytes": 174064,
+      "sha256": "aa051325dc8f986f740f68b57dc7ac89950b305f5d7651a9c1fe2b12a47b256f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-2-overgraph/config.json",
+      "bytes": 471,
+      "sha256": "8d1d0d8948955998ae21caf8a58ba641911feb89f26417eb00a350d8ca9e3485",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-2-overgraph/result.json",
+      "bytes": 155486,
+      "sha256": "da1ac05a44959c797822ea20cb777e6419666ddbeaee437979e9703e2cb28a56",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-2-sqlite/config.json",
+      "bytes": 465,
+      "sha256": "16701f0e18fc0a34ec67ebf9803f986ed1f4415ded7843fb0afbcc3faed821e2",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-2-sqlite/result.json",
+      "bytes": 154434,
+      "sha256": "19e3c37b2fb943d5140daf4fd876180a1c1df4ccca97ef0a44587a18459a7e92",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-3-grafeo/config.json",
+      "bytes": 465,
+      "sha256": "ea56f2552a353b097f35ddd86c69f382f9f262a3d8bdfdff63b428bce7d8fc6b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-3-grafeo/result.json",
+      "bytes": 152707,
+      "sha256": "d6abae61c929fa2e2725fb19b5963dcb527c8482d1349c2c22158c02fef445df",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-3-helix/config.json",
+      "bytes": 463,
+      "sha256": "3da48a788b7d434911bf1a8f262acd99e1c40ffdc25c0708a4c8faa6e3263ec8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-3-helix/result.json",
+      "bytes": 173894,
+      "sha256": "aba3c2e72cefe093e6d447abada9ee1885e0d54238a3308ed0879db3288f763b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-3-overgraph/config.json",
+      "bytes": 471,
+      "sha256": "cb291f0afa8e5529537fa74461bafdbb1a36f6a977768e838bf3128d0b307504",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-3-overgraph/result.json",
+      "bytes": 155268,
+      "sha256": "89257d40662db11773f325c1d521a48cee08093ff90115f48b3fca156d99894b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-3-sqlite/config.json",
+      "bytes": 465,
+      "sha256": "620e84f5070ac372ed4315f109e036bcde6f10427480ff7fa2b1bd2ecbc136b2",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/small-3-sqlite/result.json",
+      "bytes": 154470,
+      "sha256": "2f1ccd60ab08ce3326e2f92740e4f1bcbad7c526dc9216c5487c4f3b79414930",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-1-grafeo/config.json",
+      "bytes": 482,
+      "sha256": "76ae47f3e740fb106028c45e3360366f15caa75e4309d5ec2283e91e34fee168",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-1-grafeo/result.json",
+      "bytes": 154051,
+      "sha256": "e2a85ac7c7dbc39f34b715b0aeafe3dedf3ea3935fb35cb69463ed6641f3d214",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-1-helix/config.json",
+      "bytes": 480,
+      "sha256": "741930d34e88fcb548099f31b002d4916883016a5a22c50bbab45baf085da510",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-1-helix/result.json",
+      "bytes": 181304,
+      "sha256": "162b64aaca7a74b9fc463a930aeb0449c58e5abcdfd734c103410ebb16e1826a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-1-overgraph/config.json",
+      "bytes": 488,
+      "sha256": "49c5efa35e4ee8f5269abff5ddfdc26baeeea2d41ce1721934d35d6b8999aa7a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-1-overgraph/result.json",
+      "bytes": 157446,
+      "sha256": "03f3f1a58387d220e19556e6f331fd6f6e07a8b61b5f5e8143c393d7e58e9a8f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-1-sqlite/config.json",
+      "bytes": 482,
+      "sha256": "332762c014e378c10eab5932d49a008a76cace29fab0aba443e01740a31b264f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-1-sqlite/result.json",
+      "bytes": 160074,
+      "sha256": "a3cc8eb01eb6541c4054b79421b93d0c311635e62637f3b72fb5f05731bf4173",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-2-grafeo/config.json",
+      "bytes": 482,
+      "sha256": "dc52270b6a569e7060c1d1f1d2e31513ac1f60ee259a081492777431089f54ea",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-2-grafeo/result.json",
+      "bytes": 153891,
+      "sha256": "13af00b0700d6f0462a7c6858ad317a2694e39dae2de78883db34540269a84ae",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-2-helix/config.json",
+      "bytes": 480,
+      "sha256": "edff0efd2a017c043b7074e7080e83cbf3e04c10f9ffb8c93769c11ff4ae5b6b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-2-helix/result.json",
+      "bytes": 182873,
+      "sha256": "a90503772f050a975f1d57dce58eca47e685aee933b54d43020ec67b0e0ace69",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-2-overgraph/config.json",
+      "bytes": 488,
+      "sha256": "e467dbb6ab5644f4ff8fc243ab01e9bb9f59545cc35209d57dff98342ad96db6",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-2-overgraph/result.json",
+      "bytes": 157468,
+      "sha256": "52e81d8b2df524ef1ab4ed4bd21afd263d5f71b620b4cfc709907f437eb8575b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-2-sqlite/config.json",
+      "bytes": 482,
+      "sha256": "4c8af3348e02daf58ad447ed8e8239d3b5911ebf550b4594de3039b6bc29e6fc",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-2-sqlite/result.json",
+      "bytes": 159752,
+      "sha256": "710585e5ed442c917f5bb00bae01b89c9f600eae8f922062addbc5a0541c8229",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-3-grafeo/config.json",
+      "bytes": 482,
+      "sha256": "a09aa31ed8b971d88a8e797cc4abea76ace9bc3058c9ec33d4e463e4e91e628a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-3-grafeo/result.json",
+      "bytes": 154009,
+      "sha256": "fe7064110c945846ebdd58a059b58abf52cfbae9e7495a13ebb1e8335f3805bf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-3-helix/config.json",
+      "bytes": 480,
+      "sha256": "93385f71c9e5903532c253e6d4434d68f22c57b75ff518ef000e4194090e93cd",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-3-helix/result.json",
+      "bytes": 181785,
+      "sha256": "29fe66c12167e6de6d34352393794e505cc3589d6753f8ead220032828defcbf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-3-overgraph/config.json",
+      "bytes": 488,
+      "sha256": "88250d751406a5126814638307842bd659d3fc6c716c77b832f0c39af6cf8236",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-3-overgraph/result.json",
+      "bytes": 157433,
+      "sha256": "7686a8547fd1e84eeb7590fa732ce802db85c42a1a72196f604fe464307ca88f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-3-sqlite/config.json",
+      "bytes": 482,
+      "sha256": "80986077be31ebfe4dbb9df46dec972b7dc9807f0f6c37f55b837844026fffc2",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/measured/20261101T174520146593Z/source-3-sqlite/result.json",
+      "bytes": 160034,
+      "sha256": "3d898888d0063ecc143d360421713776b04c29fdf27fec2787c55ac49313c0fc",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/BUG-REPORT.md",
+      "bytes": 12443,
+      "sha256": "969fc0424ef3148bfbed5feb3d5f907ecd4862acd54f9c043f54a89acda04035",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/INDEPENDENT-VERIFICATION.md",
+      "bytes": 1675,
+      "sha256": "059a4ef6e582ead190a7faaf235197a0c88ffb1f45b1cb6c4ed6720d17d3c489",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/features.txt",
+      "bytes": 393,
+      "sha256": "fb9d67859e9408f16b5b7cac617fb810aba7c22486c066c4820d3569c6e37335",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/inspect-001-flushed-false.json",
+      "bytes": 313,
+      "sha256": "7d041a190f1e46c68f2ce8c63ea5e2dc46502d62c874140c6396326ab5bdbe5e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/inspect-001-flushed-true.json",
+      "bytes": 320,
+      "sha256": "add4a8d335c7feb2062ad7f6ff706b8fd496d25b93517de45c7b671ca2bed2d8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/inspect-002-flushed-false.json",
+      "bytes": 313,
+      "sha256": "7d041a190f1e46c68f2ce8c63ea5e2dc46502d62c874140c6396326ab5bdbe5e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/inspect-002-flushed-true.json",
+      "bytes": 320,
+      "sha256": "add4a8d335c7feb2062ad7f6ff706b8fd496d25b93517de45c7b671ca2bed2d8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/inspect-003-flushed-false.json",
+      "bytes": 313,
+      "sha256": "7d041a190f1e46c68f2ce8c63ea5e2dc46502d62c874140c6396326ab5bdbe5e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/inspect-003-flushed-true.json",
+      "bytes": 320,
+      "sha256": "add4a8d335c7feb2062ad7f6ff706b8fd496d25b93517de45c7b671ca2bed2d8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/run-001.json",
+      "bytes": 3998,
+      "sha256": "1c7b343afe580a0d9ea54d63906440c8c2bd5c3e3b9a25b4d4e3febf4b182822",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/run-002.json",
+      "bytes": 3998,
+      "sha256": "05ed4223fc87baba1841cf77c1e11d423a6a825d24b1341ecbff1c5082c98661",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/run-003.json",
+      "bytes": 3998,
+      "sha256": "36e20eb48382b3d00cab2a435ad79572f26ffcbfa161cfe4327b861d540024e0",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/overgraph-deletion-bug-report/evidence/verification.json",
+      "bytes": 5111,
+      "sha256": "ece7e1f244748830fca7c226b6fad7faca255bb7a42f031122916c0fd0a51e5a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T173351307075Z/manifest.json",
+      "bytes": 3605,
+      "sha256": "8eca2e24074e7d1a9abccfb6d25f9fbeb992e621689604c2acea8a6082ddc9bd",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T173351307075Z/pilot-1-grafeo/config.json",
+      "bytes": 459,
+      "sha256": "bb15e1fe7e483ceb9a54e4b150826b89b50ff5fcc1afff4a2dfa7831f79e5b4d",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T173351307075Z/pilot-1-grafeo/result.json",
+      "bytes": 47357,
+      "sha256": "8e0397bfbf799bf995a77d0d9efd15dc63433cbe27d10ca8ef0ec0d33ccf182f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T173351307075Z/pilot-1-helix/config.json",
+      "bytes": 457,
+      "sha256": "5e3eed415039ad1dacb2bf77d679a9686a4661c14dfbda25f5194fa76d009897",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T173351307075Z/pilot-1-helix/result.json",
+      "bytes": 54715,
+      "sha256": "19f74b5b769015d5e4d88a4da58f2cdd2d6e903cd94ce0965198f8ef63c93120",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T173351307075Z/pilot-1-overgraph/config.json",
+      "bytes": 465,
+      "sha256": "aa825e905405fcda9cb15f7d5b5a87aeddae2ea5f7d6b533523ace2824c3d263",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T173351307075Z/pilot-1-sqlite/config.json",
+      "bytes": 459,
+      "sha256": "1d4ee1ed5a569ab1b1d8933c7953f0f11f462b1d9c999b7598bfa6e937ccc20e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T173351307075Z/pilot-1-sqlite/result.json",
+      "bytes": 46860,
+      "sha256": "8dba2d45badd1c74dfb765a893063a2fddd2eb02a07bd4e1f77e1080190d2fb9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174047208379Z/manifest.json",
+      "bytes": 3629,
+      "sha256": "c9750ff8876209d3e557944050cc1dfd8bd3eb0248d7e19a218e6f49d9f2b004",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174047208379Z/pilot-1-grafeo/config.json",
+      "bytes": 459,
+      "sha256": "6b4d3431b5ec3696961f2efc27809db5954b019550affcf217c09032250ae95f",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174047208379Z/pilot-1-helix/config.json",
+      "bytes": 457,
+      "sha256": "b44bee11bec1bc4f772bbf4c72f36bfc2fbb81a3f146771be2cca77e535174e1",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174047208379Z/pilot-1-helix/result.json",
+      "bytes": 102368,
+      "sha256": "cae53bcd302974555d296ecd161f24d376ae09f994b42683a6ccd9c3db60a50e",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174047208379Z/pilot-1-overgraph/config.json",
+      "bytes": 465,
+      "sha256": "4a8f48ba393fe925f42cfdea5e41c9919800c8eac0df0c2a65d7a75a36274651",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174047208379Z/pilot-1-sqlite/config.json",
+      "bytes": 459,
+      "sha256": "f6e3f43ca50de7f14693547ce0a6bd46019ab8d999fb42b9f19c6c31e5799405",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174047208379Z/pilot-1-sqlite/result.json",
+      "bytes": 87671,
+      "sha256": "772e442df05a8ff46a7c1bbd6bf6919d329d5eab93cfb18b8e4e0be620f40819",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174225392217Z/manifest.json",
+      "bytes": 3463,
+      "sha256": "c2e09fc0220cf410f9db832d368cdb18336ed74ac5b83c920bb57dded190ac61",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174225392217Z/pilot-1-grafeo/config.json",
+      "bytes": 459,
+      "sha256": "c57a1f825e9d1d59747ca541b26c3a5ec24e03c04e7bba753eb0c05b27e59016",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174225392217Z/pilot-1-helix/config.json",
+      "bytes": 457,
+      "sha256": "608bb5942b04dc56ffcdbf6480b2140370407d158949ebee3a0db47d9cc47872",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174225392217Z/pilot-1-overgraph/config.json",
+      "bytes": 465,
+      "sha256": "72566282612fe87b14305aeaff9e5c62bfb2f4ed51747944c995b01f298e6adb",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174225392217Z/pilot-1-sqlite/config.json",
+      "bytes": 459,
+      "sha256": "ddc6b41e22e4f408b7bc3d0ec0652bfefe44ec205e7b8c3db4d409edfa070724",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174350105817Z/manifest.json",
+      "bytes": 4048,
+      "sha256": "14c9a1ec336fe6cc84bfcdb91a8ec65a3f514aff53f5697422d2f1e53570ba1c",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174350105817Z/pilot-1-grafeo/config.json",
+      "bytes": 459,
+      "sha256": "d9219d75cabc5d451a2c266b376d7866c213acb13b0a9e48c869083505e3f2f9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174350105817Z/pilot-1-grafeo/result.json",
+      "bytes": 88996,
+      "sha256": "0c596664ec772823c75c77854cbcfa36dddfaeeddb5b8c4295a5c336b0ffdc3c",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174350105817Z/pilot-1-helix/config.json",
+      "bytes": 457,
+      "sha256": "c7b737e1eb13350ed4772a403306a011448b009c4396f92958e8fbc364d6467b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174350105817Z/pilot-1-helix/result.json",
+      "bytes": 103949,
+      "sha256": "42d35f84025227963fcfc8535d3af4e1c855f419b81225f402faa63486b32893",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174350105817Z/pilot-1-overgraph/config.json",
+      "bytes": 465,
+      "sha256": "c90bf94b0afae214f8553f7577bcf215d2df960164b2e310bf41559a79655e70",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174350105817Z/pilot-1-overgraph/result.json",
+      "bytes": 90372,
+      "sha256": "834c0f515ec2d9f5a2ff6190dd85ce0c31239f28844c5295d0782aa0071c9d1a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174350105817Z/pilot-1-sqlite/config.json",
+      "bytes": 459,
+      "sha256": "c6cfd1dec6f124088776d0ea5e06f296cfe12e33f8aeb8f2984718a5bbe4a153",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/pilots/20261101T174350105817Z/pilot-1-sqlite/result.json",
+      "bytes": 88892,
+      "sha256": "5f1e55de4bcd1865774e6b25414f905b2e8bd922cc8b2b56a1bd1199c5992809",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/grafeo-interrupted_writer/config.json",
+      "bytes": 618,
+      "sha256": "9a2d9f77230a1702b7580e1c5f7ff3630415be37deb513feb8116190bed0d809",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/grafeo-interrupted_writer/result.json",
+      "bytes": 123,
+      "sha256": "831da6b8323064830e67a8a0bc90837e8290fac13de1875ec92cd96dd8ce9cc3",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/grafeo-interrupted_writer/verify.json",
+      "bytes": 616,
+      "sha256": "d38b467f8d5ef49c35527b5c99b1881638cd6904b17b5e6a511c1dc4ca265424",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/grafeo-recovery_writer/config.json",
+      "bytes": 591,
+      "sha256": "e9f30f747021dc0eade0530d9fe84cfc52ab0b41210d1c1be5cb192a54109a28",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/grafeo-recovery_writer/result.json",
+      "bytes": 125,
+      "sha256": "64d05bfba2f9e1483af75a807efd2467741a35ac51820317491e24561bfc28d0",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/grafeo-recovery_writer/verify.json",
+      "bytes": 590,
+      "sha256": "55a9940725f98bc1666e6c6052f01ba5ac2300649dd93dafcb84192b6389f611",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/helix-interrupted_writer/config.json",
+      "bytes": 615,
+      "sha256": "df1c923073ad817b0f765a26c6f6e26f735b4fbd653b7e445199847024780d8a",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/helix-interrupted_writer/result.json",
+      "bytes": 123,
+      "sha256": "1ec2293fdd2dcc3aa4e4a5c81d7b26199c78d26a2cf691bbf402173d16de1ce8",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/helix-interrupted_writer/verify.json",
+      "bytes": 613,
+      "sha256": "638ccfed7eb2e7ed8eee156763074a99f03aac1fa52e1b2d516b8c41c9b3676b",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/helix-recovery_writer/config.json",
+      "bytes": 588,
+      "sha256": "28ecb2c6bd62bcd5d54a9948f2ec5e8d56afdd56960e1ed1537ac87a1b135207",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/helix-recovery_writer/result.json",
+      "bytes": 124,
+      "sha256": "f978569f98d7c3ee9f77e16b7fbeb24dc2b95edca4a650a7fb3fc67c175144f3",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/helix-recovery_writer/verify.json",
+      "bytes": 587,
+      "sha256": "7efdbfffe20e4198e02f69a806ab2e660192ed7cda078a18147cb888b9d7c436",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/manifest.json",
+      "bytes": 5437,
+      "sha256": "623bc0d427af81bf90c9e02621e90aecedb6b402180b3eb9f9755db565a203b7",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/overgraph-interrupted_writer/config.json",
+      "bytes": 627,
+      "sha256": "77c7b1c76e44fe24d6f9c492fdd8e96b50a54636b12edc0dfb2a0c650f667d83",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/overgraph-interrupted_writer/result.json",
+      "bytes": 126,
+      "sha256": "685ecf3a906442f00bf1026bd7f82f354bbb155cf5486f0b2c5b0ed7abfc44bf",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/overgraph-interrupted_writer/verify.json",
+      "bytes": 625,
+      "sha256": "ac8fe124b624e8c597e6abe214501c15de57ea6f6a25c36aeaa0ba9ff7f5c852",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/overgraph-recovery_writer/config.json",
+      "bytes": 600,
+      "sha256": "020ea4a7ee6edf69d5bef308427146cf30205a3e30ee164d98508942cb9bde30",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/overgraph-recovery_writer/result.json",
+      "bytes": 127,
+      "sha256": "af7d7cf44adc2038068b0f639ad946182df11173e8dd5672ad4f2a69e57394b7",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/overgraph-recovery_writer/verify.json",
+      "bytes": 599,
+      "sha256": "a58401e2a51b30254c0f43856f1685e3d91a112ecc789e78a32b1eb1ae47c080",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/sqlite-interrupted_writer/config.json",
+      "bytes": 618,
+      "sha256": "03ab37bbb4e983956a1123a2023d60602a585e996996e40d3da82fc3437c9dad",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/sqlite-interrupted_writer/result.json",
+      "bytes": 122,
+      "sha256": "fc94ac914036bd8f8eee96a91c7b53548ed1db3f7bd037eacf662feabfd881b9",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/sqlite-interrupted_writer/verify.json",
+      "bytes": 616,
+      "sha256": "99c8a42e125632c42f5689508b114866477c26b97b3e26a743413418b1352554",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/sqlite-recovery_writer/config.json",
+      "bytes": 591,
+      "sha256": "ab60ceb24b6295261244f543f5cc075b2d48887e8136558e3a1734ae8ee1cbe5",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/sqlite-recovery_writer/result.json",
+      "bytes": 122,
+      "sha256": "7e76ec64e38b80c0ed0d5301778a2f9b0133462caa6b60d8c3f42f31995f7d92",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation/storage-evaluation/recovery/20261101T174432529475Z/sqlite-recovery_writer/verify.json",
+      "bytes": 590,
+      "sha256": "ab6eccf16c8322288798238020f7aa3c483ad0c16c7a3ac53136538195013c85",
+      "role": "Historical or scoped raw evidence"
+    },
+    {
+      "path": "docs/architecture/validation-workloads.json",
+      "bytes": 6494,
+      "sha256": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/planning/README.md",
+      "bytes": 4219,
+      "sha256": "a4049a8b86bcde4c7d47c11aa23af06e30e7f628b6b4e83b4b56e25d65751767",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/planning/design-coverage.json",
+      "bytes": 31701,
+      "sha256": "ce86e08670b39770954e5bef216688bfd297b646d1c76b819c2e3472b911ea8a",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/planning/devworks-requirements.docx",
+      "bytes": 557471,
+      "sha256": "adf891a45a11538ecff53805fae15d9e9cfb7ed2faafee0bc50bda33b12ef9b2",
+      "role": "Synchronized Word requirements"
+    },
+    {
+      "path": "docs/planning/devworks-requirements.html",
+      "bytes": 304935,
+      "sha256": "1e2dfaf9742a3872ec6d3e1766ce7d5d89d02d8c87100dc4c43d1832522eb953",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/planning/harness-workbench.html",
+      "bytes": 204610,
+      "sha256": "f370079494451d0ad52c8f0a71c0988ce72c51a6a4312ffd89de9300c3daa97d",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/planning/mockup-gallery.html",
+      "bytes": 40530,
+      "sha256": "9fa1f6b5fcb7b66c08e16a0c7f0c9012a0316759b31575ec5ba0b15709740aef",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/planning/requirements-content.json",
+      "bytes": 298226,
+      "sha256": "a44eec4eb38dad85874a5f5a4cca2461d716df16cb469b68a6202c35c57e4498",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/planning/requirements-interview.json",
+      "bytes": 141024,
+      "sha256": "c2029d506884707552b5a8f3d773f1f553dfb1d5e9136e0b2bfb5d3deabd2622",
+      "role": "Current source or generated reader"
+    },
+    {
+      "path": "docs/planning/typography-review.json",
+      "bytes": 13819,
+      "sha256": "12ac483d9c68ce050b3c948a9d1f198b19c1c8816586f37453c371870de5f993",
+      "role": "Current source or generated reader"
+    }
+  ]
+}

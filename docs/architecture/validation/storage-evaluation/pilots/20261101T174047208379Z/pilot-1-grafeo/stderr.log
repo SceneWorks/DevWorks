@@ -1,0 +1,1 @@
+Error: GRAFEO-V001: Invalid value: Constraint violation: Cannot delete node with 31 connected edge(s). Use DETACH DELETE.

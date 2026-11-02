@@ -1,0 +1,140 @@
+{
+  "date": "2026-11-01",
+  "engine": {
+    "name": "overgraph",
+    "version": "0.18.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "checksum": "ab605774b959c8dacb8d73f1a768f5634d0eabd6ff7e851cda6f381e3d8c78bc",
+    "dependencies": [
+      "arc-swap",
+      "crc32fast",
+      "crossbeam-epoch",
+      "crossbeam-skiplist",
+      "memmap2",
+      "rayon",
+      "rmp-serde",
+      "serde",
+      "serde_json",
+      "sha2"
+    ]
+  },
+  "upstream_commit": "bf834023508be5a9b28b349a6982a4735d59d918",
+  "host": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M5 Max",
+  "ram_bytes": 137438953472,
+  "cores": 18,
+  "rustc": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: aarch64-apple-darwin\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+  "cargo": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29)",
+  "binary_sha256": "ce93ebd2a0a09d80216657d9400e0e37187bedcd96e8cf68474a4f4c10242178",
+  "input_sha256": {
+    "repro/Cargo.lock": "a6f07f15c4d080a7bb2a7847214747535e0168f70174a9adea77d3fc89b7bff0",
+    "repro/Cargo.toml": "4578454e286d558da8c1fcc38ff176c2f2530ac24eb542118516eb30b0945278",
+    "repro/src/main.rs": "bf36cad56c26a0e8d51955b732553514e2001519fe19660218a3aeb710d9d2b6"
+  },
+  "summary": [
+    {
+      "repetition": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/overgraph-delete-repro",
+        "run",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-001"
+      ],
+      "exit_code": 1,
+      "all_four_variant_patterns_verified": true,
+      "fresh_process_inspections": [
+        {
+          "initial_flush": false,
+          "command": [
+            "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/overgraph-delete-repro",
+            "inspect",
+            "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-001/flush-false-rename-false",
+            "1"
+          ],
+          "exit_code": 0,
+          "stale_vector": false
+        },
+        {
+          "initial_flush": true,
+          "command": [
+            "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/overgraph-delete-repro",
+            "inspect",
+            "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-001/flush-true-rename-false",
+            "1"
+          ],
+          "exit_code": 1,
+          "stale_vector": true
+        }
+      ]
+    },
+    {
+      "repetition": 2,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/overgraph-delete-repro",
+        "run",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-002"
+      ],
+      "exit_code": 1,
+      "all_four_variant_patterns_verified": true,
+      "fresh_process_inspections": [
+        {
+          "initial_flush": false,
+          "command": [
+            "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/overgraph-delete-repro",
+            "inspect",
+            "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-002/flush-false-rename-false",
+            "1"
+          ],
+          "exit_code": 0,
+          "stale_vector": false
+        },
+        {
+          "initial_flush": true,
+          "command": [
+            "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/overgraph-delete-repro",
+            "inspect",
+            "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-002/flush-true-rename-false",
+            "1"
+          ],
+          "exit_code": 1,
+          "stale_vector": true
+        }
+      ]
+    },
+    {
+      "repetition": 3,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/overgraph-delete-repro",
+        "run",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-003"
+      ],
+      "exit_code": 1,
+      "all_four_variant_patterns_verified": true,
+      "fresh_process_inspections": [
+        {
+          "initial_flush": false,
+          "command": [
+            "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/overgraph-delete-repro",
+            "inspect",
+            "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-003/flush-false-rename-false",
+            "1"
+          ],
+          "exit_code": 0,
+          "stale_vector": false
+        },
+        {
+          "initial_flush": true,
+          "command": [
+            "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/overgraph-delete-repro",
+            "inspect",
+            "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-003/flush-true-rename-false",
+            "1"
+          ],
+          "exit_code": 1,
+          "stale_vector": true
+        }
+      ]
+    }
+  ],
+  "no_inference": true,
+  "setup_errors": 0
+}

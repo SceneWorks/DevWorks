@@ -1,0 +1,13 @@
+
+running 3 tests
+test workload::tests::sparse_tail_samples_do_not_claim_p99 ... ok
+test workload::tests::scopes_exclude_cross_project_paths_and_vector_ties ... ok
+test workload::tests::cyclic_reachability_is_finite_and_deduplicated ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

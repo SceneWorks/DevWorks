@@ -1,0 +1,8 @@
+{
+  "accesskitFeature": true,
+  "frames": 2,
+  "limits": "Native window/renderer initialization only; OS assistive technology and full pane acceptance untested.",
+  "passed": true,
+  "renderer": "glow",
+  "visible": false
+}

@@ -1,0 +1,77 @@
+{
+  "date": "2026-11-02",
+  "finding": "AR-02",
+  "status": "Resolved user-confirmed design and candidate contracts; native application unimplemented",
+  "decision": "Each feature owns one active approved plan and at most one pending revision. Keep the original plan open and approved until replacement approval; no separate plan lifecycle or user-facing version management.",
+  "behavior": [
+    "Saving/requesting approval/rejecting a revision preserves active approval and eligible work.",
+    "Pending scope cannot authorize implementation or live task acceptance changes.",
+    "Exact authenticated approval atomically replaces active plan/scope/acceptance/history and clears the pending slot.",
+    "Changed draft makes an approval stale; unrelated metadata need not invalidate an unchanged draft.",
+    "Existing manual holds remain; only incompatible work is fenced when approved changes are adopted at safe boundaries."
+  ],
+  "storage": "One feature_plans row holds active and pending content; existing feature history provides audit. The plan_revisions catalog is removed from the design fixture. Existing revision/digest fields remain internal concurrency and approval binding tokens.",
+  "schemaChecks": {
+    "schemaFiles": 44,
+    "domainTypeDefinitions": 205,
+    "catalogOperations": 351,
+    "allMessageFixtures": 1062,
+    "scenarios": 12,
+    "scenarioSteps": 26,
+    "allPassed": true
+  },
+  "sqliteChecks": [
+    "saving pending content preserves the approved plan",
+    "reopen retains approved and pending content separately",
+    "requesting approval does not invalidate the original approval",
+    "rejection preserves the approved plan",
+    "stale draft approval cannot replace the current plan",
+    "interrupted promotion rolls back plan, approval and event together",
+    "approval atomically replaces the plan and clears the one pending slot",
+    "plan approval does not clear a manual pause",
+    "feature owns one plan-state row rather than a plan-version catalog"
+  ],
+  "prototypeChecks": [
+    "saving_revision_preserves_approved_plan_and_running_work",
+    "rejection_preserves_original_approval_and_execution",
+    "editing_pending_revision_rejects_stale_approval",
+    "unrelated_metadata_does_not_invalidate_reviewed_pending_content",
+    "approval_promotes_exact_draft_and_clears_pending_slot",
+    "approval_does_not_continue_paused_work"
+  ],
+  "documents": {
+    "wordRequirementsMatched": 350,
+    "wordPages": 66,
+    "changedPagesVisuallyReviewed": [
+      12
+    ],
+    "unchangedPageImages": 65,
+    "readersChecked": 13,
+    "readerPageErrors": [],
+    "visibleTabsOpened": 0
+  },
+  "noInference": true,
+  "limits": [
+    "The SQLite checks exercise fixture transactions and rollback, not production human authority or application services.",
+    "Prototype decisions are simulated local sample state, not native execution or authorization.",
+    "DW-009/012/014/015 must implement and qualify actual admission, root/task adoption, source evidence and recovery.",
+    "AR-03 through AR-08 remain open."
+  ],
+  "sourceSha256": {
+    "tools/planning/requirements_content.py": "2f7bdf4f631584e01db949e109d0b7f61ef16551e6132cfc67fcaf3d4b985fb4",
+    "docs/planning/requirements-interview.json": "ed58461ac470bb4371715ec44e78b265d0f80388a571327dbe6a0c2c3295140c",
+    "docs/planning/devworks-requirements.docx": "d2a7f60fe240aac5e76acb2613495566f0b2c27fb1e2d0139b48d78fdc6c82fd",
+    "docs/planning/harness-workbench.html": "5e201b998c26e64c547a94ec6fb81c893f5908bc074e7b30344fde2b52c3c32b",
+    "docs/planning/workbench.js": "b978b0e611a4ed779b06f0ec7132c9dc97af6b567db1565f972fede2b89a8eba",
+    "docs/architecture/devworks-architecture.md": "8dda294080f1221222fe87b227decd57d9e9ca85b0f25dabcd78a4c7f3a8d5e9",
+    "docs/architecture/domain-operation-contracts.md": "ccae3e95fd009d2fdaadd455fd4cc50a6e321d8788e3f5a3bda2f68eedb84b8e",
+    "docs/architecture/persistence-schema.sql": "64c7ca5bcbdd3c31d3572f8622cbf00357aa580305641efd1a9b8e700c049683",
+    "tools/contracts-eval/domain-spec.json": "76ebd516ee7c91a57b3fe05ec6b86bc1cffe362151d761f276d90bc1278b54c9",
+    "tools/contracts-eval/src/domain_rules.rs": "066494e91ec1fc5e7b1fab9e1b4fb880b2a2ee5b643eed7b472fffff7db63bb9",
+    "tools/contracts-eval/make_domain_fixtures.py": "6052e21ed31c6871ff0d62fa656ca45813398345b7f7ac36b7bdee07e5604f2f",
+    "tools/contracts-eval/probe_active_pending_plan.py": "42e4d9668457dd72249caee4574538d3022c587836ed35af8d43ee127571d797",
+    "tools/planning/verify_active_pending_plan.cjs": "968f0c86a70c8c3a6323040385bfe88ba9794fbf164d5844e6487bf036b7c2c1",
+    "docs/architecture/implementation-slices.json": "dc679301e47f3cf4b998e210f5092ab12c680c3c97fea1c7af881010e387a173",
+    "docs/architecture/implementation-plan.json": "469b6643fc1a45eaa433f220bffc962d9b5e75ef6a71170bd771a6edb64afbc2"
+  }
+}

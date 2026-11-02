@@ -1,0 +1,17 @@
+{
+  "date": "2026-11-02",
+  "status": "Mock UI and setup wording only; no native transport/authentication/authority acceptance",
+  "checks": [
+    "incoming_server_disabled_by_default",
+    "both_directions_visible",
+    "secret_free_stdio_and_http_setup",
+    "selected_reads_and_no_writes_default",
+    "scoped_client_saved",
+    "explicit_sample_command_selection",
+    "sample_client_revocation",
+    "settings_layouts_1600_and_1280"
+  ],
+  "passed": true,
+  "pageErrors": [],
+  "visibleTabsOpened": 0
+}

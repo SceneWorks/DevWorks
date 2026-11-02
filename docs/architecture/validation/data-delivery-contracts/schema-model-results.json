@@ -1,0 +1,2328 @@
+{
+  "date": "2026-11-01",
+  "status": "Current candidate DTO/schema and binding checks passed; old actual-helper frames replayed as fixtures, not new helper execution; no production service qualification",
+  "host": "macOS-27.0.1-arm64-arm-64bit",
+  "authoringJsonschema": "4.26.0",
+  "schemaFiles": 39,
+  "messageFixtures": 322,
+  "coreFixtures": 60,
+  "providerPackageFixtures": 113,
+  "newFixtures": 94,
+  "actualHelperFrames": 55,
+  "scenarios": 12,
+  "scenarioSteps": 26,
+  "selectedOperationBindingsChecked": 58,
+  "selectionChecks": 491,
+  "crossOperationPayloadRejected": true,
+  "historicalHelperFramesReplayed": true,
+  "allPassed": true,
+  "cases": [
+    {
+      "id": "start",
+      "entry": "command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "pause",
+      "entry": "command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "continue",
+      "entry": "command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-caller-actorId",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-caller-policyRevision",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-caller-approved",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-caller-resumeGrant",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-caller-scopeKey",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-body-authority",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-child-control-variant",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-zero-revision",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-numeric-revision",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-leading-zero",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-signed64-overflow",
+      "entry": "command-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "accept-signed64-max",
+      "entry": "command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-unknown-protocol",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-empty-covered-set",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-duplicate-hold-id",
+      "entry": "command-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "normalize-hold-set-order",
+      "entry": "command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-path-as-id",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-overlong-key",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-duplicate-json-member",
+      "entry": "command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "accepted-does-not-mean-unblocked",
+      "entry": "command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "receipt-replayed",
+      "entry": "command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "already-active",
+      "entry": "command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "continue-required",
+      "entry": "command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "blocked",
+      "entry": "command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "revision-conflict",
+      "entry": "command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "archived",
+      "entry": "command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "command-status-unknown",
+      "entry": "command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "idempotency-conflict",
+      "entry": "command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-malformed-digest",
+      "entry": "command-reply",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-unknown-reply-variant",
+      "entry": "command-reply",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "advisory-child-eligibility",
+      "entry": "query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "root-query",
+      "entry": "query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "operation-query",
+      "entry": "query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "receipt-query",
+      "entry": "query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "event-query",
+      "entry": "query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-query-mutation",
+      "entry": "query-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-unbounded-page",
+      "entry": "query-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-oversized-cursor",
+      "entry": "query-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "null-optional-normalizes",
+      "entry": "query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "root-event",
+      "entry": "event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "decision-event",
+      "entry": "event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "activation-event",
+      "entry": "event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "blocker-event",
+      "entry": "event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "stale-observation-event",
+      "entry": "event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-mismatched-event-root",
+      "entry": "event",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-mismatched-event-revision",
+      "entry": "event",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-unknown-event-schema",
+      "entry": "event",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "blocked-eligibility-result",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-eligible-with-blocker",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "root-result",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "unknown-effect-result",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-replay-unknown-effect",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "receipt-result",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "missing-receipt-result",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "event-page-result",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-page-beyond-watermark",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "cursor-expired-result",
+      "entry": "query-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "generation-spec",
+      "entry": "inference-spec",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "host-owned-feature-attribution",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-broker-attribution-injection",
+      "entry": "inference-spec",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-provider-secret-input",
+      "entry": "inference-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-ambiguous-tool-alias",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "purpose-Conversation",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "purpose-Planning",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "purpose-Review",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "purpose-Dreaming",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "purpose-Compaction",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "purpose-Title",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "purpose-Vision",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "purpose-Semantic",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "purpose-Package",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "embedding-no-fake-session",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-embedding-purpose-mismatch",
+      "entry": "inference-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-empty-embedding-batch",
+      "entry": "inference-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "complete-tool-observation",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "provider-text",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "provider-native",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "provider-terminal",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "provider-heartbeat",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "usage-reported-zero",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "usage-subscription-estimate",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "usage-local-free",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "usage-untracked",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "usage-unknown",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-foreign-call-attempt",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-cross-connection-opaque-replay",
+      "entry": "provider-event",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "codec-reported-zero",
+      "entry": "provider-codec-event",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-codec-free-cost-authority",
+      "entry": "provider-codec-event",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-codec-billing-owner",
+      "entry": "provider-codec-event",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "session-user-message",
+      "entry": "session-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-message-role",
+      "entry": "session-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-message-actorId",
+      "entry": "session-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-message-authorityReceipt",
+      "entry": "session-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-message-hostNotice",
+      "entry": "session-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "transcript-query",
+      "entry": "session-query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "transcript-query-too-large",
+      "entry": "session-query-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "durable-call-and-wait-response",
+      "entry": "transcript-batch",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-gapped-transcript-batch",
+      "entry": "transcript-batch",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-duplicate-entry-id",
+      "entry": "transcript-batch",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "session-command-receipt",
+      "entry": "session-command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "transcript-page",
+      "entry": "transcript-page",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-unordered-transcript-page",
+      "entry": "transcript-page",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "all-eight-contribution-categories",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "contribution-Semantic",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "contribution-Tool",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "contribution-Workflow",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "contribution-EventHandler",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "contribution-ContextHook",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "contribution-Content",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "contribution-Provider",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "contribution-NativeUi",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-contribution-namespace-hijack",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-aliased-package-files",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-package-traversal",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-missing-entrypoint",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-wrong-entrypoint-case",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-bad-semver",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-self-dependency",
+      "entry": "package-manifest",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-supplied-trust-receipt",
+      "entry": "package-manifest",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "rpc-initialize",
+      "entry": "package-host-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-activate",
+      "entry": "package-host-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-invoke",
+      "entry": "package-host-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-cancel",
+      "entry": "package-host-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-shutdown",
+      "entry": "package-host-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-host-unknown-major",
+      "entry": "package-host-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-host-credential-argument",
+      "entry": "package-host-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "broker-artifact-read",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "broker-application",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "broker-inference",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "broker-http",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "broker-write-artifact",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-broker-scope-injection",
+      "entry": "package-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-broker-absolute-url",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "broker-state-Read",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "broker-state-CompareAndSet",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "progress-not-terminal",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-notification-request-id",
+      "entry": "package-notification",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "bounded-stream-credit",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-unbounded-credit",
+      "entry": "package-notification",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "package-event-codec",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "package-event-artifact",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "package-event-semantic",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "package-event-context",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "package-event-verification",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "package-event-view",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "package-event-event",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-result-0",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-result-1",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-result-2",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-result-3",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-result-4",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-result-5",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-result-6",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-result-7",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-error",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "rpc-parse-error-null-id",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-both-result-and-error",
+      "entry": "package-response",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-inappropriate-null-id",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "addon-Install",
+      "entry": "addon-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "addon-Update",
+      "entry": "addon-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "addon-Enable",
+      "entry": "addon-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "addon-Disable",
+      "entry": "addon-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "addon-Rollback",
+      "entry": "addon-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "addon-Uninstall",
+      "entry": "addon-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "addon-staged-not-activated",
+      "entry": "addon-command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "selected-route-with-revisions",
+      "entry": "route-decision",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "durable-attempt-with-native-binding",
+      "entry": "attempt-envelope",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-foreign-attempt-native-item",
+      "entry": "attempt-envelope",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-persisted-authorization-header",
+      "entry": "attempt-envelope",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "capability-unknown-is-explicit",
+      "entry": "capability-snapshot",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-0",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-1",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-2",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-3",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-4",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-5",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-6",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-7",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-8",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-9",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-10",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-11",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-12",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-13",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-14",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-15",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-16",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-17",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-18",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-19",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-20",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-21",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-22",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-23",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-24",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-25",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-26",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-27",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-28",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-29",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-30",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-31",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-32",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-33",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-34",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-35",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-36",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-37",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-38",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-39",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-40",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-41",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-42",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-43",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-44",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-45",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-46",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-47",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-48",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-49",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-50",
+      "entry": "package-notification",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-51",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-52",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-53",
+      "entry": "package-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "actual-frame-54",
+      "entry": "package-response",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "immutable-captured-view",
+      "entry": "resolved-view-set",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-hidden-worktree-fallback",
+      "entry": "resolved-view-set",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-branch-parent-mismatch",
+      "entry": "resolved-view-set",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-duplicate-view-source",
+      "entry": "resolved-view-set",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-complete-with-gaps",
+      "entry": "resolved-view-set",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-mismatched-git-hash-format",
+      "entry": "resolved-view-set",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "metadata-only-schema-view",
+      "entry": "resolved-view-set",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-source-values-in-schema-snapshot",
+      "entry": "resolved-view-set",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "graph-Search",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-Overview",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-Schema",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-Node",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-Source",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-Traverse",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-Path",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-NodeImpact",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-FileImpact",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-NodesByFile",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-RepositoryDependencies",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-Consumers",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-Publishers",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-DataLineage",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-ScopeStatus",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-authorized-source-claim",
+      "entry": "graph-read-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-graph-unbounded-work",
+      "entry": "graph-read-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-empty-exact-view",
+      "entry": "graph-read-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-raw-sql-query",
+      "entry": "graph-read-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "schema-topology-read",
+      "entry": "graph-read-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "graph-page-pinned-source",
+      "entry": "graph-page",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-graph-citation-outside-view",
+      "entry": "graph-page",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "source-page-pinned-source",
+      "entry": "graph-page",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-source-citation-outside-view",
+      "entry": "graph-page",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-dangling-graph-result",
+      "entry": "graph-page",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "scoped-hybrid-retrieval",
+      "entry": "retrieval-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "exact-space-vector-query",
+      "entry": "retrieval-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-vector-shape-mismatch",
+      "entry": "retrieval-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "exact-old-version-selection",
+      "entry": "retrieval-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "lexical-fallback-is-visible",
+      "entry": "retrieval-page",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-vector-result-without-space",
+      "entry": "retrieval-page",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-reversed-citation-range",
+      "entry": "retrieval-page",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-duplicate-passage",
+      "entry": "retrieval-page",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "word-citation-no-invented-page",
+      "entry": "retrieval-page",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-word-page-substitution",
+      "entry": "retrieval-page",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "pdf-version-page-citation",
+      "entry": "retrieval-page",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "sealed-publication-preconditions",
+      "entry": "publication-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-publish-other-source",
+      "entry": "publication-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-publish-other-revision",
+      "entry": "publication-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "index-RefreshOverlay",
+      "entry": "index-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "index-Cancel",
+      "entry": "index-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "index-SetTrust",
+      "entry": "index-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-Save",
+      "entry": "artifact-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-Replace",
+      "entry": "artifact-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-Reference",
+      "entry": "artifact-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-DeleteVersion",
+      "entry": "artifact-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-DetachProject",
+      "entry": "artifact-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-Share",
+      "entry": "artifact-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-Move",
+      "entry": "artifact-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-DisableRetrieval",
+      "entry": "artifact-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-RemoveIndex",
+      "entry": "artifact-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-delete-DeleteVersion",
+      "entry": "artifact-deletion-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-delete-DetachProject",
+      "entry": "artifact-deletion-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-delete-DeleteArtifact",
+      "entry": "artifact-deletion-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-forged-artifact-origin",
+      "entry": "artifact-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-arbitrary-artifact-path",
+      "entry": "artifact-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "artifact-query-List",
+      "entry": "artifact-query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-query-Read",
+      "entry": "artifact-query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-query-Preview",
+      "entry": "artifact-query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-query-Export",
+      "entry": "artifact-query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "artifact-query-ResolveCitation",
+      "entry": "artifact-query-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "logical-delete-before-unlink",
+      "entry": "artifact-command-reply",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "all-repository-readiness-barrier",
+      "entry": "delivery-barrier",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-cyclic-delivery-order",
+      "entry": "delivery-barrier",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-unknown-delivery-dependency",
+      "entry": "delivery-barrier",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-duplicate-delivery-repository",
+      "entry": "delivery-barrier",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-final-delivery-to-task-branch",
+      "entry": "delivery-barrier",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-caller-readiness-flag",
+      "entry": "delivery-barrier",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "git-Commit",
+      "entry": "git-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "git-Push",
+      "entry": "git-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "git-OpenPullRequest",
+      "entry": "git-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "git-Integrate",
+      "entry": "git-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "git-Cleanup",
+      "entry": "git-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-main-force-push",
+      "entry": "git-command-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-force-without-remote-lease",
+      "entry": "git-command-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-git-ref-option-injection",
+      "entry": "git-command-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-cleanup-arbitrary-path",
+      "entry": "git-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "feature-complete-separate-cleanup-release-deployment",
+      "entry": "delivery-snapshot",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-queued-as-feature-complete",
+      "entry": "delivery-snapshot",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "queued-ticket-stays-incomplete",
+      "entry": "delivery-snapshot",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-merged-without-merge-commit",
+      "entry": "delivery-snapshot",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "release-Prepare",
+      "entry": "release-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "release-Publish",
+      "entry": "release-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "release-Deploy",
+      "entry": "release-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-release-version-path",
+      "entry": "release-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-release-hash-format-mismatch",
+      "entry": "release-command-request",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    }
+  ],
+  "inputSha256": {
+    "docs/architecture/contracts/fixtures.json": "c1d57d26dc0767eeb9ae180f03be7290bb9f8921ee4fc634e0406ac6b6fc936b",
+    "docs/architecture/contracts/provider-package-fixtures.json": "58fce718ae4cfe34f244f29a0f5bffca19008aaf3321b6ef7ae73bd8087050bc",
+    "docs/architecture/validation/provider-package-contracts/actual-frame-fixtures.json": "a8e38cbf3a4ccf3b957a32b2733b3db1e98ae9ee12b97d339447d51f73ab729e",
+    "docs/architecture/contracts/data-delivery-fixtures.json": "54fc2fac8841b1591c0f2653f7548dbf5a79a16b4e4958b194be739d277083b6",
+    "docs/architecture/contracts/provider-package-scenarios.json": "37f7a8efc09becb29e0f8c31854185c890e16f95a0ab77d9ff880686b35094a5",
+    "tools/contracts-eval/Cargo.lock": "cfb646cd5e037f4a97b1686830e7a582228b29c4ff3ba0ebcbc559b69786b34b",
+    "tools/contracts-eval/src/data_delivery.rs": "749966fb2e5a7d108847abb137634273ec8ef3c2f78f8742a18af44146bacaa0",
+    "tools/contracts-eval/src/lib.rs": "2e8421be4c5f2e75285c3a60dcc4c007a3bbce6da4dac1cb4de34664fc72827d",
+    "tools/contracts-eval/src/main.rs": "bb1fd0d04d91c1e0e843a50878213e4d5cbec206d9755f4b3b33fce31dcd5545",
+    "tools/contracts-eval/src/package.rs": "83f4d26372996e49e8101e1e284cc0aa4028b92bc8e655ad1a1e4fe46bbf2a77",
+    "tools/contracts-eval/src/package_probe.rs": "0573c4ffc5aee215526e2145e4c796f13a47320dc33730e57c5569bb8a21b7c9",
+    "tools/contracts-eval/src/provider.rs": "a8ae01d15b7adb8011e41ba33941a7cddeb79a81848acfd261634eb27075a5c0",
+    "docs/architecture/contracts/addon-command-reply.schema.json": "637eee3780cc14573e10702b4aadbc09db930094e920f21e4aebf3380952085a",
+    "docs/architecture/contracts/addon-command-request.schema.json": "1e50cc8d48544e561378d4e5d3f83e94258b0d9dccd2d3d59a349de4760a5f7e",
+    "docs/architecture/contracts/artifact-command-reply.schema.json": "b206db3d40608fdc2e641e69504865691d273ba03c9206413b6b61931ba96f2c",
+    "docs/architecture/contracts/artifact-command-request.schema.json": "733fedefbc5215e983255c0883b4f5c1a43462cf77f0bd730d804b96e22f426b",
+    "docs/architecture/contracts/artifact-deletion-request.schema.json": "017deb36675a1241cbe34edbb218b6115a65a65fd776a42b8b211c5629af0c85",
+    "docs/architecture/contracts/artifact-query-request.schema.json": "ab542e20f1f0738e29466c3360176c494e4f2c24af80e6ec1fa762def92db078",
+    "docs/architecture/contracts/attempt-envelope.schema.json": "fc2fa155875ecc3910b6d98e1b78184b79299b7987f713e9a7b8bfe158d948b7",
+    "docs/architecture/contracts/capability-snapshot.schema.json": "311cff64bfa457b12d1d13671d66528e5176823e012dc3d9bf6d000516a4d649",
+    "docs/architecture/contracts/command-reply.schema.json": "c718d37915e0029d7c98e1b33980e633f9d35923f98ab470be9fc9cd3ba84627",
+    "docs/architecture/contracts/command-request.schema.json": "4ae635d9f6ac948f68e8eafb156064e92f9e74ba7ed01239718b30592707f736",
+    "docs/architecture/contracts/delivery-barrier.schema.json": "25aaa75a46cef7a0e3d055b8dff1a76fc25325f0a2efe5202abd80e3c28a72c2",
+    "docs/architecture/contracts/delivery-snapshot.schema.json": "a5b59fd9d7dbed631c1445dbbda361b53a7c799f98717b9f9d131d6fee42806b",
+    "docs/architecture/contracts/event.schema.json": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc",
+    "docs/architecture/contracts/git-command-request.schema.json": "a3ecd93b8f261d3536978d4a9e3739c101da9925ffd0e16e3fde36c26b6ec318",
+    "docs/architecture/contracts/graph-page.schema.json": "aca9af7d0e3c8615e00434eadc5556085108c08ee2a4edc2c8279a14c6439231",
+    "docs/architecture/contracts/graph-read-request.schema.json": "5eacbde85e8366c95ba683d14b5fafe865b0ee39dd042cf97cefaad6275efe0b",
+    "docs/architecture/contracts/index-command-request.schema.json": "b058cdb9e5b60123b8c05683216990f3c818ae4eece06eb8f96102561269f63b",
+    "docs/architecture/contracts/inference-request.schema.json": "303b3a3d4bd49a39c44148658c2bc6320a4e77453960b75f07cfeb2051da8211",
+    "docs/architecture/contracts/inference-spec.schema.json": "e4734b6a32933313adcdf74f07ada57c2a20f7d911eb676c7c63d44f1225d516",
+    "docs/architecture/contracts/package-host-request.schema.json": "190beae90c974720523774ca4cb366033ba74ba104dc46dbcdd780b30811f5b9",
+    "docs/architecture/contracts/package-manifest.schema.json": "7f5989387bc31c599cb97ffe0b43dc52227aa2e36c075c54be55e69d6edd8b21",
+    "docs/architecture/contracts/package-notification.schema.json": "d19320d2683b3bb226c9e65c88c83842d60702c8d6de6d4df889b05aa0d29a9d",
+    "docs/architecture/contracts/package-request.schema.json": "da31004c60eea368d2b478e0d04326e372d835132ab96b514b872910e9536b8a",
+    "docs/architecture/contracts/package-response.schema.json": "3f1cfa65356527daa9a24ee61559897c572fd7c293200e955288309ec5319905",
+    "docs/architecture/contracts/provider-codec-event.schema.json": "16d1f63f42babd80f5840c16644706abd37a74b4c7ac9859463b86a8f06b31f9",
+    "docs/architecture/contracts/provider-event.schema.json": "de1ac95963613ec2144471a56c55f6b88d1f1091a58e1839e153b07065c2a9c8",
+    "docs/architecture/contracts/publication-request.schema.json": "416f189e19c7926c05f6fe4d979478036ce586336e59550b2577629e2944008c",
+    "docs/architecture/contracts/query-reply.schema.json": "5e62392bbd693563a8dc1de57fe40e9a3025ae9d5cde4b3fe87c438a05ec802f",
+    "docs/architecture/contracts/query-request.schema.json": "33e3ed9f91f1981b65c7102263bbe9a17e1f965142ff6389f2e0ce4119d46469",
+    "docs/architecture/contracts/release-command-request.schema.json": "8c1ff3b64d926dd8b49da66fb1bbb7589162d27c414f13d06ad90dfb35b587be",
+    "docs/architecture/contracts/resolved-view-set.schema.json": "38585a4d25f0dfdc6d03012c2d6f0e048c3f88729712dd63233b67ca1796d17e",
+    "docs/architecture/contracts/retrieval-page.schema.json": "c54381130a251caccfcdd675820894a03073cf72915e2bff330b82f64c85b4da",
+    "docs/architecture/contracts/retrieval-request.schema.json": "9a7faaac8e7c31cc3f70f33f94509d56780f992e60998122f21c02f9a8cc15bb",
+    "docs/architecture/contracts/route-decision.schema.json": "3cbba022c46345fc38a9e64ffdc14cafb85358dfbbefd7a60eb91a4d9e22e38f",
+    "docs/architecture/contracts/session-command-reply.schema.json": "a1db7ae3130a65b45c457687039220fd016677acedfb52ab5852f0045c2846da",
+    "docs/architecture/contracts/session-command-request.schema.json": "e0a66d6d36586b39b6a518fdd0d006a04765c8fe0fea390cc5860cac7019cc86",
+    "docs/architecture/contracts/session-query-request.schema.json": "c24d63c61e590546b82b7311078e486bad45245f9a61de716972c484f1899339",
+    "docs/architecture/contracts/transcript-batch.schema.json": "fd9643a8069ac9f9098902cc41a4be1ae7e4463c92a26be523ced0a80eb65d1a",
+    "docs/architecture/contracts/transcript-page.schema.json": "a8d9783c980489d9121986f906766bcd8492537c78670ecf7e34b5531fb143e4"
+  }
+}

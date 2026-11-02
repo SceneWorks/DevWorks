@@ -1,0 +1,23 @@
+sequenceDiagram
+    participant C as Caller
+    participant H as Graph service
+    participant S as SQLite adapter
+    participant B as Index builder
+    C->>H: Request scope and exact view
+    H->>S: Resolve current access and pin generations
+    S-->>H: Immutable source and layer identities
+    B->>S: Publish sealed candidate with source and pointer revisions
+    alt Revisions changed
+        S-->>B: Conflict and retain published view
+    else Revisions match
+        S->>S: Commit pointer plus event and delivery
+        S-->>B: Published
+    end
+    H->>S: Query pinned whole-unit overlay
+    S->>S: Scope and masking before traversal or ranking
+    H->>S: Revalidate access before text materialization
+    alt Access revoked or pin expired
+        H-->>C: Stale or unavailable without fallback
+    else Valid
+        H-->>C: Bounded result with exact citations
+    end

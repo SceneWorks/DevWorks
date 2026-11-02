@@ -1,0 +1,146 @@
+{
+  "date": "2026-11-01",
+  "status": "User correction recorded; local mock/document checks passed. Native SystemOne, tier/effort transports and decision DTO qualification remain pending.",
+  "requirements": {
+    "total": 345,
+    "confirmed": 208,
+    "proposed": 137,
+    "added": [
+      "ROUTE-18",
+      "ROUTE-19",
+      "ROUTE-20"
+    ],
+    "revised": [
+      "UI-10"
+    ],
+    "decisions": [
+      "AD-62",
+      "AD-63"
+    ]
+  },
+  "tierDefaults": {
+    "Max": [
+      "Fable",
+      "Astra"
+    ],
+    "High": [
+      "Opus",
+      "Sol"
+    ],
+    "Mid": [
+      "Sonnet",
+      "Terra"
+    ],
+    "Low": [
+      "Haiku",
+      "Luna"
+    ]
+  },
+  "semantics": [
+    "Tier directly selects a configured pool without a model-name-to-tier alias translation.",
+    "Round robin allocates new/replacement eligible session pins; existing pins survive turns/restart.",
+    "Custom assigned eligible members participate; old local-first subset is superseded.",
+    "Effort is independent, persisted and capability-checked; explicit nondefault effort cannot silently disappear.",
+    "Open Router Auto is its own upstream route.",
+    "SystemOne Jev decision inference uses explicit decision model identity outside chat tiers and shares authority/accounting."
+  ],
+  "referenceAudit": {
+    "repository": "simple-router",
+    "localAndIndexedCommit": "a556b3531b577173195bbc3876b556196447721d",
+    "findings": [
+      "SystemOneProxy forwards explicitly selected structured decision models, without chat tier routing.",
+      "SystemOneTools provides models and decide; DecisionSupport covers choice/noul/score/box and image/video capabilities.",
+      "The retained source is read as a behavior reference; no live request was made."
+    ],
+    "sha256": {
+      "/Users/michael/Repos/simple-router/src/SimpleRouter/SystemOne/SystemOneProxy.cs": "05266c31fca7cfc785029748ebcd3e2b04859fa5bbc0153969bf1d55fce161b9",
+      "/Users/michael/Repos/simple-router/src/SimpleRouter/SystemOne/SystemOneTools.cs": "f616b0b0d091f10c31426fa06028ec8640053e4cd68db1c60df02c9d9432b150",
+      "/Users/michael/Repos/simple-router/src/SimpleRouter/SystemOne/DecisionSupport.cs": "87cb21b06b858ffd23c55806694c3bc36b9dd66d4dbec035d3c507fe1e690c55",
+      "/Users/michael/Repos/simple-router/src/SimpleRouter/Routing/ModelSelector.cs": "c46dfcaf8d30aaa2ba17288dc643c9bb7cf6f0e8f83a81ca16469c9b99149b8a"
+    }
+  },
+  "mock": {
+    "date": "2026-11-01",
+    "status": "Passed local mock interactions only; no inference or provider requests",
+    "checks": [
+      "tier_and_named_option_order",
+      "effort_independent_of_route_and_pin",
+      "route_and_effort_persist_on_reload",
+      "round_robin_allocates_and_reuses_pins",
+      "all_four_default_memberships",
+      "systemone_separate_from_chat_tiers",
+      "custom_max_model_joins_configured_pool",
+      "enabled_and_membership_changes_filter_pool",
+      "empty_pool_does_not_cross_tier",
+      "systemone_configuration_saved_locally",
+      "sidebar_shares_home_route_and_effort",
+      "openrouter_auto_is_explicit_upstream",
+      "no_outer_overflow_1600",
+      "no_outer_overflow_1280",
+      "no_script_errors"
+    ],
+    "passed": 15,
+    "pageErrors": [],
+    "visibleTabsOpened": 0
+  },
+  "architectureReader": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 39
+      },
+      {
+        "width": 800,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 39
+      }
+    ],
+    "browser": "local headless Chromium; no user-facing tab opened",
+    "decisionRows": 63,
+    "anchors": 5,
+    "localLinksValid": true,
+    "sectionSearch": true,
+    "requirementSearch": true,
+    "statusFilter": true,
+    "pageErrors": []
+  },
+  "word": {
+    "pages": 68,
+    "rendered": true,
+    "allPagesVisuallyReviewed": true,
+    "changedRequirementPages": [
+      17,
+      25
+    ],
+    "reviewSheets": 17,
+    "renderer": "Bundled document renderer with bundled LibreOffice; full-resolution source page PNGs",
+    "noLayoutDefectsObserved": true
+  },
+  "catalog": {
+    "families": 47,
+    "operations": 347,
+    "concreteInputCandidates": 58,
+    "domainInputsPending": 289,
+    "schemaFiles": 39,
+    "note": "Existing schema/probe evidence remains a historical checkpoint. No new SystemOne native schema/transport proof is claimed."
+  },
+  "noInference": true,
+  "visibleBrowserTabsOpened": 0,
+  "inputSha256": {
+    "docs/planning/requirements-content.json": "2b0cb06561922b17ccb88b4e59c7219902fac6efc3b4e88f47a954b99727406c",
+    "docs/planning/requirements-interview.json": "ab80ad7c0193b0a0e66b7a1772f9513c9a97f7ba068d6b78a7b2ec25acc7fedb",
+    "docs/planning/devworks-requirements.docx": "e82608d2a1b9a247b3e521d790405dc8929c368de9b371758a09018cc954f6f3",
+    "docs/planning/devworks-requirements.html": "7d8139a313b1164fbf0d11990035b6221c7af2f44488cf2efbb49e88efa72f89",
+    "docs/planning/harness-workbench.html": "f370079494451d0ad52c8f0a71c0988ce72c51a6a4312ffd89de9300c3daa97d",
+    "docs/planning/workbench.js": "def3320b25ded066f7ef1b7fcfde78708ff29e63b18260d60a035897831c1b6b",
+    "docs/planning/workbench.css": "b18f2c0c50a04d6cbe8cc298989555935371f29f5ea10e4cf46759466d8e3500",
+    "docs/architecture/devworks-architecture.md": "4f2eaf4677b23d1c276bfb250ca37d268c3390c945eed47e397deb07b14e1593",
+    "docs/architecture/devworks-architecture.html": "b01f610cb5f4de048e2edce5248c4bd6042b512fa53358652ef47ed03fcdd7f5",
+    "docs/architecture/architecture-handoff.md": "74ae0bfcdb7dc87798607a9b1cba34d181d79b3c6886739f9591bab22f54cec6",
+    "docs/architecture/capability-validation-contracts.json": "6aeaff06d91fc0b1f80c1ad966f3f421bde254649ed7e2ec2848092d0f05ee4e",
+    "docs/architecture/contracts/family-coverage.json": "2720861652c5f9129b4a47a15daa6238f3f4da618c1c1173bef46fe658df5a52"
+  }
+}

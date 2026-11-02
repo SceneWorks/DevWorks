@@ -1,0 +1,17 @@
+flowchart TB
+ IMPORT["User document import"] --> FILE["Managed artifact and scoped reference"]
+ FILE --> TEXT["Direct native text extraction"]
+ TEXT --> SCAN{"Scanned pages remain?"}
+ SCAN -- Yes --> VISION["Configured routed vision<br/>save page and model provenance"]
+ SCAN -- No --> CHUNK["Versioned chunks and locators"]
+ VISION --> CHUNK
+ CHUNK --> EMBED["Embedding through router"]
+ CHUNK --> FTS["SQLite lexical projection"]
+ EMBED --> VECTOR["sqlite-vec published generation"]
+ AUTHORED["One tagged Knowledge model<br/>claims, lessons, facts and evidence"] --> FTS
+ AUTHORED --> VECTOR
+ QUERY["Query plus allowed source scope"] --> SCOPE["Validate membership and scope revision"]
+ SCOPE --> RETRIEVE["Lexical / vector retrieval within allowed scope"]
+ FTS --> RETRIEVE
+ VECTOR --> RETRIEVE
+ RETRIEVE --> CITE["Bounded source passages<br/>revision, chunk and page citations"]

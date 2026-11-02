@@ -1,0 +1,79 @@
+{
+  "date": "2026-11-01",
+  "classification": "Historical registry/source-resolution probes plus subsequent linked native runtime qualification; development Mac only",
+  "package": "helix-db",
+  "registryVersion": "3.0.0",
+  "sourceCandidateCommit": "6f2a69653772b60ea099d8d36a02a1d4408147ec",
+  "sourceManifestBlob": "ed64be9d4447d7eb6f374048327753bf3ec82687",
+  "checks": [
+    {
+      "command": "cargo info helix-db@3.0.0 --verbose",
+      "exitCode": 0,
+      "observation": "Registry package lists only default feature; no embedded feature."
+    },
+    {
+      "command": "cargo metadata --manifest-path <disposable-probe>/Cargo.toml --format-version 1",
+      "dependency": "helix-db = { version = \"=3.0.0\", features = [\"embedded\"] }",
+      "exitCode": 101,
+      "observation": "Dependency resolution fails because helix-db 3.0.0 does not have feature embedded. Available features: default."
+    },
+    {
+      "source": "https://github.com/HelixDB/helix-db/blob/6f2a69653772b60ea099d8d36a02a1d4408147ec/sdks/rust/Cargo.toml",
+      "observation": "Pinned upstream source manifest has embedded = [dep:db] and optional workspace engine dependency."
+    },
+    {
+      "command": "cargo metadata --manifest-path <disposable-probe>/Cargo.toml --format-version 1",
+      "dependency": "helix-db = { version = \"3.0.0\", features = [\"embedded\"] }; tokio = { version = \"1\", features = [\"macros\", \"rt-multi-thread\"] }",
+      "exitCode": 101,
+      "observation": "Retested after the user supplied this documented configuration: ^3.0.0 resolves only 3.0.0; embedded is absent and available features are default."
+    },
+    {
+      "id": "direct_engine_metadata",
+      "command": "cargo metadata --manifest-path <probe>/Cargo.toml --format-version 1",
+      "dependency": "helix-core = { git = \"https://github.com/HelixDB/helix-db.git\", rev = \"6f2a69653772b60ea099d8d36a02a1d4408147ec\", package = \"db\" }",
+      "exitCode": 0,
+      "observation": "Pinned source engine db resolves successfully under local alias helix-core. Root and engine manifests inspected; no workspace package named helix-core at this revision."
+    },
+    {
+      "id": "direct_engine_check",
+      "command": "cargo check --locked -j 2 --manifest-path <probe>/Cargo.toml",
+      "exitCode": 0,
+      "observation": "Engine and minimal Rust consumer importing HelixDB and HelixDbSource passed cargo check. No engine queries or inference executed."
+    },
+    {
+      "id": "direct_engine_runtime",
+      "command": "tools/storage-eval/target/release/eval-helix <fresh disposable database>",
+      "exitCode": 0,
+      "observation": "Native release executable opens embedded Disk engine, writes and reads a node, closes and reopens successfully. Common pilot additionally executes graph/vector queries and mutations; comparative and fault results are recorded separately."
+    }
+  ],
+  "conclusion": "Pinned source engine package db (alias helix-core) resolves, links and passes local disk write/read/reopen. The published client embedded-feature mismatch remains historical registry evidence, not an engine runtime blocker. Four active candidates are OverGraph, Grafeo, HelixDB and SQLite; Kuzu is excluded by user. No production selection or full G01 acceptance is claimed.",
+  "notTested": [
+    "Windows/Linux and minimum-macOS builds",
+    "Complete retained CodeGraph capability inventory",
+    "Production workload scale and long-duration durability",
+    "Live inference (intentionally excluded)"
+  ],
+  "terminology": "Vector embeddings/search and embedding the database engine inside DevWorks are separate concerns. The packaging probe did not test or disprove vector support.",
+  "enginePackage": "db",
+  "engineVersion": "0.1.0",
+  "localDependencyAlias": "helix-core",
+  "engineManifestBlob": "cebe7365bb773dcdb743ec8493492e7bd69dcff2",
+  "directEngineDependency": "helix-core = { git = \"https://github.com/HelixDB/helix-db.git\", rev = \"6f2a69653772b60ea099d8d36a02a1d4408147ec\", package = \"db\" }",
+  "environment": {
+    "os": "macOS 27.0.1",
+    "architecture": "arm64",
+    "cargo": "1.98.0",
+    "rustc": "1.98.0",
+    "qualification": "Development host only; this is not proof of the macOS 26.2 minimum target or Windows/Linux support."
+  },
+  "probeInputs": "validation/helix-direct-engine",
+  "cargoLockSha256": "b0437981509230fce8f9726e4f3beb66afb62044b90fc9f0e8e19d85bfe93e65",
+  "runtimeEnvironment": {
+    "os": "macOS 27.0.1",
+    "architecture": "arm64",
+    "toolchain": "nightly-2026-10-06, rustc 1.101.0-nightly",
+    "source": "tools/storage-eval/helix",
+    "qualification": "Local native qualification only; benchmark and fault artifacts separate"
+  }
+}

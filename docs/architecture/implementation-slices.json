@@ -1,0 +1,1366 @@
+{
+  "status": "Architecture baseline 1.1 local implementation plan; execution not started",
+  "source": "Adopted architecture/requirements and retained operation inventory; candidate wire coverage complete; actual service/SDK/provider/platform acceptance remains required",
+  "slices": [
+    {
+      "key": "contracts",
+      "id": "DW-001",
+      "type": "Chore",
+      "title": "Freeze shared messages, errors and dispatch selection",
+      "operations": [],
+      "dependsOnKeys": [],
+      "acceptance": "Adopt the recorded complete catalog input/result/fault/receipt candidates into actual domain modules and gateway validation. Qualify identity/scope/receipt/event rules, strict selected-operation/mode checks, descriptor schemas and version/replay behavior before admission. Unknown versions never grant authority.",
+      "gates": [
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "store",
+      "id": "DW-002",
+      "type": "Chore",
+      "title": "Implement the transaction owner and operational repositories",
+      "operations": [],
+      "dependsOnKeys": [
+        "contracts"
+      ],
+      "acceptance": "Core-owned repository traits compile without driver types. One bounded writer commits domain state, receipts, history and outbox atomically; scoped snapshots, WAL/FULL/FK, drop rollback and cancellation semantics pass real-adapter tests.",
+      "gates": [
+        "G01"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "queue",
+      "id": "DW-003",
+      "type": "Feature",
+      "title": "Deliver durable events with fenced claims and recovery",
+      "operations": [
+        "queue.*"
+      ],
+      "dependsOnKeys": [
+        "store"
+      ],
+      "acceptance": "Atomic claims, leases/fences, consumer order, replay, retries, poison state, bounded wakeups and sleep/restart repair use SQLite plus Tokio. A missing wakeup cannot lose required work; uncertain external outcomes cannot be blindly retried. Package event handlers commit state CAS, typed effect intents, host receipt and event checkpoint in one transaction; inject crashes before/after commit and replay once without losing or duplicating logical state/effects.",
+      "gates": [
+        "G01",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "settings",
+      "id": "DW-004",
+      "type": "Feature",
+      "title": "Save typed scoped configuration and explain effective values",
+      "operations": [
+        "settings.*"
+      ],
+      "dependsOnKeys": [
+        "store"
+      ],
+      "acceptance": "Validate complete revisions, inheritance and expected revisions, show source/effective value and adoption boundaries, reject reviewer writes and stale/unknown fields. No credential values in normal configuration.",
+      "gates": [
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "authority",
+      "id": "DW-005",
+      "type": "Chore",
+      "title": "Enforce invocation authority and verified native reads",
+      "operations": [],
+      "dependsOnKeys": [
+        "contracts",
+        "settings"
+      ],
+      "acceptance": "Implement host-created authority/revocation, role/tool restrictions, scoped grants, bounded no-follow reads and stable-target destructive checks. Dedicated primary-repository deletion remains human-only. Prove races and deny unsupported profiles.",
+      "gates": [
+        "G04"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "process_owner",
+      "id": "DW-006",
+      "type": "Feature",
+      "title": "Own processes, cancellation and physical resource reservations",
+      "operations": [
+        "resources.*"
+      ],
+      "dependsOnKeys": [
+        "store",
+        "authority"
+      ],
+      "acceptance": "Canonical resources, fenced acquire/renew/release and waiters survive crash; slots do not release uncertain physical resources. Owned process trees quiesce/reap with bounded cancellation on each supported target.",
+      "gates": [
+        "G04",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "files",
+      "id": "DW-007",
+      "type": "Feature",
+      "title": "Publish immutable artifacts and revision-bound references",
+      "operations": [
+        "artifacts.*"
+      ],
+      "dependsOnKeys": [
+        "store",
+        "authority"
+      ],
+      "acceptance": "Journal file staging/flush/digest/metadata; preserve retained authored/imported versions until explicit deletion, with separate collectible derivative rules. Authorize full reference sets, tombstone before unlink, preserve surviving shares/readers/backup pins and exact old citations. Export stream and destination write are separately authorized.",
+      "gates": [
+        "G01",
+        "G06"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "sessions",
+      "id": "DW-008",
+      "type": "Feature",
+      "title": "Persist sessions, transcript batches and complete lineage",
+      "operations": [
+        "sessions.*",
+        "history.*"
+      ],
+      "dependsOnKeys": [
+        "store",
+        "files"
+      ],
+      "acceptance": "Append attributed ordered batches atomically with calls/results/checkpoints; immutable native references, compaction epochs, bounded scoped history and separate operation updates survive duplicate replay and crash.",
+      "gates": [
+        "G01",
+        "G03"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "controls",
+      "id": "DW-009",
+      "type": "Feature",
+      "title": "Run root Start Pause Continue and redirect recovery",
+      "operations": [
+        "runs.*"
+      ],
+      "dependsOnKeys": [
+        "queue",
+        "sessions",
+        "process_owner"
+      ],
+      "acceptance": "One coordinator owner per root and one continuation per session. Explicit Continue, renewed holds, accepted/unlaunched recovery, eligible descendants, parallel-tool isolation and received/acknowledged/incorporated redirect stages pass deterministic races. Eligibility uses the active approved plan while a revision is pending; pending changes cannot authorize dispatch. Approved replacement adopts at safe boundaries and fences only incompatible work.",
+      "gates": [
+        "G01",
+        "G04"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "shell",
+      "id": "DW-010",
+      "type": "Feature",
+      "title": "Build the native egui shell and reusable pane bindings",
+      "operations": [],
+      "dependsOnKeys": [
+        "contracts",
+        "settings"
+      ],
+      "acceptance": "Pin matching egui/eframe and rendering stack. Native window, keyboard/focus/accessibility, incremental projections, row/variable-block virtualization, images/file handles, pane restoration and clean optional-runtime absence work. No WebView UI.",
+      "gates": [
+        "G02",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "projects",
+      "id": "DW-011",
+      "type": "Feature",
+      "title": "Manage projects, memberships and repository registrations",
+      "operations": [
+        "projects.*",
+        "repositories.list",
+        "repositories.get",
+        "repositories.remove_index",
+        "repositories.readme",
+        "repositories.summary",
+        "repositories.search"
+      ],
+      "dependsOnKeys": [
+        "store",
+        "authority",
+        "shell"
+      ],
+      "acceptance": "Create/edit/membership/archive/restore/delete preserve exact scope and shared references. Archive fences active work immediately. Project deletion never deletes source Git resources. Native screens and agent operations share commands.",
+      "gates": [
+        "G01",
+        "G04",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "work",
+      "id": "DW-012",
+      "type": "Feature",
+      "title": "Plan features, standalone issues and task cards",
+      "operations": [
+        "features.*",
+        "issues.list",
+        "issues.get",
+        "issues.create",
+        "issues.edit",
+        "issues.prioritize",
+        "tasks.*"
+      ],
+      "dependsOnKeys": [
+        "projects",
+        "sessions",
+        "files",
+        "shell"
+      ],
+      "acceptance": "Multi-repository work, editable requirements/plans/acceptance, task dependencies/assignments and evidence links use revisions. Plan approval is scope-bound; clear standalone issues retain immediate implementation behavior. Native list/board/detail and tools share the same operations. Every task requires a project and accepts an optional feature relationship. Standalone tasks use the issue view of the same identity; task/issue entry points never duplicate work. Validate feature membership and existing standalone execution/accounting/delivery semantics. Plans belong to the feature: one active approved plan and one pending replacement. Draft edits, submission and rejection preserve active authority and eligible work; no plan-version management UI. Shared human/agent task and issue priority edits plus bulk task ordering commit revisioned history. Screens expose Blocked by/Blocks and editable same-project cross-feature/standalone links; reject invalid/self/duplicate/cyclic changes without partial writes. Human/agent tasks.set_feature and optional feature at issue creation share authoritative membership. Link authorizes delivery without revised-plan approval; clear pauses until manual resume. Preserve stable identity, active agent/workspace, history and holds; coordinator owns integration. Direct transfers retain holds without creating a pause.",
+      "gates": [
+        "G07",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "workflow",
+      "id": "DW-013",
+      "type": "Feature",
+      "title": "Configure statuses and atomically allocate eligible work",
+      "operations": [
+        "workflows.*",
+        "next_work.*"
+      ],
+      "dependsOnKeys": [
+        "work",
+        "controls"
+      ],
+      "acceptance": "Priority features/issues share a project queue; automatic feature claims require current implementation approval. Child-task claims stay within their feature. Status removal reassigns occupied records atomically; inspect/release claims obey ownership fences. Filter unsatisfied dependencies before priority and manual rank; use atomic queue revisions for edits/claims. Prove concurrent dependency edits cannot form a project-wide cycle and high-priority blocked tasks cannot bypass prerequisites. No automatic preemption on priority changes. Keep-working yields a fully dependency-blocked root only after quiescence, allowing prerequisite roots to run while preserving one active root, coordinator lineage and explicit holds; valid task-level interleaving across features must not deadlock. Membership changes update root/feature queue eligibility atomically and fence stale claims; an owned task never gains a second execution. Relinking cannot clear an unlink pause.",
+      "gates": [
+        "G01",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "approvals",
+      "id": "DW-014",
+      "type": "Feature",
+      "title": "Record exact human decisions and notifications",
+      "operations": [
+        "approvals.*",
+        "notifications.*"
+      ],
+      "dependsOnKeys": [
+        "authority",
+        "work",
+        "controls"
+      ],
+      "acceptance": "Approval proposals bind contents/target/revision, only host human interaction mints decisions, and approval wakeups re-admit saved operations without clearing pauses. Notifications and acknowledgment never resolve their linked decisions. Native OS denial retains in-app access. Feature-plan approval atomically promotes the exact pending draft with active scope/acceptance and history. Stale approval/edit races preserve the original plan; rejection leaves it approved. Approval never clears a pause.",
+      "gates": [
+        "G04",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "delegation",
+      "id": "DW-015",
+      "type": "Feature",
+      "title": "Coordinate child assignments and durable agent inboxes",
+      "operations": [
+        "agents.*"
+      ],
+      "dependsOnKeys": [
+        "controls",
+        "workflow",
+        "approvals"
+      ],
+      "acceptance": "Root coordinators delegate within independent per-root caps, retain role/scope/lineage, durable messages/acks/checkpoints and waits. No manual child Pause or global cap. Independent work continues while affected dependencies wait. Prove delegation from an issue with no feature or feature cards, using a root-scoped brief and optional task references. Assignment parentage is independent of feature membership; retain issue ownership and independent concurrency. Adding a blocker fences affected future dispatch; safe interruption/reconciliation preserves in-flight effects. Completion/removal wakes eligible dependents without clearing independent controls. Link notifications and supervisor rebinding are durable; existing worker continues, coordinator tracks it and launches/resumes only eligible unowned work. Shared-repository project work coordinates overlap through the message board with scoped access.",
+      "gates": [
+        "G03",
+        "G04"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "chat",
+      "id": "DW-016",
+      "type": "Feature",
+      "title": "Deliver Home chat and its shared coordinator sidebar",
+      "operations": [
+        "ui.current_screen"
+      ],
+      "dependsOnKeys": [
+        "shell",
+        "sessions",
+        "delegation",
+        "router"
+      ],
+      "acceptance": "Every native composer uses persisted route/effort and attachments. Home/sidebar share one session, draft, transcript and pin. Navigation appends deduplicated bounded host notices and current Help/tool context without extra inference or authority.",
+      "gates": [
+        "G02",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "router",
+      "id": "DW-017",
+      "type": "Feature",
+      "title": "Resolve direct tiers, named models and availability",
+      "operations": [
+        "router.catalog",
+        "router.route",
+        "router.pin",
+        "router.availability",
+        "router.request_status"
+      ],
+      "dependsOnKeys": [
+        "settings",
+        "controls",
+        "process_owner"
+      ],
+      "acceptance": "Max/High/Mid/Low use full eligible configured pools, custom members and persisted round-robin cursors/pins. Named intent is direct; Open Router Auto is a distinct upstream route. Explicit effort/capabilities are enforced, empty/cooling pools show truthful waits, and auxiliary calls do not repin chat.",
+      "gates": [
+        "G03"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "credentials",
+      "id": "DW-018",
+      "type": "Feature",
+      "title": "Integrate provider authentication and native secret storage",
+      "operations": [
+        "router.connections",
+        "router.configure"
+      ],
+      "dependsOnKeys": [
+        "authority",
+        "settings",
+        "router"
+      ],
+      "acceptance": "Native subscription/API/compatible connections preserve sign-in, refresh, reauthentication, credential revisions, removal/discovery/health and safe redaction. Prove target SecretStore/signing flows; no external agent CLI or old router server. Deliver distinct ClaudeSubscriptionMessages and AnthropicMessages connections. Subscription is disabled until exact-notice human risk acceptance; retain direct simple-router PKCE/token refresh without a Claude CLI. API-key replacement/removal and pricing remain independent; revoke risk acceptance on notice/profile/account changes and restore. No automatic billing crossover.",
+      "gates": [
+        "G03",
+        "G04",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "transports",
+      "id": "DW-019",
+      "type": "Chore",
+      "title": "Implement native provider transports and streaming codecs",
+      "operations": [],
+      "dependsOnKeys": [
+        "router",
+        "credentials",
+        "sessions"
+      ],
+      "acceptance": "Qualify every retained access/profile: Messages, Responses, Chat Completions, OpenRouter and local/custom variants, generation and embedding. Script SSE fragmentation, terminal/partial/tool/image/cache/native continuation errors; never flatten calls or omit unsupported images. Preserve simple-router subscription bearer/beta/identity behavior in the opt-in adapter only; the Anthropic API adapter uses its documented versioned key-auth profile without subscription identity injection. Pin and qualify both; known external restrictions remain visible.",
+      "gates": [
+        "G03"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "tool_turn",
+      "id": "DW-020",
+      "type": "Chore",
+      "title": "Bridge provider tool turns and context epochs",
+      "operations": [],
+      "dependsOnKeys": [
+        "transports",
+        "delegation",
+        "authority"
+      ],
+      "acceptance": "Stable tool aliases, durable completed calls, out-of-order independent results and one initial response per call survive pause, approval and redirection. Later outcome events are separate; provider changes preserve known results and explicit context conversion. Effective instruction bundles bind exact source digests and applicable paths before new inference/tool dispatch; edits adopt at a safe boundary without rewriting completed/in-flight provenance.",
+      "gates": [
+        "G03",
+        "G04"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "usage",
+      "id": "DW-021",
+      "type": "Feature",
+      "title": "Attribute prices, budget reservations and cache metrics",
+      "operations": [
+        "router.usage",
+        "router.price_status",
+        "router.price_refresh",
+        "router.price_override"
+      ],
+      "dependsOnKeys": [
+        "router",
+        "credentials",
+        "store"
+      ],
+      "acceptance": "Weekly/manual official price snapshots, OpenRouter reported costs, local free/custom untracked and subscription estimates preserve provenance. Feature budgets warn at 75%, reserve/admit atomically and require Continue after caps; issues/jobs have no caps. Include every attempt/auxiliary purpose and unknown tail.",
+      "gates": [
+        "G03",
+        "G12"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "systemone",
+      "id": "DW-022",
+      "type": "Feature",
+      "title": "Retain native SystemOne model discovery and decisions",
+      "operations": [
+        "router.decision_models",
+        "router.decide"
+      ],
+      "dependsOnKeys": [
+        "router",
+        "credentials",
+        "usage",
+        "authority"
+      ],
+      "acceptance": "Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility.",
+      "gates": [
+        "G03"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "structural",
+      "id": "DW-023",
+      "type": "Feature",
+      "title": "Discover repositories and publish structural indexes",
+      "operations": [
+        "indexing.*"
+      ],
+      "dependsOnKeys": [
+        "projects",
+        "queue",
+        "files"
+      ],
+      "acceptance": "Tree-sitter baseline, captures, exclusions, partial coverage, stage/cancel/resume, source revisions and immutable generation publication work without semantic runtimes. Discovery/index/reindex/overlay retirement/configuration and logs retain exact source identity.",
+      "gates": [
+        "G01",
+        "G06"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "dotnet",
+      "id": "DW-024",
+      "type": "Feature",
+      "title": "Ship the managed .NET semantic pack",
+      "operations": [],
+      "dependsOnKeys": [
+        "structural",
+        "sdk"
+      ],
+      "acceptance": "Roslyn/native compiler or SCIP import retains all claimed C#/VB constructs and provenance. Explicit optional SDK discovery, bounded owned processes, cancellation, failures and target assets preserve baseline structural indexing.",
+      "gates": [
+        "G05",
+        "G06"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "typescript",
+      "id": "DW-025",
+      "type": "Feature",
+      "title": "Ship the managed TypeScript semantic pack",
+      "operations": [],
+      "dependsOnKeys": [
+        "structural",
+        "sdk"
+      ],
+      "acceptance": "TypeScript/JavaScript compiler relationships, module/package/export and React/Angular/backend links retain source fixtures. Optional Node/toolchain assets do not become core startup dependencies; cancellation and stale output are fenced.",
+      "gates": [
+        "G05",
+        "G06"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "swift",
+      "id": "DW-026",
+      "type": "Feature",
+      "title": "Ship the managed Swift semantic pack",
+      "operations": [],
+      "dependsOnKeys": [
+        "structural",
+        "sdk"
+      ],
+      "acceptance": "SourceKit/IndexStore adaptation retains type/import/member/reference ownership and unresolved provenance. Prove actual platform/toolchain availability; unsupported targets are explicit and cannot count as full language qualification.",
+      "gates": [
+        "G05",
+        "G06"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "rust",
+      "id": "DW-027",
+      "type": "Feature",
+      "title": "Ship the managed Rust semantic pack",
+      "operations": [],
+      "dependsOnKeys": [
+        "structural",
+        "sdk"
+      ],
+      "acceptance": "rust-analyzer/SCIP symbols, Cargo identities and semantic references retain bounded resource/cancellation behavior. Test OOM/failure and changed/deleted inputs without expensive retry loops or corrupt publication.",
+      "gates": [
+        "G05",
+        "G06"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "graph",
+      "id": "DW-028",
+      "type": "Feature",
+      "title": "Read exact graph views, source and impact",
+      "operations": [
+        "code.*",
+        "repositories.nodes"
+      ],
+      "dependsOnKeys": [
+        "structural",
+        "authority"
+      ],
+      "acceptance": "Whole-unit replacement/deletion, visible endpoints, stable identities and cross-repo pinned snapshots apply consistently to every retained graph query/source/traversal/path/impact/lineage operation. Scope precedes expansion and snippets; bounded partials and missing views never fall back to main.",
+      "gates": [
+        "G06",
+        "G12"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "analysis",
+      "id": "DW-029",
+      "type": "Feature",
+      "title": "Run retained health, linking, security and metrics analysis",
+      "operations": [
+        "analysis.*"
+      ],
+      "dependsOnKeys": [
+        "graph",
+        "router",
+        "queue"
+      ],
+      "acceptance": "Implement each retained metric/security/hotspot/community/linking/batch/synthesis/fleet/archive-candidate surface, with exact revisions, structural/semantic coverage, stage checkpoints, source quirks and explicit inferred/unresolved links. Model-assisted stages use the router.",
+      "gates": [
+        "G06",
+        "G11",
+        "G12"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "knowledge",
+      "id": "DW-030",
+      "type": "Feature",
+      "title": "Manage unified claims, entities, evidence and lessons",
+      "operations": [
+        "knowledge.search",
+        "knowledge.read",
+        "knowledge.record",
+        "knowledge.revise",
+        "knowledge.relate",
+        "knowledge.tag",
+        "knowledge.verify",
+        "knowledge.retract",
+        "knowledge.scope",
+        "knowledge.diagnostics",
+        "knowledge.delete_by_source",
+        "knowledge.delete_selected",
+        "knowledge.write_status",
+        "knowledge.import_user_data",
+        "knowledge.promote",
+        "knowledge.challenge",
+        "knowledge.tagged_lessons"
+      ],
+      "dependsOnKeys": [
+        "store",
+        "files",
+        "authority",
+        "router"
+      ],
+      "acceptance": "Authored claim/entity relations, versioned evidence, tags/scope, contradiction/verification/retraction and permissioned deletion preserve provenance and visibility. Retained source semantics have native tools and screens; user import is distinct from excluded legacy Knowledge migration.",
+      "gates": [
+        "G06",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "knowledge_graph",
+      "id": "DW-031",
+      "type": "Feature",
+      "title": "Read Knowledge bundles, graph frontiers and summaries",
+      "operations": [
+        "knowledge.subgraph",
+        "knowledge.entity_bundle",
+        "knowledge.entity_graph",
+        "knowledge.claim_bundle",
+        "knowledge.expand_frontier",
+        "knowledge.render_summary",
+        "knowledge.query"
+      ],
+      "dependsOnKeys": [
+        "knowledge",
+        "graph"
+      ],
+      "acceptance": "Preserve every retained bundle/frontier/filter/cursor and structural-query operation, scope before expansion, explicit partials and stable identities. No raw internal SQL or unbounded materialization leaks through query helpers.",
+      "gates": [
+        "G06",
+        "G12"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "dreaming",
+      "id": "DW-032",
+      "type": "Feature",
+      "title": "Consolidate Knowledge with checkpointed proposals and revert",
+      "operations": [
+        "dreaming.*"
+      ],
+      "dependsOnKeys": [
+        "knowledge",
+        "knowledge_graph",
+        "approvals",
+        "queue"
+      ],
+      "acceptance": "Durable cursors/checkpoints/read efficiency, schedule/settings/instructions, nonconflicting consolidation, conflict review and attributed proposals/revert preserve source evidence and intervening edits. No inference polling while blocked.",
+      "gates": [
+        "G01",
+        "G03",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "conventions",
+      "id": "DW-033",
+      "type": "Feature",
+      "title": "Manage versioned conventions and retrieval resources",
+      "operations": [
+        "conventions.*"
+      ],
+      "dependsOnKeys": [
+        "knowledge",
+        "files"
+      ],
+      "acceptance": "Applicability/version/edit/retire/index/import/delete/move and resource search/removal preserve exact revisions and current scope. No wiki dependency; inherited guidance cannot overrule policy or user instructions.",
+      "gates": [
+        "G06",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "instructions",
+      "id": "DW-034",
+      "type": "Feature",
+      "title": "Stage approved roles and file-backed skills",
+      "operations": [
+        "skills.*",
+        "roles.*"
+      ],
+      "dependsOnKeys": [
+        "files",
+        "approvals",
+        "authority"
+      ],
+      "acceptance": "Discover shared skills in place, resolve assets from owning roots, maintain approved local overrides/history/rollback, and adopt instruction changes at safe boundaries. Agent-authored edits require exact approval; shared originals remain untouched. Repository files override default roles below user directions/enforced permissions. Closest directory wins within its subtree; AGENTS.md beats CLAUDE.md at one level and keeps nonconflicting additions. Test sibling/multi-repository isolation, material conflict records, source digests and safe-boundary adoption.",
+      "gates": [
+        "G04",
+        "G05"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "documents",
+      "id": "DW-035",
+      "type": "Feature",
+      "title": "Ingest and retrieve retained documents with exact citations",
+      "operations": [
+        "documents.*"
+      ],
+      "dependsOnKeys": [
+        "files",
+        "router",
+        "usage",
+        "graph"
+      ],
+      "acceptance": "Native Markdown/text/PDF and modern DOCX extraction, bounded diagnostics/locators, scanned-page routed vision, exact versions and shared/moved scope work. Hybrid retrieval filters before ranking/materialization, preserves embedding space and supports explicit fallback. No external office/Python runtime.",
+      "gates": [
+        "G06",
+        "G08",
+        "G12"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "schema_sources",
+      "id": "DW-036",
+      "type": "Feature",
+      "title": "Index SQL database structural metadata",
+      "operations": [
+        "schemas.*"
+      ],
+      "dependsOnKeys": [
+        "structural",
+        "authority"
+      ],
+      "acceptance": "Native SQLite/MariaDB/MySQL/PostgreSQL/SQL Server metadata profiles declare versions/auth/read-only capability; objects/relationships/index/refresh/removal/configuration never persist source row values. Distinguish unavailable, partial and healthy-empty.",
+      "gates": [
+        "G08"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "database_tools",
+      "id": "DW-037",
+      "type": "Feature",
+      "title": "Execute separately permitted database operations",
+      "operations": [
+        "database.*"
+      ],
+      "dependsOnKeys": [
+        "schema_sources",
+        "approvals"
+      ],
+      "acceptance": "Read defaults, per-connection write enablement, role/project access, bounded results/sensitive columns, transaction/errors and uncertain writes use exact target identity. Versioned migrations are preferred; applying one needs independent target authority.",
+      "gates": [
+        "G04",
+        "G08"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "git_tasks",
+      "id": "DW-039",
+      "type": "Feature",
+      "title": "Manage owned worktrees, commits, pushes and task PRs",
+      "operations": [
+        "git.worktree",
+        "git.inspect",
+        "git.diff",
+        "git.commit",
+        "git.push",
+        "git.pull_request"
+      ],
+      "dependsOnKeys": [
+        "work",
+        "process_owner",
+        "authority",
+        "files"
+      ],
+      "acceptance": "Task/group PRs integrate to feature branches; issue PRs target main. Persist all associations and expected heads. Force-with-lease is limited to owned task branches; feature force-push needs exact approval and main is always forbidden. Linked issues keep existing branches/worktrees; coordinator owns feature integration and reconciles PR targets. Unlink pauses work without deleting code or remote artifacts; historical costs stay fixed, later calls use current membership budget.",
+      "gates": [
+        "G07"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "git_delivery",
+      "id": "DW-040",
+      "type": "Feature",
+      "title": "Reconcile final delivery and clean up owned Git resources",
+      "operations": [
+        "git.integrate",
+        "git.cleanup"
+      ],
+      "dependsOnKeys": [
+        "git_tasks",
+        "approvals",
+        "queue",
+        "reviews"
+      ],
+      "acceptance": "All-repo exact-head readiness before first submission, acyclic order and revalidation preserve partial merges. Async accepted/queued/unknown states reconcile through authoritative PR/head/method evidence, including squash/rebase and expiry. Cleanup preserves dirty/unintegrated/new concurrent commits.",
+      "gates": [
+        "G07"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "github",
+      "id": "DW-041",
+      "type": "Feature",
+      "title": "Synchronize GitHub accounts, issues and observed changes",
+      "operations": [
+        "github.*",
+        "issues.publish",
+        "issues.link"
+      ],
+      "dependsOnKeys": [
+        "credentials",
+        "projects",
+        "work",
+        "git_tasks"
+      ],
+      "acceptance": "One GitHub.com account, personal/organization access and no public webhook server. Conditional paginated polling, issue import/link/publish/inbound updates/resolution reconciliation and distinct consumer cursors survive restarts without starting paused work or creating duplicates. Replace blanket two-way mirroring with inbound remote snapshots and verified-resolution summary/close. Import all reports, route shared-repository reports through triage, and apply one persisted app-wide queue with configurable Settings interval default1800seconds and no restart burst. Verify bugs before immediate work; notify feature requests/unverifiable bugs/new scope. Continue verified started fixes and approved feature work after remote closure; close unstarted unreproducible local bugs and retain feature requests. Prove deduplicated uncertain comment/close recovery and no repeated inference per poll.",
+      "gates": [
+        "G07",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "reviews",
+      "id": "DW-042",
+      "type": "Feature",
+      "title": "Resolve exact-head reviews and merge readiness",
+      "operations": [
+        "reviews.*"
+      ],
+      "dependsOnKeys": [
+        "github",
+        "git_tasks",
+        "graph",
+        "approvals"
+      ],
+      "acceptance": "Configured GitHub automation satisfies review; absent automation uses independent verified-read reviewers. Fix every actionable finding, persist adjudication, enforce configured cycles and scope-bound readiness across changed heads and policies. Failed/stalled automation automatically uses one independent in-app fallback. Normalize source/run/head/policy/cycle evidence, zero-finding completion, finite wait, changed-head invalidation and late external findings. Fallback does not bypass required checks/branch protection.",
+      "gates": [
+        "G04",
+        "G07"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "releases",
+      "id": "DW-043",
+      "type": "Feature",
+      "title": "Prepare, publish and deploy revision-bound releases",
+      "operations": [
+        "releases.*"
+      ],
+      "dependsOnKeys": [
+        "git_delivery",
+        "reviews",
+        "approvals"
+      ],
+      "acceptance": "Independent Automatic/Ask-me/Disabled policies default Ask-me. Exact revision/version/artifact/destination approvals survive retries and uncertain outcomes. Release/deploy failures do not reopen a feature whose final PRs are merged.",
+      "gates": [
+        "G07",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "packages",
+      "id": "DW-044",
+      "type": "Feature",
+      "title": "Install and activate trusted executable packages",
+      "operations": [
+        "addons.*"
+      ],
+      "dependsOnKeys": [
+        "files",
+        "authority",
+        "process_owner",
+        "queue"
+      ],
+      "acceptance": "Signed manifests, inventory/dependency/runtime closure, exact agent-authored approval and publisher trust feed quiescent registry/state publication. Framing, limits, state migration, compatible updates and guarded rollback preserve active work and authored state. Event-handler mutations must use broker.commit_event with generation/revision-bound state and follow-up intents; broker.call/state CAS cannot bypass atomic handler commit.",
+      "gates": [
+        "G05",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "sdk",
+      "id": "DW-045",
+      "type": "Chore",
+      "title": "Implement every SDK contribution and callback boundary",
+      "operations": [],
+      "dependsOnKeys": [
+        "packages",
+        "tool_turn"
+      ],
+      "acceptance": "All eight contribution types, bidirectional RPC/credits/cancel/outcome, current host tokens, broker callbacks, durable event replay and native UI descriptors pass real host/SDK tests. A package cannot claim its own authority, verified-read status or publication receipt. Expose typed broker.commit_event and EventCommitAccepted with host-minted receipt. Test duplicate keys, generation/CAS conflicts, durable replay/crash outcomes and forged EventProcessed notifications; notification alone never commits or advances a checkpoint.",
+      "gates": [
+        "G04",
+        "G05"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "mcp",
+      "id": "DW-046",
+      "type": "Feature",
+      "title": "Connect external MCP servers and selected capabilities",
+      "operations": [
+        "mcp.*"
+      ],
+      "dependsOnKeys": [
+        "authority",
+        "tool_turn",
+        "process_owner"
+      ],
+      "acceptance": "Native outgoing client HTTP/stdio lifecycle, credentials, discovery/tool selection/read-only defaults, resources/prompts/schema changes and router sampling preserve all retained capabilities. External runtimes are optional and declared. Incoming DevWorks server support is separately owned by DW-063/064; no unaudited cross-direction proxy.",
+      "gates": [
+        "G04",
+        "G05"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "browser",
+      "id": "DW-047",
+      "type": "Feature",
+      "title": "Control an owned browser through a native adapter",
+      "operations": [
+        "browser.*"
+      ],
+      "dependsOnKeys": [
+        "authority",
+        "process_owner",
+        "files"
+      ],
+      "acceptance": "Full retained session/inspection/navigation/input/upload/screenshot/console/network surface uses owned sessions, frame/node revisions and explicit file grants. Downloads, popups, crashes, CDP permissions and per-target assets are qualified; no installed Node/Python service.",
+      "gates": [
+        "G04",
+        "G09",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "desktop",
+      "id": "DW-048",
+      "type": "Feature",
+      "title": "Broker native desktop control and consent",
+      "operations": [
+        "desktop.*"
+      ],
+      "dependsOnKeys": [
+        "authority",
+        "process_owner",
+        "approvals",
+        "files"
+      ],
+      "acceptance": "Inspect/capture/request/input/release obey canonical desktop reservation, current OK/Wait and OS permissions; no input before consent. Qualify macOS/Windows/Linux X11/Wayland capabilities and show unsupported state without pretending parity.",
+      "gates": [
+        "G04",
+        "G09"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "process_tools",
+      "id": "DW-049",
+      "type": "Feature",
+      "title": "Execute authorized processes and dependency operations",
+      "operations": [
+        "process.*"
+      ],
+      "dependsOnKeys": [
+        "authority",
+        "process_owner",
+        "approvals"
+      ],
+      "acceptance": "Bound output, ownership/cancel/outcome, working roots/env/credentials and exact effective Full/restricted profile are enforced. Project dependencies follow scope; system installs need exact approval. Verified-read reviewers cannot invoke arbitrary mutation or unsupported confinement.",
+      "gates": [
+        "G04",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "containers",
+      "id": "DW-050",
+      "type": "Feature",
+      "title": "Manage supported engines and owned containers",
+      "operations": [
+        "containers.*"
+      ],
+      "dependsOnKeys": [
+        "process_tools",
+        "settings"
+      ],
+      "acceptance": "Docker/Podman and supported Apple backend capability discovery preserves per-project overrides, ownership/ports/resources/build/pull/create/start/exec/inspect/logs/stop. Close stops only app-owned agent containers, not preexisting engines/resources.",
+      "gates": [
+        "G09",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "jobs",
+      "id": "DW-051",
+      "type": "Feature",
+      "title": "Run durable schedules and manual jobs",
+      "operations": [
+        "jobs.*"
+      ],
+      "dependsOnKeys": [
+        "queue",
+        "controls",
+        "router",
+        "process_owner"
+      ],
+      "acceptance": "Timezone/occurrence identities, skip missed/overlap, interrupted-run reconciliation and native/inference dispatch share ordinary authority. No job spending caps; linked feature budgets persist. Restore keeps schedules/keep-working stopped until explicitly reactivated.",
+      "gates": [
+        "G01",
+        "G03"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "web",
+      "id": "DW-052",
+      "type": "Feature",
+      "title": "Search and retrieve web sources through shared tools",
+      "operations": [
+        "web.*"
+      ],
+      "dependsOnKeys": [
+        "authority",
+        "router",
+        "files"
+      ],
+      "acceptance": "Native search/fetch profiles, content limits, redirects/source provenance, secret protection and untrusted output preserve first-class reviewer reads. External search capability settings and actual unknown effects remain explicit.",
+      "gates": [
+        "G04"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "help",
+      "id": "DW-053",
+      "type": "Feature",
+      "title": "Ship version-matched offline Help and screen bindings",
+      "operations": [
+        "help.*"
+      ],
+      "dependsOnKeys": [
+        "shell",
+        "packages"
+      ],
+      "acceptance": "Every screen/operation/capability has searchable local Help for humans and agents, current version/permissions and examples. Offline search never requires embeddings/provider access; package guides remain bound to installed versions.",
+      "gates": [
+        "G02",
+        "G10",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "repo_docs",
+      "id": "DW-054",
+      "type": "Feature",
+      "title": "Generate repository documentation with retained behavior",
+      "operations": [
+        "repository_docs.*"
+      ],
+      "dependsOnKeys": [
+        "graph",
+        "files",
+        "router"
+      ],
+      "acceptance": "Native source/revision-bound generation covers retained repository documentation operations, provenance and approval/file authority; complete required docs accompany work and affect completion gates. No generic search substitution for the source capability.",
+      "gates": [
+        "G06",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "imports",
+      "id": "DW-055",
+      "type": "Feature",
+      "title": "Import only the selected legacy work and history",
+      "operations": [
+        "imports.*"
+      ],
+      "dependsOnKeys": [
+        "projects",
+        "work",
+        "sessions",
+        "git_tasks"
+      ],
+      "acceptance": "Preview/configure/apply/runs/inspection bind source snapshots and identity maps; resume without duplicates, preserve historical evidence and report missing data. Exclude legacy Knowledge/conventions/index migration and never resume imported agents/effects.",
+      "gates": [
+        "G01",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "maintenance",
+      "id": "DW-056",
+      "type": "Feature",
+      "title": "Prune only explicitly eligible operational data",
+      "operations": [
+        "maintenance.*"
+      ],
+      "dependsOnKeys": [
+        "sessions",
+        "files",
+        "approvals"
+      ],
+      "acceptance": "Diagnostics/index runs/messages/sessions have distinct eligibility, authored history and live-reference rules. Preview exact candidates/revisions, report holds, journal outcomes and never turn storage pressure into retained artifact/document deletion.",
+      "gates": [
+        "G01",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "diagnostics",
+      "id": "DW-057",
+      "type": "Feature",
+      "title": "Expose bounded local diagnostics and recoverable logs",
+      "operations": [
+        "workspace.diagnostics",
+        "workspace.logs",
+        "workspace.record_diagnostic"
+      ],
+      "dependsOnKeys": [
+        "queue",
+        "settings",
+        "files"
+      ],
+      "acceptance": "Redacted attributable diagnostics, operation/consumer/process/source health and exportable evidence stay distinct from model history. Unavailable metrics are not zeros; errors remain visible and no raw secrets/source rows reach logs.",
+      "gates": [
+        "G01",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "backup",
+      "id": "DW-058",
+      "type": "Feature",
+      "title": "Migrate, manually back up and restore the app store",
+      "operations": [
+        "workspace.backup",
+        "workspace.restore",
+        "workspace.migrate"
+      ],
+      "dependsOnKeys": [
+        "store",
+        "files",
+        "jobs",
+        "packages"
+      ],
+      "acceptance": "Versioned migrations/manual consistent SQLite+file snapshots, integrity/compatibility and journaled restore preserve authored data and fences. No automatic backups; restored automation stays stopped, and external effects reconcile before selective Continue.",
+      "gates": [
+        "G01",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "updates",
+      "id": "DW-059",
+      "type": "Feature",
+      "title": "Discover and install approved signed app updates",
+      "operations": [
+        "workspace.update_status",
+        "workspace.approve_install"
+      ],
+      "dependsOnKeys": [
+        "backup",
+        "packages",
+        "approvals"
+      ],
+      "acceptance": "Stable default/prerelease opt-in, due launch/hourly checks, immutable signed staging, exact install/restart approval and compatible binary rollback preserve user writes and manual-resume rules. No automatic data restore or installer loop.",
+      "gates": [
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "distribution",
+      "id": "DW-060",
+      "type": "Chore",
+      "title": "Qualify native target installers and optional assets",
+      "operations": [],
+      "dependsOnKeys": [
+        "shell",
+        "credentials",
+        "browser",
+        "desktop",
+        "containers",
+        "backup",
+        "updates"
+      ],
+      "acceptance": "Build/sign/package and clean-install every adopted OS/CPU target; audit native dependencies, secret stores, path relocation, optional packs and offline Help. No server/daemon/preinstalled language runtime is needed for core. Unqualified capabilities cannot be advertised.",
+      "gates": [
+        "G02",
+        "G04",
+        "G08",
+        "G09",
+        "G10"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "performance",
+      "id": "DW-061",
+      "type": "Chore",
+      "title": "Measure all representative workloads without inference",
+      "operations": [],
+      "dependsOnKeys": [
+        "distribution",
+        "diagnostics"
+      ],
+      "acceptance": "Generate deterministic corpus manifests and run W01\u2013W12 against production process trees on named hardware; record cold/warm/control data and calibrate provisional budgets. No inference compute in normal benchmarks/tests.",
+      "gates": [
+        "G12"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "acceptance",
+      "id": "DW-062",
+      "type": "Chore",
+      "title": "Reconcile full retained behavior and release readiness",
+      "operations": [],
+      "dependsOnKeys": [
+        "contracts",
+        "store",
+        "queue",
+        "settings",
+        "authority",
+        "process_owner",
+        "files",
+        "sessions",
+        "controls",
+        "shell",
+        "projects",
+        "work",
+        "workflow",
+        "approvals",
+        "delegation",
+        "chat",
+        "router",
+        "credentials",
+        "transports",
+        "tool_turn",
+        "usage",
+        "systemone",
+        "structural",
+        "dotnet",
+        "typescript",
+        "swift",
+        "rust",
+        "graph",
+        "analysis",
+        "knowledge",
+        "knowledge_graph",
+        "dreaming",
+        "conventions",
+        "instructions",
+        "documents",
+        "schema_sources",
+        "database_tools",
+        "git_tasks",
+        "git_delivery",
+        "github",
+        "reviews",
+        "releases",
+        "packages",
+        "sdk",
+        "mcp",
+        "browser",
+        "desktop",
+        "process_tools",
+        "containers",
+        "jobs",
+        "web",
+        "help",
+        "repo_docs",
+        "imports",
+        "maintenance",
+        "diagnostics",
+        "backup",
+        "updates",
+        "distribution",
+        "performance"
+      ],
+      "acceptance": "Run every AT requirement and all 33 CAP groups through actual services, reconcile frozen-source drift and verify each retained operation plus import quirks. Separately dispatch authorized live inference E2E later; schema/probe counts cannot satisfy product acceptance.",
+      "gates": [
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "mcp_server",
+      "id": "DW-063",
+      "type": "Feature",
+      "title": "Expose indexed code, planned work and Knowledge to MCP clients",
+      "operations": [
+        "mcp_server.status"
+      ],
+      "dependsOnKeys": [
+        "contracts",
+        "graph",
+        "analysis",
+        "work",
+        "workflow",
+        "knowledge",
+        "conventions",
+        "documents",
+        "files",
+        "sessions",
+        "mcp_server_access"
+      ],
+      "acceptance": "Implement the native installed stdio bridge and opt-in loopback Streamable HTTP listener to the existing gateway, with explicit 2026-07-28 and 2025-11-25 profiles. Publish the complete reviewed eligible code/work/Knowledge query manifest, distinct operation/mode bindings, scoped resources/context prompts, bounded pages, citation/view/revision parity, cancellation and durable status/receipt recovery. Qualify two independent clients across transports/profiles; verify no context-only inference, second store writer, residual daemon or implicit outgoing-MCP proxy. Package bridge and setup documentation for all supported targets. See mcp-server-contracts.md.",
+      "gates": [
+        "G04",
+        "G06",
+        "G10",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    },
+    {
+      "key": "mcp_server_access",
+      "id": "DW-064",
+      "type": "Feature",
+      "title": "Authorize external MCP clients and selected work or Knowledge commands",
+      "operations": [
+        "mcp_server.configure",
+        "mcp_server.clients",
+        "mcp_server.set_client_access"
+      ],
+      "dependsOnKeys": [
+        "authority",
+        "credentials",
+        "settings",
+        "shell",
+        "controls",
+        "approvals"
+      ],
+      "acceptance": "Implement human-only registration, initially empty grants, OS-protected credentials, manually provisioned per-client HTTP bearer credentials bound to store/epoch and generation and stdio protected IPC authentication. Native Settings enables the server, exports secret-free setup, and manages exact project/repository/worktree/read/command scopes, credential generation and revocation. Apply current gateway policy at call/dispatch/publication; enforce reviewer/human-only holds and explicit work/Knowledge command grants with expected revisions, attributed idempotency receipts and uncertain-effect reconciliation. Test spoofing/Host/Origin/credential-store-generation failures, scope revocation during read/publication, denied and permitted writes, retry/lost-ack duplicates, app-close and restore reauthorization. The configuration operations are not public MCP tools. See mcp-server-contracts.md.",
+      "gates": [
+        "G04",
+        "G10",
+        "G11"
+      ],
+      "status": "Planned; implementation not authorized or started"
+    }
+  ],
+  "retiredSlices": [
+    {
+      "id": "DW-038",
+      "key": "helix_source",
+      "status": "Removed from scope by user on 2 November 2026",
+      "reason": "External HelixDB schema reader is not needed. No implementation acceptance remains for this slice; preserve IDs of all other slices."
+    }
+  ]
+}

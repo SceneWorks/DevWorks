@@ -1,0 +1,303 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "DataScope": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Workspace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Project",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "DocumentVersions": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Current",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Exact",
+              "type": "string"
+            },
+            "versions": {
+              "items": {
+                "$ref": "#/$defs/ArtifactRef"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "versions"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EmbeddingSpace": {
+      "additionalProperties": false,
+      "properties": {
+        "dimensions": {
+          "format": "uint32",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "metric": {
+          "$ref": "#/$defs/Metric"
+        },
+        "modelDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "spaceId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "spaceId",
+        "modelDigest",
+        "dimensions",
+        "metric"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Metric": {
+      "enum": [
+        "L2",
+        "Cosine"
+      ],
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "QueryLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "deadlineMs": {
+          "format": "uint32",
+          "maximum": 300000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxResults": {
+          "format": "uint16",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxVisited": {
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxResults",
+        "maxVisited",
+        "deadlineMs"
+      ],
+      "type": "object"
+    },
+    "RetrievalInput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Text",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "float32Le": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "Vector",
+              "type": "string"
+            },
+            "space": {
+              "$ref": "#/$defs/EmbeddingSpace"
+            }
+          },
+          "required": [
+            "kind",
+            "space",
+            "float32Le"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RetrievalMode": {
+      "enum": [
+        "Lexical",
+        "Vector",
+        "Hybrid"
+      ],
+      "type": "string"
+    },
+    "RetrievalSource": {
+      "enum": [
+        "Code",
+        "Document",
+        "Knowledge",
+        "Convention"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:retrieval-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "$ref": "#/$defs/RetrievalInput"
+    },
+    "lexicalFallback": {
+      "type": "boolean"
+    },
+    "limits": {
+      "$ref": "#/$defs/QueryLimits"
+    },
+    "mode": {
+      "$ref": "#/$defs/RetrievalMode"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "queryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "scope": {
+      "$ref": "#/$defs/DataScope"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/RetrievalSource"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array"
+    },
+    "versions": {
+      "$ref": "#/$defs/DocumentVersions"
+    }
+  },
+  "required": [
+    "protocol",
+    "queryId",
+    "scope",
+    "sources",
+    "versions",
+    "input",
+    "mode",
+    "lexicalFallback",
+    "limits"
+  ],
+  "title": "RetrievalRequest",
+  "type": "object"
+}

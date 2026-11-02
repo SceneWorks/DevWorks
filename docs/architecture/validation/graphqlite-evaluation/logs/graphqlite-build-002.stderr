@@ -1,0 +1,20 @@
+   Compiling rusqlite v0.41.1
+   Compiling eval-common v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/common)
+   Compiling graphqlite v0.12.0
+   Compiling eval-graphqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/graphqlite)
+error[E0369]: cannot subtract `{float}` from `Option<f64>`
+   --> graphqlite/src/freshness.rs:172:62
+    |
+172 |     if !refreshed_weight.found || (refreshed_weight.distance - 16.).abs() > 1e-6 {
+    |                                    ------------------------- ^ --- {float}
+    |                                    |
+    |                                    Option<f64>
+    |
+note: `Option<f64>` does not implement `Sub<{float}>`
+   --> /Users/michael/.rustup/toolchains/nightly-2026-10-06-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs:598:1
+    |
+598 | pub enum Option<T> {
+    | ^^^^^^^^^^^^^^^^^^ `Option<f64>` is defined in another crate
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `eval-graphqlite` (bin "eval-graphqlite") due to 1 previous error

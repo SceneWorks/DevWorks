@@ -1,0 +1,24 @@
+{
+  "checks": [
+    "Max_allocates_pair_and_reuses_pin",
+    "High_allocates_pair_and_reuses_pin",
+    "Mid_allocates_pair_and_reuses_pin",
+    "Low_allocates_pair_and_reuses_pin",
+    "custom_member_participates_without_model_alias_translation",
+    "explicit_effort_excludes_incompatible_routes",
+    "empty_tier_does_not_cross_tier_or_select_jev",
+    "all_four_typed_question_variants_and_media_validate",
+    "unsupported_question_image_or_video_rejected_before_send",
+    "unknown_question_cannot_become_execution",
+    "native_local_http_preserves_state_questions_media_and_upstream_model",
+    "structured_answers_usage_and_unknown_fields_preserved_as_untrusted_output"
+  ],
+  "fixtureHttpOnly": true,
+  "host": "macOS arm64",
+  "limits": [
+    "Native deterministic allocation/capability and localhost wire subset, not production router state, durable pins, pricing/permissions, credentials or live Jev qualification.",
+    "Example probabilities are fixture data and grant no operation authority. Native public SystemOne schema and actual per-model output semantics remain qualification work."
+  ],
+  "noInference": true,
+  "passed": 12
+}

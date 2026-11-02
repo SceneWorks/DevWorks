@@ -1,0 +1,80 @@
+{
+  "date": "2026-11-02",
+  "project": "DW",
+  "architectureFeature": "DW-F1",
+  "deliveryFeatures": [
+    {
+      "key": "DW-F2",
+      "title": "Durable runtime and persistence",
+      "items": 5,
+      "sourceRequirements": 31
+    },
+    {
+      "key": "DW-F3",
+      "title": "Execution controls and permissions",
+      "items": 4,
+      "sourceRequirements": 27
+    },
+    {
+      "key": "DW-F4",
+      "title": "Workspace and project experience",
+      "items": 4,
+      "sourceRequirements": 24
+    },
+    {
+      "key": "DW-F5",
+      "title": "Work planning and agent coordination",
+      "items": 3,
+      "sourceRequirements": 47
+    },
+    {
+      "key": "DW-F6",
+      "title": "Models, routing and usage",
+      "items": 6,
+      "sourceRequirements": 41
+    },
+    {
+      "key": "DW-F7",
+      "title": "Code and database intelligence",
+      "items": 9,
+      "sourceRequirements": 28
+    },
+    {
+      "key": "DW-F8",
+      "title": "Knowledge, documents and instructions",
+      "items": 6,
+      "sourceRequirements": 39
+    },
+    {
+      "key": "DW-F9",
+      "title": "GitHub and autonomous delivery",
+      "items": 5,
+      "sourceRequirements": 43
+    },
+    {
+      "key": "DW-F10",
+      "title": "Packages and external harnesses",
+      "items": 5,
+      "sourceRequirements": 22
+    },
+    {
+      "key": "DW-F11",
+      "title": "Agent tools and automation",
+      "items": 6,
+      "sourceRequirements": 18
+    },
+    {
+      "key": "DW-F12",
+      "title": "Application operations and acceptance",
+      "items": 10,
+      "sourceRequirements": 30
+    }
+  ],
+  "nativeItems": 63,
+  "sourceRequirements": 350,
+  "dependencyEdges": 250,
+  "identitiesAcceptanceAndDependenciesPreserved": true,
+  "nativeStatus": "backlog",
+  "publicationItem": "DW-64",
+  "allPassed": true
+}

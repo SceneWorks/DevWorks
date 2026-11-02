@@ -1,0 +1,12 @@
+flowchart LR
+ SRC["Repository baseline and worktree contents"] --> SNAP["Immutable content manifest<br/>base / head / local digest"]
+ SNAP --> TREE["Tree-sitter structural extraction"]
+ SNAP --> SEM["Optional .NET / TS / Swift / Rust pack"]
+ TREE --> VALID["Validate symbols, references<br/>coverage and source identity"]
+ SEM --> VALID
+ VALID --> GEN["Staging graph generation"]
+ GEN --> PUB["Publish manifest after complete validation"]
+ PUB --> VIEW["GraphView<br/>baseline + changed paths + tombstones"]
+ VIEW --> QUERY["Search / source / traversal / impact / retrieval"]
+ MISSING["Missing, failed or stale requested view"] --> UNAVAILABLE["Explicit scoped unavailable or stale result"]
+ BASE["Other worktree or main"] -. "Never a silent substitute" .-> UNAVAILABLE

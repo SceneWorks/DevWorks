@@ -1,0 +1,126 @@
+{
+  "status": "Narrow main-body feasibility only; not production extraction/security/platform acceptance",
+  "host": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "cases": [
+    {
+      "case": "body-runs-unicode-entities-table.docx",
+      "passed": true,
+      "expectedRejection": null,
+      "output": {
+        "paragraphs": [
+          {
+            "locator": "word/document.xml#paragraph/1",
+            "text": "A & B — café λ\tend"
+          },
+          {
+            "locator": "word/document.xml#paragraph/2",
+            "text": "Cell"
+          }
+        ],
+        "scope": "Main-body runs and table paragraphs only. No rendering, auxiliary stories, revisions or application publication.",
+        "status": "ExtractedProbeBodyOnly",
+        "tableCells": 1
+      }
+    },
+    {
+      "case": "missing-main.docx",
+      "passed": true,
+      "expectedRejection": "MissingRequiredPart",
+      "output": {
+        "reason": "MissingRequiredPart",
+        "status": "Rejected"
+      }
+    },
+    {
+      "case": "malformed.docx",
+      "passed": true,
+      "expectedRejection": "MalformedXml",
+      "output": {
+        "reason": "MalformedXml:ill-formed document: expected `</w:body>`, but `</w:document>` was found",
+        "status": "Rejected"
+      }
+    },
+    {
+      "case": "dtd.docx",
+      "passed": true,
+      "expectedRejection": "DtdForbidden",
+      "output": {
+        "reason": "DtdForbidden",
+        "status": "Rejected"
+      }
+    },
+    {
+      "case": "unsafe-path.docx",
+      "passed": true,
+      "expectedRejection": "UnsafePartPath",
+      "output": {
+        "reason": "UnsafePartPath",
+        "status": "Rejected"
+      }
+    },
+    {
+      "case": "duplicate-case.docx",
+      "passed": true,
+      "expectedRejection": "DuplicatePart",
+      "output": {
+        "reason": "DuplicatePart",
+        "status": "Rejected"
+      }
+    },
+    {
+      "case": "main-too-large.docx",
+      "passed": true,
+      "expectedRejection": "MainPartTooLarge",
+      "output": {
+        "reason": "MainPartTooLarge",
+        "status": "Rejected"
+      }
+    },
+    {
+      "case": "deep-xml.docx",
+      "passed": true,
+      "expectedRejection": "XmlDepthExceeded",
+      "output": {
+        "reason": "XmlDepthExceeded",
+        "status": "Rejected"
+      }
+    },
+    {
+      "case": "legacy.doc",
+      "passed": true,
+      "expectedRejection": "UnsupportedFormat",
+      "output": {
+        "reason": "UnsupportedFormat",
+        "status": "Rejected"
+      }
+    },
+    {
+      "case": "external-reference-inert.docx",
+      "passed": true,
+      "expectedRejection": null,
+      "output": {
+        "paragraphs": [
+          {
+            "locator": "word/document.xml#paragraph/1",
+            "text": "A & B — café λ\tend"
+          },
+          {
+            "locator": "word/document.xml#paragraph/2",
+            "text": "Cell"
+          }
+        ],
+        "scope": "Main-body runs and table paragraphs only. No rendering, auxiliary stories, revisions or application publication.",
+        "status": "ExtractedProbeBodyOnly",
+        "tableCells": 1
+      }
+    },
+    {
+      "case": "requirements-document-body",
+      "passed": true,
+      "sha256": "20bfc9a3d7386b2c1b6bf2c890d2e1136d146a7f179170c389a77efd65979975",
+      "paragraphs": 912,
+      "tableCells": 403
+    }
+  ],
+  "allPassed": true
+}

@@ -1,0 +1,1158 @@
+{
+  "allPassed": true,
+  "cases": [
+    {
+      "entry": "command-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "start",
+      "normalized": {
+        "command": {
+          "expectedControlRevision": "1",
+          "expectedWorkRevision": "1",
+          "kind": "runs.start",
+          "rootId": "root-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "key-start"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "pause",
+      "normalized": {
+        "command": {
+          "expectedControlRevision": "1",
+          "kind": "runs.pause",
+          "rootId": "root-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "key-pause"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "continue",
+      "normalized": {
+        "command": {
+          "coveredHolds": [
+            {
+              "holdId": "hold-a",
+              "revision": "1"
+            }
+          ],
+          "expectedControlRevision": "1",
+          "kind": "runs.continue",
+          "rootId": "root-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "key-continue"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-request",
+      "error": "unknown field `actorId`, expected one of `protocol`, `requestKey`, `command` at line 1 column 198",
+      "expectedSchemaValid": false,
+      "id": "reject-caller-actorId",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "unknown field `policyRevision`, expected one of `protocol`, `requestKey`, `command` at line 1 column 205",
+      "expectedSchemaValid": false,
+      "id": "reject-caller-policyRevision",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "unknown field `approved`, expected one of `protocol`, `requestKey`, `command` at line 1 column 199",
+      "expectedSchemaValid": false,
+      "id": "reject-caller-approved",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "unknown field `resumeGrant`, expected one of `protocol`, `requestKey`, `command` at line 1 column 202",
+      "expectedSchemaValid": false,
+      "id": "reject-caller-resumeGrant",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "unknown field `scopeKey`, expected one of `protocol`, `requestKey`, `command` at line 1 column 199",
+      "expectedSchemaValid": false,
+      "id": "reject-caller-scopeKey",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "unknown field `actorId`, expected one of `rootId`, `expectedControlRevision`, `coveredHolds` at line 1 column 206",
+      "expectedSchemaValid": false,
+      "id": "reject-body-authority",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "unknown variant `assignments.continue`, expected one of `runs.start`, `runs.pause`, `runs.continue` at line 1 column 94",
+      "expectedSchemaValid": false,
+      "id": "reject-child-control-variant",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "revision must be positive at line 1 column 158",
+      "expectedSchemaValid": false,
+      "id": "reject-zero-revision",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "invalid type: integer `1`, expected a string at line 1 column 156",
+      "expectedSchemaValid": false,
+      "id": "reject-numeric-revision",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "invalid counter at line 1 column 159",
+      "expectedSchemaValid": false,
+      "id": "reject-leading-zero",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "invalid counter at line 1 column 176",
+      "expectedSchemaValid": true,
+      "id": "reject-signed64-overflow",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "accept-signed64-max",
+      "normalized": {
+        "command": {
+          "expectedControlRevision": "9223372036854775807",
+          "expectedWorkRevision": "1",
+          "kind": "runs.start",
+          "rootId": "root-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "key-start"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-request",
+      "error": "unknown variant `2.0`, expected `1.0-draft.1` at line 1 column 17",
+      "expectedSchemaValid": false,
+      "id": "reject-unknown-protocol",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "covered holds out of bounds",
+      "expectedSchemaValid": false,
+      "id": "reject-empty-covered-set",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "duplicate hold ID",
+      "expectedSchemaValid": true,
+      "id": "reject-duplicate-hold-id",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "normalize-hold-set-order",
+      "normalized": {
+        "command": {
+          "coveredHolds": [
+            {
+              "holdId": "hold-a",
+              "revision": "1"
+            },
+            {
+              "holdId": "hold-z",
+              "revision": "2"
+            }
+          ],
+          "expectedControlRevision": "1",
+          "kind": "runs.continue",
+          "rootId": "root-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "key-continue"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-request",
+      "error": "invalid opaque ID/key at line 1 column 161",
+      "expectedSchemaValid": false,
+      "id": "reject-path-as-id",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "invalid opaque ID/key at line 1 column 170",
+      "expectedSchemaValid": false,
+      "id": "reject-overlong-key",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-request",
+      "error": "duplicate field `rootId` at line 1 column 176",
+      "expectedSchemaValid": false,
+      "id": "reject-duplicate-json-member",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "accepted-does-not-mean-unblocked",
+      "normalized": {
+        "kind": "Recorded",
+        "protocol": "1.0-draft.1",
+        "receipt": {
+          "acceptedAtMs": "1793570000000",
+          "commandId": "cmd-a",
+          "committedSequence": "9",
+          "decision": {
+            "activation": {
+              "executionId": "exec-a",
+              "generation": "1",
+              "phase": "Pending"
+            },
+            "clearedHolds": [
+              {
+                "holdId": "hold-a",
+                "revision": "1"
+              }
+            ],
+            "kind": "Accepted",
+            "remaining": {
+              "hasMore": false,
+              "items": [
+                {
+                  "cause": "Approval",
+                  "holdId": "hold-a",
+                  "revision": "1",
+                  "subject": {
+                    "id": "root-a",
+                    "kind": "root"
+                  }
+                }
+              ]
+            },
+            "root": {
+              "desiredState": "Enabled",
+              "revision": "2",
+              "rootId": "root-a"
+            }
+          },
+          "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "replayed": false
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "receipt-replayed",
+      "normalized": {
+        "kind": "Recorded",
+        "protocol": "1.0-draft.1",
+        "receipt": {
+          "acceptedAtMs": "1793570000000",
+          "commandId": "cmd-a",
+          "committedSequence": "9",
+          "decision": {
+            "activation": {
+              "executionId": "exec-a",
+              "generation": "1",
+              "phase": "Pending"
+            },
+            "clearedHolds": [
+              {
+                "holdId": "hold-a",
+                "revision": "1"
+              }
+            ],
+            "kind": "Accepted",
+            "remaining": {
+              "hasMore": false,
+              "items": [
+                {
+                  "cause": "Approval",
+                  "holdId": "hold-a",
+                  "revision": "1",
+                  "subject": {
+                    "id": "root-a",
+                    "kind": "root"
+                  }
+                }
+              ]
+            },
+            "root": {
+              "desiredState": "Enabled",
+              "revision": "2",
+              "rootId": "root-a"
+            }
+          },
+          "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "replayed": true
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "already-active",
+      "normalized": {
+        "kind": "Recorded",
+        "protocol": "1.0-draft.1",
+        "receipt": {
+          "acceptedAtMs": "1793570000000",
+          "commandId": "cmd-a",
+          "committedSequence": "9",
+          "decision": {
+            "activation": {
+              "executionId": "exec-a",
+              "generation": "1",
+              "phase": "Pending"
+            },
+            "kind": "AlreadyActive",
+            "root": {
+              "desiredState": "Enabled",
+              "revision": "2",
+              "rootId": "root-a"
+            }
+          },
+          "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "replayed": false
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "continue-required",
+      "normalized": {
+        "kind": "Recorded",
+        "protocol": "1.0-draft.1",
+        "receipt": {
+          "acceptedAtMs": "1793570000000",
+          "commandId": "cmd-a",
+          "committedSequence": "9",
+          "decision": {
+            "holds": [
+              {
+                "holdId": "hold-a",
+                "revision": "1"
+              }
+            ],
+            "kind": "ContinueRequired",
+            "rootId": "root-a"
+          },
+          "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "replayed": false
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "blocked",
+      "normalized": {
+        "kind": "Recorded",
+        "protocol": "1.0-draft.1",
+        "receipt": {
+          "acceptedAtMs": "1793570000000",
+          "commandId": "cmd-a",
+          "committedSequence": "9",
+          "decision": {
+            "blockers": {
+              "hasMore": false,
+              "items": [
+                {
+                  "cause": "Approval",
+                  "holdId": "hold-a",
+                  "revision": "1",
+                  "subject": {
+                    "id": "root-a",
+                    "kind": "root"
+                  }
+                }
+              ]
+            },
+            "kind": "Blocked",
+            "rootId": "root-a"
+          },
+          "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "replayed": false
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "revision-conflict",
+      "normalized": {
+        "kind": "Recorded",
+        "protocol": "1.0-draft.1",
+        "receipt": {
+          "acceptedAtMs": "1793570000000",
+          "commandId": "cmd-a",
+          "committedSequence": "9",
+          "decision": {
+            "current": "2",
+            "expected": "1",
+            "kind": "RevisionConflict",
+            "revisionKind": "Control",
+            "subject": {
+              "id": "root-a",
+              "kind": "root"
+            }
+          },
+          "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "replayed": false
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "archived",
+      "normalized": {
+        "kind": "Recorded",
+        "protocol": "1.0-draft.1",
+        "receipt": {
+          "acceptedAtMs": "1793570000000",
+          "commandId": "cmd-a",
+          "committedSequence": "9",
+          "decision": {
+            "kind": "Archived",
+            "rootId": "root-a"
+          },
+          "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "replayed": false
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "command-status-unknown",
+      "normalized": {
+        "correlationId": "corr-a",
+        "kind": "CommandStatusUnknown",
+        "protocol": "1.0-draft.1",
+        "requestKey": "key-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "idempotency-conflict",
+      "normalized": {
+        "code": "IdempotencyConflict",
+        "correlationId": "corr-a",
+        "kind": "Rejected",
+        "protocol": "1.0-draft.1",
+        "requestKey": "key-a",
+        "retry": "Never"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "command-reply",
+      "error": "invalid request digest",
+      "expectedSchemaValid": false,
+      "id": "reject-malformed-digest",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "command-reply",
+      "error": "unknown variant `Success`, expected one of `Recorded`, `Rejected`, `CommandStatusUnknown` at line 1 column 17",
+      "expectedSchemaValid": false,
+      "id": "reject-unknown-reply-variant",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "query-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "advisory-child-eligibility",
+      "normalized": {
+        "protocol": "1.0-draft.1",
+        "query": {
+          "kind": "runs.eligibility",
+          "purpose": "Implementation",
+          "target": {
+            "id": "child-a",
+            "kind": "assignment"
+          }
+        },
+        "queryId": "query-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "root-query",
+      "normalized": {
+        "protocol": "1.0-draft.1",
+        "query": {
+          "kind": "runs.inspect",
+          "rootId": "root-a"
+        },
+        "queryId": "query-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "operation-query",
+      "normalized": {
+        "protocol": "1.0-draft.1",
+        "query": {
+          "kind": "history.operation_status",
+          "operationId": "op-a"
+        },
+        "queryId": "query-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "receipt-query",
+      "normalized": {
+        "protocol": "1.0-draft.1",
+        "query": {
+          "kind": "history.command_receipt",
+          "requestKey": "key-a"
+        },
+        "queryId": "query-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "event-query",
+      "normalized": {
+        "protocol": "1.0-draft.1",
+        "query": {
+          "after": "opaque-cursor",
+          "kind": "history.events",
+          "limit": 100,
+          "rootId": "root-a"
+        },
+        "queryId": "query-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-request",
+      "error": "unknown field `clearBlockers`, expected `target` or `purpose` at line 1 column 176",
+      "expectedSchemaValid": false,
+      "id": "reject-query-mutation",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "query-request",
+      "error": "invalid bounded event page",
+      "expectedSchemaValid": false,
+      "id": "reject-unbounded-page",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "query-request",
+      "error": "invalid bounded event page",
+      "expectedSchemaValid": false,
+      "id": "reject-oversized-cursor",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "query-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "null-optional-normalizes",
+      "normalized": {
+        "protocol": "1.0-draft.1",
+        "query": {
+          "kind": "history.events",
+          "limit": 1,
+          "rootId": "root-a"
+        },
+        "queryId": "query-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "event",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "root-event",
+      "normalized": {
+        "actorId": "user-a",
+        "aggregate": {
+          "id": "root-a",
+          "kind": "root"
+        },
+        "aggregateRevision": "2",
+        "aggregateRevisionKind": "Control",
+        "commandId": "cmd-a",
+        "event": {
+          "kind": "RootControlChanged",
+          "reason": "Continued",
+          "root": {
+            "desiredState": "Enabled",
+            "revision": "2",
+            "rootId": "root-a"
+          }
+        },
+        "eventId": "event-a",
+        "occurredAtMs": "1793570000000",
+        "protocol": "1.0-draft.1",
+        "rootId": "root-a",
+        "sequence": "8"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "event",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "decision-event",
+      "normalized": {
+        "actorId": "user-a",
+        "aggregate": {
+          "id": "root-a",
+          "kind": "root"
+        },
+        "aggregateRevision": "2",
+        "aggregateRevisionKind": "Control",
+        "commandId": "cmd-a",
+        "event": {
+          "commandId": "cmd-a",
+          "kind": "CommandDecided"
+        },
+        "eventId": "event-a",
+        "occurredAtMs": "1793570000000",
+        "protocol": "1.0-draft.1",
+        "rootId": "root-a",
+        "sequence": "8"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "event",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "activation-event",
+      "normalized": {
+        "actorId": "user-a",
+        "aggregate": {
+          "id": "root-a",
+          "kind": "root"
+        },
+        "aggregateRevision": "2",
+        "aggregateRevisionKind": "Control",
+        "commandId": "cmd-a",
+        "event": {
+          "executionId": "exec-a",
+          "generation": "1",
+          "kind": "ActivationRequested",
+          "rootId": "root-a"
+        },
+        "eventId": "event-a",
+        "occurredAtMs": "1793570000000",
+        "protocol": "1.0-draft.1",
+        "rootId": "root-a",
+        "sequence": "8"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "event",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "blocker-event",
+      "normalized": {
+        "actorId": "user-a",
+        "aggregate": {
+          "id": "hold-a",
+          "kind": "blocker"
+        },
+        "aggregateRevision": "1",
+        "aggregateRevisionKind": "Blocker",
+        "commandId": "cmd-a",
+        "event": {
+          "blocker": {
+            "cause": "Approval",
+            "holdId": "hold-a",
+            "revision": "1",
+            "subject": {
+              "id": "root-a",
+              "kind": "root"
+            }
+          },
+          "change": "Raised",
+          "kind": "BlockerChanged"
+        },
+        "eventId": "event-a",
+        "occurredAtMs": "1793570000000",
+        "protocol": "1.0-draft.1",
+        "rootId": "root-a",
+        "sequence": "8"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "event",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "stale-observation-event",
+      "normalized": {
+        "actorId": "user-a",
+        "aggregate": {
+          "id": "op-a",
+          "kind": "operation"
+        },
+        "aggregateRevision": "2",
+        "aggregateRevisionKind": "Operation",
+        "commandId": "cmd-a",
+        "event": {
+          "attemptId": "attempt-a",
+          "kind": "OperationObserved",
+          "observation": "StaleOwnerEvidenceOnly",
+          "operationId": "op-a",
+          "ownerGeneration": "1",
+          "state": "OutcomeUnknown"
+        },
+        "eventId": "event-a",
+        "occurredAtMs": "1793570000000",
+        "protocol": "1.0-draft.1",
+        "rootId": "root-a",
+        "sequence": "8"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "event",
+      "error": "root event mismatch",
+      "expectedSchemaValid": true,
+      "id": "reject-mismatched-event-root",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "event",
+      "error": "root event mismatch",
+      "expectedSchemaValid": true,
+      "id": "reject-mismatched-event-revision",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "event",
+      "error": "unknown variant `UnknownNewMutation`, expected one of `CommandDecided`, `RootControlChanged`, `ActivationRequested`, `BlockerChanged`, `OperationObserved` at line 1 column 285",
+      "expectedSchemaValid": false,
+      "id": "reject-unknown-event-schema",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "query-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "blocked-eligibility-result",
+      "normalized": {
+        "kind": "Result",
+        "protocol": "1.0-draft.1",
+        "queryId": "query-a",
+        "result": {
+          "blockers": {
+            "hasMore": false,
+            "items": [
+              {
+                "cause": "Approval",
+                "holdId": "hold-a",
+                "revision": "1",
+                "subject": {
+                  "id": "root-a",
+                  "kind": "root"
+                }
+              }
+            ]
+          },
+          "eligible": false,
+          "kind": "Eligibility",
+          "purpose": "Implementation",
+          "target": {
+            "id": "child-a",
+            "kind": "assignment"
+          }
+        },
+        "stamp": {
+          "policyRevision": "1",
+          "restoreEpoch": "0",
+          "scopeRevision": "1",
+          "sequence": "9",
+          "storeId": "store-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-reply",
+      "error": "eligibility and blockers disagree",
+      "expectedSchemaValid": true,
+      "id": "reject-eligible-with-blocker",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "query-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "root-result",
+      "normalized": {
+        "kind": "Result",
+        "protocol": "1.0-draft.1",
+        "queryId": "query-a",
+        "result": {
+          "blockers": {
+            "hasMore": false,
+            "items": []
+          },
+          "kind": "Root",
+          "root": {
+            "desiredState": "Enabled",
+            "revision": "2",
+            "rootId": "root-a"
+          }
+        },
+        "stamp": {
+          "policyRevision": "1",
+          "restoreEpoch": "0",
+          "scopeRevision": "1",
+          "sequence": "9",
+          "storeId": "store-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "unknown-effect-result",
+      "normalized": {
+        "kind": "Result",
+        "protocol": "1.0-draft.1",
+        "queryId": "query-a",
+        "result": {
+          "kind": "Operation",
+          "operationId": "op-a",
+          "retry": "ReconcileOperation",
+          "revision": "1",
+          "state": "OutcomeUnknown"
+        },
+        "stamp": {
+          "policyRevision": "1",
+          "restoreEpoch": "0",
+          "scopeRevision": "1",
+          "sequence": "9",
+          "storeId": "store-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-reply",
+      "error": "unknown outcome requires reconciliation",
+      "expectedSchemaValid": true,
+      "id": "reject-replay-unknown-effect",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "query-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "receipt-result",
+      "normalized": {
+        "kind": "Result",
+        "protocol": "1.0-draft.1",
+        "queryId": "query-a",
+        "result": {
+          "kind": "Receipt",
+          "receipt": {
+            "acceptedAtMs": "1793570000000",
+            "commandId": "cmd-a",
+            "committedSequence": "9",
+            "decision": {
+              "activation": {
+                "executionId": "exec-a",
+                "generation": "1",
+                "phase": "Pending"
+              },
+              "clearedHolds": [
+                {
+                  "holdId": "hold-a",
+                  "revision": "1"
+                }
+              ],
+              "kind": "Accepted",
+              "remaining": {
+                "hasMore": false,
+                "items": [
+                  {
+                    "cause": "Approval",
+                    "holdId": "hold-a",
+                    "revision": "1",
+                    "subject": {
+                      "id": "root-a",
+                      "kind": "root"
+                    }
+                  }
+                ]
+              },
+              "root": {
+                "desiredState": "Enabled",
+                "revision": "2",
+                "rootId": "root-a"
+              }
+            },
+            "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "stamp": {
+          "policyRevision": "1",
+          "restoreEpoch": "0",
+          "scopeRevision": "1",
+          "sequence": "9",
+          "storeId": "store-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "missing-receipt-result",
+      "normalized": {
+        "kind": "Result",
+        "protocol": "1.0-draft.1",
+        "queryId": "query-a",
+        "result": {
+          "kind": "Receipt"
+        },
+        "stamp": {
+          "policyRevision": "1",
+          "restoreEpoch": "0",
+          "scopeRevision": "1",
+          "sequence": "9",
+          "storeId": "store-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "event-page-result",
+      "normalized": {
+        "kind": "Result",
+        "protocol": "1.0-draft.1",
+        "queryId": "query-a",
+        "result": {
+          "events": [
+            {
+              "actorId": "user-a",
+              "aggregate": {
+                "id": "root-a",
+                "kind": "root"
+              },
+              "aggregateRevision": "2",
+              "aggregateRevisionKind": "Control",
+              "commandId": "cmd-a",
+              "event": {
+                "kind": "RootControlChanged",
+                "reason": "Continued",
+                "root": {
+                  "desiredState": "Enabled",
+                  "revision": "2",
+                  "rootId": "root-a"
+                }
+              },
+              "eventId": "event-a",
+              "occurredAtMs": "1793570000000",
+              "protocol": "1.0-draft.1",
+              "rootId": "root-a",
+              "sequence": "8"
+            }
+          ],
+          "hasMore": false,
+          "kind": "Events",
+          "nextCursor": "tail-cursor"
+        },
+        "stamp": {
+          "policyRevision": "1",
+          "restoreEpoch": "0",
+          "scopeRevision": "1",
+          "sequence": "9",
+          "storeId": "store-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "query-reply",
+      "error": "event page order/watermark mismatch",
+      "expectedSchemaValid": true,
+      "id": "reject-page-beyond-watermark",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "query-reply",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "cursor-expired-result",
+      "normalized": {
+        "code": "CursorExpired",
+        "correlationId": "corr-a",
+        "kind": "Rejected",
+        "protocol": "1.0-draft.1",
+        "queryId": "query-a",
+        "retry": "RefreshAndNewRequest"
+      },
+      "passed": true,
+      "typedValid": true
+    }
+  ],
+  "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"
+}
+

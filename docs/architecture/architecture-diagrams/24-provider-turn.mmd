@@ -1,0 +1,19 @@
+sequenceDiagram
+ participant R as Router / assembler
+ participant D as SQLite owner
+ participant P as Provider adapter
+ participant B as Tool broker
+ R->>P: Prepare current native envelope and capabilities
+ R->>D: Save request / attempt / pin and admission
+ D-->>R: Committed receipt
+ R->>P: Send with host-resolved secret handle
+ P-->>R: Ordered text / native item / argument fragments
+ R->>D: Persist bounded attributed chunks
+ Note over R,B: Fragments are not dispatchable calls
+ P-->>R: Valid complete calls and terminal tool turn
+ R->>D: Save complete envelopes, IDs and ordinals
+ R->>B: Admit eligible independent operations
+ B->>D: Persist each observed result or scoped wait
+ D-->>R: Durable responses in recorded call order
+ R->>P: Native paired continuation or new event boundary
+ Note over R,P: Preserve same-provider opaque state and images

@@ -1,0 +1,138 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "EndpointProfile": {
+      "enum": [
+        "OpenAiResponses",
+        "CodexSubscriptionResponses",
+        "AnthropicMessages",
+        "ClaudeSubscriptionMessages",
+        "OpenRouterChat",
+        "CompatibleChat",
+        "Embedding"
+      ],
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "NativeBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "accountRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "contextEpoch": {
+          "$ref": "#/$defs/Counter"
+        },
+        "endpointProfile": {
+          "$ref": "#/$defs/EndpointProfile"
+        },
+        "modelId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "connectionId",
+        "accountRevision",
+        "endpointProfile",
+        "modelId",
+        "contextEpoch"
+      ],
+      "type": "object"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "Support": {
+      "enum": [
+        "Supported",
+        "Unsupported",
+        "Unknown"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:capability-snapshot",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "binding": {
+      "$ref": "#/$defs/NativeBinding"
+    },
+    "cacheMetrics": {
+      "$ref": "#/$defs/Support"
+    },
+    "cancellation": {
+      "$ref": "#/$defs/Support"
+    },
+    "contextTokens": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Revision"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "embeddings": {
+      "$ref": "#/$defs/Support"
+    },
+    "inputImages": {
+      "$ref": "#/$defs/Support"
+    },
+    "outputTokens": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Revision"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parallelTools": {
+      "$ref": "#/$defs/Support"
+    },
+    "requestObservation": {
+      "$ref": "#/$defs/Support"
+    },
+    "revision": {
+      "$ref": "#/$defs/Revision"
+    },
+    "structuredOutput": {
+      "$ref": "#/$defs/Support"
+    },
+    "tools": {
+      "$ref": "#/$defs/Support"
+    }
+  },
+  "required": [
+    "binding",
+    "revision",
+    "tools",
+    "parallelTools",
+    "inputImages",
+    "structuredOutput",
+    "embeddings",
+    "cancellation",
+    "requestObservation",
+    "cacheMetrics"
+  ],
+  "title": "CapabilitySnapshot",
+  "type": "object"
+}

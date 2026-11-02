@@ -1,0 +1,25 @@
+sequenceDiagram
+    participant H as Package host
+    participant P as Owned helper
+    participant B as Host broker
+    participant S as Store and registry
+    H->>P: Initialize with nonce, versions, features and manifest digest
+    P-->>H: Selected protocol and declared inventory
+    Note over H,P: Startup has no invocation grants
+    H->>S: Verify staged package and committed registry generation
+    H->>P: Activate committed registry and state
+    H->>P: Invoke with scoped token, input and revision view
+    P->>B: Broker callback with stable action key
+    B->>B: Check current token, selected operation, schema and controls
+    B->>S: Durable admission or existing operation receipt
+    S-->>B: Actual accepted state
+    H->>B: Revoke new callback admission for cancellation
+    H->>P: Cancel original invocation
+    P-->>H: Cancellation request acknowledged
+    Note over H,P: Acknowledgment is separate from terminal outcome
+    B-->>P: Late observation of already admitted callback
+    P-->>H: Terminal outcome with retained uncertainty
+    H->>S: Record observations and reconcile effects
+    Note over H,S: New registry waits for quiescence and compatibility
+    H->>P: Activate a later committed generation
+    Note over P,B: Old tokens and generations cannot authorize new effects

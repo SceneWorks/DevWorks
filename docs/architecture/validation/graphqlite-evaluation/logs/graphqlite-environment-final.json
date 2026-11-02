@@ -1,0 +1,31 @@
+{
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M5 Max",
+  "ram_bytes": 137438953472,
+  "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=24969315)\t80%; AC attached; not charging present: true",
+  "native_sources_sha256": {
+    "Cargo.toml": "26599773f4d5354575c44156791819693d1946281aee3a5fca92e6c0ac7493bc",
+    "Cargo.lock": "54f37e01c554f6fba047ba9d66f1104c3d723cf7df7cce781247eba5090164aa",
+    "run.py": "f63193471ec83de708f1b424f48a1d32f4f7e96ab78aca0e97955da86fb084e1",
+    "recovery.py": "459d7aa6abe2be32d34e49eef7ac05a28f8d7908a320c3289cf3ac1eaae67d4f",
+    "graphqlite_cache.py": "d35926bf3927885a045585665746f41768a9eab1f8acff2e6e6b52a510f6336a",
+    "summarize.py": "ff30368b76f578412bf74d9f95ab6ceab8cc64b772cf4cf889acd994c803bcfb",
+    "common/Cargo.toml": "b06e6ea11f6f777ca51c7d77432951ad1b2934666b43012b6a6b3b4ee92edd0a",
+    "common/src/workload.rs": "dd75291e53667d0565ae4ed325045f3b8a5046350a8bbb3f90c969d6d7d6e98f",
+    "common/src/lib.rs": "c6fde9ab645412f1b7541e908915a0cb8d65f76b494b25ae734ce3001ddea527",
+    "common/src/mapping.rs": "f5335365f62f8f6d769a14193f56f87fa5a44b75781d25279fa9893a1a5277b3",
+    "graphqlite/Cargo.toml": "6122481af3889ff27ca02771a4ef569bc411047a8f5ace939de5cf08a58e9671",
+    "graphqlite/src/adapter.rs": "30ae65011ded603ea992f8cd64fefbf6c2fd61a60503f2eb726b3f518eecc5e1",
+    "graphqlite/src/freshness.rs": "609a9155b6201b7e4210084294f4e3bc9c2b2414cdc388d5ccd77671c7717b39",
+    "graphqlite/src/main.rs": "be21734bc7b9bfa26db215d85b02a12c4bfa676b37bf98a03ea9f7c10c31f323",
+    "graphqlite/src/cache_profile.rs": "c400d6862736bc9895cefbd944a68caef99c96d4931298a2507aaf263e952834",
+    "sqlite/Cargo.toml": "ed9a46640e54182837122cc748b018bad0e3cccc66e755ebfe83c7ea11a905a4",
+    "sqlite/src/adapter.rs": "de84d80753edc19e07939607691bacf8e93e023f17cdcd2e46bf0a0069a56eab",
+    "sqlite/src/main.rs": "a1281d934a21659313760f06bb06dce96231a97de861c732bc9af15a69cf5278"
+  },
+  "libraries": {
+    "graphqlite": "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.40.3)\n",
+    "sqlite": "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.40.3)\n"
+  },
+  "no_inference": true
+}

@@ -1,0 +1,2970 @@
+{
+  "date": "2026-11-02",
+  "system": "CodeGraph",
+  "project": {
+    "key": "DW",
+    "id": "5b467868-553a-4973-87d6-e1c69480b7fe"
+  },
+  "feature": {
+    "id": "622109e1-6618-4644-bd30-64728f63114f",
+    "key": "DW-F1",
+    "title": "DevWorks architecture and planning baseline"
+  },
+  "sourcePlan": "implementation-plan.json",
+  "fullSourceRequirements": {
+    "count": 350,
+    "documentId": "3ab2d98c-4bcf-4c3d-b415-df422cbf33e0",
+    "statusesPreserved": true,
+    "individuallyStructuredAcrossDeliveryFeatures": true
+  },
+  "structuredSharedRequirements": 3,
+  "nativeImplementationItems": 63,
+  "publicationItem": "DW-64",
+  "dependencyEdges": 250,
+  "nativeInitialStatus": "backlog",
+  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, acceptance criteria and250 dependencies are preserved. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All350 source requirements are individually structured across related delivery features. Native implementation remains unstarted.",
+  "items": [
+    {
+      "ref": "slice-contracts",
+      "key": "DW-1",
+      "id": "ed6fc4b3-91e9-4f31-a0f0-1984e8941016",
+      "title": "Freeze shared messages, errors and dispatch selection",
+      "type": "task",
+      "localSliceId": "DW-001",
+      "blockedBy": [],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F2"
+    },
+    {
+      "ref": "slice-store",
+      "key": "DW-2",
+      "id": "45d42717-16d0-4241-8035-752aa0246e05",
+      "title": "Implement the transaction owner and operational repositories",
+      "type": "task",
+      "localSliceId": "DW-002",
+      "blockedBy": [
+        "DW-1"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F2"
+    },
+    {
+      "ref": "slice-queue",
+      "key": "DW-3",
+      "id": "fad8b1be-a51e-4116-9db0-2eb1ad0b6760",
+      "title": "Deliver durable events with fenced claims and recovery",
+      "type": "story",
+      "localSliceId": "DW-003",
+      "blockedBy": [
+        "DW-2"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F2"
+    },
+    {
+      "ref": "slice-settings",
+      "key": "DW-4",
+      "id": "d599c2a5-1074-4d7b-9cdb-1cd5e67a1b63",
+      "title": "Save typed scoped configuration and explain effective values",
+      "type": "story",
+      "localSliceId": "DW-004",
+      "blockedBy": [
+        "DW-2"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F4"
+    },
+    {
+      "ref": "slice-authority",
+      "key": "DW-5",
+      "id": "88acd771-1d31-474b-93e1-9f58ab48ba34",
+      "title": "Enforce invocation authority and verified native reads",
+      "type": "task",
+      "localSliceId": "DW-005",
+      "blockedBy": [
+        "DW-1",
+        "DW-4"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F3"
+    },
+    {
+      "ref": "slice-process_owner",
+      "key": "DW-6",
+      "id": "223dbc17-650c-4ad1-afdb-9ebf7d96bb86",
+      "title": "Own processes, cancellation and physical resource reservations",
+      "type": "story",
+      "localSliceId": "DW-006",
+      "blockedBy": [
+        "DW-2",
+        "DW-5"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F3"
+    },
+    {
+      "ref": "slice-files",
+      "key": "DW-7",
+      "id": "ee7444d4-843f-4f2e-afa0-35d78d6bd969",
+      "title": "Publish immutable artifacts and revision-bound references",
+      "type": "story",
+      "localSliceId": "DW-007",
+      "blockedBy": [
+        "DW-2",
+        "DW-5"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F2"
+    },
+    {
+      "ref": "slice-sessions",
+      "key": "DW-8",
+      "id": "121717f5-7872-474f-a03d-9f93a0e45f26",
+      "title": "Persist sessions, transcript batches and complete lineage",
+      "type": "story",
+      "localSliceId": "DW-008",
+      "blockedBy": [
+        "DW-2",
+        "DW-7"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F2"
+    },
+    {
+      "ref": "slice-controls",
+      "key": "DW-9",
+      "id": "3d286d66-702e-44ab-a32f-e582acf349b5",
+      "title": "Run root Start Pause Continue and redirect recovery",
+      "type": "story",
+      "localSliceId": "DW-009",
+      "blockedBy": [
+        "DW-3",
+        "DW-8",
+        "DW-6"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F3"
+    },
+    {
+      "ref": "slice-shell",
+      "key": "DW-10",
+      "id": "37cf0047-dc9e-4895-a155-94152fb57536",
+      "title": "Build the native egui shell and reusable pane bindings",
+      "type": "story",
+      "localSliceId": "DW-010",
+      "blockedBy": [
+        "DW-1",
+        "DW-4"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F4"
+    },
+    {
+      "ref": "slice-projects",
+      "key": "DW-11",
+      "id": "8cb3c88e-7d50-489a-bb1d-27d0ede4d7c2",
+      "title": "Manage projects, memberships and repository registrations",
+      "type": "story",
+      "localSliceId": "DW-011",
+      "blockedBy": [
+        "DW-2",
+        "DW-5",
+        "DW-10"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F4"
+    },
+    {
+      "ref": "slice-work",
+      "key": "DW-12",
+      "id": "d69bbe31-dbab-4f9a-8e5e-9bab175d2d2b",
+      "title": "Plan features, standalone issues and task cards",
+      "type": "story",
+      "localSliceId": "DW-012",
+      "blockedBy": [
+        "DW-11",
+        "DW-8",
+        "DW-7",
+        "DW-10"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F5"
+    },
+    {
+      "ref": "slice-workflow",
+      "key": "DW-13",
+      "id": "6c1cbd27-078a-463b-8ac8-51ba6d7c504c",
+      "title": "Configure statuses and atomically allocate eligible work",
+      "type": "story",
+      "localSliceId": "DW-013",
+      "blockedBy": [
+        "DW-12",
+        "DW-9"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F5"
+    },
+    {
+      "ref": "slice-approvals",
+      "key": "DW-14",
+      "id": "518441b6-7ce5-4009-bb03-bcc9f11cb94e",
+      "title": "Record exact human decisions and notifications",
+      "type": "story",
+      "localSliceId": "DW-014",
+      "blockedBy": [
+        "DW-5",
+        "DW-12",
+        "DW-9"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F3"
+    },
+    {
+      "ref": "slice-delegation",
+      "key": "DW-15",
+      "id": "eb6588b2-fecd-4dcb-9d27-0e38c70af64c",
+      "title": "Coordinate child assignments and durable agent inboxes",
+      "type": "story",
+      "localSliceId": "DW-015",
+      "blockedBy": [
+        "DW-9",
+        "DW-13",
+        "DW-14"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F5"
+    },
+    {
+      "ref": "slice-chat",
+      "key": "DW-16",
+      "id": "103996d9-43fe-4dea-b37c-cd2a14125491",
+      "title": "Deliver Home chat and its shared coordinator sidebar",
+      "type": "story",
+      "localSliceId": "DW-016",
+      "blockedBy": [
+        "DW-10",
+        "DW-8",
+        "DW-15",
+        "DW-17"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F4"
+    },
+    {
+      "ref": "slice-router",
+      "key": "DW-17",
+      "id": "09f67e84-46e1-4c9d-85f1-f775b678948f",
+      "title": "Resolve direct tiers, named models and availability",
+      "type": "story",
+      "localSliceId": "DW-017",
+      "blockedBy": [
+        "DW-4",
+        "DW-9",
+        "DW-6"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F6"
+    },
+    {
+      "ref": "slice-credentials",
+      "key": "DW-18",
+      "id": "67fcb120-b20d-4eef-a5cb-59fce4ca1b93",
+      "title": "Integrate provider authentication and native secret storage",
+      "type": "story",
+      "localSliceId": "DW-018",
+      "blockedBy": [
+        "DW-5",
+        "DW-4",
+        "DW-17"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F6"
+    },
+    {
+      "ref": "slice-transports",
+      "key": "DW-19",
+      "id": "95e8a206-1ebf-44d5-bf38-255c6a608e78",
+      "title": "Implement native provider transports and streaming codecs",
+      "type": "task",
+      "localSliceId": "DW-019",
+      "blockedBy": [
+        "DW-17",
+        "DW-18",
+        "DW-8"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F6"
+    },
+    {
+      "ref": "slice-tool_turn",
+      "key": "DW-20",
+      "id": "bf498e81-1f17-42ed-94f1-301dcbe8c9a0",
+      "title": "Bridge provider tool turns and context epochs",
+      "type": "task",
+      "localSliceId": "DW-020",
+      "blockedBy": [
+        "DW-19",
+        "DW-15",
+        "DW-5"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F6"
+    },
+    {
+      "ref": "slice-usage",
+      "key": "DW-21",
+      "id": "42e6ada9-e79b-48fe-9935-60e091776a12",
+      "title": "Attribute prices, budget reservations and cache metrics",
+      "type": "story",
+      "localSliceId": "DW-021",
+      "blockedBy": [
+        "DW-17",
+        "DW-18",
+        "DW-2"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F6"
+    },
+    {
+      "ref": "slice-systemone",
+      "key": "DW-22",
+      "id": "f3b65f34-78c2-4c91-a019-54dc6a0efdf7",
+      "title": "Retain native SystemOne model discovery and decisions",
+      "type": "story",
+      "localSliceId": "DW-022",
+      "blockedBy": [
+        "DW-17",
+        "DW-18",
+        "DW-21",
+        "DW-5"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F6"
+    },
+    {
+      "ref": "slice-structural",
+      "key": "DW-23",
+      "id": "acd55ff6-f3f4-4e7b-8c3f-66e414f4709a",
+      "title": "Discover repositories and publish structural indexes",
+      "type": "story",
+      "localSliceId": "DW-023",
+      "blockedBy": [
+        "DW-11",
+        "DW-3",
+        "DW-7"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F7"
+    },
+    {
+      "ref": "slice-dotnet",
+      "key": "DW-24",
+      "id": "fe635ffd-d080-413e-ab49-89cc09e369a8",
+      "title": "Ship the managed .NET semantic pack",
+      "type": "story",
+      "localSliceId": "DW-024",
+      "blockedBy": [
+        "DW-23",
+        "DW-44"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F7"
+    },
+    {
+      "ref": "slice-typescript",
+      "key": "DW-25",
+      "id": "b7ae4a1a-554a-4f92-a337-fd26b65d8b29",
+      "title": "Ship the managed TypeScript semantic pack",
+      "type": "story",
+      "localSliceId": "DW-025",
+      "blockedBy": [
+        "DW-23",
+        "DW-44"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F7"
+    },
+    {
+      "ref": "slice-swift",
+      "key": "DW-26",
+      "id": "df256de5-5845-47f0-a0a0-8f249166e63e",
+      "title": "Ship the managed Swift semantic pack",
+      "type": "story",
+      "localSliceId": "DW-026",
+      "blockedBy": [
+        "DW-23",
+        "DW-44"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F7"
+    },
+    {
+      "ref": "slice-rust",
+      "key": "DW-27",
+      "id": "212aaf71-ce26-463c-8158-e30f0b4a469a",
+      "title": "Ship the managed Rust semantic pack",
+      "type": "story",
+      "localSliceId": "DW-027",
+      "blockedBy": [
+        "DW-23",
+        "DW-44"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F7"
+    },
+    {
+      "ref": "slice-graph",
+      "key": "DW-28",
+      "id": "512b97ce-f553-4156-922e-ffc31c5ba037",
+      "title": "Read exact graph views, source and impact",
+      "type": "story",
+      "localSliceId": "DW-028",
+      "blockedBy": [
+        "DW-23",
+        "DW-5"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F7"
+    },
+    {
+      "ref": "slice-analysis",
+      "key": "DW-29",
+      "id": "e75e206e-ddd3-484f-8d4b-29d6259e9ad8",
+      "title": "Run retained health, linking, security and metrics analysis",
+      "type": "story",
+      "localSliceId": "DW-029",
+      "blockedBy": [
+        "DW-28",
+        "DW-17",
+        "DW-3"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F7"
+    },
+    {
+      "ref": "slice-knowledge",
+      "key": "DW-30",
+      "id": "cd16fc16-c114-46e8-a88e-c089418f6c65",
+      "title": "Manage unified claims, entities, evidence and lessons",
+      "type": "story",
+      "localSliceId": "DW-030",
+      "blockedBy": [
+        "DW-2",
+        "DW-7",
+        "DW-5",
+        "DW-17"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F8"
+    },
+    {
+      "ref": "slice-knowledge_graph",
+      "key": "DW-31",
+      "id": "c7cdda75-9592-4873-80cd-b3686ebec4ed",
+      "title": "Read Knowledge bundles, graph frontiers and summaries",
+      "type": "story",
+      "localSliceId": "DW-031",
+      "blockedBy": [
+        "DW-30",
+        "DW-28"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F8"
+    },
+    {
+      "ref": "slice-dreaming",
+      "key": "DW-32",
+      "id": "396d8317-6040-4b65-95b3-11342a4cd64e",
+      "title": "Consolidate Knowledge with checkpointed proposals and revert",
+      "type": "story",
+      "localSliceId": "DW-032",
+      "blockedBy": [
+        "DW-30",
+        "DW-31",
+        "DW-14",
+        "DW-3"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F8"
+    },
+    {
+      "ref": "slice-conventions",
+      "key": "DW-33",
+      "id": "b0d63753-0409-46d2-a1d1-17e54fc6a1aa",
+      "title": "Manage versioned conventions and retrieval resources",
+      "type": "story",
+      "localSliceId": "DW-033",
+      "blockedBy": [
+        "DW-30",
+        "DW-7"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F8"
+    },
+    {
+      "ref": "slice-instructions",
+      "key": "DW-34",
+      "id": "8217f41a-85b7-4848-b1f6-3f20cdaac07a",
+      "title": "Stage approved roles and file-backed skills",
+      "type": "story",
+      "localSliceId": "DW-034",
+      "blockedBy": [
+        "DW-7",
+        "DW-14",
+        "DW-5"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F8"
+    },
+    {
+      "ref": "slice-documents",
+      "key": "DW-35",
+      "id": "7faad946-3be9-4dd8-80f4-0d71dfb957f3",
+      "title": "Ingest and retrieve retained documents with exact citations",
+      "type": "story",
+      "localSliceId": "DW-035",
+      "blockedBy": [
+        "DW-7",
+        "DW-17",
+        "DW-21",
+        "DW-28"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F8"
+    },
+    {
+      "ref": "slice-schema_sources",
+      "key": "DW-36",
+      "id": "323eb13d-7a00-4231-b71c-75fad995f74f",
+      "title": "Index SQL database structural metadata",
+      "type": "story",
+      "localSliceId": "DW-036",
+      "blockedBy": [
+        "DW-23",
+        "DW-5"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F7"
+    },
+    {
+      "ref": "slice-database_tools",
+      "key": "DW-37",
+      "id": "b86da817-f0ef-4434-8d64-26b190810cef",
+      "title": "Execute separately permitted database operations",
+      "type": "story",
+      "localSliceId": "DW-037",
+      "blockedBy": [
+        "DW-36",
+        "DW-14"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F7"
+    },
+    {
+      "ref": "slice-git_tasks",
+      "key": "DW-38",
+      "id": "a38f2283-a79d-4a0f-be3c-99f2f2dab3f6",
+      "title": "Manage owned worktrees, commits, pushes and task PRs",
+      "type": "story",
+      "localSliceId": "DW-039",
+      "blockedBy": [
+        "DW-12",
+        "DW-6",
+        "DW-5",
+        "DW-7"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F9"
+    },
+    {
+      "ref": "slice-git_delivery",
+      "key": "DW-39",
+      "id": "bf97afe0-2c32-4c0a-bfb1-b434d91cc59b",
+      "title": "Reconcile final delivery and clean up owned Git resources",
+      "type": "story",
+      "localSliceId": "DW-040",
+      "blockedBy": [
+        "DW-38",
+        "DW-14",
+        "DW-3",
+        "DW-41"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F9"
+    },
+    {
+      "ref": "slice-github",
+      "key": "DW-40",
+      "id": "12aa04e1-7662-48ec-8907-42506f28267b",
+      "title": "Synchronize GitHub accounts, issues and observed changes",
+      "type": "story",
+      "localSliceId": "DW-041",
+      "blockedBy": [
+        "DW-18",
+        "DW-11",
+        "DW-12",
+        "DW-38"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F9"
+    },
+    {
+      "ref": "slice-reviews",
+      "key": "DW-41",
+      "id": "0cbae9cb-f475-4dce-9c2b-6dd1563420db",
+      "title": "Resolve exact-head reviews and merge readiness",
+      "type": "story",
+      "localSliceId": "DW-042",
+      "blockedBy": [
+        "DW-40",
+        "DW-38",
+        "DW-28",
+        "DW-14"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F9"
+    },
+    {
+      "ref": "slice-releases",
+      "key": "DW-42",
+      "id": "e9e83448-2b9a-42b1-ad7b-dc5ddd9f272c",
+      "title": "Prepare, publish and deploy revision-bound releases",
+      "type": "story",
+      "localSliceId": "DW-043",
+      "blockedBy": [
+        "DW-39",
+        "DW-41",
+        "DW-14"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F9"
+    },
+    {
+      "ref": "slice-packages",
+      "key": "DW-43",
+      "id": "4d042491-7355-426a-b586-21ad810065cb",
+      "title": "Install and activate trusted executable packages",
+      "type": "story",
+      "localSliceId": "DW-044",
+      "blockedBy": [
+        "DW-7",
+        "DW-5",
+        "DW-6",
+        "DW-3"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F10"
+    },
+    {
+      "ref": "slice-sdk",
+      "key": "DW-44",
+      "id": "f27d4f51-c43c-424a-9442-2a0dcc25dd2d",
+      "title": "Implement every SDK contribution and callback boundary",
+      "type": "task",
+      "localSliceId": "DW-045",
+      "blockedBy": [
+        "DW-43",
+        "DW-20"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F10"
+    },
+    {
+      "ref": "slice-mcp",
+      "key": "DW-45",
+      "id": "ec2211dc-756a-4766-ac14-f899f3961848",
+      "title": "Connect external MCP servers and selected capabilities",
+      "type": "story",
+      "localSliceId": "DW-046",
+      "blockedBy": [
+        "DW-5",
+        "DW-20",
+        "DW-6"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F10"
+    },
+    {
+      "ref": "slice-browser",
+      "key": "DW-46",
+      "id": "d5289eda-82a5-49c3-86b0-4928fefebadb",
+      "title": "Control an owned browser through a native adapter",
+      "type": "story",
+      "localSliceId": "DW-047",
+      "blockedBy": [
+        "DW-5",
+        "DW-6",
+        "DW-7"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F11"
+    },
+    {
+      "ref": "slice-desktop",
+      "key": "DW-47",
+      "id": "cde25fad-5c8d-4a89-b7d0-7956a67aaa92",
+      "title": "Broker native desktop control and consent",
+      "type": "story",
+      "localSliceId": "DW-048",
+      "blockedBy": [
+        "DW-5",
+        "DW-6",
+        "DW-14",
+        "DW-7"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F11"
+    },
+    {
+      "ref": "slice-process_tools",
+      "key": "DW-48",
+      "id": "00419793-8cd1-4df4-97e3-60ffc825779f",
+      "title": "Execute authorized processes and dependency operations",
+      "type": "story",
+      "localSliceId": "DW-049",
+      "blockedBy": [
+        "DW-5",
+        "DW-6",
+        "DW-14"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F11"
+    },
+    {
+      "ref": "slice-containers",
+      "key": "DW-49",
+      "id": "86630b94-eca9-4d70-86b3-fa82b7d7a2de",
+      "title": "Manage supported engines and owned containers",
+      "type": "story",
+      "localSliceId": "DW-050",
+      "blockedBy": [
+        "DW-48",
+        "DW-4"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F11"
+    },
+    {
+      "ref": "slice-jobs",
+      "key": "DW-50",
+      "id": "dd15964c-c57b-4eca-9872-9f54e45127e6",
+      "title": "Run durable schedules and manual jobs",
+      "type": "story",
+      "localSliceId": "DW-051",
+      "blockedBy": [
+        "DW-3",
+        "DW-9",
+        "DW-17",
+        "DW-6"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F11"
+    },
+    {
+      "ref": "slice-web",
+      "key": "DW-51",
+      "id": "f6151f4e-6b4a-4f8f-8374-537a45aecc02",
+      "title": "Search and retrieve web sources through shared tools",
+      "type": "story",
+      "localSliceId": "DW-052",
+      "blockedBy": [
+        "DW-5",
+        "DW-17",
+        "DW-7"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F11"
+    },
+    {
+      "ref": "slice-help",
+      "key": "DW-52",
+      "id": "1ad9fd81-4845-4f11-8fe8-d95567408397",
+      "title": "Ship version-matched offline Help and screen bindings",
+      "type": "story",
+      "localSliceId": "DW-053",
+      "blockedBy": [
+        "DW-10",
+        "DW-43"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-repo_docs",
+      "key": "DW-53",
+      "id": "b523aa87-8afd-47ad-8164-291e9bb5928c",
+      "title": "Generate repository documentation with retained behavior",
+      "type": "story",
+      "localSliceId": "DW-054",
+      "blockedBy": [
+        "DW-28",
+        "DW-7",
+        "DW-17"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-imports",
+      "key": "DW-54",
+      "id": "37d78f28-1f10-49db-b8c8-5a0d01646d1e",
+      "title": "Import only the selected legacy work and history",
+      "type": "story",
+      "localSliceId": "DW-055",
+      "blockedBy": [
+        "DW-11",
+        "DW-12",
+        "DW-8",
+        "DW-38"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-maintenance",
+      "key": "DW-55",
+      "id": "ee071346-dd5b-4533-89d1-9bd4a992c355",
+      "title": "Prune only explicitly eligible operational data",
+      "type": "story",
+      "localSliceId": "DW-056",
+      "blockedBy": [
+        "DW-8",
+        "DW-7",
+        "DW-14"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-diagnostics",
+      "key": "DW-56",
+      "id": "01ce5b03-50e1-4ca3-ba9f-6f359033479c",
+      "title": "Expose bounded local diagnostics and recoverable logs",
+      "type": "story",
+      "localSliceId": "DW-057",
+      "blockedBy": [
+        "DW-3",
+        "DW-4",
+        "DW-7"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-backup",
+      "key": "DW-57",
+      "id": "077052ca-06f9-4754-a526-6d26fd1a704e",
+      "title": "Migrate, manually back up and restore the app store",
+      "type": "story",
+      "localSliceId": "DW-058",
+      "blockedBy": [
+        "DW-2",
+        "DW-7",
+        "DW-50",
+        "DW-43"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-updates",
+      "key": "DW-58",
+      "id": "d7281fed-7528-488e-be6c-27e2bd23a804",
+      "title": "Discover and install approved signed app updates",
+      "type": "story",
+      "localSliceId": "DW-059",
+      "blockedBy": [
+        "DW-57",
+        "DW-43",
+        "DW-14"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-distribution",
+      "key": "DW-59",
+      "id": "768b5071-089b-4638-b8c5-1119bb420f07",
+      "title": "Qualify native target installers and optional assets",
+      "type": "task",
+      "localSliceId": "DW-060",
+      "blockedBy": [
+        "DW-10",
+        "DW-18",
+        "DW-46",
+        "DW-47",
+        "DW-49",
+        "DW-57",
+        "DW-58"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-performance",
+      "key": "DW-60",
+      "id": "624f5079-3d2c-4e11-94dd-ca7aa6459f7e",
+      "title": "Measure all representative workloads without inference",
+      "type": "task",
+      "localSliceId": "DW-061",
+      "blockedBy": [
+        "DW-59",
+        "DW-56"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-acceptance",
+      "key": "DW-61",
+      "id": "2c4d7f78-1096-4d9a-b0e7-cfe102ef92be",
+      "title": "Reconcile full retained behavior and release readiness",
+      "type": "task",
+      "localSliceId": "DW-062",
+      "blockedBy": [
+        "DW-1",
+        "DW-2",
+        "DW-3",
+        "DW-4",
+        "DW-5",
+        "DW-6",
+        "DW-7",
+        "DW-8",
+        "DW-9",
+        "DW-10",
+        "DW-11",
+        "DW-12",
+        "DW-13",
+        "DW-14",
+        "DW-15",
+        "DW-16",
+        "DW-17",
+        "DW-18",
+        "DW-19",
+        "DW-20",
+        "DW-21",
+        "DW-22",
+        "DW-23",
+        "DW-24",
+        "DW-25",
+        "DW-26",
+        "DW-27",
+        "DW-28",
+        "DW-29",
+        "DW-30",
+        "DW-31",
+        "DW-32",
+        "DW-33",
+        "DW-34",
+        "DW-35",
+        "DW-36",
+        "DW-37",
+        "DW-38",
+        "DW-39",
+        "DW-40",
+        "DW-41",
+        "DW-42",
+        "DW-43",
+        "DW-44",
+        "DW-45",
+        "DW-46",
+        "DW-47",
+        "DW-48",
+        "DW-49",
+        "DW-50",
+        "DW-51",
+        "DW-52",
+        "DW-53",
+        "DW-54",
+        "DW-55",
+        "DW-56",
+        "DW-57",
+        "DW-58",
+        "DW-59",
+        "DW-60",
+        "DW-62",
+        "DW-63"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F12"
+    },
+    {
+      "ref": "slice-mcp_server",
+      "key": "DW-62",
+      "id": "ac852970-a997-49a1-9796-a44b693a9c62",
+      "title": "Expose indexed code, planned work and Knowledge to MCP clients",
+      "type": "story",
+      "localSliceId": "DW-063",
+      "blockedBy": [
+        "DW-1",
+        "DW-28",
+        "DW-29",
+        "DW-12",
+        "DW-13",
+        "DW-30",
+        "DW-33",
+        "DW-35",
+        "DW-7",
+        "DW-8",
+        "DW-63"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F10"
+    },
+    {
+      "ref": "slice-mcp_server_access",
+      "key": "DW-63",
+      "id": "4015a5ac-be1a-493d-a0aa-ea7131ab4351",
+      "title": "Authorize external MCP clients and selected work or Knowledge commands",
+      "type": "story",
+      "localSliceId": "DW-064",
+      "blockedBy": [
+        "DW-5",
+        "DW-18",
+        "DW-4",
+        "DW-10",
+        "DW-9",
+        "DW-14"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F10"
+    },
+    {
+      "ref": "architecture-publication",
+      "key": "DW-64",
+      "id": "ce4ba1da-440c-41fc-acb8-0efacbe97ba7",
+      "title": "Publish the architecture review and planning baseline",
+      "type": "task",
+      "localSliceId": null,
+      "blockedBy": [],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F1"
+    }
+  ],
+  "structuredSourceRequirements": 350,
+  "deliveryFeatures": [
+    {
+      "id": "11568b6e-16b6-48b5-b0c1-3f0c3b0cdf10",
+      "key": "DW-F2",
+      "version": 1,
+      "title": "Durable runtime and persistence",
+      "items": [
+        "DW-1",
+        "DW-2",
+        "DW-3",
+        "DW-8",
+        "DW-7"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "ARCH-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ARCH-02",
+          "codegraphRequirement": "E2",
+          "status": "Proposed"
+        },
+        {
+          "id": "ARCH-03",
+          "codegraphRequirement": "E3",
+          "status": "Proposed"
+        },
+        {
+          "id": "ARCH-04",
+          "codegraphRequirement": "E4",
+          "status": "Proposed"
+        },
+        {
+          "id": "ARCH-05",
+          "codegraphRequirement": "E5",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ARCH-06",
+          "codegraphRequirement": "E6",
+          "status": "Confirmed"
+        },
+        {
+          "id": "STORE-01",
+          "codegraphRequirement": "E7",
+          "status": "Confirmed"
+        },
+        {
+          "id": "STORE-02",
+          "codegraphRequirement": "E8",
+          "status": "Proposed"
+        },
+        {
+          "id": "STORE-03",
+          "codegraphRequirement": "E9",
+          "status": "Proposed"
+        },
+        {
+          "id": "STORE-04",
+          "codegraphRequirement": "E10",
+          "status": "Confirmed"
+        },
+        {
+          "id": "STORE-05",
+          "codegraphRequirement": "E11",
+          "status": "Proposed"
+        },
+        {
+          "id": "STORE-06",
+          "codegraphRequirement": "E12",
+          "status": "Proposed"
+        },
+        {
+          "id": "STORE-07",
+          "codegraphRequirement": "E13",
+          "status": "Confirmed"
+        },
+        {
+          "id": "STORE-08",
+          "codegraphRequirement": "E14",
+          "status": "Confirmed"
+        },
+        {
+          "id": "STORE-09",
+          "codegraphRequirement": "E15",
+          "status": "Confirmed"
+        },
+        {
+          "id": "STORE-10",
+          "codegraphRequirement": "E16",
+          "status": "Proposed"
+        },
+        {
+          "id": "STORE-11",
+          "codegraphRequirement": "E17",
+          "status": "Proposed"
+        },
+        {
+          "id": "STORE-12",
+          "codegraphRequirement": "E18",
+          "status": "Proposed"
+        },
+        {
+          "id": "STORE-13",
+          "codegraphRequirement": "E19",
+          "status": "Confirmed"
+        },
+        {
+          "id": "HISTORY-01",
+          "codegraphRequirement": "E20",
+          "status": "Confirmed"
+        },
+        {
+          "id": "HISTORY-02",
+          "codegraphRequirement": "E21",
+          "status": "Proposed"
+        },
+        {
+          "id": "ART-01",
+          "codegraphRequirement": "E22",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ART-02",
+          "codegraphRequirement": "E23",
+          "status": "Proposed"
+        },
+        {
+          "id": "ART-03",
+          "codegraphRequirement": "E24",
+          "status": "Proposed"
+        },
+        {
+          "id": "ART-04",
+          "codegraphRequirement": "E25",
+          "status": "Proposed"
+        },
+        {
+          "id": "ART-05",
+          "codegraphRequirement": "E26",
+          "status": "Confirmed"
+        },
+        {
+          "id": "OP-01",
+          "codegraphRequirement": "E27",
+          "status": "Confirmed"
+        },
+        {
+          "id": "OP-02",
+          "codegraphRequirement": "E28",
+          "status": "Proposed"
+        },
+        {
+          "id": "OP-03",
+          "codegraphRequirement": "E29",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ARCH-07",
+          "codegraphRequirement": "E30",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ARCH-08",
+          "codegraphRequirement": "E31",
+          "status": "Confirmed"
+        }
+      ]
+    },
+    {
+      "id": "92f9884f-37d7-49af-8a1c-bc7f8a6617f5",
+      "key": "DW-F3",
+      "version": 1,
+      "title": "Execution controls and permissions",
+      "items": [
+        "DW-5",
+        "DW-9",
+        "DW-14",
+        "DW-6"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "CONTROL-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTROL-02",
+          "codegraphRequirement": "E2",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTROL-03",
+          "codegraphRequirement": "E3",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTROL-04",
+          "codegraphRequirement": "E4",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTROL-05",
+          "codegraphRequirement": "E5",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTROL-06",
+          "codegraphRequirement": "E6",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTROL-07",
+          "codegraphRequirement": "E7",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTROL-08",
+          "codegraphRequirement": "E8",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTROL-09",
+          "codegraphRequirement": "E9",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTROL-10",
+          "codegraphRequirement": "E10",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTROL-11",
+          "codegraphRequirement": "E11",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTROL-12",
+          "codegraphRequirement": "E12",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTROL-13",
+          "codegraphRequirement": "E13",
+          "status": "Confirmed"
+        },
+        {
+          "id": "NOTIFY-01",
+          "codegraphRequirement": "E14",
+          "status": "Confirmed"
+        },
+        {
+          "id": "NOTIFY-02",
+          "codegraphRequirement": "E15",
+          "status": "Proposed"
+        },
+        {
+          "id": "NOTIFY-03",
+          "codegraphRequirement": "E16",
+          "status": "Proposed"
+        },
+        {
+          "id": "NOTIFY-04",
+          "codegraphRequirement": "E17",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SEC-01",
+          "codegraphRequirement": "E18",
+          "status": "Proposed"
+        },
+        {
+          "id": "SEC-02",
+          "codegraphRequirement": "E19",
+          "status": "Proposed"
+        },
+        {
+          "id": "SEC-03",
+          "codegraphRequirement": "E20",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SEC-04",
+          "codegraphRequirement": "E21",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SEC-05",
+          "codegraphRequirement": "E22",
+          "status": "Proposed"
+        },
+        {
+          "id": "RES-01",
+          "codegraphRequirement": "E23",
+          "status": "Confirmed"
+        },
+        {
+          "id": "RES-02",
+          "codegraphRequirement": "E24",
+          "status": "Proposed"
+        },
+        {
+          "id": "RES-03",
+          "codegraphRequirement": "E25",
+          "status": "Proposed"
+        },
+        {
+          "id": "POWER-01",
+          "codegraphRequirement": "E26",
+          "status": "Confirmed"
+        },
+        {
+          "id": "POWER-02",
+          "codegraphRequirement": "E27",
+          "status": "Proposed"
+        }
+      ]
+    },
+    {
+      "id": "00fa7073-c1b4-4f02-8682-e84bb935d4d5",
+      "key": "DW-F4",
+      "version": 1,
+      "title": "Workspace and project experience",
+      "items": [
+        "DW-4",
+        "DW-10",
+        "DW-11",
+        "DW-16"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "UI-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UI-02",
+          "codegraphRequirement": "E2",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UI-03",
+          "codegraphRequirement": "E3",
+          "status": "Proposed"
+        },
+        {
+          "id": "UI-04",
+          "codegraphRequirement": "E4",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UI-05",
+          "codegraphRequirement": "E5",
+          "status": "Proposed"
+        },
+        {
+          "id": "UI-06",
+          "codegraphRequirement": "E6",
+          "status": "Proposed"
+        },
+        {
+          "id": "UI-07",
+          "codegraphRequirement": "E7",
+          "status": "Proposed"
+        },
+        {
+          "id": "UI-08",
+          "codegraphRequirement": "E8",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UI-09",
+          "codegraphRequirement": "E9",
+          "status": "Proposed"
+        },
+        {
+          "id": "UI-10",
+          "codegraphRequirement": "E10",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SET-01",
+          "codegraphRequirement": "E11",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SET-02",
+          "codegraphRequirement": "E12",
+          "status": "Proposed"
+        },
+        {
+          "id": "SET-03",
+          "codegraphRequirement": "E13",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SET-04",
+          "codegraphRequirement": "E14",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SET-05",
+          "codegraphRequirement": "E15",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SET-06",
+          "codegraphRequirement": "E16",
+          "status": "Proposed"
+        },
+        {
+          "id": "SET-07",
+          "codegraphRequirement": "E17",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SET-08",
+          "codegraphRequirement": "E18",
+          "status": "Proposed"
+        },
+        {
+          "id": "VIS-01",
+          "codegraphRequirement": "E19",
+          "status": "Confirmed"
+        },
+        {
+          "id": "VIS-02",
+          "codegraphRequirement": "E20",
+          "status": "Confirmed"
+        },
+        {
+          "id": "VIS-03",
+          "codegraphRequirement": "E21",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UI-11",
+          "codegraphRequirement": "E22",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UI-12",
+          "codegraphRequirement": "E23",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UI-13",
+          "codegraphRequirement": "E24",
+          "status": "Confirmed"
+        }
+      ]
+    },
+    {
+      "id": "6ef5d8f5-635a-4629-9a59-5c5cb5389953",
+      "key": "DW-F5",
+      "version": 1,
+      "title": "Work planning and agent coordination",
+      "items": [
+        "DW-12",
+        "DW-13",
+        "DW-15"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "MODEL-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "MODEL-02",
+          "codegraphRequirement": "E2",
+          "status": "Proposed"
+        },
+        {
+          "id": "MODEL-03",
+          "codegraphRequirement": "E3",
+          "status": "Proposed"
+        },
+        {
+          "id": "COORD-01",
+          "codegraphRequirement": "E4",
+          "status": "Confirmed"
+        },
+        {
+          "id": "COORD-02",
+          "codegraphRequirement": "E5",
+          "status": "Confirmed"
+        },
+        {
+          "id": "COORD-03",
+          "codegraphRequirement": "E6",
+          "status": "Confirmed"
+        },
+        {
+          "id": "COORD-04",
+          "codegraphRequirement": "E7",
+          "status": "Proposed"
+        },
+        {
+          "id": "COORD-05",
+          "codegraphRequirement": "E8",
+          "status": "Proposed"
+        },
+        {
+          "id": "COORD-06",
+          "codegraphRequirement": "E9",
+          "status": "Proposed"
+        },
+        {
+          "id": "COORD-07",
+          "codegraphRequirement": "E10",
+          "status": "Proposed"
+        },
+        {
+          "id": "COORD-08",
+          "codegraphRequirement": "E11",
+          "status": "Proposed"
+        },
+        {
+          "id": "AGENT-01",
+          "codegraphRequirement": "E12",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-02",
+          "codegraphRequirement": "E13",
+          "status": "Proposed"
+        },
+        {
+          "id": "AGENT-03",
+          "codegraphRequirement": "E14",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-04",
+          "codegraphRequirement": "E15",
+          "status": "Proposed"
+        },
+        {
+          "id": "AGENT-05",
+          "codegraphRequirement": "E16",
+          "status": "Proposed"
+        },
+        {
+          "id": "AGENT-06",
+          "codegraphRequirement": "E17",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-07",
+          "codegraphRequirement": "E18",
+          "status": "Proposed"
+        },
+        {
+          "id": "AGENT-08",
+          "codegraphRequirement": "E19",
+          "status": "Proposed"
+        },
+        {
+          "id": "AGENT-09",
+          "codegraphRequirement": "E20",
+          "status": "Proposed"
+        },
+        {
+          "id": "AGENT-10",
+          "codegraphRequirement": "E21",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-11",
+          "codegraphRequirement": "E22",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-12",
+          "codegraphRequirement": "E23",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-13",
+          "codegraphRequirement": "E24",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-14",
+          "codegraphRequirement": "E25",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-15",
+          "codegraphRequirement": "E26",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-16",
+          "codegraphRequirement": "E27",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-17",
+          "codegraphRequirement": "E28",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-01",
+          "codegraphRequirement": "E29",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-02",
+          "codegraphRequirement": "E30",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-03",
+          "codegraphRequirement": "E31",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-04",
+          "codegraphRequirement": "E32",
+          "status": "Proposed"
+        },
+        {
+          "id": "WORK-05",
+          "codegraphRequirement": "E33",
+          "status": "Proposed"
+        },
+        {
+          "id": "WORK-06",
+          "codegraphRequirement": "E34",
+          "status": "Proposed"
+        },
+        {
+          "id": "WORK-07",
+          "codegraphRequirement": "E35",
+          "status": "Proposed"
+        },
+        {
+          "id": "WORK-08",
+          "codegraphRequirement": "E36",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-09",
+          "codegraphRequirement": "E37",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-10",
+          "codegraphRequirement": "E38",
+          "status": "Proposed"
+        },
+        {
+          "id": "WORK-11",
+          "codegraphRequirement": "E39",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-12",
+          "codegraphRequirement": "E40",
+          "status": "Proposed"
+        },
+        {
+          "id": "WORK-13",
+          "codegraphRequirement": "E41",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-14",
+          "codegraphRequirement": "E42",
+          "status": "Proposed"
+        },
+        {
+          "id": "WORK-15",
+          "codegraphRequirement": "E43",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-16",
+          "codegraphRequirement": "E44",
+          "status": "Confirmed"
+        },
+        {
+          "id": "WORK-17",
+          "codegraphRequirement": "E45",
+          "status": "Confirmed"
+        },
+        {
+          "id": "COORD-09",
+          "codegraphRequirement": "E46",
+          "status": "Confirmed"
+        },
+        {
+          "id": "COORD-10",
+          "codegraphRequirement": "E47",
+          "status": "Confirmed"
+        }
+      ]
+    },
+    {
+      "id": "84f1dddf-fa8f-46b9-836f-41e9e134e49a",
+      "key": "DW-F6",
+      "version": 1,
+      "title": "Models, routing and usage",
+      "items": [
+        "DW-17",
+        "DW-18",
+        "DW-19",
+        "DW-20",
+        "DW-21",
+        "DW-22"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "ROUTE-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-02",
+          "codegraphRequirement": "E2",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-03",
+          "codegraphRequirement": "E3",
+          "status": "Proposed"
+        },
+        {
+          "id": "ROUTE-04",
+          "codegraphRequirement": "E4",
+          "status": "Proposed"
+        },
+        {
+          "id": "ROUTE-05",
+          "codegraphRequirement": "E5",
+          "status": "Proposed"
+        },
+        {
+          "id": "ROUTE-06",
+          "codegraphRequirement": "E6",
+          "status": "Proposed"
+        },
+        {
+          "id": "ROUTE-07",
+          "codegraphRequirement": "E7",
+          "status": "Proposed"
+        },
+        {
+          "id": "ROUTE-08",
+          "codegraphRequirement": "E8",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-11",
+          "codegraphRequirement": "E9",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-12",
+          "codegraphRequirement": "E10",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-13",
+          "codegraphRequirement": "E11",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-14",
+          "codegraphRequirement": "E12",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-15",
+          "codegraphRequirement": "E13",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-09",
+          "codegraphRequirement": "E14",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-10",
+          "codegraphRequirement": "E15",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CACHE-01",
+          "codegraphRequirement": "E16",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CACHE-02",
+          "codegraphRequirement": "E17",
+          "status": "Proposed"
+        },
+        {
+          "id": "CACHE-03",
+          "codegraphRequirement": "E18",
+          "status": "Proposed"
+        },
+        {
+          "id": "CACHE-04",
+          "codegraphRequirement": "E19",
+          "status": "Proposed"
+        },
+        {
+          "id": "CACHE-05",
+          "codegraphRequirement": "E20",
+          "status": "Proposed"
+        },
+        {
+          "id": "CACHE-06",
+          "codegraphRequirement": "E21",
+          "status": "Proposed"
+        },
+        {
+          "id": "ROUTE-16",
+          "codegraphRequirement": "E22",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-17",
+          "codegraphRequirement": "E23",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-18",
+          "codegraphRequirement": "E24",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-19",
+          "codegraphRequirement": "E25",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-20",
+          "codegraphRequirement": "E26",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTEXT-01",
+          "codegraphRequirement": "E27",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTEXT-02",
+          "codegraphRequirement": "E28",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTEXT-03",
+          "codegraphRequirement": "E29",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTEXT-04",
+          "codegraphRequirement": "E30",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTEXT-05",
+          "codegraphRequirement": "E31",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTEXT-06",
+          "codegraphRequirement": "E32",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TOOL-01",
+          "codegraphRequirement": "E33",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TOOL-02",
+          "codegraphRequirement": "E34",
+          "status": "Proposed"
+        },
+        {
+          "id": "TOOL-03",
+          "codegraphRequirement": "E35",
+          "status": "Proposed"
+        },
+        {
+          "id": "TOOL-04",
+          "codegraphRequirement": "E36",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TOOL-05",
+          "codegraphRequirement": "E37",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TOOL-06",
+          "codegraphRequirement": "E38",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TOOL-07",
+          "codegraphRequirement": "E39",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TOOL-08",
+          "codegraphRequirement": "E40",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TOOL-09",
+          "codegraphRequirement": "E41",
+          "status": "Confirmed"
+        }
+      ]
+    },
+    {
+      "id": "9c866c95-d2b0-418e-81b8-b93ec7a697e4",
+      "key": "DW-F7",
+      "version": 1,
+      "title": "Code and database intelligence",
+      "items": [
+        "DW-23",
+        "DW-24",
+        "DW-25",
+        "DW-26",
+        "DW-27",
+        "DW-28",
+        "DW-29",
+        "DW-36",
+        "DW-37"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "CODE-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CODE-02",
+          "codegraphRequirement": "E2",
+          "status": "Proposed"
+        },
+        {
+          "id": "CODE-03",
+          "codegraphRequirement": "E3",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CODE-04",
+          "codegraphRequirement": "E4",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CODE-05",
+          "codegraphRequirement": "E5",
+          "status": "Proposed"
+        },
+        {
+          "id": "CODE-06",
+          "codegraphRequirement": "E6",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CODE-07",
+          "codegraphRequirement": "E7",
+          "status": "Proposed"
+        },
+        {
+          "id": "CODE-08",
+          "codegraphRequirement": "E8",
+          "status": "Proposed"
+        },
+        {
+          "id": "CODE-09",
+          "codegraphRequirement": "E9",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CODE-10",
+          "codegraphRequirement": "E10",
+          "status": "Proposed"
+        },
+        {
+          "id": "CODE-11",
+          "codegraphRequirement": "E11",
+          "status": "Proposed"
+        },
+        {
+          "id": "GRAPH-01",
+          "codegraphRequirement": "E12",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GRAPH-02",
+          "codegraphRequirement": "E13",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GRAPH-03",
+          "codegraphRequirement": "E14",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GRAPH-04",
+          "codegraphRequirement": "E15",
+          "status": "Proposed"
+        },
+        {
+          "id": "DB-01",
+          "codegraphRequirement": "E16",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DB-02",
+          "codegraphRequirement": "E17",
+          "status": "Proposed"
+        },
+        {
+          "id": "DB-03",
+          "codegraphRequirement": "E18",
+          "status": "Proposed"
+        },
+        {
+          "id": "DB-04",
+          "codegraphRequirement": "E19",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DB-05",
+          "codegraphRequirement": "E20",
+          "status": "Proposed"
+        },
+        {
+          "id": "DB-06",
+          "codegraphRequirement": "E21",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DB-07",
+          "codegraphRequirement": "E22",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DB-08",
+          "codegraphRequirement": "E23",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DB-09",
+          "codegraphRequirement": "E24",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SCHEMA-01",
+          "codegraphRequirement": "E25",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SCHEMA-02",
+          "codegraphRequirement": "E26",
+          "status": "Proposed"
+        },
+        {
+          "id": "HEALTH-01",
+          "codegraphRequirement": "E27",
+          "status": "Confirmed"
+        },
+        {
+          "id": "HEALTH-02",
+          "codegraphRequirement": "E28",
+          "status": "Proposed"
+        }
+      ]
+    },
+    {
+      "id": "8462988e-08e1-4996-a1f0-9dd53f94770d",
+      "key": "DW-F8",
+      "version": 1,
+      "title": "Knowledge, documents and instructions",
+      "items": [
+        "DW-30",
+        "DW-31",
+        "DW-32",
+        "DW-33",
+        "DW-34",
+        "DW-35"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "KNOW-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "KNOW-02",
+          "codegraphRequirement": "E2",
+          "status": "Proposed"
+        },
+        {
+          "id": "KNOW-03",
+          "codegraphRequirement": "E3",
+          "status": "Proposed"
+        },
+        {
+          "id": "KNOW-04",
+          "codegraphRequirement": "E4",
+          "status": "Confirmed"
+        },
+        {
+          "id": "KNOW-05",
+          "codegraphRequirement": "E5",
+          "status": "Proposed"
+        },
+        {
+          "id": "KNOW-06",
+          "codegraphRequirement": "E6",
+          "status": "Proposed"
+        },
+        {
+          "id": "KNOW-07",
+          "codegraphRequirement": "E7",
+          "status": "Confirmed"
+        },
+        {
+          "id": "KNOW-08",
+          "codegraphRequirement": "E8",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DREAM-01",
+          "codegraphRequirement": "E9",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DREAM-02",
+          "codegraphRequirement": "E10",
+          "status": "Proposed"
+        },
+        {
+          "id": "DREAM-03",
+          "codegraphRequirement": "E11",
+          "status": "Proposed"
+        },
+        {
+          "id": "DREAM-04",
+          "codegraphRequirement": "E12",
+          "status": "Proposed"
+        },
+        {
+          "id": "DREAM-05",
+          "codegraphRequirement": "E13",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONV-01",
+          "codegraphRequirement": "E14",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONV-02",
+          "codegraphRequirement": "E15",
+          "status": "Proposed"
+        },
+        {
+          "id": "SKILL-01",
+          "codegraphRequirement": "E16",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SKILL-02",
+          "codegraphRequirement": "E17",
+          "status": "Proposed"
+        },
+        {
+          "id": "SKILL-03",
+          "codegraphRequirement": "E18",
+          "status": "Proposed"
+        },
+        {
+          "id": "SKILL-04",
+          "codegraphRequirement": "E19",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SKILL-05",
+          "codegraphRequirement": "E20",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SKILL-06",
+          "codegraphRequirement": "E21",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SKILL-07",
+          "codegraphRequirement": "E22",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SKILL-08",
+          "codegraphRequirement": "E23",
+          "status": "Proposed"
+        },
+        {
+          "id": "SKILL-09",
+          "codegraphRequirement": "E24",
+          "status": "Confirmed"
+        },
+        {
+          "id": "RAG-01",
+          "codegraphRequirement": "E25",
+          "status": "Confirmed"
+        },
+        {
+          "id": "RAG-02",
+          "codegraphRequirement": "E26",
+          "status": "Proposed"
+        },
+        {
+          "id": "RAG-03",
+          "codegraphRequirement": "E27",
+          "status": "Proposed"
+        },
+        {
+          "id": "RAG-09",
+          "codegraphRequirement": "E28",
+          "status": "Confirmed"
+        },
+        {
+          "id": "RAG-10",
+          "codegraphRequirement": "E29",
+          "status": "Confirmed"
+        },
+        {
+          "id": "RAG-04",
+          "codegraphRequirement": "E30",
+          "status": "Proposed"
+        },
+        {
+          "id": "RAG-05",
+          "codegraphRequirement": "E31",
+          "status": "Proposed"
+        },
+        {
+          "id": "RAG-06",
+          "codegraphRequirement": "E32",
+          "status": "Proposed"
+        },
+        {
+          "id": "RAG-07",
+          "codegraphRequirement": "E33",
+          "status": "Proposed"
+        },
+        {
+          "id": "RAG-08",
+          "codegraphRequirement": "E34",
+          "status": "Proposed"
+        },
+        {
+          "id": "RAG-11",
+          "codegraphRequirement": "E35",
+          "status": "Confirmed"
+        },
+        {
+          "id": "RAG-12",
+          "codegraphRequirement": "E36",
+          "status": "Confirmed"
+        },
+        {
+          "id": "RAG-13",
+          "codegraphRequirement": "E37",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DOC-01",
+          "codegraphRequirement": "E38",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DOC-02",
+          "codegraphRequirement": "E39",
+          "status": "Confirmed"
+        }
+      ]
+    },
+    {
+      "id": "ef088ec7-ff8d-452a-93c5-cfc2a128efb3",
+      "key": "DW-F9",
+      "version": 1,
+      "title": "GitHub and autonomous delivery",
+      "items": [
+        "DW-38",
+        "DW-39",
+        "DW-40",
+        "DW-41",
+        "DW-42"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "GIT-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-02",
+          "codegraphRequirement": "E2",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-03",
+          "codegraphRequirement": "E3",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-04",
+          "codegraphRequirement": "E4",
+          "status": "Proposed"
+        },
+        {
+          "id": "GIT-05",
+          "codegraphRequirement": "E5",
+          "status": "Proposed"
+        },
+        {
+          "id": "GIT-06",
+          "codegraphRequirement": "E6",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-07",
+          "codegraphRequirement": "E7",
+          "status": "Proposed"
+        },
+        {
+          "id": "GIT-08",
+          "codegraphRequirement": "E8",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-09",
+          "codegraphRequirement": "E9",
+          "status": "Proposed"
+        },
+        {
+          "id": "GIT-10",
+          "codegraphRequirement": "E10",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-11",
+          "codegraphRequirement": "E11",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-12",
+          "codegraphRequirement": "E12",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-13",
+          "codegraphRequirement": "E13",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-14",
+          "codegraphRequirement": "E14",
+          "status": "Proposed"
+        },
+        {
+          "id": "GIT-15",
+          "codegraphRequirement": "E15",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-16",
+          "codegraphRequirement": "E16",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GIT-17",
+          "codegraphRequirement": "E17",
+          "status": "Confirmed"
+        },
+        {
+          "id": "REVIEW-01",
+          "codegraphRequirement": "E18",
+          "status": "Confirmed"
+        },
+        {
+          "id": "REVIEW-02",
+          "codegraphRequirement": "E19",
+          "status": "Proposed"
+        },
+        {
+          "id": "REVIEW-03",
+          "codegraphRequirement": "E20",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-01",
+          "codegraphRequirement": "E21",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-02",
+          "codegraphRequirement": "E22",
+          "status": "Proposed"
+        },
+        {
+          "id": "GH-03",
+          "codegraphRequirement": "E23",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-04",
+          "codegraphRequirement": "E24",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-05",
+          "codegraphRequirement": "E25",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-06",
+          "codegraphRequirement": "E26",
+          "status": "Proposed"
+        },
+        {
+          "id": "GH-07",
+          "codegraphRequirement": "E27",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-08",
+          "codegraphRequirement": "E28",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-09",
+          "codegraphRequirement": "E29",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-10",
+          "codegraphRequirement": "E30",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-11",
+          "codegraphRequirement": "E31",
+          "status": "Confirmed"
+        },
+        {
+          "id": "GH-12",
+          "codegraphRequirement": "E32",
+          "status": "Proposed"
+        },
+        {
+          "id": "DELIVERY-01",
+          "codegraphRequirement": "E33",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DELIVERY-02",
+          "codegraphRequirement": "E34",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DELIVERY-03",
+          "codegraphRequirement": "E35",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DELIVERY-04",
+          "codegraphRequirement": "E36",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DELIVERY-05",
+          "codegraphRequirement": "E37",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DELIVERY-06",
+          "codegraphRequirement": "E38",
+          "status": "Proposed"
+        },
+        {
+          "id": "DELIVERY-07",
+          "codegraphRequirement": "E39",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DELIVERY-08",
+          "codegraphRequirement": "E40",
+          "status": "Confirmed"
+        },
+        {
+          "id": "DELIVERY-09",
+          "codegraphRequirement": "E41",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CODEREVIEW-01",
+          "codegraphRequirement": "E42",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CODEREVIEW-02",
+          "codegraphRequirement": "E43",
+          "status": "Proposed"
+        }
+      ]
+    },
+    {
+      "id": "51519d8a-abe8-4198-b847-fdbcd2f103c0",
+      "key": "DW-F10",
+      "version": 1,
+      "title": "Packages and external harnesses",
+      "items": [
+        "DW-43",
+        "DW-44",
+        "DW-45",
+        "DW-62",
+        "DW-63"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "ADDON-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ADDON-02",
+          "codegraphRequirement": "E2",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ADDON-03",
+          "codegraphRequirement": "E3",
+          "status": "Proposed"
+        },
+        {
+          "id": "ADDON-04",
+          "codegraphRequirement": "E4",
+          "status": "Proposed"
+        },
+        {
+          "id": "MCP-01",
+          "codegraphRequirement": "E5",
+          "status": "Confirmed"
+        },
+        {
+          "id": "MCP-02",
+          "codegraphRequirement": "E6",
+          "status": "Proposed"
+        },
+        {
+          "id": "MCP-03",
+          "codegraphRequirement": "E7",
+          "status": "Proposed"
+        },
+        {
+          "id": "MCP-04",
+          "codegraphRequirement": "E8",
+          "status": "Proposed"
+        },
+        {
+          "id": "MCP-05",
+          "codegraphRequirement": "E9",
+          "status": "Proposed"
+        },
+        {
+          "id": "MCP-06",
+          "codegraphRequirement": "E10",
+          "status": "Confirmed"
+        },
+        {
+          "id": "MCP-07",
+          "codegraphRequirement": "E11",
+          "status": "Confirmed"
+        },
+        {
+          "id": "MCP-08",
+          "codegraphRequirement": "E12",
+          "status": "Proposed"
+        },
+        {
+          "id": "MCP-09",
+          "codegraphRequirement": "E13",
+          "status": "Proposed"
+        },
+        {
+          "id": "MCP-10",
+          "codegraphRequirement": "E14",
+          "status": "Proposed"
+        },
+        {
+          "id": "MCP-11",
+          "codegraphRequirement": "E15",
+          "status": "Proposed"
+        },
+        {
+          "id": "EXT-01",
+          "codegraphRequirement": "E16",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EXT-02",
+          "codegraphRequirement": "E17",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EXT-03",
+          "codegraphRequirement": "E18",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EXT-04",
+          "codegraphRequirement": "E19",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EXT-05",
+          "codegraphRequirement": "E20",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EXT-06",
+          "codegraphRequirement": "E21",
+          "status": "Proposed"
+        },
+        {
+          "id": "EXT-07",
+          "codegraphRequirement": "E22",
+          "status": "Confirmed"
+        }
+      ]
+    },
+    {
+      "id": "591ffa53-eb6d-4486-9e25-e740f09888ca",
+      "key": "DW-F11",
+      "version": 1,
+      "title": "Agent tools and automation",
+      "items": [
+        "DW-46",
+        "DW-47",
+        "DW-48",
+        "DW-49",
+        "DW-50",
+        "DW-51"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "UIQA-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UIQA-02",
+          "codegraphRequirement": "E2",
+          "status": "Proposed"
+        },
+        {
+          "id": "UIQA-03",
+          "codegraphRequirement": "E3",
+          "status": "Proposed"
+        },
+        {
+          "id": "UIQA-04",
+          "codegraphRequirement": "E4",
+          "status": "Proposed"
+        },
+        {
+          "id": "UIQA-05",
+          "codegraphRequirement": "E5",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTAINER-01",
+          "codegraphRequirement": "E6",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTAINER-02",
+          "codegraphRequirement": "E7",
+          "status": "Confirmed"
+        },
+        {
+          "id": "CONTAINER-03",
+          "codegraphRequirement": "E8",
+          "status": "Proposed"
+        },
+        {
+          "id": "CONTAINER-04",
+          "codegraphRequirement": "E9",
+          "status": "Confirmed"
+        },
+        {
+          "id": "JOB-01",
+          "codegraphRequirement": "E10",
+          "status": "Confirmed"
+        },
+        {
+          "id": "JOB-02",
+          "codegraphRequirement": "E11",
+          "status": "Proposed"
+        },
+        {
+          "id": "JOB-03",
+          "codegraphRequirement": "E12",
+          "status": "Confirmed"
+        },
+        {
+          "id": "JOB-04",
+          "codegraphRequirement": "E13",
+          "status": "Confirmed"
+        },
+        {
+          "id": "JOB-05",
+          "codegraphRequirement": "E14",
+          "status": "Confirmed"
+        },
+        {
+          "id": "JOB-06",
+          "codegraphRequirement": "E15",
+          "status": "Proposed"
+        },
+        {
+          "id": "JOB-07",
+          "codegraphRequirement": "E16",
+          "status": "Confirmed"
+        },
+        {
+          "id": "JOB-08",
+          "codegraphRequirement": "E17",
+          "status": "Confirmed"
+        },
+        {
+          "id": "JOB-09",
+          "codegraphRequirement": "E18",
+          "status": "Confirmed"
+        }
+      ]
+    },
+    {
+      "id": "d7b9f52d-45d6-4429-a7b9-4d1d288d1593",
+      "key": "DW-F12",
+      "version": 1,
+      "title": "Application operations and acceptance",
+      "items": [
+        "DW-52",
+        "DW-53",
+        "DW-54",
+        "DW-55",
+        "DW-56",
+        "DW-57",
+        "DW-58",
+        "DW-59",
+        "DW-60",
+        "DW-61"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "HELP-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "HELP-02",
+          "codegraphRequirement": "E2",
+          "status": "Confirmed"
+        },
+        {
+          "id": "HELP-03",
+          "codegraphRequirement": "E3",
+          "status": "Confirmed"
+        },
+        {
+          "id": "HELP-04",
+          "codegraphRequirement": "E4",
+          "status": "Confirmed"
+        },
+        {
+          "id": "HELP-05",
+          "codegraphRequirement": "E5",
+          "status": "Confirmed"
+        },
+        {
+          "id": "HELP-06",
+          "codegraphRequirement": "E6",
+          "status": "Proposed"
+        },
+        {
+          "id": "PLAT-01",
+          "codegraphRequirement": "E7",
+          "status": "Confirmed"
+        },
+        {
+          "id": "PLAT-02",
+          "codegraphRequirement": "E8",
+          "status": "Confirmed"
+        },
+        {
+          "id": "PLAT-03",
+          "codegraphRequirement": "E9",
+          "status": "Proposed"
+        },
+        {
+          "id": "PERF-01",
+          "codegraphRequirement": "E10",
+          "status": "Confirmed"
+        },
+        {
+          "id": "PERF-02",
+          "codegraphRequirement": "E11",
+          "status": "Proposed"
+        },
+        {
+          "id": "OPS-01",
+          "codegraphRequirement": "E12",
+          "status": "Proposed"
+        },
+        {
+          "id": "OPS-02",
+          "codegraphRequirement": "E13",
+          "status": "Proposed"
+        },
+        {
+          "id": "UPDATE-01",
+          "codegraphRequirement": "E14",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UPDATE-02",
+          "codegraphRequirement": "E15",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UPDATE-03",
+          "codegraphRequirement": "E16",
+          "status": "Proposed"
+        },
+        {
+          "id": "UPDATE-04",
+          "codegraphRequirement": "E17",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SELF-01",
+          "codegraphRequirement": "E18",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SELF-02",
+          "codegraphRequirement": "E19",
+          "status": "Proposed"
+        },
+        {
+          "id": "SELF-03",
+          "codegraphRequirement": "E20",
+          "status": "Confirmed"
+        },
+        {
+          "id": "SELF-04",
+          "codegraphRequirement": "E21",
+          "status": "Confirmed"
+        },
+        {
+          "id": "LOG-01",
+          "codegraphRequirement": "E22",
+          "status": "Confirmed"
+        },
+        {
+          "id": "LOG-02",
+          "codegraphRequirement": "E23",
+          "status": "Proposed"
+        },
+        {
+          "id": "LOG-03",
+          "codegraphRequirement": "E24",
+          "status": "Proposed"
+        },
+        {
+          "id": "IMPORT-01",
+          "codegraphRequirement": "E25",
+          "status": "Confirmed"
+        },
+        {
+          "id": "IMPORT-02",
+          "codegraphRequirement": "E26",
+          "status": "Proposed"
+        },
+        {
+          "id": "TEST-01",
+          "codegraphRequirement": "E27",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TEST-02",
+          "codegraphRequirement": "E28",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TEST-03",
+          "codegraphRequirement": "E29",
+          "status": "Confirmed"
+        },
+        {
+          "id": "TEST-04",
+          "codegraphRequirement": "E30",
+          "status": "Confirmed"
+        }
+      ]
+    }
+  ]
+}

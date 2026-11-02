@@ -1,0 +1,9 @@
+{"start": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-overgraph"}
+{"finish": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-overgraph", "exit_code": 1, "errors": "Error: Deleted vector remained visible\n"}
+{"start": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-grafeo"}
+{"finish": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-grafeo", "exit_code": 1, "errors": "Error: GRAFEO-V001: Invalid value: Constraint violation: Cannot delete node with 31 connected edge(s). Use DETACH DELETE.\n"}
+{"start": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-sqlite"}
+{"finish": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-sqlite", "exit_code": 0, "errors": []}
+{"start": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-helix"}
+{"finish": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-helix", "exit_code": 0, "errors": []}
+{"manifest": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/manifest.json"}

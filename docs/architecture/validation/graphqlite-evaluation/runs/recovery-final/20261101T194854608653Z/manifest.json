@@ -1,0 +1,78 @@
+{
+  "inference": false,
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "cases": [
+    {
+      "engine": "graphqlite",
+      "action": "recovery_writer",
+      "binary_sha256": "a58b9444838ece5aa2f4d69f82aad5e3db2f9582cd92ca239b22f1f089453f71",
+      "case": "work/graphqlite-eval-runs/recovery-final/20261101T194854608653Z/graphqlite-recovery_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.3453310828190297,
+      "result": {
+        "action": "recovery_check",
+        "checks": 1028,
+        "engine": "graphqlite",
+        "real_inference": false,
+        "reopen_ns": 19623083
+      }
+    },
+    {
+      "engine": "graphqlite",
+      "action": "interrupted_writer",
+      "binary_sha256": "a58b9444838ece5aa2f4d69f82aad5e3db2f9582cd92ca239b22f1f089453f71",
+      "case": "work/graphqlite-eval-runs/recovery-final/20261101T194854608653Z/graphqlite-interrupted_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.020864292047917843,
+      "result": {
+        "action": "interrupted_open",
+        "checks": 0,
+        "engine": "graphqlite",
+        "real_inference": false,
+        "reopen_ns": 9855583
+      }
+    },
+    {
+      "engine": "sqlite",
+      "action": "recovery_writer",
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "case": "work/graphqlite-eval-runs/recovery-final/20261101T194854608653Z/sqlite-recovery_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.2911540830973536,
+      "result": {
+        "action": "recovery_check",
+        "checks": 1028,
+        "engine": "sqlite",
+        "real_inference": false,
+        "reopen_ns": 470833
+      }
+    },
+    {
+      "engine": "sqlite",
+      "action": "interrupted_writer",
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "case": "work/graphqlite-eval-runs/recovery-final/20261101T194854608653Z/sqlite-interrupted_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.010578999994322658,
+      "result": {
+        "action": "interrupted_open",
+        "checks": 0,
+        "engine": "sqlite",
+        "real_inference": false,
+        "reopen_ns": 1384917
+      }
+    }
+  ]
+}

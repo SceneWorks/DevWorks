@@ -1,0 +1,15 @@
+flowchart TB
+ DUE["Weekly while open / missing catalog / manual refresh"] --> FETCH["Official OpenAI and Anthropic sources<br/>native HTTP; no inference or credentials"]
+ FETCH --> VALIDATE["Validate model, units, tiers, provenance and parser"]
+ VALIDATE --> SNAP["Atomically publish new immutable price snapshot"]
+ VALIDATE --> STALE["Failed refresh: retain last good prices<br/>show age and error; retry with backoff"]
+ SNAP --> FUTURE["Future attempt snapshots selected rate revision<br/>explicit overrides survive"]
+ OR["Provider reports charge, including zero"] --> EFFECTIVE["One effective attempt cost and attributed ledger"]
+ FUTURE --> EST["Configured / official / subscription API-equivalent estimate"]
+ EST --> EFFECTIVE
+ LOCAL["Explicit local-provider classification"] --> FREE["LocalFree: known zero"]
+ FREE --> EFFECTIVE
+ CUSTOM["No reported or configured custom price"] --> UNKNOWN["Untracked: request allowed<br/>price not tracked; excluded monetary total"]
+ UNKNOWN --> EFFECTIVE
+ EFFECTIVE --> BUDGET["Tracked spend + priced reservations<br/>show partial coverage and threshold state"]
+ EFFECTIVE --> HISTORY["Original observations and historical rate retained<br/>later actual charge is an explicit correction"]

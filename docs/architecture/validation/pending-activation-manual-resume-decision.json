@@ -1,0 +1,39 @@
+{
+  "title": "Accepted but unlaunched activations require manual Continue after restart",
+  "date": "2026-11-01",
+  "status": "CONTROL-10 clarified and confirmed; concrete restart mechanisms remain proposed",
+  "requirements": 334,
+  "diagrams": 17,
+  "traceability": "All IDs, statements and statuses match; no removals",
+  "word": {
+    "pages": 65,
+    "unchangedPageBodies": 63,
+    "changedPagesVisuallyReviewed": [
+      14,
+      49
+    ],
+    "allRequirementIdsPresent": true,
+    "control10TextPresent": true
+  },
+  "readers": {
+    "widths": [
+      1440,
+      800
+    ],
+    "policyPresent": true,
+    "horizontalOverflow": false,
+    "brokenImages": 0
+  },
+  "nativeRuntime": "No product implementation or inference executed",
+  "documentSha256": {
+    "tools/planning/requirements_content.py": "6dd5cae952ce7652a26dccb1c1d5b881674e0e88e558d2c44b0335baeeace6ff",
+    "docs/planning/requirements-interview.json": "81438f55009eeea24583bb6161a7e03dca235b484693171245ba42447ec25414",
+    "docs/planning/requirements-content.json": "6dbc7c1fa3f9b7a32e815ad9ada1901ae8b896bdd5c9fda88dc41cea0bdb381f",
+    "docs/planning/devworks-requirements.html": "8405b67dafe758b44ec9ceb1f0a9a5b4560d6c0cdb6e06a729ed87d95ac62c76",
+    "docs/planning/devworks-requirements.docx": "b0e9ca025a13f8a631e297b2c06bdb09ce604090b40fe949e525ca41518833f1",
+    "docs/architecture/devworks-architecture.md": "b1966c2142dc6bcab85d17341dc4292bc2c2b1367d0fe541a1112f59c39b2d6f",
+    "docs/architecture/devworks-architecture.html": "3b2069dcdbbf38d2cee182ba32db8a96c59566b9330db2365a5858b4c1006eca",
+    "docs/architecture/devworks-requirements-traceability.json": "b5301c56aa0f2378b694b069cf5f62cb466acc1795a06092bdd8ee78524bda8f",
+    "docs/architecture/architecture-diagrams/manifest.json": "08ed9e1ba4673ce0b2a3453de77ad2ab13c907e7e63c5ee9ca52db87b427c80c"
+  }
+}

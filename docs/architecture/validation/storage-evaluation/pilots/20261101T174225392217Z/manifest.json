@@ -1,0 +1,79 @@
+{
+  "phase": "pilot",
+  "created_utc": "20261101T174225392217Z",
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "workspace_lock_sha256": "de4aeb3ae95d95389dac8d0fe5d6486c413fefeffe44884421cc506fc0540f66",
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "logical_cpus": 18
+  },
+  "inference": false,
+  "runs": [
+    {
+      "engine": "overgraph",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174225392217Z/pilot-1-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174225392217Z/pilot-1-overgraph",
+      "binary_bytes": 12124864,
+      "binary_sha256": "b0e1deefbf8220f179e398780b42ec511171cd1d6e635d2bd1e379919591cb56",
+      "exit_code": 1,
+      "wall_seconds": 0.7301712080370635,
+      "error_tail": "Error: Hybrid missing source locator\n"
+    },
+    {
+      "engine": "grafeo",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-grafeo",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174225392217Z/pilot-1-grafeo/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174225392217Z/pilot-1-grafeo",
+      "binary_bytes": 14450512,
+      "binary_sha256": "a9858c7324158886a80862ed8dd0fc7b82aa13045386894e755585f759206bf5",
+      "exit_code": 1,
+      "wall_seconds": 0.7271336249541491,
+      "error_tail": "Error: Hybrid missing source locator\n"
+    },
+    {
+      "engine": "sqlite",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174225392217Z/pilot-1-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174225392217Z/pilot-1-sqlite",
+      "binary_bytes": 3159568,
+      "binary_sha256": "5f8a164b8d84389029b9c5bd736d5984989060560d94f28ee1fee431d4bff23a",
+      "exit_code": 1,
+      "wall_seconds": 0.4278788750525564,
+      "error_tail": "Error: Hybrid missing source locator\n"
+    },
+    {
+      "engine": "helix",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-helix",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174225392217Z/pilot-1-helix/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174225392217Z/pilot-1-helix",
+      "binary_bytes": 54496480,
+      "binary_sha256": "37b950b95e6fc570932d8102df874c5bad5fa9c53ffd266de0dbcd9a8156f13f",
+      "exit_code": 1,
+      "wall_seconds": 2.007650083163753,
+      "error_tail": "Error: Hybrid missing source locator\n"
+    }
+  ]
+}

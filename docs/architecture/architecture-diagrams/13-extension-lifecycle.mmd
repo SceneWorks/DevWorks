@@ -1,0 +1,20 @@
+stateDiagram-v2
+    [*] --> Discovered
+    Discovered --> Verified: Integrity and target
+    Discovered --> Unavailable: Unsupported
+    Verified --> AwaitingApproval: Approval missing
+    AwaitingApproval --> Rejected: Approval declined
+    AwaitingApproval --> Prepared: Approval recorded
+    Verified --> Prepared: Trusted signed update
+    Prepared --> Unavailable: Invalid candidate
+    Prepared --> Quiescing: Gate admission
+    Quiescing --> Prepared: Still busy
+    Quiescing --> Committed: Atomic publication
+    Committed --> Active: Matching process ready
+    Committed --> RolledBack: Safe startup rollback
+    Active --> Retiring: Disable or update
+    Active --> Failed: Process failure
+    Failed --> Committed: Bounded restart
+    Failed --> Blocked: Recovery blocked
+    Retiring --> Retired: Verified retirement
+    Retired --> [*]: Eligible removal

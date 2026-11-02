@@ -1,0 +1,501 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "CompleteToolCall": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "call": {
+          "$ref": "#/$defs/ToolCallKey"
+        },
+        "capabilityId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "inputSchema": {
+          "$ref": "#/$defs/SchemaRef"
+        },
+        "nativeItem": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "call",
+        "capabilityId",
+        "inputSchema",
+        "arguments",
+        "nativeItem"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "EndpointProfile": {
+      "enum": [
+        "OpenAiResponses",
+        "CodexSubscriptionResponses",
+        "AnthropicMessages",
+        "ClaudeSubscriptionMessages",
+        "OpenRouterChat",
+        "CompatibleChat",
+        "Embedding"
+      ],
+      "type": "string"
+    },
+    "FreeBasis": {
+      "enum": [
+        "LocalProvider"
+      ],
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "NativeBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "accountRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "contextEpoch": {
+          "$ref": "#/$defs/Counter"
+        },
+        "endpointProfile": {
+          "$ref": "#/$defs/EndpointProfile"
+        },
+        "modelId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "connectionId",
+        "accountRevision",
+        "endpointProfile",
+        "modelId",
+        "contextEpoch"
+      ],
+      "type": "object"
+    },
+    "PriceObservation": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+              "type": "string"
+            },
+            "currency": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Reported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "amount",
+            "currency"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+              "type": "string"
+            },
+            "currency": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Estimated",
+              "type": "string"
+            },
+            "priceSnapshotId": {
+              "$ref": "#/$defs/Id"
+            },
+            "subscriptionEquivalent": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "amount",
+            "currency",
+            "priceSnapshotId",
+            "subscriptionEquivalent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "basis": {
+              "$ref": "#/$defs/FreeBasis"
+            },
+            "kind": {
+              "const": "Free",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "basis"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Untracked",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Unknown",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "ProviderBody": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blockIndex": {
+              "$ref": "#/$defs/Counter"
+            },
+            "kind": {
+              "const": "TextDelta",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "blockIndex",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ToolCallComplete",
+              "type": "string"
+            },
+            "toolCall": {
+              "$ref": "#/$defs/CompleteToolCall"
+            }
+          },
+          "required": [
+            "kind",
+            "toolCall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "binding": {
+              "$ref": "#/$defs/NativeBinding"
+            },
+            "kind": {
+              "const": "NativeContinuation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "binding",
+            "artifact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Usage",
+              "type": "string"
+            },
+            "observation": {
+              "$ref": "#/$defs/UsageObservation"
+            }
+          },
+          "required": [
+            "kind",
+            "observation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Terminal",
+              "type": "string"
+            },
+            "nativeStopReason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "outcome": {
+              "$ref": "#/$defs/TurnOutcome"
+            }
+          },
+          "required": [
+            "kind",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Heartbeat",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "QualifiedId": {
+      "pattern": "^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$",
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "SchemaRef": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "schemaId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "schemaId",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ToolCallKey": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "$ref": "#/$defs/Id"
+        },
+        "nativeCallId": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        "ordinal": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "attemptId",
+        "nativeCallId",
+        "ordinal"
+      ],
+      "type": "object"
+    },
+    "TurnOutcome": {
+      "enum": [
+        "Completed",
+        "ToolCallsReady",
+        "Incomplete",
+        "Cancelled",
+        "Failed",
+        "OutcomeUnknown"
+      ],
+      "type": "string"
+    },
+    "UsageObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "cacheWriteTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cachedReadTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost": {
+          "$ref": "#/$defs/PriceObservation"
+        },
+        "inputTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "cost"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:provider-event",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "attemptId": {
+      "$ref": "#/$defs/Id"
+    },
+    "binding": {
+      "$ref": "#/$defs/NativeBinding"
+    },
+    "event": {
+      "$ref": "#/$defs/ProviderBody"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "requestId": {
+      "$ref": "#/$defs/Id"
+    },
+    "sequence": {
+      "$ref": "#/$defs/Revision"
+    }
+  },
+  "required": [
+    "protocol",
+    "requestId",
+    "attemptId",
+    "binding",
+    "sequence",
+    "event"
+  ],
+  "title": "ProviderEvent",
+  "type": "object"
+}

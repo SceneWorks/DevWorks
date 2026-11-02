@@ -1,0 +1,34 @@
+{
+  "date": "2026-11-01",
+  "status": "Real local Git effects with scripted PR/check/review and queue states; no GitHub API qualification",
+  "gitVersion": "git version 2.53.0",
+  "passed": 17,
+  "checks": [
+    "missing_review_prevents_first_merge",
+    "all_head_evidence_prepares_barrier",
+    "dependency_order_blocks_later_repository",
+    "lost_ack_after_real_merge_is_unknown",
+    "recovery_observes_actual_merge_without_resubmitting",
+    "changed_head_invalidates_remaining_delivery",
+    "partial_delivery_preserves_earlier_merge_without_revert",
+    "new_head_requires_new_checks",
+    "refreshed_evidence_allows_remaining_merge",
+    "dependency_cycle_rejected_before_effects",
+    "active_writer_holds_cleanup",
+    "unowned_path_never_removed",
+    "untracked_changes_hold_cleanup",
+    "verified_owned_integrated_clean_worktree_removed",
+    "branch_cas_preserves_concurrent_commit_after_worktree_removal",
+    "queued_merge_does_not_complete_feature",
+    "unknown_merge_requires_observation"
+  ],
+  "noInference": true,
+  "noGitHubWrites": true,
+  "allRepositoriesOwnedTemporary": true,
+  "allTemporaryFixturesRemoved": true,
+  "limitations": [
+    "The fixture uses ordinary merge commits; squash/rebase recovery requires provider evidence.",
+    "Queue, PR, check and review state are scripted rather than a live GitHub integration.",
+    "No atomic cross-repository transaction, target-base CAS, production authority or OS path-race guarantee is proved."
+  ]
+}

@@ -1,0 +1,727 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "CodecBody": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blockIndex": {
+              "$ref": "#/$defs/Counter"
+            },
+            "kind": {
+              "const": "TextDelta",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "blockIndex",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ToolCallComplete",
+              "type": "string"
+            },
+            "toolCall": {
+              "$ref": "#/$defs/CompleteToolCall"
+            }
+          },
+          "required": [
+            "kind",
+            "toolCall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "binding": {
+              "$ref": "#/$defs/NativeBinding"
+            },
+            "kind": {
+              "const": "NativeContinuation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "binding",
+            "artifact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Usage",
+              "type": "string"
+            },
+            "observation": {
+              "$ref": "#/$defs/RawUsageObservation"
+            }
+          },
+          "required": [
+            "kind",
+            "observation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Terminal",
+              "type": "string"
+            },
+            "nativeStopReason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "outcome": {
+              "$ref": "#/$defs/TurnOutcome"
+            }
+          },
+          "required": [
+            "kind",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Heartbeat",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CompleteToolCall": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "call": {
+          "$ref": "#/$defs/ToolCallKey"
+        },
+        "capabilityId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "inputSchema": {
+          "$ref": "#/$defs/SchemaRef"
+        },
+        "nativeItem": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "call",
+        "capabilityId",
+        "inputSchema",
+        "arguments",
+        "nativeItem"
+      ],
+      "type": "object"
+    },
+    "ContributionEvent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/ProviderCodecEvent"
+            },
+            "kind": {
+              "const": "Provider",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "event"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "ArtifactProduced",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "artifact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "$ref": "#/$defs/IndexFormat"
+            },
+            "index": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "SemanticIndex",
+              "type": "string"
+            },
+            "sourceSnapshot": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "sourceSnapshot",
+            "index",
+            "format"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "inputDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "kind": {
+              "const": "ContextProposal",
+              "type": "string"
+            },
+            "proposal": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "inputDigest",
+            "proposal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "items": {
+                "$ref": "#/$defs/ArtifactRef"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "kind": {
+              "const": "Verification",
+              "type": "string"
+            },
+            "passed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "passed",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "ViewUpdate",
+              "type": "string"
+            },
+            "revision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "revision",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "eventId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "EventProcessed",
+              "type": "string"
+            },
+            "processingReceipt": {
+              "$ref": "#/$defs/Id"
+            },
+            "subscriptionId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "subscriptionId",
+            "eventId",
+            "processingReceipt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "EndpointProfile": {
+      "enum": [
+        "OpenAiResponses",
+        "CodexSubscriptionResponses",
+        "AnthropicMessages",
+        "ClaudeSubscriptionMessages",
+        "OpenRouterChat",
+        "CompatibleChat",
+        "Embedding"
+      ],
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "IndexFormat": {
+      "enum": [
+        "Scip",
+        "Native"
+      ],
+      "type": "string"
+    },
+    "InvocationEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/ContributionEvent"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "invocationToken": {
+          "$ref": "#/$defs/Id"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "invocationId",
+        "invocationToken",
+        "sequence",
+        "event"
+      ],
+      "type": "object"
+    },
+    "NativeBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "accountRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "contextEpoch": {
+          "$ref": "#/$defs/Counter"
+        },
+        "endpointProfile": {
+          "$ref": "#/$defs/EndpointProfile"
+        },
+        "modelId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "connectionId",
+        "accountRevision",
+        "endpointProfile",
+        "modelId",
+        "contextEpoch"
+      ],
+      "type": "object"
+    },
+    "Progress": {
+      "additionalProperties": false,
+      "properties": {
+        "droppedCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "invocationToken": {
+          "$ref": "#/$defs/Id"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Revision"
+        },
+        "text": {
+          "maxLength": 4096,
+          "type": "string"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "invocationId",
+        "invocationToken",
+        "sequence",
+        "text",
+        "droppedCount"
+      ],
+      "type": "object"
+    },
+    "ProviderCodecEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "$ref": "#/$defs/Id"
+        },
+        "event": {
+          "$ref": "#/$defs/CodecBody"
+        },
+        "requestId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "requestId",
+        "attemptId",
+        "sequence",
+        "event"
+      ],
+      "type": "object"
+    },
+    "QualifiedId": {
+      "pattern": "^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$",
+      "type": "string"
+    },
+    "RawUsageObservation": {
+      "additionalProperties": false,
+      "description": "Codec observations are untrusted; the host adds price classification, route binding and attribution.",
+      "properties": {
+        "cacheWriteTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cachedReadTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reportedCost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReportedCost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ReportedCost": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "pattern": "^[0-9]+(\\.[0-9]+)?$",
+          "type": "string"
+        },
+        "currency": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "type": "object"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RpcVersion": {
+      "enum": [
+        "2.0"
+      ],
+      "type": "string"
+    },
+    "SchemaRef": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "schemaId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "schemaId",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "StreamCredit": {
+      "additionalProperties": false,
+      "properties": {
+        "grantBytes": {
+          "format": "uint32",
+          "maximum": 262144,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "invocationToken": {
+          "$ref": "#/$defs/Id"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Revision"
+        },
+        "streamId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "invocationId",
+        "invocationToken",
+        "streamId",
+        "sequence",
+        "grantBytes"
+      ],
+      "type": "object"
+    },
+    "ToolCallKey": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "$ref": "#/$defs/Id"
+        },
+        "nativeCallId": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        "ordinal": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "attemptId",
+        "nativeCallId",
+        "ordinal"
+      ],
+      "type": "object"
+    },
+    "TurnOutcome": {
+      "enum": [
+        "Completed",
+        "ToolCallsReady",
+        "Incomplete",
+        "Cancelled",
+        "Failed",
+        "OutcomeUnknown"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:package-notification",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "package.progress",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Progress"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "package.event",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/InvocationEvent"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "broker.streamCredit",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/StreamCredit"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "params"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "PackageNotification"
+}

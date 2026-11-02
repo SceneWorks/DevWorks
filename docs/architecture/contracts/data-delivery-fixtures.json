@@ -1,0 +1,660 @@
+[
+  {
+    "id": "immutable-captured-view",
+    "entry": "resolved-view-set",
+    "raw": "{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-hidden-worktree-fallback",
+    "entry": "resolved-view-set",
+    "raw": "{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-branch-parent-mismatch",
+    "entry": "resolved-view-set",
+    "raw": "{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"other\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-duplicate-view-source",
+    "entry": "resolved-view-set",
+    "raw": "{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}},{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-complete-with-gaps",
+    "entry": "resolved-view-set",
+    "raw": "{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[\"missing-unit\"],\"moreGaps\":false}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-mismatched-git-hash-format",
+    "entry": "resolved-view-set",
+    "raw": "{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha256\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "metadata-only-schema-view",
+    "entry": "resolved-view-set",
+    "raw": "{\"pinId\":\"pin-schema\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[],\"schemaViews\":[{\"connectionId\":\"connection-a\",\"snapshotId\":\"schema-snapshot\",\"generationId\":\"schema-generation\",\"schemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"accessRevision\":\"1\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-source-values-in-schema-snapshot",
+    "entry": "resolved-view-set",
+    "raw": "{\"pinId\":\"pin-schema\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[],\"schemaViews\":[{\"connectionId\":\"connection-a\",\"snapshotId\":\"schema-snapshot\",\"generationId\":\"schema-generation\",\"schemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"accessRevision\":\"1\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"sampleRecords\":[{\"password\":\"forbidden\"}]}]}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "graph-Search",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Search\",\"text\":\"Widget\",\"nodeKinds\":[]},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-Overview",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Overview\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-Schema",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Schema\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-Node",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Node\",\"nodeId\":\"node-a\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-Source",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Source\",\"nodeId\":\"node-a\",\"maxLines\":100},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-Traverse",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Traverse\",\"startIds\":[\"node-a\"],\"direction\":\"Forward\",\"edgeKinds\":[],\"maxDepth\":5},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-Path",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Path\",\"fromId\":\"node-a\",\"toId\":\"node-b\",\"maxDepth\":8},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-NodeImpact",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"NodeImpact\",\"nodeId\":\"node-a\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-FileImpact",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"FileImpact\",\"repositoryId\":\"repo-a\",\"unitKey\":\"unit-a\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-NodesByFile",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"NodesByFile\",\"repositoryId\":\"repo-a\",\"unitKey\":\"unit-a\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-RepositoryDependencies",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"RepositoryDependencies\",\"repositoryId\":\"repo-a\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-Consumers",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Consumers\",\"nodeId\":\"node-a\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-Publishers",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Publishers\",\"nodeId\":\"node-a\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-DataLineage",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"DataLineage\",\"nodeId\":\"node-a\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-ScopeStatus",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"ScopeStatus\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-authorized-source-claim",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Overview\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000},\"authorized\":true}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-graph-unbounded-work",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Overview\"},\"limits\":{\"maxResults\":100,\"maxVisited\":1000001,\"deadlineMs\":2000}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-empty-exact-view",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[]},\"query\":{\"kind\":\"Overview\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-raw-sql-query",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"Exact\",\"viewIds\":[\"view-a\"]},\"query\":{\"kind\":\"Overview\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000},\"sql\":\"select private_data\"}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "schema-topology-read",
+    "entry": "graph-read-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"view\":{\"kind\":\"SchemaPublished\",\"connectionIds\":[\"connection-a\"]},\"query\":{\"kind\":\"Overview\"},\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "graph-page-pinned-source",
+    "entry": "graph-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"view\":{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]},\"completion\":\"Complete\",\"result\":{\"kind\":\"Nodes\",\"nodes\":[{\"nodeId\":\"node-a\",\"unitKey\":\"unit-a\",\"kind\":\"function\",\"name\":\"Widget\",\"citation\":{\"source\":{\"kind\":\"Repository\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"sourceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Code\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"firstLine\":1,\"lastLine\":4}}}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-graph-citation-outside-view",
+    "entry": "graph-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"view\":{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]},\"completion\":\"Complete\",\"result\":{\"kind\":\"Nodes\",\"nodes\":[{\"nodeId\":\"node-a\",\"unitKey\":\"unit-a\",\"kind\":\"function\",\"name\":\"Widget\",\"citation\":{\"source\":{\"kind\":\"Repository\",\"snapshot\":{\"repositoryId\":\"repo-other\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"sourceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Code\",\"snapshot\":{\"repositoryId\":\"repo-other\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"firstLine\":1,\"lastLine\":4}}}]}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "source-page-pinned-source",
+    "entry": "graph-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"view\":{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]},\"completion\":\"Complete\",\"result\":{\"kind\":\"Source\",\"citation\":{\"source\":{\"kind\":\"Repository\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"sourceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Code\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"firstLine\":1,\"lastLine\":4}},\"text\":\"fn Widget() {}\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-source-citation-outside-view",
+    "entry": "graph-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"view\":{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]},\"completion\":\"Complete\",\"result\":{\"kind\":\"Source\",\"citation\":{\"source\":{\"kind\":\"Repository\",\"snapshot\":{\"repositoryId\":\"repo-other\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"sourceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Code\",\"snapshot\":{\"repositoryId\":\"repo-other\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"firstLine\":1,\"lastLine\":4}},\"text\":\"fn Widget() {}\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-dangling-graph-result",
+    "entry": "graph-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"view\":{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]},\"completion\":\"Complete\",\"result\":{\"kind\":\"Graph\",\"nodes\":[{\"nodeId\":\"node-a\",\"unitKey\":\"unit-a\",\"kind\":\"function\",\"name\":\"Widget\",\"citation\":{\"source\":{\"kind\":\"Repository\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"sourceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Code\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"unitKey\":\"unit-a\",\"firstLine\":1,\"lastLine\":4}}}],\"edges\":[{\"edgeId\":\"edge-a\",\"sourceId\":\"node-a\",\"targetId\":\"node-missing\",\"kind\":\"calls\",\"producingUnit\":\"unit-a\"}]}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "scoped-hybrid-retrieval",
+    "entry": "retrieval-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"sources\":[\"Document\",\"Knowledge\",\"Code\",\"Convention\"],\"versions\":{\"kind\":\"Current\"},\"input\":{\"kind\":\"Text\",\"text\":\"transaction ownership\"},\"mode\":\"Hybrid\",\"lexicalFallback\":true,\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "exact-space-vector-query",
+    "entry": "retrieval-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"sources\":[\"Document\",\"Knowledge\",\"Code\",\"Convention\"],\"versions\":{\"kind\":\"Current\"},\"input\":{\"kind\":\"Vector\",\"space\":{\"spaceId\":\"space-a\",\"modelDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"dimensions\":2,\"metric\":\"L2\"},\"float32Le\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}},\"mode\":\"Vector\",\"lexicalFallback\":true,\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-vector-shape-mismatch",
+    "entry": "retrieval-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"sources\":[\"Document\",\"Knowledge\",\"Code\",\"Convention\"],\"versions\":{\"kind\":\"Current\"},\"input\":{\"kind\":\"Vector\",\"space\":{\"spaceId\":\"space-a\",\"modelDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"dimensions\":2,\"metric\":\"L2\"},\"float32Le\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"12\",\"mediaType\":\"text/plain\"}},\"mode\":\"Vector\",\"lexicalFallback\":true,\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "exact-old-version-selection",
+    "entry": "retrieval-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"sources\":[\"Document\",\"Knowledge\",\"Code\",\"Convention\"],\"versions\":{\"kind\":\"Exact\",\"versions\":[{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}]},\"input\":{\"kind\":\"Text\",\"text\":\"transaction ownership\"},\"mode\":\"Hybrid\",\"lexicalFallback\":true,\"limits\":{\"maxResults\":100,\"maxVisited\":10000,\"deadlineMs\":2000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "lexical-fallback-is-visible",
+    "entry": "retrieval-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"generationIds\":[\"generation-a\"],\"effectiveMode\":\"Lexical\",\"completion\":\"Complete\",\"passages\":[{\"chunkId\":\"chunk-a\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Text\",\"firstLine\":1,\"lastLine\":3}},\"text\":\"transaction ownership\",\"rank\":1}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-vector-result-without-space",
+    "entry": "retrieval-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"generationIds\":[\"generation-a\"],\"effectiveMode\":\"Vector\",\"completion\":\"Complete\",\"passages\":[{\"chunkId\":\"chunk-a\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Text\",\"firstLine\":1,\"lastLine\":3}},\"text\":\"transaction ownership\",\"rank\":1}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-reversed-citation-range",
+    "entry": "retrieval-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"generationIds\":[\"generation-a\"],\"effectiveMode\":\"Lexical\",\"completion\":\"Complete\",\"passages\":[{\"chunkId\":\"chunk-a\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Text\",\"firstLine\":4,\"lastLine\":1}},\"text\":\"transaction ownership\",\"rank\":1}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-duplicate-passage",
+    "entry": "retrieval-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"generationIds\":[\"generation-a\"],\"effectiveMode\":\"Lexical\",\"completion\":\"Complete\",\"passages\":[{\"chunkId\":\"chunk-a\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Text\",\"firstLine\":1,\"lastLine\":3}},\"text\":\"transaction ownership\",\"rank\":1},{\"chunkId\":\"chunk-a\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Text\",\"firstLine\":1,\"lastLine\":3}},\"text\":\"transaction ownership\",\"rank\":1}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "word-citation-no-invented-page",
+    "entry": "retrieval-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"generationIds\":[\"generation-a\"],\"effectiveMode\":\"Lexical\",\"completion\":\"Complete\",\"passages\":[{\"chunkId\":\"chunk-a\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Docx\",\"part\":\"body-part\",\"paragraph\":3}},\"text\":\"transaction ownership\",\"rank\":1}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-word-page-substitution",
+    "entry": "retrieval-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"generationIds\":[\"generation-a\"],\"effectiveMode\":\"Lexical\",\"completion\":\"Complete\",\"passages\":[{\"chunkId\":\"chunk-a\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Docx\",\"part\":\"body-part\",\"paragraph\":3,\"page\":17}},\"text\":\"transaction ownership\",\"rank\":1}]}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "pdf-version-page-citation",
+    "entry": "retrieval-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-rag\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"generationIds\":[\"generation-a\"],\"effectiveMode\":\"Lexical\",\"completion\":\"Complete\",\"passages\":[{\"chunkId\":\"chunk-a\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Pdf\",\"page\":2}},\"text\":\"transaction ownership\",\"rank\":1}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "sealed-publication-preconditions",
+    "entry": "publication-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"operationId\":\"operation-index\",\"sourceId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"expectedPointerRevision\":\"0\",\"view\":{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}},\"sealedManifest\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-publish-other-source",
+    "entry": "publication-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"operationId\":\"operation-index\",\"sourceId\":\"repo-other\",\"expectedSourceRevision\":\"1\",\"expectedPointerRevision\":\"0\",\"view\":{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}},\"sealedManifest\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-publish-other-revision",
+    "entry": "publication-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"operationId\":\"operation-index\",\"sourceId\":\"repo-a\",\"expectedSourceRevision\":\"2\",\"expectedPointerRevision\":\"0\",\"view\":{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}},\"sealedManifest\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "index-RefreshOverlay",
+    "entry": "index-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"worktreeId\":\"work-a\",\"expectedSourceRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "index-Cancel",
+    "entry": "index-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"Cancel\",\"operationId\":\"operation-index\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "index-SetTrust",
+    "entry": "index-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"SetTrust\",\"repositoryId\":\"repo-a\",\"nodeId\":\"node-a\",\"expectedRevision\":\"1\",\"viewId\":\"view-a\",\"expectedContentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"trusted\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-Save",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"projectId\":\"project-a\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-Replace",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Replace\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\",\"source\":{\"kind\":\"WorkOutput\",\"fileHandle\":\"file-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-Reference",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Reference\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"subject\":{\"kind\":\"root\",\"id\":\"root-a\"},\"expectedRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-DeleteVersion",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"DeleteVersion\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"expectedRevision\":\"1\",\"expectedReferenceRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-DetachProject",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"DetachProject\",\"artifactId\":\"artifact-a\",\"projectId\":\"project-a\",\"expectedReferenceRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-Share",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Share\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-Move",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Move\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-DisableRetrieval",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"DisableRetrieval\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-RemoveIndex",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"RemoveIndex\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-delete-DeleteVersion",
+    "entry": "artifact-deletion-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-delete\",\"deletion\":{\"kind\":\"DeleteVersion\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"expectedRevision\":\"1\",\"expectedReferenceRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-delete-DetachProject",
+    "entry": "artifact-deletion-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-delete\",\"deletion\":{\"kind\":\"DetachProject\",\"artifactId\":\"artifact-a\",\"projectId\":\"project-a\",\"expectedReferenceRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-delete-DeleteArtifact",
+    "entry": "artifact-deletion-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-delete\",\"deletion\":{\"kind\":\"DeleteArtifact\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\",\"expectedReferenceRevision\":\"1\",\"expectedVersionsDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-forged-artifact-origin",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"projectId\":\"project-a\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\",\"originActorId\":\"user\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-arbitrary-artifact-path",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"projectId\":\"project-a\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\",\"path\":\"/private/file\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "artifact-query-List",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"List\",\"projectId\":\"project-a\"},\"limit\":100}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-query-Read",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"Read\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\"},\"limit\":100}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-query-Preview",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"Preview\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\"},\"limit\":100}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-query-Export",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"Export\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\"},\"limit\":100}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "artifact-query-ResolveCitation",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"ResolveCitation\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"locator\":{\"kind\":\"Text\",\"firstLine\":1,\"lastLine\":3}}},\"limit\":100}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "logical-delete-before-unlink",
+    "entry": "artifact-command-reply",
+    "raw": "{\"kind\":\"Recorded\",\"protocol\":\"1.0-draft.1\",\"receipt\":{\"commandId\":\"command-a\",\"committedSequence\":\"1\",\"acceptedAtMs\":\"1\",\"requestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"decision\":{\"kind\":\"VersionUnavailable\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"physicalDeletePending\":true}},\"replayed\":false}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "all-repository-readiness-barrier",
+    "entry": "delivery-barrier",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-b\"}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-cyclic-delivery-order",
+    "entry": "delivery-barrier",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-b\"},{\"before\":\"repo-b\",\"after\":\"repo-a\"}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-unknown-delivery-dependency",
+    "entry": "delivery-barrier",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-unknown\"}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-duplicate-delivery-repository",
+    "entry": "delivery-barrier",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-b\"}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-final-delivery-to-task-branch",
+    "entry": "delivery-barrier",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/codex/task\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-b\"}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-caller-readiness-flag",
+    "entry": "delivery-barrier",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-b\"}],\"allChecksPassed\":true}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "git-Commit",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"git-command\",\"command\":{\"kind\":\"Commit\",\"worktreeId\":\"work-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"message\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "git-Push",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"git-command\",\"command\":{\"kind\":\"Push\",\"worktreeId\":\"work-a\",\"remoteId\":\"remote-a\",\"targetRef\":\"refs/heads/codex/task-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"expectedRemote\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"mode\":\"ForceWithLease\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "git-OpenPullRequest",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"git-command\",\"command\":{\"kind\":\"OpenPullRequest\",\"repositoryId\":\"repo-a\",\"headRef\":\"refs/heads/codex/task-a\",\"baseRef\":\"refs/heads/codex/feature-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"description\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "git-Integrate",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"git-command\",\"command\":{\"kind\":\"Integrate\",\"deliveryId\":\"delivery-a\",\"expectedBarrierRevision\":\"1\",\"repositoryId\":\"repo-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "git-Cleanup",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"git-command\",\"command\":{\"kind\":\"Cleanup\",\"worktreeId\":\"work-a\",\"expectedOwnershipRevision\":\"1\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-main-force-push",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"git-command\",\"command\":{\"kind\":\"Push\",\"worktreeId\":\"work-a\",\"remoteId\":\"remote-a\",\"targetRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"expectedRemote\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"mode\":\"ForceWithLease\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-force-without-remote-lease",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"git-command\",\"command\":{\"kind\":\"Push\",\"worktreeId\":\"work-a\",\"remoteId\":\"remote-a\",\"targetRef\":\"refs/heads/codex/task-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"mode\":\"ForceWithLease\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-git-ref-option-injection",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"git-command\",\"command\":{\"kind\":\"Push\",\"worktreeId\":\"work-a\",\"remoteId\":\"remote-a\",\"targetRef\":\"--delete\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"expectedRemote\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"mode\":\"ForceWithLease\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-cleanup-arbitrary-path",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"git-command\",\"command\":{\"kind\":\"Cleanup\",\"worktreeId\":\"work-a\",\"expectedOwnershipRevision\":\"1\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"path\":\"/\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "feature-complete-separate-cleanup-release-deployment",
+    "entry": "delivery-snapshot",
+    "raw": "{\"deliveryId\":\"delivery-a\",\"revision\":\"1\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observation\":\"Merged\",\"mergeCommit\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}],\"featureComplete\":true,\"cleanupPending\":true,\"releasePending\":true,\"deploymentPending\":true}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-queued-as-feature-complete",
+    "entry": "delivery-snapshot",
+    "raw": "{\"deliveryId\":\"delivery-a\",\"revision\":\"1\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observation\":\"Queued\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"requestTicketId\":\"merge-ticket-a\"}],\"featureComplete\":true,\"cleanupPending\":true,\"releasePending\":true,\"deploymentPending\":true}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "queued-ticket-stays-incomplete",
+    "entry": "delivery-snapshot",
+    "raw": "{\"deliveryId\":\"delivery-a\",\"revision\":\"1\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observation\":\"Queued\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"requestTicketId\":\"merge-ticket-a\"}],\"featureComplete\":false,\"cleanupPending\":true,\"releasePending\":true,\"deploymentPending\":true}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-merged-without-merge-commit",
+    "entry": "delivery-snapshot",
+    "raw": "{\"deliveryId\":\"delivery-a\",\"revision\":\"1\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observation\":\"Merged\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}],\"featureComplete\":true,\"cleanupPending\":true,\"releasePending\":true,\"deploymentPending\":true}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "release-Prepare",
+    "entry": "release-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"release-a\",\"action\":\"Prepare\",\"repositoryId\":\"repo-a\",\"expectedRevision\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"version\":\"v1.2.3-rc.1+build.8\",\"destinationId\":\"destination-a\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"expectedPolicyRevision\":\"1\"}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "release-Publish",
+    "entry": "release-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"release-a\",\"action\":\"Publish\",\"repositoryId\":\"repo-a\",\"expectedRevision\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"version\":\"v1.2.3-rc.1+build.8\",\"destinationId\":\"destination-a\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"expectedPolicyRevision\":\"1\"}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "release-Deploy",
+    "entry": "release-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"release-a\",\"action\":\"Deploy\",\"repositoryId\":\"repo-a\",\"expectedRevision\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"version\":\"v1.2.3-rc.1+build.8\",\"destinationId\":\"destination-a\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"expectedPolicyRevision\":\"1\"}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-release-version-path",
+    "entry": "release-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"release-a\",\"action\":\"Prepare\",\"repositoryId\":\"repo-a\",\"expectedRevision\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"version\":\"../../other\",\"destinationId\":\"destination-a\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"expectedPolicyRevision\":\"1\"}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-release-hash-format-mismatch",
+    "entry": "release-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"release-a\",\"action\":\"Prepare\",\"repositoryId\":\"repo-a\",\"expectedRevision\":{\"format\":\"Sha256\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"version\":\"v1.2.3-rc.1+build.8\",\"destinationId\":\"destination-a\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"expectedPolicyRevision\":\"1\"}",
+    "typedValid": false,
+    "schemaValid": true
+  }
+]

@@ -1,0 +1,11 @@
+flowchart TB
+ A["router.decide command<br/>exact model revision + state + questions"] --> B["Host resolves current model/profile<br/>credential, attribution and price context"]
+ B --> C["Validate known question variants<br/>or registered extension schema"]
+ C --> D["Check top-level and embedded media<br/>authorized artifacts / outbound targets"]
+ D --> E["Journal attempt and dispatch<br/>native SystemOne wire conversion"]
+ E --> F["Structured response + raw evidence<br/>schema validation and usage settlement"]
+ E --> U["Timeout / partial / transport loss<br/>unknown tail held or reconciled"]
+ F --> G["Untrusted decision result<br/>cannot mint approval or execute tools"]
+ T["Chat tiers and pins<br/>no SystemOne membership"] -.-> B
+ classDef gate fill:#fff5df,stroke:#b3843f,color:#4f3a1a;
+ class U,G gate;

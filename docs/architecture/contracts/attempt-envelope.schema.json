@@ -1,0 +1,446 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "AccessMode": {
+      "enum": [
+        "ApiKey",
+        "Subscription",
+        "Local",
+        "Custom"
+      ],
+      "type": "string"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "BoundNativeItem": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "binding": {
+          "$ref": "#/$defs/NativeBinding"
+        }
+      },
+      "required": [
+        "binding",
+        "artifact"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "EffortOption": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "value": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "value",
+        "required"
+      ],
+      "type": "object"
+    },
+    "EndpointProfile": {
+      "enum": [
+        "OpenAiResponses",
+        "CodexSubscriptionResponses",
+        "AnthropicMessages",
+        "ClaudeSubscriptionMessages",
+        "OpenRouterChat",
+        "CompatibleChat",
+        "Embedding"
+      ],
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "InferenceOptions": {
+      "additionalProperties": false,
+      "properties": {
+        "deadlineMs": {
+          "format": "uint32",
+          "maximum": 86400000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EffortOption"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputSchema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchemaRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selection": {
+          "$ref": "#/$defs/ModelSelection"
+        }
+      },
+      "required": [
+        "selection",
+        "deadlineMs"
+      ],
+      "type": "object"
+    },
+    "ModelSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Auto",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Model",
+              "type": "string"
+            },
+            "modelId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "modelId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Pool",
+              "type": "string"
+            },
+            "poolId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "poolId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NativeBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "accountRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "contextEpoch": {
+          "$ref": "#/$defs/Counter"
+        },
+        "endpointProfile": {
+          "$ref": "#/$defs/EndpointProfile"
+        },
+        "modelId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "connectionId",
+        "accountRevision",
+        "endpointProfile",
+        "modelId",
+        "contextEpoch"
+      ],
+      "type": "object"
+    },
+    "PriceBasis": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ReportedPreferred",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "RateSnapshot",
+              "type": "string"
+            },
+            "overrideRevision": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Revision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "snapshotId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "snapshotId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "LocalFree",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Untracked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "QualifiedId": {
+      "pattern": "^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$",
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RouteDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "accessMode": {
+          "$ref": "#/$defs/AccessMode"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/Id"
+        },
+        "attemptNumber": {
+          "$ref": "#/$defs/Revision"
+        },
+        "binding": {
+          "$ref": "#/$defs/NativeBinding"
+        },
+        "capabilityRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "capacityGrantId": {
+          "$ref": "#/$defs/Id"
+        },
+        "catalogRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "connectionRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "credentialRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "pinRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policyRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "priceBasis": {
+          "$ref": "#/$defs/PriceBasis"
+        },
+        "reason": {
+          "$ref": "#/$defs/SelectionReason"
+        },
+        "requestId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "requestId",
+        "attemptId",
+        "attemptNumber",
+        "binding",
+        "accessMode",
+        "connectionRevision",
+        "credentialRevision",
+        "capabilityRevision",
+        "catalogRevision",
+        "policyRevision",
+        "reason",
+        "capacityGrantId",
+        "priceBasis"
+      ],
+      "type": "object"
+    },
+    "SchemaRef": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "schemaId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "schemaId",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "SelectionReason": {
+      "enum": [
+        "Explicit",
+        "SessionPin",
+        "RoundRobin",
+        "Failover"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:attempt-envelope",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cacheEpoch": {
+      "$ref": "#/$defs/Counter"
+    },
+    "contextDigest": {
+      "$ref": "#/$defs/Digest"
+    },
+    "nativeContinuation": {
+      "items": {
+        "$ref": "#/$defs/BoundNativeItem"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "options": {
+      "$ref": "#/$defs/InferenceOptions"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "requestArtifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "route": {
+      "$ref": "#/$defs/RouteDecision"
+    }
+  },
+  "required": [
+    "protocol",
+    "route",
+    "options",
+    "requestArtifact",
+    "contextDigest",
+    "cacheEpoch",
+    "nativeContinuation"
+  ],
+  "title": "AttemptEnvelope",
+  "type": "object"
+}

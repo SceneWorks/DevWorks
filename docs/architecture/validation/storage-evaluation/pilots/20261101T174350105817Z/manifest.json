@@ -1,0 +1,98 @@
+{
+  "phase": "pilot",
+  "created_utc": "20261101T174350105817Z",
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "workspace_lock_sha256": "de4aeb3ae95d95389dac8d0fe5d6486c413fefeffe44884421cc506fc0540f66",
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "logical_cpus": 18
+  },
+  "inference": false,
+  "runs": [
+    {
+      "engine": "overgraph",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 1.8466656249947846,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 7830,
+      "case_errors": [
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=84 stale=[84]",
+        "Deleted vector remained visible: query=167 stale=[167]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=84 stale=[84]",
+        "Deleted vector remained visible after reopen: query=167 stale=[167]"
+      ]
+    },
+    {
+      "engine": "grafeo",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-grafeo",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-grafeo/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-grafeo",
+      "binary_bytes": 14450800,
+      "binary_sha256": "e6eb1c9197026f6fd05b2f9898c5f9ea0baaef9590251297f6e28cdd9ac689c9",
+      "exit_code": 0,
+      "wall_seconds": 1.6212259579915553,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 7830,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-sqlite",
+      "binary_bytes": 3159872,
+      "binary_sha256": "4d67bddb457792cafc98060f8657cf45b5aa7e47cad97be2365b613754093897",
+      "exit_code": 0,
+      "wall_seconds": 0.5602265000343323,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 7830,
+      "case_errors": []
+    },
+    {
+      "engine": "helix",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-helix",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-helix/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-helix",
+      "binary_bytes": 54513280,
+      "binary_sha256": "e7d7783549fd269410a46ee08d8437cf89137078af607b8caa96a2d018202ad5",
+      "exit_code": 0,
+      "wall_seconds": 5.751217040931806,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 7830,
+      "case_errors": []
+    }
+  ]
+}

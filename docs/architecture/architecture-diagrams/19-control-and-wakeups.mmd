@@ -1,0 +1,38 @@
+sequenceDiagram
+ participant U as User / event
+ participant S as Supervisor
+ participant D as SQLite owner
+ participant B as Tool broker
+ participant T as Target
+ rect rgb(244, 248, 252)
+ Note over U,T: Approval completes a saved operation
+ U->>D: Approve exact proposal revision
+ D->>D: Commit decision and deduplicated wakeup
+ D-->>B: Durable work available
+ B->>D: Recheck root, owner, proposal and resources
+ alt Root paused or proposal stale
+ D-->>B: Blocked or revision conflict
+ Note over S,B: Retain approval and wait - no dispatch
+ else Eligible now
+ D->>D: Consume approval and admit same operation
+ D-->>B: Current attempt admitted
+ B->>T: Dispatch saved arguments
+ T-->>B: Actual outcome
+ B->>D: Persist outcome and session event
+ D-->>S: New outcome at next valid turn boundary
+ end
+ end
+ rect rgb(255, 250, 239)
+ Note over U,T: Redirect is independent of Pause
+ U->>D: Redirect affected scope
+ D->>D: Save instruction and fence old pending dispatch
+ D-->>U: Received receipt
+ D-->>S: New instruction revision
+ S->>B: Cancel affected in-flight work
+ B->>T: Contract-specific cancellation
+ T-->>B: Known result or uncertain effect
+ B->>D: Preserve observations and scoped blockers
+ S->>D: Acknowledge at safe context boundary
+ S->>D: Record incorporated assignment / plan
+ Note over S,T: Eligible independent work continues automatically
+ end

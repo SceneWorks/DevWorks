@@ -1,0 +1,101 @@
+{
+  "date": "2026-11-02",
+  "finding": "AR-03",
+  "status": "Resolved architecture/candidate/prototype refinement under user confirmation; native work services unimplemented",
+  "userDecision": "Humans and agents must be able to reprioritize tasks and manage task-blocking dependencies.",
+  "adoptedSemantics": [
+    "Single-item Task/Issue priority edits and bulk tasks.prioritize share revisioned domain policy and history.",
+    "Eligibility first, then descending priority/manual rank/stable tie break; priority cannot waive blockers or preempt running work.",
+    "Standalone ordering uses the existing mixed feature/issue project queue.",
+    "A blocks B is one directed edge with derived Blocked by/Blocks navigation; replace only the target task incoming links.",
+    "Project-scoped links include different features and standalone issues; validate both endpoints, self/duplicate links and the whole project DAG atomically.",
+    "Verified prerequisite completion and ordinary controls govern wakeup/admission; manual Done is not fabricated acceptance.",
+    "New blockers fence affected new dispatch and request safe interruption/reconciliation; completing/removing one blocker cannot clear another pause/approval/budget hold.",
+    "Keep-working must yield an entirely dependency-blocked quiescent root so eligible prerequisites can progress while retaining one active root and coordinator lineage.",
+    "Routine priority/dependency coordination preserves the approved feature plan and does not require another plan approval."
+  ],
+  "catalog": {
+    "operations": 352,
+    "families": 48,
+    "mcpReadCandidates": 95,
+    "mcpCommandCandidates": 58
+  },
+  "schemaChecks": {
+    "schemaFiles": 44,
+    "catalogOperations": 352,
+    "allMessageFixtures": 1074,
+    "newMessageFixtures": 752,
+    "newNegativeFixtures": 64,
+    "scenarios": 12,
+    "scenarioSteps": 26,
+    "allPassed": true
+  },
+  "sqliteChecks": [
+    "cross-feature and standalone links share one project DAG",
+    "blocked high-priority work waits while independent work stays eligible",
+    "cycle refused with prior edge set intact",
+    "self-link refused",
+    "duplicate link refused atomically",
+    "cross-project link refused atomically",
+    "stale dependency edit refused",
+    "second concurrent-intent link cannot close a cycle",
+    "bulk priority and manual order are fenced by one queue-owner revision",
+    "priority changes preserve execution controls",
+    "manual Done does not satisfy verified-acceptance dependency",
+    "accepted prerequisite makes only its eligible dependents ready",
+    "removing a blocker does not clear manual pause"
+  ],
+  "prototypeChecks": [
+    "human_task_editor_updates_priority",
+    "agent_uses_same_task_mutation_boundary",
+    "human_can_add_cross_feature_blocking_link",
+    "standalone_issue_dependency_uses_same_project_graph",
+    "stale_task_edit_and_cross_project_link_refused",
+    "blocked_issue_cannot_start",
+    "self_duplicate_cycle_and_missing_targets_refused_atomically",
+    "blocked_priority_cannot_bypass_prerequisite",
+    "manual_done_is_distinct_from_verified_completion",
+    "dependency_removal_preserves_manual_pause",
+    "bulk_order_checks_queue_revision",
+    "standalone_order_uses_mixed_feature_issue_queue",
+    "routine_coordination_preserves_approved_plan"
+  ],
+  "documents": {
+    "requirementsMatchedInWord": 350,
+    "wordPages": 66,
+    "changedPagesVisuallyReviewed": [
+      18
+    ],
+    "unchangedPages": 65,
+    "readersChecked": 13,
+    "pageErrors": [],
+    "visibleTabsOpened": 0
+  },
+  "noInference": true,
+  "confidence": "High in candidate/fixture/prototype behavior; actual native orchestration and authority remain gated",
+  "limits": [
+    "SQLite checks use actual database mechanics with scripted policy, not a production scheduler/authority adapter.",
+    "Prototype operations and verification are local sample simulations; no real processes, agent work or inference were started.",
+    "DW-012/013/015 retain actual service, graph concurrency, admission fencing, root-mode yield/resume, human/agent UI/tool parity and recovery acceptance.",
+    "Cross-project dependency policy is not introduced by this project-scoped refinement.",
+    "AR-04 through AR-08 remain open."
+  ],
+  "sourceSha256": {
+    "tools/planning/requirements_content.py": "97fd9dec86ae53fe6d37ca47e5ec06395b1a883ac6e45f12aec82641d36a13d8",
+    "docs/planning/requirements-interview.json": "ba3cd1706ac9820fcd1090e525d9bfdf2a4726fbef6b52de15cbab9079712db5",
+    "docs/planning/devworks-requirements.docx": "a0bb63936aa9b7d39f25f32992552c07c27239cc7be1d230075af5eca09eb141",
+    "docs/planning/workbench.js": "df7d8d863524c1e8aaf24213e4cdae18ce2909def995372b67bc1a7296091cad",
+    "docs/planning/harness-workbench.html": "b11f4fd4a6a6311033987af1e22459bb9628f024e1b6ca18cd5d40a79624fedc",
+    "docs/architecture/devworks-architecture.md": "678dec12641c4be32236cde8c2cde585c086c610595584794f74ede331d0dc8d",
+    "docs/architecture/domain-operation-contracts.md": "6d5ed2ded99f65a949434eeb6e329099c6148835ddb89800085be75d08274128",
+    "docs/architecture/architecture-contracts.json": "fa8de2f9b42331c895ad646f5a92db95f7f069d79331bd57ef35eb475997ea5a",
+    "tools/contracts-eval/domain-spec.json": "f57abef86459a36da3422d81d8a75f8ef83188b948b73c607cbb4a5596ba1d89",
+    "tools/contracts-eval/src/domain_rules.rs": "42f513448708ffbc5dac934356c46fb1c7928028414c5341842b18e91e6aa0aa",
+    "tools/contracts-eval/make_domain_fixtures.py": "5bc2f326076f888bfd01de7e543ae8e0ba545ecbe92873549bfea883448c66de",
+    "tools/contracts-eval/probe_task_order_dependencies.py": "12c060ef2b7fbe23a48a9762cbf67e2b8979c5618d6b521971ce21954d93fe0a",
+    "tools/planning/verify_task_order_dependencies.cjs": "a7114f66445c6bfff9ae03a43f167a47f7ebeb40d6e3bd80680b7237ad147d35",
+    "docs/architecture/implementation-slices.json": "9cdea4cddc9b060ba452204700497aa6bca1651b613587c854b576e958197a4c",
+    "docs/architecture/implementation-plan.json": "7605e31103aa4db4e18c7bb6a83d798a93fb7770f6c3d5361e01ffcfcf371c38",
+    "docs/architecture/mcp-publication-candidates.json": "16427e9e074d14fb20e4ccb7840c64f044030285c296b22fa3d816ad6c1881ef"
+  }
+}

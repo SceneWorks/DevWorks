@@ -1,0 +1,17 @@
+flowchart TB
+ TASKS["Parallel task worktrees"] --> GROUP["Task or grouped PRs<br/>to repository feature branches"]
+ GROUP --> FIX["Checks and selected review source<br/>resolve every actionable finding"]
+ FIX --> IMPLEMENT["Feature implementation complete<br/>including required docs and verification"]
+ IMPLEMENT --> FINALS["Final PR to main in every affected repository"]
+ FINALS --> ALL{"All final heads pass<br/>checks and reviews?"}
+ ALL -- No --> FIXFINAL["Repair and refresh affected head evidence"]
+ FIXFINAL --> ALL
+ ALL -- Yes --> BARRIER["Persist readiness barrier and dependency order"]
+ BARRIER --> MERGE["Recheck authority and heads<br/>merge next dependency"]
+ MERGE --> MORE{"More repositories?"}
+ MORE -- Yes --> RECHECK["Revalidate barrier after any code change"]
+ RECHECK --> MERGE
+ MORE -- No --> DONE["All merges observed<br/>feature complete"]
+ DONE --> CLEAN["Owned worktree / local branch cleanup"]
+ DONE --> RELEASE["Separate release / deployment tracking<br/>Ask me by default"]
+ MERGE -. Unusual unresolved failure .-> HOLD["Hold affected delivery and dependents"]

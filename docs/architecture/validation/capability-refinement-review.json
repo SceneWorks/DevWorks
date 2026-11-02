@@ -1,0 +1,163 @@
+{
+  "title": "DevWorks capability and queue architecture refinement review",
+  "date": "2026-11-01",
+  "status": "Source/design/document verification passed; native conformance and performance not run",
+  "confirmedDecision": "OP-03 excludes legacy Shortcut and RabbitMQ integrations",
+  "adoptedDecisions": [
+    "AD-41",
+    "AD-42",
+    "AD-43"
+  ],
+  "requirements": {
+    "count": 341,
+    "confirmed": 204,
+    "proposed": 137,
+    "previous340Preserved": true,
+    "added": [
+      "OP-03"
+    ],
+    "inputSha256": "c15afb75bb4b611c41b9d64dd61847a0f55cf2ab8b480252474ce3c03a39ffbb",
+    "allIdsInWord": true
+  },
+  "inventory": {
+    "sourceRevision": "afe73560215bbe7593fc59451de5cc3237e3eeca",
+    "sourceFiles": 111,
+    "allFileDigestsRechecked": true,
+    "entries": 558,
+    "sourceKinds": {
+      "consumer": 10,
+      "http": 258,
+      "minimal_http": 1,
+      "extractor": 7,
+      "semantic_adapter": 28,
+      "job": 13,
+      "mcp": 115,
+      "resource": 5,
+      "assistant_tool": 18,
+      "index_stage": 16,
+      "work_tool": 30,
+      "ui": 57
+    },
+    "dispositions": {
+      "adapt": 226,
+      "native": 187,
+      "replace": 19,
+      "excluded": 64,
+      "support": 51,
+      "alias": 11
+    },
+    "acceptanceGroups": 33,
+    "workloads": 12,
+    "semanticRuntimeParity": false
+  },
+  "reader": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 32
+      },
+      {
+        "width": 800,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 32
+      }
+    ],
+    "browser": "local headless Chromium; no user-facing tab opened",
+    "decisionRows": 43,
+    "anchors": 6,
+    "localLinksValid": true,
+    "sectionSearch": true,
+    "requirementSearch": true,
+    "statusFilter": true,
+    "pageErrors": []
+  },
+  "capabilityReader": {
+    "status": "Passed documentation interaction checks only",
+    "entries": 558,
+    "acceptanceGroups": 33,
+    "workloads": 12,
+    "widths": [
+      {
+        "width": 1440,
+        "overflow": false
+      },
+      {
+        "width": 800,
+        "overflow": false
+      }
+    ],
+    "excludedFilter": 64,
+    "rabbitMqFilter": 3,
+    "searchAndDetails": true,
+    "localLinksAndAnchorsValid": true,
+    "pageErrors": [],
+    "visibleTabsOpened": 0
+  },
+  "diagrams": {
+    "total": 32,
+    "allXmlValid": true,
+    "changedVisuallyReviewed": [
+      "31-local-event-delivery",
+      "32-capability-validation"
+    ]
+  },
+  "word": {
+    "renderedPages": 67,
+    "changedPagesVisuallyReviewed": [
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53
+    ],
+    "exactPriorBodyMatches": 58,
+    "comparison": "Exact body pixels excluding footer bottom 7 percent against verified security-pass render",
+    "footerNumbersVerified": true
+  },
+  "queueReview": "See queue-dependency-review.json for exact fetched blob identities, primary references, observed versions and limitations",
+  "authoringParser": {
+    "successful": [
+      "tree-sitter0.25.2",
+      "tree-sitter-c-sharp0.23.5"
+    ],
+    "failed": "Initial tree-sitter0.26.0 runs segfaulted; produced no usable inventory"
+  },
+  "notClaimed": [
+    "Native application/queue/SDK implementation",
+    "Executed native acceptance cases or performance workloads",
+    "558 independent retained features",
+    "Whole-project audit/benchmark of channel or broker alternatives",
+    "Exact frozen public schemas or unconditional implementation readiness"
+  ],
+  "confidence": "High in source accounting, recorded scope and reuse recommendation; medium in unexecuted native conformance/engineering budgets",
+  "documentSha256": {
+    "docs/architecture/devworks-architecture.md": "3a91eea35852bfb7e49e4a42a0ec6aea2bfb7581959d8119992739079eff8dab",
+    "docs/architecture/devworks-architecture.html": "d845fe2055d05d7881f608da9d5f51b4c91d7c11c35ce6f9e1fe1a068ef59b33",
+    "docs/architecture/architecture-contracts.json": "3e79744643f26692f147aa14e4800ad6583aaed19ca5de8279810c7b1d94fec3",
+    "docs/architecture/devworks-requirements-traceability.json": "f16eaef63518802e73bb4a93283d48088ad2ed175690002779b4b9cc6e661a6a",
+    "docs/architecture/codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
+    "docs/architecture/capability-validation-contracts.json": "9dd2b17703c7c5ff1bccc2b6e1b2b3279d5914b17d42165a9d6d25c87e9dd822",
+    "docs/architecture/validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
+    "docs/architecture/capability-review.html": "630ee6ee0cd157c1e759baa9adf80c3be0f01948e9e7f44944f6e4f36708f41e",
+    "docs/architecture/capability-inventory-validation.json": "f8385094495d7ea8a0ec9afff80d5a03417924776b6e367ad85918c0b9fa77b4",
+    "docs/architecture/async-queue-options.md": "ad9bb92d842f4bdc6f57cd6f63b10bb5aa8b4186667705f4eed3e448bf76f07d",
+    "docs/architecture/validation/queue-dependency-review.json": "715a7fb43231a9671f09f796719f1cf2e241553be28472cb8cd9a98be80b0081",
+    "docs/planning/requirements-content.json": "c15afb75bb4b611c41b9d64dd61847a0f55cf2ab8b480252474ce3c03a39ffbb",
+    "docs/planning/requirements-interview.json": "ae4d1f96dd6bdc8ef41fcfb560e5ec2dfb3f6e664e28f6a6a040886a56b7f0af",
+    "docs/planning/devworks-requirements.docx": "24fe80b3ac9f89f930df09a9524edebe5abb4ac8a60e3e34741e29c0da7886b3",
+    "tools/planning/inventory_codegraph.py": "1933e9d46ddd957350344fe336771eba37d78a21ae76c483e18d92b64181c1a8",
+    "tools/planning/map_codegraph_inventory.py": "1d9b6a008e2d8bcb868f357790a074e00de0ac52930dc1b401366243605a9553",
+    "tools/planning/build_capability_review.cjs": "352c4921c75dc7719321b86d516da222adf21a2ad52640a1d7917af38ca0fce0",
+    "docs/architecture/architecture-diagrams/31-local-event-delivery.mmd": "77389a94de4d6e8b0d35fbc68dd35bf204399092e945155670e24e60b4f5142a",
+    "docs/architecture/architecture-diagrams/31-local-event-delivery.svg": "fcb4d3f1660ff929258441eba88e6fffa66ae61aeb68f94c267dc33b14cdd5ea",
+    "docs/architecture/architecture-diagrams/32-capability-validation.mmd": "6d9fae3408258144e842309268140a463a48ce04ff3e0ac30c535c1b6a85034b",
+    "docs/architecture/architecture-diagrams/32-capability-validation.svg": "0f73f15be0fea59be54f89c39ed701d5cdd0e9727a8e58f940513b797f5abfca"
+  }
+}

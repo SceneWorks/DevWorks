@@ -1,0 +1,17 @@
+   Compiling eval-common v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/common)
+   Compiling hashlink v0.12.2
+   Compiling rusqlite v0.41.1
+   Compiling eval-helix v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/helix)
+   Compiling eval-grafeo v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/grafeo)
+   Compiling eval-overgraph v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/overgraph)
+   Compiling eval-sqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/sqlite)
+warning: unused dependency `sha2`
+  --> common/Cargo.toml:11:1
+   |
+11 | sha2 = "0.10"
+   | ^^^^^^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `sha2`
+warning: `eval-common` (manifest) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 16.87s

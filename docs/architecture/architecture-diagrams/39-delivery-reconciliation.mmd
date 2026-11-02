@@ -1,0 +1,23 @@
+sequenceDiagram
+    participant D as Delivery coordinator
+    participant A as Repository A
+    participant B as Repository B
+    D->>D: Freeze approved scope and all exact-head evidence
+    D->>D: Validate all readiness and dependency order
+    D->>A: Submit merge with expected head
+    A--xD: Acknowledgment lost
+    D->>D: Record OutcomeUnknown
+    D->>A: Observe ticket and PR merge evidence
+    A-->>D: Merged with actual commit
+    D->>D: Persist A merged without resubmission
+    D->>B: Reobserve expected head and readiness
+    alt B head changed
+        B-->>D: Changed head
+        D->>D: Hold B and retain A merge
+    else B still eligible
+        D->>B: Submit merge
+        B-->>D: Accepted or queued
+        D->>B: Observe PR until authoritative outcome
+        B-->>D: Merged with actual commit
+        D->>D: Complete delivery with separate cleanup and release
+    end

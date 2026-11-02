@@ -1,0 +1,21 @@
+flowchart TB
+ subgraph BACKUP["Manual backup"]
+ START["User starts backup"] --> BARRIER["Persist file-deletion barrier"]
+ BARRIER --> COPY["SQLite backup API to staging<br/>ordinary app writes may continue"]
+ COPY --> FILES["Read copied database reference set<br/>copy immutable retained blobs"]
+ FILES --> VERIFY["Verify database, references, digests and sizes"]
+ VERIFY --> COMPLETE["Flush manifest and completion marker last<br/>publish completed backup; release barrier"]
+ COPY --> FAIL["Failure / cancellation: incomplete destination<br/>never advertised as a valid backup"]
+ FILES --> FAIL
+ VERIFY --> FAIL
+ end
+ subgraph RESTORE["Staged restore"]
+ SELECT["User selects backup and reviews replacement scope"] --> VALIDATE["Quiesce app; validate isolated staged root"]
+ VALIDATE --> JOURNAL["Durable switch journal outside exchanged root"]
+ JOURNAL --> SWAP["Recoverable same-volume root rename"]
+ SWAP --> EPOCH["New restore / boot epoch<br/>old claims and resume capabilities cannot dispatch"]
+ EPOCH --> HOLD["Schedules and keep-working stopped<br/>features / issues require selective Continue"]
+ HOLD --> RECON["Reconcile external facts before later eligible effects<br/>reactivation is explicit"]
+ SWAP --> CRASH["Interrupted switch: journal resumes or rolls back<br/>never mix database and artifact roots"]
+ end
+ COMPLETE -.-> SELECT

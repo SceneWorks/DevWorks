@@ -1,0 +1,131 @@
+{
+  "date": "2026-11-02",
+  "status": "Document QA only; separate from DTO/schema/native acceptance",
+  "visibleTabsOpened": 0,
+  "readers": [
+    {
+      "stem": "devworks-architecture",
+      "imageCount": 43,
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "localLinksChecked": 121,
+      "decisionRows": 71,
+      "filtersVerified": true
+    },
+    {
+      "stem": "domain-operation-contracts",
+      "imageCount": 2,
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "localLinksChecked": 9
+    },
+    {
+      "stem": "domain-operation-reference",
+      "imageCount": 0,
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "localLinksChecked": 21,
+      "qualifiedOperationRows": 347
+    },
+    {
+      "stem": "shared-operation-contracts",
+      "imageCount": 0,
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "localLinksChecked": 10
+    },
+    {
+      "stem": "implementation-plan",
+      "imageCount": 1,
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "localLinksChecked": 67,
+      "sliceAnchors": 62
+    },
+    {
+      "stem": "provider-session-package-contracts",
+      "imageCount": 2,
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "localLinksChecked": 9
+    },
+    {
+      "stem": "data-retrieval-delivery-contracts",
+      "imageCount": 3,
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "localLinksChecked": 8
+    }
+  ],
+  "pageErrors": []
+}

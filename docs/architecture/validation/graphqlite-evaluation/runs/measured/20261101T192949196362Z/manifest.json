@@ -1,0 +1,483 @@
+{
+  "phase": "measured",
+  "created_utc": "20261101T192949196362Z",
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "workspace_lock_sha256": "54f37e01c554f6fba047ba9d66f1104c3d723cf7df7cce781247eba5090164aa",
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "logical_cpus": 18
+  },
+  "inference": false,
+  "order_seed": 67321,
+  "rayon_threads": 4,
+  "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: aarch64-apple-darwin\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3",
+  "cache_policy": "Fresh process/database each case; OS filesystem cache not flushed; queries include first-access and warm samples",
+  "release_profile": {
+    "opt_level": 3,
+    "lto": false,
+    "codegen_units": 16
+  },
+  "runs": [
+    {
+      "engine": "graphqlite",
+      "profile": "small",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-1-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-1-graphqlite",
+      "binary_bytes": 4622320,
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "exit_code": 0,
+      "wall_seconds": 0.9614697501529008,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 63373312,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 11138,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "small",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-1-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-1-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 0.5936307080555707,
+      "process_peak_rss_bytes": 56426496,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 11138,
+      "case_errors": []
+    },
+    {
+      "engine": "graphqlite",
+      "profile": "source",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-1-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-1-graphqlite",
+      "binary_bytes": 4622320,
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "exit_code": 0,
+      "wall_seconds": 24.330554499989375,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 186187776,
+      "nodes": 15587,
+      "edges": 24861,
+      "correctness_checks": 25716,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "source",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-1-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-1-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 2.35858983383514,
+      "process_peak_rss_bytes": 161251328,
+      "nodes": 15587,
+      "edges": 24861,
+      "correctness_checks": 25716,
+      "case_errors": []
+    },
+    {
+      "engine": "graphqlite",
+      "profile": "overlay",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-1-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-1-graphqlite",
+      "binary_bytes": 4622320,
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "exit_code": 0,
+      "wall_seconds": 71.22070566611364,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 303579136,
+      "nodes": 28540,
+      "edges": 46182,
+      "correctness_checks": 38669,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "overlay",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-1-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-1-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 3.027483999961987,
+      "process_peak_rss_bytes": 264519680,
+      "nodes": 28540,
+      "edges": 46182,
+      "correctness_checks": 38669,
+      "case_errors": []
+    },
+    {
+      "engine": "graphqlite",
+      "profile": "small",
+      "iteration": 2,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-2-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-2-graphqlite",
+      "binary_bytes": 4622320,
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "exit_code": 0,
+      "wall_seconds": 1.1011930829845369,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 64946176,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 11138,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "small",
+      "iteration": 2,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-2-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-2-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 0.6181890000589192,
+      "process_peak_rss_bytes": 56115200,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 11138,
+      "case_errors": []
+    },
+    {
+      "engine": "graphqlite",
+      "profile": "source",
+      "iteration": 2,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-2-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-2-graphqlite",
+      "binary_bytes": 4622320,
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "exit_code": 0,
+      "wall_seconds": 25.383900250075385,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 190562304,
+      "nodes": 15587,
+      "edges": 24861,
+      "correctness_checks": 25716,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "source",
+      "iteration": 2,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-2-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-2-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 2.4690991670358926,
+      "process_peak_rss_bytes": 162168832,
+      "nodes": 15587,
+      "edges": 24861,
+      "correctness_checks": 25716,
+      "case_errors": []
+    },
+    {
+      "engine": "graphqlite",
+      "profile": "overlay",
+      "iteration": 2,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-2-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-2-graphqlite",
+      "binary_bytes": 4622320,
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "exit_code": 0,
+      "wall_seconds": 71.9942221250385,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 305102848,
+      "nodes": 28540,
+      "edges": 46182,
+      "correctness_checks": 38669,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "overlay",
+      "iteration": 2,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-2-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-2-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 3.247367999982089,
+      "process_peak_rss_bytes": 264241152,
+      "nodes": 28540,
+      "edges": 46182,
+      "correctness_checks": 38669,
+      "case_errors": []
+    },
+    {
+      "engine": "graphqlite",
+      "profile": "small",
+      "iteration": 3,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-3-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-3-graphqlite",
+      "binary_bytes": 4622320,
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "exit_code": 0,
+      "wall_seconds": 1.107476499862969,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 64438272,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 11138,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "small",
+      "iteration": 3,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-3-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/small-3-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 0.6033372909296304,
+      "process_peak_rss_bytes": 57262080,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 11138,
+      "case_errors": []
+    },
+    {
+      "engine": "graphqlite",
+      "profile": "source",
+      "iteration": 3,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-3-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-3-graphqlite",
+      "binary_bytes": 4622320,
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "exit_code": 0,
+      "wall_seconds": 27.679339332971722,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 183648256,
+      "nodes": 15587,
+      "edges": 24861,
+      "correctness_checks": 25716,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "source",
+      "iteration": 3,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-3-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/source-3-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 2.594429250108078,
+      "process_peak_rss_bytes": 160235520,
+      "nodes": 15587,
+      "edges": 24861,
+      "correctness_checks": 25716,
+      "case_errors": []
+    },
+    {
+      "engine": "graphqlite",
+      "profile": "overlay",
+      "iteration": 3,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-3-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-3-graphqlite",
+      "binary_bytes": 4622320,
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "exit_code": 0,
+      "wall_seconds": 90.261153541971,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 302858240,
+      "nodes": 28540,
+      "edges": 46182,
+      "correctness_checks": 38669,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "overlay",
+      "iteration": 3,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-3-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/measured/20261101T192949196362Z/overlay-3-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 12.64474599994719,
+      "process_peak_rss_bytes": 268337152,
+      "nodes": 28540,
+      "edges": 46182,
+      "correctness_checks": 38669,
+      "case_errors": []
+    }
+  ]
+}

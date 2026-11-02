@@ -1,0 +1,9 @@
+{
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "database": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-helix/database",
+  "output": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174350105817Z/pilot-1-helix/result.json",
+  "limit": 1000,
+  "overlay": false,
+  "samples": 120,
+  "vector_samples": 8
+}

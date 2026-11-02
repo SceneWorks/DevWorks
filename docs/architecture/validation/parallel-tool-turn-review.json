@@ -1,0 +1,71 @@
+{
+  "title": "Independent tool-call failure isolation and proposed turn protocol",
+  "date": "2026-11-01",
+  "status": "TOOL-09 confirmed; concrete envelope, ordered-result and wait/resumption protocols proposed",
+  "requirements": 335,
+  "diagrams": 18,
+  "traceability": "All IDs, statements and statuses match",
+  "word": {
+    "pages": 66,
+    "unchangedPageBodies": 38,
+    "changedPagesVisuallyReviewed": [
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66
+    ],
+    "allRequirementIdsPresent": true,
+    "tool09TextPresent": true,
+    "reviewMethod": "Baseline body comparison; individual page images 39\u201354 and contact sheets 55\u201366"
+  },
+  "readers": {
+    "widths": [
+      1440,
+      800
+    ],
+    "policyPresent": true,
+    "horizontalOverflow": false,
+    "brokenImages": 0,
+    "newDiagramInlineVisuallyReviewed": true
+  },
+  "nativeRuntime": "No product implementation or inference executed",
+  "documentSha256": {
+    "tools/planning/requirements_content.py": "6dd5cae952ce7652a26dccb1c1d5b881674e0e88e558d2c44b0335baeeace6ff",
+    "tools/planning/requirements_expansion.py": "4dbd99d1ff3c04b683743e66c6ba610400927570060bb710ef380dfcbef533c0",
+    "docs/planning/requirements-interview.json": "fa1bca98b2833d8c92906765ab0b069d8b1bf33feb72bcb7fd69ead7485400c3",
+    "docs/planning/requirements-content.json": "6a566e3e7768f415fe7a1b1b6a1967d6b716581e88cee878a5e2214972bce83b",
+    "docs/planning/devworks-requirements.html": "390e9aef35ed828a20a1b6da489a2720777569a8447c1a6edf7db73ed622b1a8",
+    "docs/planning/devworks-requirements.docx": "2a66ce4bc417523c63cc8b1b58d7120fc76867e96a8d306fb859c69b02bf492f",
+    "docs/architecture/devworks-architecture.md": "4e43fc5584917ad60acb68df961a0380cb7fb982a80966ae7fec9c9c662eb1a5",
+    "docs/architecture/devworks-architecture.html": "1e5032c60a04ad2ee885f791d89911ef3fc574a7a2add2d5ab7257a53a079db8",
+    "docs/architecture/devworks-requirements-traceability.json": "af914577f1c75dd31811b69ad0a27230fb2e61bfc76f2ad2099fea4d998dc7e3",
+    "docs/architecture/architecture-contracts.json": "920ee92355b20e0d456f906f85569799654faedf203e25f5355cf9afc505fba4",
+    "docs/architecture/architecture-diagrams/manifest.json": "be08ea399348ccde1c5ad76308a8f84f98119474a65e91ccba3ca75ec398d845",
+    "docs/architecture/architecture-diagrams/18-parallel-tool-turn.mmd": "b3a8a48725c12f0b391204637582beab6b45bc418dbe776ed8f2835b7ba94d8d",
+    "docs/architecture/architecture-diagrams/18-parallel-tool-turn.svg": "2f56363ad0e5e8c0e33086d7b218b4ce103454beef92f7cf58e8144dc5e55d21"
+  }
+}

@@ -1,0 +1,23 @@
+sequenceDiagram
+    participant C as Application command
+    participant S as SQLite write owner
+    participant D as Tokio dispatcher
+    participant H as Native handler
+    C->>S: State change and required delivery intents
+    S->>S: Commit state history event and queue rows
+    S-->>C: Durable receipt
+    S-->>D: Best effort wakeup
+    Note over S,D: Startup and bounded sweep recover missed wakeups
+    D->>S: Claim eligible deliveries within available capacity
+    S-->>D: Owner lease and fencing generation
+    D->>H: Bounded mpsc dispatch
+    H->>S: Recheck control and admit stable operation
+    alt Database-only result
+        H->>S: Commit handler effects delivery completion and follow-ups
+    else External effect
+        H->>H: Dispatch through normal effect broker
+        H->>S: Save observation or Unknown outcome
+        Note over H,S: Lost response requires reconciliation before retry
+    end
+    S-->>D: Durable outcome and eligible wakeups
+    Note over C,H: Feature and issue restart holds still require Continue

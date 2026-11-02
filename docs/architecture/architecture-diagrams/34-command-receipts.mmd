@@ -1,0 +1,25 @@
+sequenceDiagram
+    participant C as UI or tool caller
+    participant G as App gateway
+    participant W as SQLite write owner
+    participant S as Supervisor
+    C->>G: Continue with key K and exact holds
+    G->>G: Bind host authority and validate message
+    G->>W: Look up scoped K then current revisions
+    W->>W: Commit control, decision, receipt and wakeup
+    W--xC: Commit response lost
+    W-->>S: Best effort wakeup hint
+    Note over S,W: Dispatch still checks current authority and blockers
+    C->>G: Retry exact K and normalized command
+    G->>W: Current visibility and receipt lookup
+    W-->>C: Recorded old decision, replayed true
+    Note over C,W: Receipt replay does not dispatch again
+    C->>G: New Pause with key P
+    G->>W: Renew pause latch and control revision
+    W-->>C: Pause accepted, stopping status separate
+    C->>G: Retry old Continue K
+    G->>W: Return original receipt under current visibility
+    W-->>C: Historical decision, newer pause remains
+    C->>G: New Continue with current control and stale hold
+    G->>W: Check current control and covered holds
+    W-->>C: Revision conflict, no holds cleared

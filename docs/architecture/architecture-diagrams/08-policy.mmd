@@ -1,0 +1,17 @@
+flowchart TB
+ CALLER["UI / agent / schedule / package / MCP request"] --> CTX["Host-bound invocation context"]
+ CTX --> SELECT["Shared tool selection and scope"]
+ SELECT --> ROLE["Mandatory role restriction<br/>reviewers read-only"]
+ ROLE --> OWN["Ownership, plan and policy revisions"]
+ OWN --> BOUNDARY["Effective authority and execution boundary<br/>confined requirements never fall back to Full"]
+ BOUNDARY --> TARGET["Resolve target and effect<br/>protected-root / main-ref guards"]
+ TARGET --> DECIDE{"Required approval or resource consent?"}
+ DECIDE -- Pending --> WAIT["Affected hold and notification"]
+ DECIDE -- Valid or not required --> INTENT["Journal durable effect intent"]
+ INTENT --> IO["Adapter dispatch"]
+ IO --> OBS["Observe and reconcile result"]
+ OBS --> CHECK["Reject stale result as current evidence"]
+ SELECT -. Denied .-> DENY["Attributed denial without dispatch"]
+ ROLE -. Denied .-> DENY
+ TARGET -. Denied .-> DENY
+ BOUNDARY -. Unavailable .-> DENY

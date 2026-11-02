@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-02",
+  "scope": "SQLite design-fixture transaction mechanics only; human authority, actual plan adoption, work eligibility and native services remain implementation acceptance",
+  "checks": [
+    "saving pending content preserves the approved plan",
+    "reopen retains approved and pending content separately",
+    "requesting approval does not invalidate the original approval",
+    "rejection preserves the approved plan",
+    "stale draft approval cannot replace the current plan",
+    "interrupted promotion rolls back plan, approval and event together",
+    "approval atomically replaces the plan and clears the one pending slot",
+    "plan approval does not clear a manual pause",
+    "feature owns one plan-state row rather than a plan-version catalog"
+  ],
+  "passed": true,
+  "noInference": true,
+  "schemaSha256": "64c7ca5bcbdd3c31d3572f8622cbf00357aa580305641efd1a9b8e700c049683"
+}

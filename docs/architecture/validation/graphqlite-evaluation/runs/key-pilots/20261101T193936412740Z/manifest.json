@@ -1,0 +1,75 @@
+{
+  "phase": "pilot",
+  "created_utc": "20261101T193936412740Z",
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "workspace_lock_sha256": "54f37e01c554f6fba047ba9d66f1104c3d723cf7df7cce781247eba5090164aa",
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "logical_cpus": 18
+  },
+  "inference": false,
+  "order_seed": 67321,
+  "rayon_threads": 4,
+  "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: aarch64-apple-darwin\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3",
+  "cache_policy": "Fresh process/database each case; OS filesystem cache not flushed; queries include first-access and warm samples",
+  "release_profile": {
+    "opt_level": 3,
+    "lto": false,
+    "codegen_units": 16
+  },
+  "runs": [
+    {
+      "engine": "graphqlite",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/key-pilots/20261101T193936412740Z/pilot-1-graphqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/key-pilots/20261101T193936412740Z/pilot-1-graphqlite",
+      "binary_bytes": 4622432,
+      "binary_sha256": "01eca79c5ad5e3091dcc9e7dbb8b113c0fb5e2379de6bbd61aa8c09f5e2786b6",
+      "exit_code": 0,
+      "wall_seconds": 2.7861516668926924,
+      "extracted_extensions": [
+        {
+          "name": "graphqlite-0.12.0-graphqlite.dylib",
+          "bytes": 854528,
+          "sha256": "46ff8b643847840a48806bfa1ed1bb27762cdbd08a72d7d3b04b4bbae0b2e886"
+        }
+      ],
+      "process_peak_rss_bytes": 64831488,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 7830,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/key-pilots/20261101T193936412740Z/pilot-1-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/key-pilots/20261101T193936412740Z/pilot-1-sqlite",
+      "binary_bytes": 3160256,
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "exit_code": 0,
+      "wall_seconds": 0.5613737078383565,
+      "process_peak_rss_bytes": 55590912,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 7830,
+      "case_errors": []
+    }
+  ]
+}

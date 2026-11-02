@@ -1,0 +1,172 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling tempfile v3.27.0
+   Compiling insta v1.49.0
+   Compiling quote v1.0.47
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling synstructure v0.14.0
+   Compiling darling_core v0.24.1
+   Compiling prettyplease v0.3.0
+   Compiling tracing-attributes v0.1.31
+   Compiling pin-project-internal v1.1.13
+   Compiling thiserror-impl v1.0.69
+   Compiling pear_codegen v0.2.9
+   Compiling serde_derive v1.0.229
+   Compiling tokio-macros v2.7.2
+   Compiling futures-macro v0.3.34
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.7
+   Compiling futures-util v0.3.34
+   Compiling displaydoc v0.2.7
+   Compiling zerofrom v0.1.8
+   Compiling thiserror-impl v2.0.21
+   Compiling yoke v0.8.4
+   Compiling tracing v0.1.44
+   Compiling async-trait v0.1.92
+   Compiling zerovec v0.11.9
+   Compiling serde v1.0.229
+   Compiling zerotrie v0.2.5
+   Compiling thiserror v2.0.21
+   Compiling pin-project v1.1.13
+   Compiling tinystr v0.8.5
+   Compiling potential_utf v0.1.6
+   Compiling ptr_meta_derive v0.3.2
+   Compiling icu_locale_core v2.4.0
+   Compiling icu_collections v2.4.0
+   Compiling bytes v1.12.1
+   Compiling chrono v0.4.45
+   Compiling serde_urlencoded v0.7.1
+   Compiling bincode v2.0.1
+   Compiling tokio v1.54.1
+   Compiling http v1.5.0
+   Compiling icu_provider v2.4.0
+   Compiling icu_normalizer v2.4.0
+   Compiling http-body v1.1.0
+   Compiling icu_properties v2.4.0
+   Compiling idna_adapter v1.2.2
+   Compiling http-body-util v0.1.5
+   Compiling arcstr v1.2.0
+   Compiling idna v1.1.0
+   Compiling halfbrown v0.4.0
+   Compiling bincode v1.3.3
+   Compiling url v2.5.8
+   Compiling value-trait v0.12.3
+   Compiling grafeo-common v0.6.0
+   Compiling futures-executor v0.3.34
+   Compiling ptr_meta v0.3.2
+   Compiling serde_spanned v0.6.9
+   Compiling quick-xml v0.41.0
+   Compiling toml_datetime v0.6.11
+   Compiling tantivy-common v0.11.0
+   Compiling darling_macro v0.24.1
+   Compiling tokio-util v0.7.20
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.6
+   Compiling tower-http v0.6.11
+   Compiling foyer-tokio v0.22.6
+   Compiling h2 v0.4.20
+   Compiling foyer-common v0.22.6
+   Compiling bytemuck_derive v1.12.1
+   Compiling foyer-memory v0.22.6
+   Compiling darling v0.24.1
+   Compiling toml_edit v0.22.27
+   Compiling bytemuck v1.25.2
+   Compiling rancor v0.1.3
+   Compiling futures v0.3.34
+   Compiling simd-json v0.18.1
+   Compiling bytecheck_derive v0.8.3
+   Compiling helix-ast-arena-derive v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling hyper v1.12.0
+   Compiling hyper-util v0.1.21
+   Compiling hyper-rustls v0.27.10
+   Compiling helix-ast v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling reqwest v0.13.5
+   Compiling reqwest v0.12.28
+   Compiling toml v0.8.23
+   Compiling object_store v0.14.2
+   Compiling bytecheck v0.8.3
+   Compiling foyer-storage v0.22.6
+   Compiling bon-macros v3.10.3
+   Compiling grafeo-core v0.6.0
+   Compiling slatedb-common v0.16.0 (https://github.com/HelixDB/slatedb.git?rev=2fb25fdaa61d42cc3756f979a8a7b37dbfc483fd#2fb25fda)
+   Compiling tantivy-stacker v0.7.0
+   Compiling tantivy-sstable v0.7.0
+   Compiling eval-common v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/common)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling thiserror v1.0.69
+   Compiling pear v0.2.9
+   Compiling typetag-impl v0.2.23
+   Compiling munge_macro v0.4.7
+   Compiling ouroboros_macro v0.18.5
+   Compiling munge v0.4.7
+   Compiling figment v0.10.19
+   Compiling typetag v0.2.23
+   Compiling ouroboros v0.18.5
+   Compiling grafeo-adapters v0.6.0
+   Compiling slatedb-txn-obj v0.16.0 (https://github.com/HelixDB/slatedb.git?rev=2fb25fdaa61d42cc3756f979a8a7b37dbfc483fd#2fb25fda)
+   Compiling tantivy-columnar v0.7.0
+   Compiling bon v3.10.3
+   Compiling foyer v0.22.6
+   Compiling helix-planner v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling rend v0.5.4
+   Compiling atomic v0.6.1
+   Compiling grafeo-storage v0.6.0
+   Compiling backon v1.6.0
+   Compiling fail-parallel v0.6.0
+   Compiling tantivy-query-grammar v0.26.0
+   Compiling tantivy-tokenizer-api v0.7.0
+   Compiling ulid v1.2.1
+   Compiling sketches-ddsketch v0.4.2
+   Compiling quick-xml v0.38.4
+   Compiling rust-stemmers v1.2.0
+   Compiling duration-str v0.11.3
+   Compiling rkyv_derive v0.8.18
+   Compiling divan-macros v0.1.21
+   Compiling rkyv v0.8.18
+   Compiling divan v0.1.21
+   Compiling slatedb v0.16.0 (https://github.com/HelixDB/slatedb.git?rev=2fb25fdaa61d42cc3756f979a8a7b37dbfc483fd#2fb25fda)
+   Compiling helix-cypher v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling tantivy v0.26.2
+   Compiling object_store v0.12.5
+   Compiling grafeo-engine v0.6.0
+   Compiling helix-metrics v0.1.1 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling roaring v0.11.5
+   Compiling range-cache v0.1.1
+   Compiling rmp-serde v1.3.1
+   Compiling db v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling overgraph v0.18.0
+   Compiling grafeo v0.6.0
+   Compiling eval-sqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/sqlite)
+   Compiling eval-grafeo v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/grafeo)
+warning: variable does not need to be mutable
+ --> grafeo/src/main.rs:6:9
+  |
+6 |     let mut s = db.session();
+  |         ----^
+  |         |
+  |         help: remove this `mut`
+  |
+  = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `eval-grafeo` (bin "eval-grafeo") generated 1 warning (run `cargo fix --bin "eval-grafeo" -p eval-grafeo` to apply 1 suggestion)
+   Compiling eval-overgraph v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/overgraph)
+   Compiling eval-helix v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/helix)
+warning: unused dependency `serde`
+ --> common/Cargo.toml:9:1
+  |
+9 | serde.workspace = true
+  | ^^^^^
+  |
+  = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `serde`
+warning: unused dependency `serde_json`
+  --> common/Cargo.toml:10:1
+   |
+10 | serde_json.workspace = true
+   | ^^^^^^^^^^
+   |
+help: consider removing the dependency on `serde_json`
+warning: `eval-common` (manifest) generated 2 warnings
+    Finished `release` profile [optimized] target(s) in 2m 44s

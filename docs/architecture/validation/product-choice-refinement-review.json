@@ -1,0 +1,114 @@
+{
+  "title": "DevWorks final product-choice and architecture refinement review",
+  "date": "2026-11-01",
+  "status": "Document/design verification and narrow DOCX body probe passed; production adapter/platform acceptance pending",
+  "confirmedDecisions": [
+    "Initial modern .docx only (RAG-09)",
+    "Scheduled inference usage-only with no job spending limits (JOB-09)"
+  ],
+  "adoptedTechnicalDecisions": [
+    "AD-44",
+    "AD-45",
+    "AD-46",
+    "AD-47"
+  ],
+  "requirements": {
+    "count": 342,
+    "Confirmed": 205,
+    "Proposed": 137,
+    "inputSha256": "d12aafc3f4ac5a4dc5b765dd82a85aefcbdb3ee271b966ea4b8f0c779aaa9096",
+    "previous341IdsAndStatusesPreserved": true,
+    "changedStatements": [
+      "UPDATE-03",
+      "JOB-02",
+      "JOB-06",
+      "RAG-03",
+      "RAG-09"
+    ],
+    "added": [
+      "JOB-09"
+    ],
+    "allIdsInWord": true
+  },
+  "reader": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 33
+      },
+      {
+        "width": 800,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 33
+      }
+    ],
+    "browser": "local headless Chromium; no user-facing tab opened",
+    "decisionRows": 47,
+    "anchors": 4,
+    "localLinksValid": true,
+    "sectionSearch": true,
+    "requirementSearch": true,
+    "statusFilter": true,
+    "pageErrors": []
+  },
+  "word": {
+    "pages": 67,
+    "pageFootersVerified": true,
+    "reviewMethod": "60 first-pass bodies match prior reviewed render; seven first-pass changed bodies inspected; final render matches 62 first-pass reviewed bodies and five final changed bodies inspected",
+    "finalChangedBodiesInspected": [
+      31,
+      44,
+      45,
+      48,
+      49
+    ],
+    "docxSha256": "20bfc9a3d7386b2c1b6bf2c890d2e1136d146a7f179170c389a77efd65979975"
+  },
+  "docxProbe": {
+    "cases": 11,
+    "passed": true,
+    "host": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "scope": "Main-body runs and table paragraphs, selected rejection fixtures, requirements document. Not full OOXML/security/rendering/application/platform acceptance."
+  },
+  "diagram": {
+    "new": "33-app-update",
+    "total": 33,
+    "visualInspection": "Full-size source render and inline 800px reader inspected"
+  },
+  "handoff": "architecture-handoff.md separates interface/backend feasibility from later production acceptance",
+  "noInferenceExecuted": true,
+  "noVisibleBrowserTabOpened": true,
+  "sourceSha256": {
+    "docs/architecture/devworks-architecture.md": "68acd68d49941dc29bdd7d94c6617dd2a78582e36d707bbfc547aa57dce0de0f",
+    "docs/architecture/architecture-handoff.md": "5c13c888a4f3e2c524474f90673a1833e684f84794842e3e942f75561ecc49bf",
+    "tools/document-eval/src/main.rs": "1895b8a560412191381bf55764da9dccafbbee4e25437568657e5692507916af",
+    "tools/document-eval/Cargo.lock": "fc6917ba6ee178332075b6278fc28aca725691ad95dbc33948b791598b2abd54",
+    "tools/document-eval/run_fixtures.py": "4b1ae86a50a7647e5dd04b74bea1b84ec025bd84642750f4a14e43e8b1693b1d"
+  },
+  "capabilityReader": {
+    "status": "Passed documentation interaction checks only",
+    "entries": 558,
+    "acceptanceGroups": 33,
+    "workloads": 12,
+    "widths": [
+      {
+        "width": 1440,
+        "overflow": false
+      },
+      {
+        "width": 800,
+        "overflow": false
+      }
+    ],
+    "excludedFilter": 64,
+    "rabbitMqFilter": 3,
+    "searchAndDetails": true,
+    "localLinksAndAnchorsValid": true,
+    "pageErrors": [],
+    "visibleTabsOpened": 0
+  },
+  "memoryWriteVerified": "Completed: four structured claims and four evidence rows"
+}

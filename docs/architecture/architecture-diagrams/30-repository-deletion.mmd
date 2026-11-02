@@ -1,0 +1,31 @@
+sequenceDiagram
+    participant A as Agent or user
+    participant D as Deletion service
+    participant U as Dedicated user confirmation
+    participant R as Registry and journal
+    participant F as Filesystem adapter
+    A->>D: Propose exact primary repository deletion
+    D->>R: Resolve root identity references and active users
+    R-->>D: Revisioned dependency snapshot
+    D->>U: Preview exact local removal and retained records
+    Note over A,U: Agent operation approval cannot confirm this action
+    U->>D: User confirms bound target and snapshot
+    D->>R: Fence dependent admissions and journal intent
+    D->>D: Stop and reconcile active use
+    D->>R: Recheck identity references and confirmation
+    alt Target changed or users unresolved
+        R-->>D: Block without enlarging target
+        D-->>U: Changed proposal needs review
+    else Confirmed target still valid
+        R-->>D: Admit typed deletion
+        D->>F: Guard roots and use stable handles
+        alt Partial filesystem failure
+            F-->>D: Actual removed and remaining targets
+            D->>R: Save partial outcome and recovery state
+        else Completed
+            F-->>D: Confirmed local source removed
+            D->>R: Save completion and preserve history
+        end
+        D-->>U: Actual outcome and retained remote history artifacts
+    end
+    Note over D,F: Drive and filesystem roots always remain blocked

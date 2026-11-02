@@ -1,0 +1,11 @@
+{
+  "checks": [
+    "new_owned_group",
+    "descendant_inherits_group",
+    "group_cancellation",
+    "direct_child_wait",
+    "descendant_reaped"
+  ],
+  "limits": "Cooperative fixture descendants only; setsid/escaped process, PID reuse, browser and arbitrary toolchain containment not established.",
+  "passed": true
+}

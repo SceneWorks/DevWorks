@@ -1,0 +1,26 @@
+sequenceDiagram
+    participant U as User settings
+    participant P as Policy and journal
+    participant B as Broker
+    participant X as Native or remote execution
+    B->>P: Prepare action under revision N
+    P-->>B: Bound context and expected revisions
+    U->>P: Narrow scope or revoke grant
+    P->>P: Commit N plus 1 and cancellation intent
+    alt Change wins before admission
+        B->>P: Recheck immediately before effect
+        P-->>B: Reject stale authority
+        B-->>X: No dispatch
+    else Action already admitted
+        B->>X: Cancel admitted work
+        X-->>B: Observation or missing response
+        B->>P: Reconcile actual outcome
+        P-->>U: Committed or stopped or Unknown
+    end
+    alt Native process holds broader rights
+        P->>X: Fence broker and terminate owned processes
+        X-->>P: Verified stop or uncertainty
+        P-->>U: Effective narrow mode only after verified stop
+    else No wider native process
+        P-->>U: New effective policy revision
+    end

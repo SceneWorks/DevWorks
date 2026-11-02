@@ -1,0 +1,93 @@
+{
+  "initialize": {
+    "jsonrpc": "2.0",
+    "id": "session-a:h:1",
+    "method": "host.initialize",
+    "params": {
+      "processSessionId": "session-a",
+      "offeredMin": {
+        "major": 1,
+        "minor": 0
+      },
+      "offeredMax": {
+        "major": 1,
+        "minor": 0
+      },
+      "expectedManifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requiredFeatures": [
+        "cancel",
+        "credits"
+      ],
+      "maxFrameBytes": 1048576
+    }
+  },
+  "activate": {
+    "jsonrpc": "2.0",
+    "id": "session-a:h:2",
+    "method": "host.activate",
+    "params": {
+      "processSessionId": "session-a",
+      "registryRevision": "1",
+      "stateGeneration": "1",
+      "configurationRevision": "1"
+    }
+  },
+  "invoke": {
+    "jsonrpc": "2.0",
+    "id": "session-a:h:3",
+    "method": "host.invoke",
+    "params": {
+      "processSessionId": "session-a",
+      "invocationId": "invocation-a",
+      "invocationToken": "token-a",
+      "contributionId": "fixture/tool",
+      "scope": {
+        "kind": "Root",
+        "projectId": "project-a",
+        "rootId": "root-a"
+      },
+      "allowedOperations": [
+        "core/read"
+      ],
+      "registryRevision": "1",
+      "stateGeneration": "1",
+      "authorityRevision": "1",
+      "controlGeneration": "1",
+      "operationId": "op-a",
+      "deadlineMs": 1000,
+      "input": {
+        "artifactId": "artifact-a",
+        "versionId": "version-a",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "byteLength": "2",
+        "mediaType": "application/json"
+      }
+    }
+  },
+  "cancel": {
+    "jsonrpc": "2.0",
+    "id": "session-a:h:4",
+    "method": "host.cancel",
+    "params": {
+      "processSessionId": "session-a",
+      "invocationId": "invocation-a",
+      "cancellationRevision": "1"
+    }
+  },
+  "shutdown": {
+    "jsonrpc": "2.0",
+    "id": "session-a:h:5",
+    "method": "host.shutdown",
+    "params": {
+      "processSessionId": "session-a",
+      "deadlineMs": 1000
+    }
+  },
+  "artifact": {
+    "artifactId": "artifact-a",
+    "versionId": "version-a",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "byteLength": "2",
+    "mediaType": "application/json"
+  }
+}

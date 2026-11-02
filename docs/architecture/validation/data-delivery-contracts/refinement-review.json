@@ -1,0 +1,122 @@
+{
+  "date": "2026-11-01",
+  "status": "Architecture candidates and narrow local experiments verified; no production app, inference, live GitHub or cross-platform qualification",
+  "allChecksPassed": true,
+  "requirements": {
+    "total": 342,
+    "confirmed": 205,
+    "proposed": 137,
+    "unchangedInputSha256": "d12aafc3f4ac5a4dc5b765dd82a85aefcbdb3ee271b966ea4b8f0c779aaa9096"
+  },
+  "candidates": {
+    "schemas": 39,
+    "messages": 322,
+    "newMessages": 94,
+    "operationInputs": 58,
+    "pendingInputs": 287,
+    "families": 47,
+    "operations": 345,
+    "decisions": 61,
+    "diagrams": 39
+  },
+  "nativeStore": {
+    "runtimeChecks": 25,
+    "sqlite": "3.54.1",
+    "sqliteVec": "v0.1.7",
+    "driverFreeCore": true,
+    "adapterLocalSql": true,
+    "transactionScopedBorrows": true,
+    "compileFailDoctest": {
+      "passed": 1,
+      "failed": 0,
+      "observedCommand": "CARGO_TARGET_DIR=.planning-build/data-delivery-contracts/store-target cargo test --locked --release --doc --manifest-path tools/store-port-eval/Cargo.toml",
+      "note": "Observed passing command; store crate source unchanged since that run."
+    }
+  },
+  "temporaryGit": {
+    "checks": 17,
+    "version": "git version 2.53.0",
+    "scriptedGitHubMetadata": true,
+    "temporaryFixturesRemoved": true
+  },
+  "reader": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 39
+      },
+      {
+        "width": 800,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 39
+      }
+    ],
+    "browser": "local headless Chromium; no user-facing tab opened",
+    "decisionRows": 61,
+    "anchors": 4,
+    "localLinksValid": true,
+    "sectionSearch": true,
+    "requirementSearch": true,
+    "statusFilter": true,
+    "pageErrors": []
+  },
+  "detailReader": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false
+      },
+      {
+        "width": 800,
+        "overflow": false
+      }
+    ],
+    "visibleTabsOpened": 0,
+    "localLinksValid": true,
+    "pageErrors": []
+  },
+  "visualInspection": {
+    "reviewed": [
+      "37-exact-graph-view-inline-1440.png",
+      "38-artifact-version-lifecycle-inline-1440.png",
+      "39-delivery-reconciliation-inline-1440.png",
+      "shared-contracts-800.png"
+    ],
+    "note": "Text, wrapping and diagram layout reviewed in local headless screenshots; no visible browser tabs opened."
+  },
+  "limits": [
+    "Small fixture-specific native port subset, not full repositories or async writer/claims/migrations/restore.",
+    "Scalar scoped vector/FTS correctness, not accelerated-index recall or representative performance.",
+    "View reclaimability subset, not full generation/reference garbage collector.",
+    "Real regular Git merges and cleanup with scripted PR/review/check/queue metadata, not actual GitHub qualification.",
+    "Production services, authority enforcement, full operation/result/error surface and target acceptance remain pending."
+  ],
+  "inputSha256": {
+    "tools/store-port-eval/src/core.rs": "7cbf7c9b6369cbd249095d3ebb7a0f297a4c2000676a76f794eebca6b3a9c0f7",
+    "tools/store-port-eval/src/lib.rs": "c21cfe297779932cf0a0938cc06c772f9d961281cd02eb4a593a1ef7e87da571",
+    "tools/store-port-eval/src/main.rs": "157f2ea75d4edb5f447cda3c33c02ffa12dd34df92fc40bcc853caf6a226e73c",
+    "tools/store-port-eval/src/sqlite.rs": "14c9690b786af75b6c322e962b96da224cd5c5a83eec3a2d7c0ca9272098927d",
+    "tools/store-port-eval/Cargo.toml": "e0f5e8a9f5e51fa464a32e6a1e8c53f9bea3ca4b81fa6fef77742029ac4d488e",
+    "tools/store-port-eval/Cargo.lock": "0b79c009f2b33fbb53e7e0dc6888ee46d302e7aca518ab3f4011db9476f072fa",
+    "tools/contracts-eval/probe_git_delivery.py": "6810906d4aa0d90336fba3dd14385ced7d8217fcca9fd9b3903cb7d4e0c408f9",
+    "docs/architecture/persistence-schema.sql": "e7558ecde52496b171bfd8a05acc205a0122b4b1b4b132391dc44a3e8232a508",
+    "docs/architecture/data-retrieval-delivery-contracts.md": "a3068f2859770e7e27010958805eb51eb12a84a9afed45cdbcf70459c63b771b",
+    "docs/architecture/data-retrieval-delivery-contracts.html": "1cf96d5451bae357e7ff71fa0d7af8e814201307cbca2b6c04588c299ba07270",
+    "docs/architecture/devworks-architecture.md": "d865b1036344e41939d5bf348ea1afc0c02430fca4578fc69fef69e5f2503570",
+    "docs/architecture/devworks-architecture.html": "3a6baffe3b846d08f742dfb6aafd24d5ba947039820e83b94ca823e1f0e336d7",
+    "docs/architecture/architecture-handoff.md": "453bbce3cf0b15732e1dfbc0e27e48c11f2d2e7c5d616ba92c5b0b72ff917fe3",
+    "docs/architecture/contracts/manifest.json": "b97592ec12cc1c808071604649d9230bc5ff47198cabecbe0736ed348305cd73",
+    "docs/architecture/contracts/family-coverage.json": "459f5b60e142b6cc42444f4014ae1aa311018c85ccc5abd4345de30f01b07342",
+    "docs/planning/requirements-interview.json": "d91c98da4ba14f70cb1c939040d54f0cc42c2df6bd812782ae35280c60844db8",
+    "docs/planning/requirements-content.json": "d12aafc3f4ac5a4dc5b765dd82a85aefcbdb3ee271b966ea4b8f0c779aaa9096",
+    "docs/architecture/architecture-diagrams/37-exact-graph-view.mmd": "eacda8f04acb569f60748908959547dd0e08be3e130a66aeaaf1798338c858f8",
+    "docs/architecture/architecture-diagrams/37-exact-graph-view.svg": "dd91033b8162d6b5fe4ae57efd918b0c4619ffbba087a0bc8b2ce7781f127521",
+    "docs/architecture/architecture-diagrams/38-artifact-version-lifecycle.mmd": "1849d8245a3cfd95dffc72f99156dd505dc50a73870d67ba579bdb7b130282c6",
+    "docs/architecture/architecture-diagrams/38-artifact-version-lifecycle.svg": "1fa03b03baa083f8d971117385f75598c6c38acdc80fc5daab19bfad6e1fae0a",
+    "docs/architecture/architecture-diagrams/39-delivery-reconciliation.mmd": "de8c3d70dfa25ee67e02c827ab171e98c335ae70d46005501a62484e0f7a5f86",
+    "docs/architecture/architecture-diagrams/39-delivery-reconciliation.svg": "419da65686e2f15c95ff508373707369508d94b2e866bbd4993ea6ca2c55b350"
+  }
+}

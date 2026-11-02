@@ -1,0 +1,38 @@
+{
+  "title": "Explicit authorization for agent and schedule Continue",
+  "date": "2026-11-01",
+  "status": "CONTROL-12 clarified and confirmed; authorization binding/lifetime remains under review",
+  "requirements": 334,
+  "traceability": "All IDs, statements and statuses match",
+  "word": {
+    "pages": 65,
+    "unchangedPageBodies": 62,
+    "changedPages": [
+      14,
+      15,
+      48
+    ],
+    "allRequirementIdsPresent": true,
+    "authorizationTextPresent": true
+  },
+  "readers": {
+    "widths": [
+      1440,
+      800
+    ],
+    "authorizationTextPresent": true,
+    "horizontalOverflow": false,
+    "brokenImages": 0
+  },
+  "nativeRuntime": "No product implementation or inference executed",
+  "documentSha256": {
+    "tools/planning/requirements_content.py": "30fbfaa4e3c96a2c3560154dc4151904d1a17702aa52d902ca1cb7fb764a61e7",
+    "docs/planning/requirements-interview.json": "12c48fd577bd96e7757558bfd7620dc1fb4575f524319dfcda8bde5701b7d802",
+    "docs/planning/requirements-content.json": "962ccddd374c182faaf890671091df55584be109ffdcd462a58cd4970da277aa",
+    "docs/planning/devworks-requirements.html": "23fa0fa3c19a4d3414baed607411c845a15c147c1ac4bbf376c41d1ca79d070e",
+    "docs/planning/devworks-requirements.docx": "e1ffda8d8ab9ad40b00b0b9fadaa469deb4eb964fc94466ef7ea1832e459c39d",
+    "docs/architecture/devworks-architecture.md": "a1a6616b9c8bab433beaae93bdbcf54643f8a6b4c016c371d70d3fd63812c715",
+    "docs/architecture/devworks-architecture.html": "4b678155b0a554fd7c43163129d8092f31a9db44294091d25df89a4496653be3",
+    "docs/architecture/devworks-requirements-traceability.json": "9283117b8fabd4784c5a966f2234bd3fe9b05934cf5923cb5a49d0cfb04234fa"
+  }
+}

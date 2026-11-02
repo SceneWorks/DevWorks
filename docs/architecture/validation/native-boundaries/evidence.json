@@ -1,0 +1,74 @@
+{
+  "status": "Narrow architecture experiments; production integration, shipping provenance, target and security qualification pending",
+  "date": "2026-11-01",
+  "host": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "macOS": "27.0.1"
+  },
+  "toolVersions": {
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)"
+  },
+  "nativeChecks": {
+    "decision-results": 12,
+    "ui-results": 4,
+    "pdf-results": 8,
+    "guards-results": 6,
+    "browser-results": 9
+  },
+  "nativeChecksTotal": 39,
+  "noInference": true,
+  "visibleBrowserTabsOpened": 0,
+  "pdfiumAsset": {
+    "source": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7881/pdfium-mac-arm64.tgz",
+    "sha256": "52e94ca5aa8847934330daf3f8150c190682c5ca93831468794f8b90d4392e40",
+    "archiveBytes": 3533019,
+    "libraryBytes": 7732336,
+    "releaseDigestVerified": true,
+    "shippingApproval": false,
+    "v8": false,
+    "xfa": false,
+    "noticeFilesPreservedWithIgnoredAsset": true
+  },
+  "sourceAndResultSha256": {
+    "tools/native-boundary-eval/src/browser.rs": "a4ebde5969a5210d2a0ddad942a8229c0f4affe6cca792649c9982a56cc04ee3",
+    "tools/native-boundary-eval/src/decision.rs": "e36d18234df6598870914ed5203453e97ef0789242c31812ba8c966a337b19f2",
+    "tools/native-boundary-eval/src/guards.rs": "cd89427182bc1f74b75112484ee0541447c1d2617255b19dcfcfefa88d93ed6f",
+    "tools/native-boundary-eval/src/main.rs": "826b7e13763aaf6aa779bab19c963afd57d49e394af3d31496ee5419208c806d",
+    "tools/native-boundary-eval/src/pdf.rs": "85c82b51fc9a1949d9c792d00ce08e34e68a68aef852fc4e3c039649d7c16b5e",
+    "tools/native-boundary-eval/src/ui.rs": "282d4ab9026ff9475eed7f47e3575c059f0ec447c8e6ab8262528cf3d46f576c",
+    "tools/native-boundary-eval/Cargo.toml": "8f177475ca97a12d29c221fd88283d99605b8bb8363120fbe7f745b84c681e50",
+    "tools/native-boundary-eval/Cargo.lock": "70177731a3ca763259d5f74c8eea5ac43feab6a670e63a18e7e79fb6f04f5f6e",
+    "tools/native-boundary-eval/run.py": "091e6048de975bfcb789f40c4ce49e1d7b146f0ecce5575d5426a5adde3da9e9",
+    "tools/native-boundary-eval/README.md": "9420347903e0d2d1ee53045952fb22607d73c443a3351859e9921221cd6b6b4f",
+    "tools/planning/build_implementation_plan.py": "e640d8412e9fd3773fa2b21ae050e7257a34cd5526a3b6708aab49682b45f338",
+    "tools/planning/build_architecture.cjs": "5132414a1cfa24d4991aee2365068c85aa5220810ff68dfcb078c343c40ec9d6",
+    "tools/planning/verify_native_planning_readers.cjs": "5ea16af59e9c6d32dd7184fbe4f410e8f53c6d83eda7418b59c631da9addef68",
+    "docs/architecture/native-backend-feasibility.md": "a1f28e7eff924b0aea4abe749b9d471e887b1698171e1b0f514ce17d7d99b166",
+    "docs/architecture/implementation-slices.json": "290745fef0830e5ec54398b3a25c9a337f87b11d393bdebf77d1c79cb10bc1d2",
+    "docs/architecture/implementation-plan.json": "1b6d5aa3deb1d971b81b9edcad06bf786fecd05a4ae9ea5cca53d88e42a03316",
+    "docs/architecture/implementation-plan.md": "13a88f1991d920b27b69bb5210111de0fe4d629c6e2145da6efa30c6fdcafaa9",
+    "docs/architecture/validation/native-boundaries/browser-results.json": "ef99facef13f8f6c1c3e11110c65102bfe16a7aaee03f7035f116a4d7a45ec14",
+    "docs/architecture/validation/native-boundaries/decision-results.json": "82f2316287918c32bafd5aa49d4c3d103997483271433feff3470d9eace9dd77",
+    "docs/architecture/validation/native-boundaries/guards-results.json": "2e406f27c12bfc83456f2b75d278674bf3cedc18fb4dc20f128874886920ac71",
+    "docs/architecture/validation/native-boundaries/pdf-results.json": "21aed517588187dc041d93c4c812211b3b9a9332ce0b8da413fdd60cd3d94a85",
+    "docs/architecture/validation/native-boundaries/ui-results.json": "3c2a749860433da0ffab41c519f1b96ef43286654da6b42e8ab439f6414d4d33",
+    "docs/architecture/validation/native-boundaries/reader-checks.json": "063d46733ac4f84c79e82263d223795f3fd702650bea79e99c1378afd3671139"
+  },
+  "ownedFinalFixtureSha256": {
+    "encrypted.pdf": "790df986f1a298babbf041097a285cfaa457333feee37cbed7c433850c120f84",
+    "mixed.pdf": "2f6cef2078d2ee6b67a3ac72702deca706f5154d8f48eb5833b7e93a07b0d4bc",
+    "broken.pdf": "ddf46a1ce7efaa8401ae63dc957c10448baf937d58a8ee1dd599d7d91cd382eb",
+    "scan.png": "39a9ac4c7fa8e2032ca07128272593c6fa28fd1e13413025266adf19fb8784b2"
+  },
+  "limits": [
+    "No production service, host authority or public SDK implemented.",
+    "Headless egui is not an eframe/native window or OS accessibility qualification.",
+    "PDF and browser results do not qualify confinement, full input/protocol surface, supply chain or all target assets.",
+    "Read guards use fixture policy/revision values; no arbitrary executable or destructive operation tested.",
+    "Tier/SystemOne tests use native deterministic fixtures and local HTTP only; full public schemas/durable router/live semantics pending.",
+    "Coverage counts preserve requirement status and are not full contract or production acceptance.",
+    "All 12 production workloads and six target builds remain unexecuted in this pass."
+  ]
+}

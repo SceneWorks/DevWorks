@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-01",
+  "inference": false,
+  "timed_sources_unchanged_after_guard_revision": {
+    "graphqlite/src/adapter.rs": true,
+    "graphqlite/src/cache_profile.rs": true,
+    "common/src/workload.rs": true,
+    "sqlite/src/adapter.rs": true,
+    "Cargo.lock": true
+  },
+  "matrices": {
+    "original": "runs/measured/20261101T192949196362Z/manifest.json",
+    "indexed": "runs/key-measured/20261101T194050977085Z/manifest.json"
+  },
+  "cache_profiles": "runs/key-measured/20261101T194050977085Z/cache-profiles/manifest.json",
+  "freshness_final": "runs/freshness-guard-final-manifest.json",
+  "recovery_final": "runs/recovery-final/20261101T194854608653Z/manifest.json",
+  "published_crate_sha256": "ed8ced3d14c2485f0dad1c96dac2b860675755ef08b609c13762687755e18352",
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "confidence": "High for reproduced local outcomes. Native stale-cache controls are expected observations, not suppressed pass results.",
+  "limitations": [
+    "No power-loss safety claim",
+    "No target Windows/Linux/minimum-macOS qualification",
+    "No full CodeGraph operation acceptance",
+    "No production cache manager or atomic indexing publication implemented"
+  ]
+}

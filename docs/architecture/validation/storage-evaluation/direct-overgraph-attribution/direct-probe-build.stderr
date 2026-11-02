@@ -1,0 +1,21 @@
+   Compiling foldhash v0.2.0
+   Compiling libc v0.2.191
+   Compiling cc v1.10.0
+   Compiling num-traits v0.2.19
+   Compiling either v1.19.0
+   Compiling smallvec v1.16.4
+   Compiling bitflags v2.13.2
+   Compiling hashbrown v0.17.1
+   Compiling rayon v1.12.0
+   Compiling cpufeatures v0.2.17
+   Compiling memmap2 v0.9.12
+   Compiling sha2 v0.10.9
+   Compiling hashlink v0.12.2
+   Compiling libsqlite3-sys v0.39.1
+   Compiling rmp v0.8.15
+   Compiling rmp-serde v1.3.1
+   Compiling overgraph v0.18.0
+   Compiling rusqlite v0.41.1
+   Compiling eval-common v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/common)
+   Compiling eval-overgraph v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/overgraph)
+    Finished `release` profile [optimized] target(s) in 46.32s

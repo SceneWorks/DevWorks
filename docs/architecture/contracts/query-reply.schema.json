@@ -1,0 +1,998 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "Activation": {
+      "additionalProperties": false,
+      "properties": {
+        "executionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "generation": {
+          "$ref": "#/$defs/Revision"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        }
+      },
+      "required": [
+        "executionId",
+        "generation",
+        "phase"
+      ],
+      "type": "object"
+    },
+    "Blocker": {
+      "additionalProperties": false,
+      "properties": {
+        "cause": {
+          "$ref": "#/$defs/Cause"
+        },
+        "holdId": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "subject": {
+          "$ref": "#/$defs/Subject"
+        }
+      },
+      "required": [
+        "holdId",
+        "revision",
+        "subject",
+        "cause"
+      ],
+      "type": "object"
+    },
+    "BlockerChange": {
+      "enum": [
+        "Raised",
+        "Cleared"
+      ],
+      "type": "string"
+    },
+    "Blockers": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Blocker"
+          },
+          "maxItems": 100,
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "Cause": {
+      "enum": [
+        "HumanPause",
+        "RestartContinue",
+        "BudgetContinue",
+        "Approval",
+        "Dependency",
+        "Reconciliation",
+        "Credentials",
+        "Capacity",
+        "StorageUnavailable",
+        "Policy"
+      ],
+      "type": "string"
+    },
+    "ControlReason": {
+      "enum": [
+        "Paused",
+        "Continued"
+      ],
+      "type": "string"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Decision": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "activation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Activation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "clearedHolds": {
+              "items": {
+                "$ref": "#/$defs/HoldRef"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "kind": {
+              "const": "Accepted",
+              "type": "string"
+            },
+            "remaining": {
+              "$ref": "#/$defs/Blockers"
+            },
+            "root": {
+              "$ref": "#/$defs/RootControl"
+            }
+          },
+          "required": [
+            "kind",
+            "root",
+            "clearedHolds",
+            "remaining"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "activation": {
+              "$ref": "#/$defs/Activation"
+            },
+            "kind": {
+              "const": "AlreadyActive",
+              "type": "string"
+            },
+            "root": {
+              "$ref": "#/$defs/RootControl"
+            }
+          },
+          "required": [
+            "kind",
+            "root",
+            "activation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "holds": {
+              "items": {
+                "$ref": "#/$defs/HoldRef"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            },
+            "kind": {
+              "const": "ContinueRequired",
+              "type": "string"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "rootId",
+            "holds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blockers": {
+              "$ref": "#/$defs/Blockers"
+            },
+            "kind": {
+              "const": "Blocked",
+              "type": "string"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "rootId",
+            "blockers"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "$ref": "#/$defs/Revision"
+            },
+            "expected": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "RevisionConflict",
+              "type": "string"
+            },
+            "revisionKind": {
+              "$ref": "#/$defs/RevisionKind"
+            },
+            "subject": {
+              "$ref": "#/$defs/Subject"
+            }
+          },
+          "required": [
+            "kind",
+            "subject",
+            "revisionKind",
+            "expected",
+            "current"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Archived",
+              "type": "string"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "rootId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DesiredState": {
+      "enum": [
+        "Enabled",
+        "Paused"
+      ],
+      "type": "string"
+    },
+    "EligibilityTarget": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "root",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "assignment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Event": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/Subject"
+        },
+        "aggregateRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "aggregateRevisionKind": {
+          "$ref": "#/$defs/RevisionKind"
+        },
+        "commandId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "event": {
+          "$ref": "#/$defs/EventBody"
+        },
+        "eventId": {
+          "$ref": "#/$defs/Id"
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "rootId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "protocol",
+        "eventId",
+        "sequence",
+        "aggregate",
+        "aggregateRevision",
+        "aggregateRevisionKind",
+        "actorId",
+        "occurredAtMs",
+        "event"
+      ],
+      "type": "object"
+    },
+    "EventBody": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "CommandDecided",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "commandId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "RootControlChanged",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/ControlReason"
+            },
+            "root": {
+              "$ref": "#/$defs/RootControl"
+            }
+          },
+          "required": [
+            "kind",
+            "root",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "executionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "generation": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "ActivationRequested",
+              "type": "string"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "rootId",
+            "executionId",
+            "generation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blocker": {
+              "$ref": "#/$defs/Blocker"
+            },
+            "change": {
+              "$ref": "#/$defs/BlockerChange"
+            },
+            "kind": {
+              "const": "BlockerChanged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "blocker",
+            "change"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attemptId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "OperationObserved",
+              "type": "string"
+            },
+            "observation": {
+              "$ref": "#/$defs/ObservationDisposition"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            },
+            "ownerGeneration": {
+              "$ref": "#/$defs/Revision"
+            },
+            "state": {
+              "$ref": "#/$defs/OperationState"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId",
+            "attemptId",
+            "ownerGeneration",
+            "observation",
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HoldRef": {
+      "additionalProperties": false,
+      "properties": {
+        "holdId": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "holdId",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "ObservationDisposition": {
+      "enum": [
+        "CurrentOwner",
+        "StaleOwnerEvidenceOnly"
+      ],
+      "type": "string"
+    },
+    "OperationState": {
+      "enum": [
+        "IntentRecorded",
+        "Preflighted",
+        "Dispatching",
+        "ObservedComplete",
+        "Failed",
+        "OutcomeUnknown",
+        "NeedsInput",
+        "RetryPending",
+        "CancelledBeforeDispatch"
+      ],
+      "type": "string"
+    },
+    "Phase": {
+      "enum": [
+        "Pending",
+        "Claimed",
+        "Running",
+        "Stopping",
+        "Stopped"
+      ],
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "Purpose": {
+      "enum": [
+        "Planning",
+        "Implementation",
+        "Resume"
+      ],
+      "type": "string"
+    },
+    "QueryError": {
+      "enum": [
+        "PermissionDenied",
+        "NotFound",
+        "InvalidRequest",
+        "CursorExpired",
+        "ViewUnavailable",
+        "UnsupportedSchema",
+        "StorageUnavailable"
+      ],
+      "type": "string"
+    },
+    "QueryResult": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "activation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Activation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blockers": {
+              "$ref": "#/$defs/Blockers"
+            },
+            "kind": {
+              "const": "Root",
+              "type": "string"
+            },
+            "root": {
+              "$ref": "#/$defs/RootControl"
+            }
+          },
+          "required": [
+            "kind",
+            "root",
+            "blockers"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blockers": {
+              "$ref": "#/$defs/Blockers"
+            },
+            "eligible": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "Eligibility",
+              "type": "string"
+            },
+            "purpose": {
+              "$ref": "#/$defs/Purpose"
+            },
+            "target": {
+              "$ref": "#/$defs/EligibilityTarget"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "purpose",
+            "eligible",
+            "blockers"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Operation",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryAdvice"
+            },
+            "revision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "state": {
+              "$ref": "#/$defs/OperationState"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId",
+            "revision",
+            "state",
+            "retry"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Receipt",
+              "type": "string"
+            },
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Receipt"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "events": {
+              "items": {
+                "$ref": "#/$defs/Event"
+              },
+              "maxItems": 500,
+              "type": "array"
+            },
+            "hasMore": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "Events",
+              "type": "string"
+            },
+            "nextCursor": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "events",
+            "nextCursor",
+            "hasMore"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReadStamp": {
+      "additionalProperties": false,
+      "properties": {
+        "policyRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "restoreEpoch": {
+          "$ref": "#/$defs/Counter"
+        },
+        "scopeRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Counter"
+        },
+        "storeId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "storeId",
+        "restoreEpoch",
+        "sequence",
+        "policyRevision",
+        "scopeRevision"
+      ],
+      "type": "object"
+    },
+    "Receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "commandId": {
+          "$ref": "#/$defs/Id"
+        },
+        "committedSequence": {
+          "$ref": "#/$defs/Revision"
+        },
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        },
+        "operationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "commandId",
+        "committedSequence",
+        "acceptedAtMs",
+        "requestDigest",
+        "decision"
+      ],
+      "type": "object"
+    },
+    "RetryAdvice": {
+      "enum": [
+        "Never",
+        "SameCommand",
+        "AfterBlockerClears",
+        "ResolveReceipt",
+        "ReconcileOperation",
+        "RefreshAndNewRequest"
+      ],
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RevisionKind": {
+      "enum": [
+        "Work",
+        "Control",
+        "Blocker",
+        "Operation",
+        "Policy",
+        "Scope",
+        "Plan",
+        "Authority"
+      ],
+      "type": "string"
+    },
+    "RootControl": {
+      "additionalProperties": false,
+      "properties": {
+        "desiredState": {
+          "$ref": "#/$defs/DesiredState"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "rootId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "rootId",
+        "revision",
+        "desiredState"
+      ],
+      "type": "object"
+    },
+    "Subject": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "root",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "assignment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "resource",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "blocker",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:query-reply",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "Result",
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "queryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "result": {
+          "$ref": "#/$defs/QueryResult"
+        },
+        "stamp": {
+          "$ref": "#/$defs/ReadStamp"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "queryId",
+        "stamp",
+        "result"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/QueryError"
+        },
+        "correlationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "kind": {
+          "const": "Rejected",
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "queryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryAdvice"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "queryId",
+        "code",
+        "retry",
+        "correlationId"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "QueryReply"
+}

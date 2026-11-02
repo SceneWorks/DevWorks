@@ -1,0 +1,766 @@
+{
+  "source_commit": "4c7022973d37ddfcd54f2a01c176f0dd97cefa9d",
+  "prototype_scope": [
+    {
+      "capability": "Workspace coordinator as primary interface",
+      "source": "User requirement; dedicated workspace-wide coordinator role",
+      "ui": "Default Chat entry; center conversation, right-hand searchable session history with date groups and active selection, dedicated instructions preview, and linked sample answers. Session selection and drafts persist; no conversation dropdown. Tool execution remains simulated."
+    },
+    {
+      "capability": "Project membership across repositories",
+      "source": "CodeGraphWeb/src/app/pages/work/work-project.component.ts",
+      "ui": "Project repository overview and feature repository scope"
+    },
+    {
+      "capability": "Feature backlog and priority",
+      "source": "CodeGraphWeb/src/app/pages/work/work-project.component.ts",
+      "ui": "Searchable, filterable, sortable feature table with manual create/edit/priority controls"
+    },
+    {
+      "capability": "Planning cards and status movement",
+      "source": "CodeGraphWeb/src/app/pages/work/work-feature.component.ts",
+      "ui": "Feature Kanban; drag, keyboard-accessible move, create/edit/archive, dependencies, acceptance"
+    },
+    {
+      "capability": "Knowledge lifecycle",
+      "source": "src/CodeGraph.Data/IKnowledgeStore.cs",
+      "ui": "Record, revise, verify, retract, provenance, revisions, scope"
+    },
+    {
+      "capability": "Claim-centric memory",
+      "source": "CodeGraphWeb/src/app/pages/memory/memory-page.component.html",
+      "ui": "Unified Knowledge collection with Memory/Lesson tags, project/shared scope, evidence and revision history; no separate navigation catalogs."
+    },
+    {
+      "capability": "Lessons and rules",
+      "source": "src/CodeGraph.Models/Work/Lessons.cs",
+      "ui": "Unified Knowledge collection with Memory/Lesson tags, project/shared scope, evidence and revision history; no separate navigation catalogs."
+    },
+    {
+      "capability": "Dreaming",
+      "source": "CodeGraphWeb/src/app/pages/dreaming/dreaming-page.component.html",
+      "ui": "Runs, outcomes, action journal, evidence, reversible writes, versioned instructions and schedule"
+    },
+    {
+      "capability": "Review queue",
+      "source": "CodeGraphWeb/src/app/pages/knowledge/review-queue-page.component.html",
+      "ui": "Conflicts, challenges, proposals, reasons and resolution with explicit blocking scope"
+    },
+    {
+      "capability": "Shared human/agent commands",
+      "source": "src/CodeGraph.Api/Controllers/WorkController.cs",
+      "ui": "Shared work command previews and a simulated agent tool catalog. New management controls mutate local sample state; the production UI and agents must use the same validated application operations. This is not a complete backend/tool executor."
+    },
+    {
+      "capability": "In-app notifications",
+      "source": "User requirement; new interaction design",
+      "ui": "Read/unread notifications with deep links, grouped by actionable decision and activity"
+    }
+  ],
+  "status": "Interactive local design prototype only; provider calls, parsing/indexing, GitHub/database operations, agent execution and computer control are simulated. Uploaded files persist locally in browser IndexedDB.",
+  "requirements_scope": [
+    {
+      "capability": "Repository home and navigation",
+      "status": "Represented in UI study 05; user review and native implementation remain pending.",
+      "source_commit": "bec77ed044d3ace42366c8143444fa82dafde7aa",
+      "discovery_index_commit": "5156046ea90c3cb9c79c64365fa89f55f3b2a8c5",
+      "source_files": [
+        "CodeGraphWeb/src/app/app.routes.ts",
+        "CodeGraphWeb/src/app/pages/repo-detail/repo-detail.component.html",
+        "CodeGraphWeb/src/app/pages/repo-detail/repo-detail-projects.component.html",
+        "CodeGraphWeb/src/app/pages/repo-detail/repo-detail-dependencies.component.html",
+        "CodeGraphWeb/src/app/pages/node-list/node-list.component.html",
+        "CodeGraphWeb/src/app/pages/node-detail/node-detail.component.html",
+        "CodeGraphWeb/src/app/pages/graph/graph-page.component.ts"
+      ],
+      "requirements": [
+        "GRAPH-02",
+        "GRAPH-03",
+        "GRAPH-04"
+      ],
+      "navigation": "Repository home Overview with Nodes/Health/Reviews; code projects and node types to scoped node lists, containers/members, node detail, source and incoming/outgoing/cross-repository relationships; breadcrumbs and return context."
+    },
+    {
+      "capability": "Managed document RAG",
+      "requirements": [
+        "RAG-01",
+        "RAG-02",
+        "RAG-03",
+        "RAG-04",
+        "RAG-05",
+        "RAG-06",
+        "RAG-07",
+        "RAG-09",
+        "RAG-10",
+        "RAG-11",
+        "RAG-12"
+      ],
+      "status": "Represented in UI study 06; native implementation and production acceptance remain pending.",
+      "ui": "Knowledge / Documents, passages/citations, import, share/move, retained managed artifact, extraction/index attempts and retrieval settings. Scoped lexical sample search; no embedding or vision inference executed."
+    },
+    {
+      "capability": "Managed executable add-ons",
+      "requirements": [
+        "EXT-01",
+        "EXT-02",
+        "EXT-03",
+        "EXT-04",
+        "EXT-05",
+        "EXT-06"
+      ],
+      "status": "Represented in UI study 06; native implementation and production acceptance remain pending.",
+      "ui": "Settings / Add-ons: .NET, TypeScript, Swift, Rust packs and harness extensions; contributions/access/dependencies/health/history, install/enable/disable/configure/uninstall, versioned approval and rollback previews; agent context package attribution."
+    },
+    {
+      "capability": "Offline local Help",
+      "requirements": [
+        "HELP-01",
+        "HELP-02",
+        "HELP-03",
+        "HELP-04",
+        "HELP-05",
+        "HELP-06"
+      ],
+      "status": "Represented in UI study 06; native implementation and production acceptance remain pending.",
+      "ui": "Help near Settings, local searchable topics, contextual links on every workspace and Settings section; same content through prototype help tools. Conceptual developer guides; actual SDK/source documentation remains implementation work."
+    },
+    {
+      "capability": "Release update visibility",
+      "requirements": [
+        "UPDATE-01",
+        "UPDATE-02",
+        "UPDATE-03",
+        "UPDATE-04"
+      ],
+      "status": "Represented in UI study 06; native implementation and production acceptance remain pending.",
+      "ui": "Pinned installed version and available-release status in lower-left sidebar, hourly release-check policy, sample background download/cancel, explicit install/restart approval. No release API or installer invoked."
+    },
+    {
+      "capability": "Trust and recovery",
+      "requirements": [
+        "SEC-03",
+        "SEC-04",
+        "SEC-05",
+        "STORE-04"
+      ],
+      "status": "Represented in UI study 06; native implementation and production acceptance remain pending.",
+      "ui": "Access & safety Settings, selected tools/reviewer restrictions, blocked-call rationale, recovery journal preview. Policy and recovery simulation only; not an OS sandbox."
+    },
+    {
+      "capability": "Purposeful architecture and test guidance",
+      "requirements": [
+        "ARCH-07",
+        "ARCH-08",
+        "DOC-01",
+        "DOC-02",
+        "TEST-01",
+        "TEST-02",
+        "TEST-03",
+        "TEST-04",
+        "VIS-01",
+        "VIS-02",
+        "VIS-03"
+      ],
+      "status": "Represented in UI study 06; native implementation and production acceptance remain pending.",
+      "ui": "Local engineering Help and delivery evidence policy: meaningful deterministic unit/integration tests without real inference; separate later live E2E; code and visual documentation obligations. UI diagrams are conceptual, not a detailed architecture design."
+    },
+    {
+      "capability": "Project lifecycle, paths and containers",
+      "requirements": [],
+      "status": "Represented in UI study 06; native implementation and production acceptance remain pending.",
+      "ui": "Project archive confirmation/immediate stop, restore without resume, harness-data-only delete, shared artifact preservation, workspace/project repository directory and container preferences, per-project Keep working and mixed queue. Runtime detection and agent execution remain simulated."
+    },
+    {
+      "capability": "Delivery and inherited GitHub policies",
+      "requirements": [],
+      "status": "Represented in UI study 06; native implementation and production acceptance remain pending.",
+      "ui": "All final PRs gated before dependency-ordered merging; releases/deployments tracked separately; Ask-me action policies inherit to projects/repositories. Issue import/sync overrides and main force-push protection visible."
+    },
+    {
+      "capability": "Ubiquitous current-session workspace coordinator",
+      "requirements": [
+        "UI-11",
+        "UI-12",
+        "UI-13",
+        "COORD-09",
+        "COORD-10"
+      ],
+      "status": "Represented in UI study 07; native runtime implementation remains pending.",
+      "ui": "Toolbar chat icon on all screens; shared Home session, draft, route pin, files and transcript; persistent right sidebar across navigation/projects; explicit close and automatic Home closure; deduplicated host screen notices with selected record, local Help and relevant effective tools; separate feature/issue coordinator transcripts."
+    }
+  ],
+  "prototype_revision": 7,
+  "current_screens": [
+    {
+      "title": "Workspace coordinator",
+      "page": "chat",
+      "parameters": {},
+      "preview": "ui-07/01-chat.png",
+      "coverage": "Primary chat, right-hand session history, router model selector, and file/image attachments."
+    },
+    {
+      "title": "Workspace coordinator beside Dreaming",
+      "page": "dreaming",
+      "parameters": {
+        "coordinator": "open"
+      },
+      "preview": "ui-07/42-dreaming-coordinator.png",
+      "coverage": "Continue the current Home conversation from any screen. Navigation posts screen context with Help and effective tools."
+    },
+    {
+      "title": "Multi-repository project",
+      "page": "overview",
+      "parameters": {},
+      "preview": "ui-07/02-project.png",
+      "coverage": "Repositories, mixed feature/issue priority queue, required input, and current execution policy."
+    },
+    {
+      "title": "Feature backlog",
+      "page": "features",
+      "parameters": {},
+      "preview": "ui-07/03-features.png",
+      "coverage": "Search, filter, prioritize, create and refine features. Open each feature’s planning board."
+    },
+    {
+      "title": "Feature workspace",
+      "page": "feature",
+      "parameters": {
+        "view": "Board"
+      },
+      "preview": "ui-07/04-feature-board.png",
+      "coverage": "Manual Kanban controls alongside coordinator chat, plan readiness, concurrency and spending."
+    },
+    {
+      "title": "Standalone issues",
+      "page": "issues",
+      "parameters": {},
+      "preview": "ui-07/07-issues.png",
+      "coverage": "Local and GitHub-linked issues without synthetic features. Start, pause and Continue."
+    },
+    {
+      "title": "Issue coordinator",
+      "page": "issue",
+      "parameters": {},
+      "preview": "ui-07/08-issue-workspace.png",
+      "coverage": "A dedicated conversation, task history, worktree/branch/PR links and direct delivery to main."
+    },
+    {
+      "title": "Changes across repositories",
+      "page": "feature",
+      "parameters": {
+        "view": "Changes"
+      },
+      "preview": "ui-07/05-feature-changes.png",
+      "coverage": "Read source diffs with the feature conversation and linked repository PR."
+    },
+    {
+      "title": "Feature delivery",
+      "page": "feature",
+      "parameters": {
+        "view": "Delivery"
+      },
+      "preview": "ui-07/06-feature-delivery.png",
+      "coverage": "Task PRs to feature branches, independent review gates, final delivery and cleanup."
+    },
+    {
+      "title": "Agents and sessions",
+      "page": "agents",
+      "parameters": {},
+      "preview": "ui-07/24-agents.png",
+      "coverage": "Coordinator and worker activity, context usage, model route, pause and inspection."
+    },
+    {
+      "title": "Inspect and redirect an agent",
+      "page": "agents",
+      "parameters": {
+        "inspect": "engine-worker"
+      },
+      "preview": "ui-07/27-agent-transcript.png",
+      "coverage": "Transcript, tool calls, context, effective tool access and worktree scope. Redirect at the next safe step."
+    },
+    {
+      "title": "Project artifacts",
+      "page": "artifacts",
+      "parameters": {},
+      "preview": "ui-07/22-artifacts.png",
+      "coverage": "Upload, preview, export and explicitly delete retained files with project/feature/task provenance."
+    },
+    {
+      "title": "Workspace and feature coordinators",
+      "page": "feature",
+      "parameters": {
+        "view": "Board",
+        "coordinator": "open"
+      },
+      "preview": "ui-07/43-feature-global-chat.png",
+      "coverage": "The global Home conversation stays open beside dedicated feature chat, with independent transcripts and current-screen context."
+    },
+    {
+      "title": "Unified Knowledge",
+      "page": "knowledge",
+      "parameters": {},
+      "preview": "ui-07/09-knowledge.png",
+      "coverage": "Memory, facts and lessons in one tagged collection. Search, scope, evidence and revision history."
+    },
+    {
+      "title": "Dreaming",
+      "page": "dreaming",
+      "parameters": {},
+      "preview": "ui-07/25-dreaming.png",
+      "coverage": "Inspect consolidation runs, source verification, changes and unresolved conflicts."
+    },
+    {
+      "title": "Approvals and required input",
+      "page": "reviews",
+      "parameters": {},
+      "preview": "ui-07/10-approvals.png",
+      "coverage": "Conflicts, skill overrides, role revisions and harness installation requests with recorded decisions."
+    },
+    {
+      "title": "Repository home",
+      "page": "repository",
+      "parameters": {
+        "repo": "engine",
+        "tab": "Overview"
+      },
+      "preview": "ui-07/11-repository.png",
+      "coverage": "Overview, code projects, index views, dependencies, health and review entry points."
+    },
+    {
+      "title": "Code graph navigation",
+      "page": "repository",
+      "parameters": {
+        "repo": "engine",
+        "tab": "Graph"
+      },
+      "preview": "ui-07/12-code-graph.png",
+      "coverage": "Follow cross-repository relationships into nodes, source and provenance."
+    },
+    {
+      "title": "Repository health",
+      "page": "repository",
+      "parameters": {
+        "repo": "engine",
+        "tab": "Health"
+      },
+      "preview": "ui-07/13-repository-health.png",
+      "coverage": "Findings, coverage, revision, severity and evidence linked to corrective work."
+    },
+    {
+      "title": "Database schema exploration",
+      "page": "databases",
+      "parameters": {
+        "schema": "Schema"
+      },
+      "preview": "ui-07/14-database-schema.png",
+      "coverage": "Schema-only indexing for SQLite, MariaDB/MySQL, PostgreSQL and SQL Server; no HelixDB source reader."
+    },
+    {
+      "title": "Shared database access",
+      "page": "databases",
+      "parameters": {
+        "schema": "Access"
+      },
+      "preview": "ui-07/15-database-access.png",
+      "coverage": "Share connections across projects with independent access and explicit connection write enablement."
+    },
+    {
+      "title": "Indexing diagnostics",
+      "page": "indexing",
+      "parameters": {},
+      "preview": "ui-07/23-indexing.png",
+      "coverage": "Stages, failures, stale views, optional semantic coverage, retry attempts and exportable logs."
+    },
+    {
+      "title": "Providers and router",
+      "page": "settings",
+      "parameters": {
+        "settings": "Routing"
+      },
+      "preview": "ui-07/17-settings-routing.png",
+      "coverage": "Subscription/API/compatible connections, model catalog, session affinity, failover and cool-off behavior."
+    },
+    {
+      "title": "Review and delivery policy",
+      "page": "settings",
+      "parameters": {
+        "settings": "Delivery"
+      },
+      "preview": "ui-07/18-settings-delivery.png",
+      "coverage": "Workspace defaults with project and repository overrides and visible effective policy."
+    },
+    {
+      "title": "Agent tool selection",
+      "page": "settings",
+      "parameters": {
+        "settings": "Tools"
+      },
+      "preview": "ui-07/19-settings-tools.png",
+      "coverage": "Individual toggles, Select all and read-only selection. Reviewers cannot gain write tools."
+    },
+    {
+      "title": "Skills and shared overrides",
+      "page": "settings",
+      "parameters": {
+        "settings": "Skills"
+      },
+      "preview": "ui-07/20-settings-skills.png",
+      "coverage": "Shared skill discovery and harness-owned skills. Proposed overrides require approval."
+    },
+    {
+      "title": "Scheduled inference and maintenance",
+      "page": "jobs",
+      "parameters": {},
+      "preview": "ui-07/16-jobs.png",
+      "coverage": "App/project scope, prompts, routes, history, run controls, and skipped overlapping occurrences."
+    },
+    {
+      "title": "Usage, costs and prompt caches",
+      "page": "usage",
+      "parameters": {},
+      "preview": "ui-07/21-usage.png",
+      "coverage": "Request attribution, cost estimates, subscription usage and reported/unreported cache metrics."
+    },
+    {
+      "title": "Resource reservations",
+      "page": "resources",
+      "parameters": {},
+      "preview": "ui-07/26-resources.png",
+      "coverage": "Capacity, ownership and waiting work. Desktop control asks OK or Wait while you are active."
+    },
+    {
+      "title": "MCP connections and client access",
+      "page": "settings",
+      "parameters": {
+        "settings": "MCP"
+      },
+      "preview": "ui-07/44-settings-mcp.png",
+      "coverage": "Connect external servers and authorize other harnesses to read indexed code, planned work and Knowledge, with optional command grants."
+    },
+    {
+      "title": "Managed knowledge documents",
+      "page": "knowledge",
+      "parameters": {
+        "knowledge": "Documents"
+      },
+      "preview": "ui-07/28-documents.png",
+      "coverage": "Import Markdown, text, PDF and Word as project artifacts; inspect scope, extraction, embeddings and retained copies."
+    },
+    {
+      "title": "Passages and source citations",
+      "page": "knowledge",
+      "parameters": {
+        "knowledge": "Documents",
+        "doc": "doc-import",
+        "docTab": "Passages"
+      },
+      "preview": "ui-07/29-document-passages.png",
+      "coverage": "Inspect searchable passages with document revisions, chunk identities and heading/page citations."
+    },
+    {
+      "title": "Partial extraction and retry history",
+      "page": "knowledge",
+      "parameters": {
+        "knowledge": "Documents",
+        "doc": "doc-scan",
+        "docTab": "Overview"
+      },
+      "preview": "ui-07/30-document-partial.png",
+      "coverage": "Scanned pages awaiting a vision route stay visibly partial; failed and encrypted sources are never marked complete."
+    },
+    {
+      "title": "Language packs and harness extensions",
+      "page": "settings",
+      "parameters": {
+        "settings": "Addons"
+      },
+      "preview": "ui-07/31-addons.png",
+      "coverage": "Manage optional .NET, TypeScript, Swift and Rust semantic support alongside versioned executable packages."
+    },
+    {
+      "title": "Add-on access and contributions",
+      "page": "settings",
+      "parameters": {
+        "settings": "Addons",
+        "package": "evidence",
+        "packageTab": "Access & contributions"
+      },
+      "preview": "ui-07/32-addon-access.png",
+      "coverage": "Inspect tools, native UI, access, reviewer restrictions and routed inference before activating a package."
+    },
+    {
+      "title": "Agent access and safety",
+      "page": "settings",
+      "parameters": {
+        "settings": "Safety"
+      },
+      "preview": "ui-07/33-safety.png",
+      "coverage": "Configurable trust, selected tools, immutable reviewer restrictions and visible destructive-operation guards."
+    },
+    {
+      "title": "Preferred container runtimes",
+      "page": "settings",
+      "parameters": {
+        "settings": "Containers"
+      },
+      "preview": "ui-07/34-containers.png",
+      "coverage": "Docker, Podman and compatible Apple container preferences with project overrides and honest capability checks."
+    },
+    {
+      "title": "Repository paths and project lifecycle",
+      "page": "settings",
+      "parameters": {
+        "settings": "General"
+      },
+      "preview": "ui-07/35-project-defaults.png",
+      "coverage": "Workspace and project clone directories, archive confirmation and harness-data-only deletion."
+    },
+    {
+      "title": "Document ingestion and retrieval",
+      "page": "settings",
+      "parameters": {
+        "settings": "Knowledge"
+      },
+      "preview": "ui-07/36-document-settings.png",
+      "coverage": "Vision fallback is on by default; choose router paths and inspect the managed-artifact and indexing policies."
+    },
+    {
+      "title": "App updates and restart approval",
+      "page": "settings",
+      "parameters": {
+        "settings": "Updates"
+      },
+      "preview": "ui-07/37-app-updates.png",
+      "coverage": "Hourly release checking, automatic background download and approval before installation; installed version stays visible."
+    },
+    {
+      "title": "Searchable offline Help",
+      "page": "help",
+      "parameters": {
+        "topic": "chat"
+      },
+      "preview": "ui-07/38-help.png",
+      "coverage": "Local, version-matched guidance for every workspace and Settings topic, shared by humans and agents."
+    },
+    {
+      "title": "Local plugin developer guide",
+      "page": "help",
+      "parameters": {
+        "topic": "plugins"
+      },
+      "preview": "ui-07/39-plugin-guide.png",
+      "coverage": "Managed executable extensibility, approvals, permissions and a conceptual lifecycle; the SDK contract remains to be designed."
+    },
+    {
+      "title": "Architecture and test guidance",
+      "page": "help",
+      "parameters": {
+        "topic": "testing"
+      },
+      "preview": "ui-07/40-testing-guide.png",
+      "coverage": "Important unit and integration coverage uses deterministic substitutes, with real-inference E2E reserved for later."
+    },
+    {
+      "title": "Projects and archived work",
+      "page": "portfolio",
+      "parameters": {},
+      "preview": "ui-07/41-project-lifecycle.png",
+      "coverage": "Multi-repository projects, explicit archive/restore and preserved local repositories and GitHub resources."
+    }
+  ],
+  "settings_topics": [
+    "General & repository paths",
+    "Access & safety",
+    "Containers",
+    "Documents & retrieval",
+    "Add-ons",
+    "App updates",
+    "Providers & routing",
+    "MCP connections and client access",
+    "Agent tools",
+    "GitHub account & sync",
+    "Review & delivery",
+    "Agents & context",
+    "Scheduled jobs",
+    "Database connections",
+    "Indexing & operations",
+    "Role instructions",
+    "Skills",
+    "Conventions",
+    "Project workflow",
+    "Notifications & power",
+    "Storage & import"
+  ],
+  "confirmed_update": "Baseline 1.1 adds incoming MCP context access and per-client grants alongside outgoing connections. Revision 07 adds a persistent toolbar coordinator sidebar sharing the active Home session, navigation context, local Help and effective-tool discovery. Revision 06 incorporated managed document RAG, language packs and harness extensions, local Help, update visibility, project paths/lifecycle, containers, access/safety and revised delivery/engineering policies. Product decisions are captured; proposed details and production acceptance remain explicit.",
+  "verification": {
+    "date": "2026-11-01",
+    "prototype_revision": 7,
+    "gallery_previews": 43,
+    "settings_sections": 21,
+    "sidebar_interaction_assertions_passed": 39,
+    "sidebar_coexistence_layout_checks": 61,
+    "desktop_viewports": [
+      "1600x1050",
+      "1280x900"
+    ],
+    "console_errors_observed": 0,
+    "horizontal_overflow_observed": 0,
+    "checks": [
+      "Sidebar starts closed on detailed screen",
+      "Toolbar icon opens right sidebar",
+      "Sidebar uses selected Home conversation",
+      "Home draft is shared with sidebar",
+      "Router model selection is shared",
+      "Pending attachment is shared",
+      "Dreaming navigation posts one context notice",
+      "Screen references matching local Help",
+      "Re-renders do not duplicate navigation notices",
+      "Sidebar can send screen-aware sample message",
+      "Response records screen at message time",
+      "Sent attachment belongs to same transcript",
+      "Sidebar remains open across screen navigation",
+      "Sidebar coexists with feature workspace",
+      "Feature coordinator remains a separate conversation",
+      "Current context identifies selected feature",
+      "Workspace messages do not enter feature transcript",
+      "Sidebar draft survives navigation",
+      "Sidebar remains open across project changes",
+      "Context follows selected project",
+      "Project changes do not create a coordinator session",
+      "Screen inspector exposes relevant effective tools",
+      "Closing a context dialog leaves sidebar open",
+      "Explicit close dismisses sidebar",
+      "Close clears sidebar-opening URL state",
+      "Navigation after close does not reopen sidebar",
+      "Agent screen context stays current while closed",
+      "Closed sidebar stays closed on reload",
+      "Returning Home automatically closes sidebar",
+      "Home keeps its right-hand chat history",
+      "Full chat returns to same session",
+      "Returning Home preserves shared draft",
+      "Home toolbar icon focuses existing chat",
+      "Sidebar follows a newly selected Home session",
+      "Sidebar has no independent session selector",
+      "Sidebar fits smaller desktop without horizontal overflow",
+      "Sidebar remains within viewport",
+      "Closing returns keyboard focus to toolbar icon",
+      "No page errors in sidebar interaction flow"
+    ],
+    "document_requirements_unique_ids": 327,
+    "document_rendered_pages": 64,
+    "document_visual_review": "Changed pages 1,62–64 reviewed individually; other 60 page bodies match the previously reviewed requirements edition.",
+    "visual_review": "Dreaming and feature workspace sidebars reviewed at full size, together with docked Settings at 1600px and overlay Settings at 1280px. All 43 gallery routes render and expose the toolbar chat icon.",
+    "limitations": "Interactive HTML design reference for native Rust/egui. The same local Home session, draft, selected route, attachments and transcript are used by the sidebar. Host-authored page notices and a read-only screen/tool-context preview are functional. Agent/provider execution and external integrations remain simulated; no real inference was invoked."
+  },
+  "product_name": "DevWorks",
+  "previous_verification_revision_6": {
+    "date": "2026-11-01",
+    "prototype_revision": 6,
+    "gallery_previews": 41,
+    "settings_sections": 21,
+    "desktop_viewports": [
+      "1600x1050",
+      "1280x900"
+    ],
+    "interaction_assertions_passed": 83,
+    "interaction_checks": [
+      "Primary chat layout retained",
+      "Installed version visible in sidebar",
+      "Settings renders: General",
+      "Context Help: General",
+      "Settings renders: Routing",
+      "Context Help: Routing",
+      "Settings renders: MCP",
+      "Context Help: MCP",
+      "Settings renders: Tools",
+      "Context Help: Tools",
+      "Settings renders: Safety",
+      "Context Help: Safety",
+      "Settings renders: GitHub",
+      "Context Help: GitHub",
+      "Settings renders: Delivery",
+      "Context Help: Delivery",
+      "Settings renders: Agents",
+      "Context Help: Agents",
+      "Settings renders: Jobs",
+      "Context Help: Jobs",
+      "Settings renders: Databases",
+      "Context Help: Databases",
+      "Settings renders: Indexing",
+      "Context Help: Indexing",
+      "Settings renders: Instructions",
+      "Context Help: Instructions",
+      "Settings renders: Skills",
+      "Context Help: Skills",
+      "Settings renders: Conventions",
+      "Context Help: Conventions",
+      "Settings renders: Workflow",
+      "Context Help: Workflow",
+      "Settings renders: Notifications",
+      "Context Help: Notifications",
+      "Settings renders: Storage",
+      "Context Help: Storage",
+      "Settings renders: Containers",
+      "Context Help: Containers",
+      "Settings renders: Knowledge",
+      "Context Help: Knowledge",
+      "Settings renders: Addons",
+      "Context Help: Addons",
+      "Settings renders: Updates",
+      "Context Help: Updates",
+      "Project path override persists",
+      "Container override persists",
+      "Reviewer policy retained under restricted trust",
+      "Blocked-call rationale is inspectable",
+      "Vision fallback toggle persists",
+      "Passage search returns scoped source evidence",
+      "Citation opens with source revision",
+      "Moved document no longer visible to former project",
+      "Moved document visible in new project",
+      "Move uses same artifact identity",
+      "Imported document survives reload",
+      "Managed document bytes persist in IndexedDB",
+      "Import does not falsely claim inference/indexing completed",
+      "Package proposal binds version and sample contents",
+      "Approval activates reviewed sample package",
+      "Declining update retains installed version",
+      "Help documents corrected integration-test policy",
+      "Agent Help reads same local topic",
+      "Archive warns of immediate stop",
+      "Cancelled archive leaves project active",
+      "Confirmed archive stops affected project work",
+      "Archived project cannot claim work",
+      "Restore does not resume work",
+      "Repository release policy override persists",
+      "No page JavaScript errors in interaction checks",
+      "Removing an index retains the managed artifact",
+      "Shared artifact preserved for remaining project",
+      "Settings topic search returns matches",
+      "Settings search finds container preferences",
+      "Package update records reviewed replacement version",
+      "Package rollback restores prior version",
+      "Agent effective tool list includes local Help",
+      "Agent context shows extension version attribution",
+      "Repository GitHub import override persists",
+      "Local Help search works while offline",
+      "Project deletion preserves repository registrations and resources",
+      "Gallery filters to new document screens",
+      "All 41 gallery preview assets resolve",
+      "No JavaScript errors in edge cases"
+    ],
+    "console_errors_observed": 0,
+    "layout_issues_observed": 0,
+    "final_gallery_assets_missing": 0,
+    "visual_review": "All 41 previews reviewed in six contact sheets; new Documents, Add-ons, Safety, Updates and Help reviewed at full size. Final corrected partial-document, project overview, test guidance and delivery previews reviewed individually. Add-ons and document Settings also reviewed at 1280x900. Sidebar version remains in view.",
+    "limitations": "HTML design reference for the future native Rust/egui app. Inference, indexing/extraction, actual plugin execution, GitHub/database/MCP operations, container control, OS enforcement, update installation and desktop automation are simulated. No real inference was invoked. Imported files retain actual bytes in this browser IndexedDB. Unit/integration and live end-to-end application suites are not implemented by these UI checks."
+  },
+  "typography": {
+    "globalFontIncrease": "1pt",
+    "method": "Additive CSS font-size adjustment; proportional layout and spacing retained",
+    "previewScreensUpdated": 43,
+    "layoutWidthsChecked": [
+      1280,
+      1600
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-02",
+  "requirementsMatched": 350,
+  "implementationPlanDigestsMatched": 8,
+  "wordPages": 66,
+  "changedPages": [
+    "page-11.png",
+    "page-19.png",
+    "page-22.png",
+    "page-28.png",
+    "page-29.png",
+    "page-32.png",
+    "page-33.png",
+    "page-36.png",
+    "page-37.png",
+    "page-50.png",
+    "page-54.png"
+  ],
+  "visualReview": "All eleven changed final pages inspected at readable full-page size; other fifty-five PNGs pixel-identical to the previous visually verified slice. No clipping, overlap or broken tables observed.",
+  "readers": 13,
+  "layouts": [
+    1440,
+    800
+  ],
+  "allPassed": true
+}

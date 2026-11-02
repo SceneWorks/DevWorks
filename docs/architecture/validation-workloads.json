@@ -1,0 +1,123 @@
+{
+  "title": "Representative validation workloads",
+  "date": "2026-11-01",
+  "status": "Adopted workload specifications; no results measured",
+  "measurementPolicy": {
+    "hardware": "Record CPU/cores/RAM/SSD/power/OS/build/GPU/display and binary/dependency digests. Reference latency/RSS budgets assume a 16-GiB SSD workstation; publish constrained-device results separately.",
+    "samples": "20 fresh-process starts; at least 1000 queries after recorded warmup for latency distributions. Include failures, p50/p95/p99 and sample count.",
+    "cache": "Cold-process is a fresh app, not a promise of cold filesystem caches. Record OS cache state.",
+    "corpora": "Freeze seed/generator/version, source digests/counts/topology/dimensions and relevance labels. Synthetic scale does not prove extraction semantics.",
+    "inference": "Precomputed/scripted fixtures only. Live E2E is separately dispatched later.",
+    "memory": "Report core and helper/browser/compiler process-tree RSS and GPU memory separately and combined."
+  },
+  "provisionalBudgets": {
+    "status": "Initial engineering targets on reference hardware; calibrate on first actual build and record reasons for changes. No performance pass or confirmed product measurement.",
+    "firstInteractiveFrameP95Ms": 3000,
+    "idleCoreRssMiB": 200,
+    "idleCpuPercentOfOneCore": 0.5,
+    "coreInstallMiB": 200,
+    "warmBoundedReadP95Ms": 250,
+    "warmDocumentTopKP95Ms": 500,
+    "ordinaryControlAdmissionP95Ms": 100,
+    "frameP95Ms": 33,
+    "coreRssDuringTypicalIndexMiB": 1024
+  },
+  "workloads": [
+    {
+      "id": "W01",
+      "title": "Clean installation and idle",
+      "corpus": "Empty workspace with optional tools/model endpoints absent",
+      "parameters": "20 fresh-process starts; ten-minute settled idle window",
+      "metrics": "first interactive frame, installed bytes, core/process-tree RSS, CPU per core, dynamic dependencies",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W02",
+      "title": "Planning and history",
+      "corpus": "50 projects, 500 features/issues, 10000 tasks, 1000000 history events",
+      "parameters": "100-row pages; eight simultaneous readers/editors",
+      "metrics": "page/filter/edit p50/p95/p99, SQLite/WAL size, RSS, scope correctness",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W03",
+      "title": "Transcript and UI streaming",
+      "corpus": "100000-message conversation with variable text/code and attachments",
+      "parameters": "100 visible rows; 20 scripted streams",
+      "metrics": "input/frame p95/p99, scroll stalls, durable chunk lag, rendered rows, RSS",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W04",
+      "title": "Incremental extraction",
+      "corpus": "500 files/50000 LOC and 10000 files/1000000 LOC; mixed-language frozen sources",
+      "parameters": "1 percent edits; 0.2 percent rename/delete; each semantic pack separately",
+      "metrics": "full/incremental wall time, bytes/files per second, core/helper RSS, publication/cancellation correctness",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W05",
+      "title": "Graph queries",
+      "corpus": "100000 and 1000000 seeded nodes at mean five edges per node, cycles/hubs/cross-repo links; 5000000-node stretch",
+      "parameters": "search, call path, impact, architecture, dependencies at depths 1/3/6",
+      "metrics": "cold-process/warm p50/p95/p99, visited edges, truncation, I/O, scope violations, RSS",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W06",
+      "title": "Overlay publication",
+      "corpus": "Ten divergent worktrees across two projects sharing a baseline",
+      "parameters": "100 changed files per view; moving base during publication",
+      "metrics": "refresh latency, overlay bytes, pin lifetime, wrong-view results, retries",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W07",
+      "title": "Document retrieval",
+      "corpus": "1000/10000 text/PDF/DOCX documents plus scanned-page fixtures; 100000/250000 chunks",
+      "parameters": "384/1536-dimension precomputed vectors; top 10; scripted extraction, no inference",
+      "metrics": "lexical/vector p95, labeled recall, citation accuracy, scope violations, disk/RSS, reindex time",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W08",
+      "title": "Queue saturation and recovery",
+      "corpus": "100000 pending events with four consumers each; ordered and independent partitions",
+      "parameters": "1/4/16 workers; 1 percent fixture failures; 1-KiB payloads",
+      "metrics": "oldest eligible age, delivery lag p95/p99, duplicate effects, control-write latency, backlog bytes, restart time",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W09",
+      "title": "Concurrent application load",
+      "corpus": "Ten work roots with independent default worker allowances, indexing and graph reads",
+      "parameters": "20 scripted streams; 32 active tool calls; 10000 queued jobs",
+      "metrics": "UI/control admission p95, storage fairness, queue lag, core/process-tree RSS, no missed acknowledged outcomes",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W10",
+      "title": "Faults and resource pressure",
+      "corpus": "Commit/publication/dispatch/ack kill points; low disk and unavailable providers/helpers/key stores",
+      "parameters": "before commit; after commit before wakeup; after external fixture commit before ack",
+      "metrics": "lost acknowledged records, duplicate unsafe effects, Unknown reconciliation, independent progress, Continue/restore holds",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W11",
+      "title": "Packages and external tools",
+      "corpus": "Every contribution fixture and local/remote MCP fixtures",
+      "parameters": "20 instances; 10000 replayed events; failed required/optional hooks and updates",
+      "metrics": "pressure, hook latency, quiescence, registry/state identity, revocation, process leakage",
+      "executionStatus": "Not run"
+    },
+    {
+      "id": "W12",
+      "title": "Native platform capabilities",
+      "corpus": "Every adopted OS/CPU/display row and optional helper/browser/desktop/container separately",
+      "parameters": "native hardware for actual graphics/accessibility/power/isolation claims",
+      "metrics": "startup/idle/install by target, permissions, helper coverage, owned-resource shutdown",
+      "executionStatus": "Not run"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+flowchart TB
+ OPEN["App open"] --> RUN["Authorized work and schedules"]
+ RUN --> SLEEP["System sleep"]
+ SLEEP --> WAKE["Wake: reconcile and automatically continue<br/>preserve pre-existing holds"]
+ WAKE --> RUN
+ RUN --> CLOSE["Main window closes<br/>stop admission, persist and exit"]
+ CLOSE --> REOPEN["App reopened"]
+ REOPEN --> WORK["Features / issues remain paused<br/>manual selective Continue"]
+ REOPEN --> JOB["Interrupted scheduled run resumes<br/>same run identity after reconciliation"]
+ REOPEN --> NEXT["Enabled schedules use next future occurrence<br/>missed occurrences remain missed"]
+ REOPEN --> KEEP["Keep-working requires manual restart"]
+ RUN --> ARCH["Confirm active project archival"]
+ ARCH --> STOP["Immediately fence and interrupt project<br/>no safe-step wait"]
+ STOP --> RESTORE["Restore records without resuming<br/>manual reactivation"]

@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-02",
+  "scope": "Mock UI/shared sample operations only; no native scheduling, authority or real evidence qualification",
+  "checks": [
+    "human_task_editor_updates_priority",
+    "agent_uses_same_task_mutation_boundary",
+    "human_can_add_cross_feature_blocking_link",
+    "standalone_issue_dependency_uses_same_project_graph",
+    "stale_task_edit_and_cross_project_link_refused",
+    "blocked_issue_cannot_start",
+    "self_duplicate_cycle_and_missing_targets_refused_atomically",
+    "blocked_priority_cannot_bypass_prerequisite",
+    "manual_done_is_distinct_from_verified_completion",
+    "dependency_removal_preserves_manual_pause",
+    "bulk_order_checks_queue_revision",
+    "standalone_order_uses_mixed_feature_issue_queue",
+    "routine_coordination_preserves_approved_plan"
+  ],
+  "passed": true,
+  "pageErrors": [],
+  "visibleTabsOpened": 0
+}

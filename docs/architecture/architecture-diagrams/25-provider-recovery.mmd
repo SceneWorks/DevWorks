@@ -1,0 +1,15 @@
+flowchart TB
+ FAULT["Stream / transport failure or cancellation"] --> BOUNDARY{"Recorded effect boundary?"}
+ BOUNDARY -- No admitted tool --> PARTIAL["Retain partial output and usage uncertainty<br/>new attributed attempt; no concatenated duplicate"]
+ BOUNDARY -- Tool admitted --> OBSERVE["Read operation journal and observe actual target"]
+ OBSERVE --> KNOWN["Completed result: reuse durable receipt"]
+ OBSERVE --> UNKNOWN["Unknown effect: block operation and dependents<br/>continue independent eligible work"]
+ PARTIAL --> POLICY["Recheck controls, capabilities, budget and route pool"]
+ KNOWN --> POLICY
+ POLICY --> NATIVE{"Safe native continuation available?"}
+ NATIVE -- Yes --> REPLAY["Replay exact eligible native items and known results"]
+ NATIVE -- No --> EPOCH["New context epoch from current instructions<br/>and durable action receipts; retain old attempt"]
+ REPLAY --> PIN["Persist eligible replacement pin when required"]
+ EPOCH --> PIN
+ PIN --> RETRY["Bounded attempt or durable availability wait"]
+ UNKNOWN --> RECON["Decision / evidence wakes reconciliation<br/>no unsafe effect replay"]

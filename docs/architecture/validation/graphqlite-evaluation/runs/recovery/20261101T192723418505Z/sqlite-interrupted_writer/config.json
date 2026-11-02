@@ -1,0 +1,8 @@
+{
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "database": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/recovery/20261101T192723418505Z/sqlite-interrupted_writer/database",
+  "output": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/recovery/20261101T192723418505Z/sqlite-interrupted_writer/result.json",
+  "limit": 9223372036854775807,
+  "action": "interrupted_writer",
+  "signal": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/recovery/20261101T192723418505Z/sqlite-interrupted_writer/ack"
+}

@@ -1,0 +1,86 @@
+{
+  "title": "Rust channel and queue source review",
+  "date": "2026-11-01",
+  "status": "Primary documentation and selected source inspection; no runtime tests",
+  "decision": "Reuse Tokio channels for live communication and atomic application outbox records for durable delivery",
+  "documentation": [
+    {
+      "crate": "tokio",
+      "versionObserved": "1.54.1",
+      "url": "https://docs.rs/tokio/latest/tokio/sync/index.html"
+    },
+    {
+      "crate": "crossbeam-channel",
+      "versionObserved": "0.5.17",
+      "url": "https://docs.rs/crossbeam-channel/latest/crossbeam_channel/"
+    },
+    {
+      "crate": "flume",
+      "versionObserved": "0.12.0",
+      "url": "https://docs.rs/flume/latest/flume/"
+    }
+  ],
+  "sourceFiles": [
+    {
+      "repository": "rid3thespiral/msg-broker-rust",
+      "path": "Cargo.toml",
+      "gitBlobSha": "6ba027aec20fcfbffd0393c39385ccf38e0f870e",
+      "url": "https://github.com/rid3thespiral/msg-broker-rust/blob/main/Cargo.toml",
+      "contentAvailableAtReview": true
+    },
+    {
+      "repository": "rid3thespiral/msg-broker-rust",
+      "path": "src/lib.rs",
+      "gitBlobSha": "d094e1d26dbde94482b70c92435cac5e5cc883d3",
+      "url": "https://github.com/rid3thespiral/msg-broker-rust/blob/main/src/lib.rs",
+      "contentAvailableAtReview": true
+    },
+    {
+      "repository": "rid3thespiral/msg-broker-rust",
+      "path": "src/broker/core.rs",
+      "gitBlobSha": "139eb73de15917d7e155e388a5d88120f3c51f53",
+      "url": "https://github.com/rid3thespiral/msg-broker-rust/blob/main/src/broker/core.rs",
+      "contentAvailableAtReview": true
+    },
+    {
+      "repository": "rid3thespiral/msg-broker-rust",
+      "path": "src/storage/commit_log.rs",
+      "gitBlobSha": "0f061808624d0af0b384ff97ee291bcec7d7758c",
+      "url": "https://github.com/rid3thespiral/msg-broker-rust/blob/main/src/storage/commit_log.rs",
+      "contentAvailableAtReview": true
+    },
+    {
+      "repository": "robustmq/robustmq",
+      "path": "Cargo.toml",
+      "gitBlobSha": "4eb7cb99cc3b6148920d687cd9e56127dd130d96",
+      "url": "https://github.com/robustmq/robustmq/blob/main/Cargo.toml",
+      "contentAvailableAtReview": true
+    },
+    {
+      "repository": "apalis-dev/apalis-sqlite",
+      "path": "Cargo.toml",
+      "gitBlobSha": "185becdf6fe3671bf2b80b861b2911363af408aa",
+      "url": "https://github.com/apalis-dev/apalis-sqlite/blob/main/Cargo.toml",
+      "contentAvailableAtReview": true
+    },
+    {
+      "repository": "apalis-dev/apalis-sqlite",
+      "path": "src/lib.rs",
+      "gitBlobSha": "22f02fff671075f5124c2030ee8af059a75f64b5",
+      "url": "https://github.com/apalis-dev/apalis-sqlite/blob/main/src/lib.rs",
+      "contentAvailableAtReview": true
+    }
+  ],
+  "observations": [
+    "msg-broker-rust provides an embedded API; inspected subscribe uses unbounded Tokio receiver",
+    "msg-broker-rust consumer groups keep current_offset in in-memory HashMap; inspected file append flushes with no sync_all/sync_data in that path",
+    "RobustMQ article describes broker/meta/journal components; current workspace has broker/storage/meta/admin modules",
+    "apalis-sqlite 1.0.0 inspected setup selects synchronous=OFF and uses SQLx persistence; not adopted unchanged"
+  ],
+  "limits": [
+    "No whole-project security/correctness audit",
+    "No benchmark or native queue/framework build",
+    "File blob hashes identify fetched contents; default branch URLs are mutable",
+    "Observed library versions are not frozen DevWorks release pins"
+  ]
+}

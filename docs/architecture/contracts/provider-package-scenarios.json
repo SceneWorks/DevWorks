@@ -1,0 +1,1074 @@
+[
+  {
+    "kind": "Stream",
+    "id": "parallel-calls-ready-only-at-terminal",
+    "events": [
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "1",
+        "event": {
+          "kind": "ToolCallComplete",
+          "toolCall": {
+            "call": {
+              "attemptId": "attempt-a",
+              "nativeCallId": "call:b",
+              "ordinal": "1"
+            },
+            "capabilityId": "core/read",
+            "inputSchema": {
+              "schemaId": "core/object",
+              "revision": "1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "arguments": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            },
+            "nativeItem": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            }
+          }
+        }
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "2",
+        "event": {
+          "kind": "ToolCallComplete",
+          "toolCall": {
+            "call": {
+              "attemptId": "attempt-a",
+              "nativeCallId": "call:a",
+              "ordinal": "0"
+            },
+            "capabilityId": "core/read",
+            "inputSchema": {
+              "schemaId": "core/object",
+              "revision": "1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "arguments": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            },
+            "nativeItem": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            }
+          }
+        }
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "3",
+        "event": {
+          "kind": "Terminal",
+          "outcome": "ToolCallsReady"
+        }
+      }
+    ],
+    "expectedAccept": [
+      true,
+      true,
+      true
+    ],
+    "expectedReady": [
+      false,
+      false,
+      true
+    ]
+  },
+  {
+    "kind": "Stream",
+    "id": "eof-with-call-is-not-ready",
+    "events": [
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "1",
+        "event": {
+          "kind": "ToolCallComplete",
+          "toolCall": {
+            "call": {
+              "attemptId": "attempt-a",
+              "nativeCallId": "call:a",
+              "ordinal": "0"
+            },
+            "capabilityId": "core/read",
+            "inputSchema": {
+              "schemaId": "core/object",
+              "revision": "1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "arguments": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            },
+            "nativeItem": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            }
+          }
+        }
+      }
+    ],
+    "expectedAccept": [
+      true
+    ],
+    "expectedReady": [
+      false
+    ]
+  },
+  {
+    "kind": "Stream",
+    "id": "incomplete-turn-retains-unready-call",
+    "events": [
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "1",
+        "event": {
+          "kind": "ToolCallComplete",
+          "toolCall": {
+            "call": {
+              "attemptId": "attempt-a",
+              "nativeCallId": "call:a",
+              "ordinal": "0"
+            },
+            "capabilityId": "core/read",
+            "inputSchema": {
+              "schemaId": "core/object",
+              "revision": "1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "arguments": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            },
+            "nativeItem": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            }
+          }
+        }
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "2",
+        "event": {
+          "kind": "Terminal",
+          "outcome": "Incomplete"
+        }
+      }
+    ],
+    "expectedAccept": [
+      true,
+      true
+    ],
+    "expectedReady": [
+      false,
+      false
+    ]
+  },
+  {
+    "kind": "Stream",
+    "id": "duplicate-call-does-not-advance-stream",
+    "events": [
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "1",
+        "event": {
+          "kind": "ToolCallComplete",
+          "toolCall": {
+            "call": {
+              "attemptId": "attempt-a",
+              "nativeCallId": "call:a",
+              "ordinal": "0"
+            },
+            "capabilityId": "core/read",
+            "inputSchema": {
+              "schemaId": "core/object",
+              "revision": "1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "arguments": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            },
+            "nativeItem": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            }
+          }
+        }
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "2",
+        "event": {
+          "kind": "ToolCallComplete",
+          "toolCall": {
+            "call": {
+              "attemptId": "attempt-a",
+              "nativeCallId": "call:a",
+              "ordinal": "0"
+            },
+            "capabilityId": "core/read",
+            "inputSchema": {
+              "schemaId": "core/object",
+              "revision": "1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "arguments": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            },
+            "nativeItem": {
+              "artifactId": "artifact-a",
+              "versionId": "version-a",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "byteLength": "2",
+              "mediaType": "application/json"
+            }
+          }
+        }
+      }
+    ],
+    "expectedAccept": [
+      true,
+      false
+    ],
+    "expectedReady": [
+      false,
+      false
+    ]
+  },
+  {
+    "kind": "Stream",
+    "id": "text-completion",
+    "events": [
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "1",
+        "event": {
+          "kind": "TextDelta",
+          "blockIndex": "0",
+          "text": "Hello"
+        }
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "2",
+        "event": {
+          "kind": "Terminal",
+          "outcome": "Completed"
+        }
+      }
+    ],
+    "expectedAccept": [
+      true,
+      true
+    ],
+    "expectedReady": [
+      false,
+      false
+    ]
+  },
+  {
+    "kind": "Stream",
+    "id": "event-after-terminal-rejected",
+    "events": [
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "1",
+        "event": {
+          "kind": "Terminal",
+          "outcome": "Completed"
+        }
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "2",
+        "event": {
+          "kind": "Heartbeat"
+        }
+      }
+    ],
+    "expectedAccept": [
+      true,
+      false
+    ],
+    "expectedReady": [
+      false,
+      false
+    ]
+  },
+  {
+    "kind": "Stream",
+    "id": "foreign-opaque-preserved-as-invalid",
+    "events": [
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "1",
+        "event": {
+          "kind": "NativeContinuation",
+          "binding": {
+            "connectionId": "other",
+            "accountRevision": "1",
+            "endpointProfile": "OpenAiResponses",
+            "modelId": "model-a",
+            "contextEpoch": "0"
+          },
+          "artifact": {
+            "artifactId": "artifact-a",
+            "versionId": "version-a",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "byteLength": "2",
+            "mediaType": "application/json"
+          }
+        }
+      }
+    ],
+    "expectedAccept": [
+      false
+    ],
+    "expectedReady": [
+      false
+    ]
+  },
+  {
+    "kind": "Stream",
+    "id": "attempt-change-fenced",
+    "events": [
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-a",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "1",
+        "event": {
+          "kind": "TextDelta",
+          "blockIndex": "0",
+          "text": "Partial"
+        }
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "requestId": "request-a",
+        "attemptId": "attempt-b",
+        "binding": {
+          "connectionId": "connection-a",
+          "accountRevision": "1",
+          "endpointProfile": "OpenAiResponses",
+          "modelId": "model-a",
+          "contextEpoch": "0"
+        },
+        "sequence": "2",
+        "event": {
+          "kind": "Heartbeat"
+        }
+      }
+    ],
+    "expectedAccept": [
+      true,
+      false
+    ],
+    "expectedReady": [
+      false,
+      false
+    ]
+  },
+  {
+    "kind": "Transcript",
+    "id": "parallel-wait-replay-and-later-operation-event",
+    "batches": [
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-full",
+        "sessionId": "session-a",
+        "contextEpoch": "0",
+        "expectedNextSequence": "1",
+        "entries": [
+          {
+            "entryId": "c-a",
+            "sequence": "1",
+            "body": {
+              "kind": "ToolCallRecorded",
+              "toolCall": {
+                "call": {
+                  "attemptId": "attempt-a",
+                  "nativeCallId": "call:a",
+                  "ordinal": "0"
+                },
+                "capabilityId": "core/read",
+                "inputSchema": {
+                  "schemaId": "core/object",
+                  "revision": "1",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                "arguments": {
+                  "artifactId": "artifact-a",
+                  "versionId": "version-a",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "byteLength": "2",
+                  "mediaType": "application/json"
+                },
+                "nativeItem": {
+                  "artifactId": "artifact-a",
+                  "versionId": "version-a",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "byteLength": "2",
+                  "mediaType": "application/json"
+                }
+              }
+            }
+          },
+          {
+            "entryId": "c-b",
+            "sequence": "2",
+            "body": {
+              "kind": "ToolCallRecorded",
+              "toolCall": {
+                "call": {
+                  "attemptId": "attempt-a",
+                  "nativeCallId": "call:b",
+                  "ordinal": "1"
+                },
+                "capabilityId": "core/read",
+                "inputSchema": {
+                  "schemaId": "core/object",
+                  "revision": "1",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                "arguments": {
+                  "artifactId": "artifact-a",
+                  "versionId": "version-a",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "byteLength": "2",
+                  "mediaType": "application/json"
+                },
+                "nativeItem": {
+                  "artifactId": "artifact-a",
+                  "versionId": "version-a",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "byteLength": "2",
+                  "mediaType": "application/json"
+                }
+              }
+            }
+          },
+          {
+            "entryId": "r-b",
+            "sequence": "3",
+            "body": {
+              "kind": "ToolResponseRecorded",
+              "call": {
+                "attemptId": "attempt-a",
+                "nativeCallId": "call:b",
+                "ordinal": "1"
+              },
+              "outcome": {
+                "kind": "ApprovalRequired",
+                "approvalId": "approval-a",
+                "operationId": "op-b"
+              }
+            }
+          },
+          {
+            "entryId": "r-a",
+            "sequence": "4",
+            "body": {
+              "kind": "ToolResponseRecorded",
+              "call": {
+                "attemptId": "attempt-a",
+                "nativeCallId": "call:a",
+                "ordinal": "0"
+              },
+              "outcome": {
+                "kind": "Completed",
+                "artifacts": [
+                  {
+                    "artifactId": "artifact-a",
+                    "versionId": "version-a",
+                    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "byteLength": "2",
+                    "mediaType": "application/json"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-full",
+        "sessionId": "session-a",
+        "contextEpoch": "0",
+        "expectedNextSequence": "1",
+        "entries": [
+          {
+            "entryId": "c-a",
+            "sequence": "1",
+            "body": {
+              "kind": "ToolCallRecorded",
+              "toolCall": {
+                "call": {
+                  "attemptId": "attempt-a",
+                  "nativeCallId": "call:a",
+                  "ordinal": "0"
+                },
+                "capabilityId": "core/read",
+                "inputSchema": {
+                  "schemaId": "core/object",
+                  "revision": "1",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                "arguments": {
+                  "artifactId": "artifact-a",
+                  "versionId": "version-a",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "byteLength": "2",
+                  "mediaType": "application/json"
+                },
+                "nativeItem": {
+                  "artifactId": "artifact-a",
+                  "versionId": "version-a",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "byteLength": "2",
+                  "mediaType": "application/json"
+                }
+              }
+            }
+          },
+          {
+            "entryId": "c-b",
+            "sequence": "2",
+            "body": {
+              "kind": "ToolCallRecorded",
+              "toolCall": {
+                "call": {
+                  "attemptId": "attempt-a",
+                  "nativeCallId": "call:b",
+                  "ordinal": "1"
+                },
+                "capabilityId": "core/read",
+                "inputSchema": {
+                  "schemaId": "core/object",
+                  "revision": "1",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                "arguments": {
+                  "artifactId": "artifact-a",
+                  "versionId": "version-a",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "byteLength": "2",
+                  "mediaType": "application/json"
+                },
+                "nativeItem": {
+                  "artifactId": "artifact-a",
+                  "versionId": "version-a",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "byteLength": "2",
+                  "mediaType": "application/json"
+                }
+              }
+            }
+          },
+          {
+            "entryId": "r-b",
+            "sequence": "3",
+            "body": {
+              "kind": "ToolResponseRecorded",
+              "call": {
+                "attemptId": "attempt-a",
+                "nativeCallId": "call:b",
+                "ordinal": "1"
+              },
+              "outcome": {
+                "kind": "ApprovalRequired",
+                "approvalId": "approval-a",
+                "operationId": "op-b"
+              }
+            }
+          },
+          {
+            "entryId": "r-a",
+            "sequence": "4",
+            "body": {
+              "kind": "ToolResponseRecorded",
+              "call": {
+                "attemptId": "attempt-a",
+                "nativeCallId": "call:a",
+                "ordinal": "0"
+              },
+              "outcome": {
+                "kind": "Completed",
+                "artifacts": [
+                  {
+                    "artifactId": "artifact-a",
+                    "versionId": "version-a",
+                    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "byteLength": "2",
+                    "mediaType": "application/json"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-duplicate-response",
+        "sessionId": "session-a",
+        "contextEpoch": "0",
+        "expectedNextSequence": "5",
+        "entries": [
+          {
+            "entryId": "r-b-again",
+            "sequence": "5",
+            "body": {
+              "kind": "ToolResponseRecorded",
+              "call": {
+                "attemptId": "attempt-a",
+                "nativeCallId": "call:b",
+                "ordinal": "1"
+              },
+              "outcome": {
+                "kind": "Completed",
+                "artifacts": []
+              }
+            }
+          }
+        ]
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-update",
+        "sessionId": "session-a",
+        "contextEpoch": "0",
+        "expectedNextSequence": "5",
+        "entries": [
+          {
+            "entryId": "operation-update",
+            "sequence": "5",
+            "body": {
+              "kind": "OperationUpdate",
+              "operationId": "op-b",
+              "revision": "2",
+              "artifact": {
+                "artifactId": "artifact-a",
+                "versionId": "version-a",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "byteLength": "2",
+                "mediaType": "application/json"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "expected": [
+      "Accepted",
+      "Replayed",
+      "Rejected",
+      "Accepted"
+    ],
+    "expectedNext": [
+      5,
+      5,
+      5,
+      6
+    ]
+  },
+  {
+    "kind": "Transcript",
+    "id": "invalid-tail-does-not-persist-prefix",
+    "batches": [
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-bad",
+        "sessionId": "session-a",
+        "contextEpoch": "0",
+        "expectedNextSequence": "1",
+        "entries": [
+          {
+            "entryId": "u-a",
+            "sequence": "1",
+            "body": {
+              "kind": "UserMessage",
+              "content": [
+                {
+                  "kind": "Text",
+                  "text": "Hello"
+                }
+              ]
+            }
+          },
+          {
+            "entryId": "orphan",
+            "sequence": "2",
+            "body": {
+              "kind": "ToolResponseRecorded",
+              "call": {
+                "attemptId": "attempt-a",
+                "nativeCallId": "call:a",
+                "ordinal": "0"
+              },
+              "outcome": {
+                "kind": "Failed",
+                "code": "failed"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-good",
+        "sessionId": "session-a",
+        "contextEpoch": "0",
+        "expectedNextSequence": "1",
+        "entries": [
+          {
+            "entryId": "u-b",
+            "sequence": "1",
+            "body": {
+              "kind": "UserMessage",
+              "content": [
+                {
+                  "kind": "Text",
+                  "text": "Hello"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "expected": [
+      "Rejected",
+      "Accepted"
+    ],
+    "expectedNext": [
+      1,
+      2
+    ]
+  },
+  {
+    "kind": "Transcript",
+    "id": "batch-key-payload-conflict",
+    "batches": [
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-good",
+        "sessionId": "session-a",
+        "contextEpoch": "0",
+        "expectedNextSequence": "1",
+        "entries": [
+          {
+            "entryId": "u-b",
+            "sequence": "1",
+            "body": {
+              "kind": "UserMessage",
+              "content": [
+                {
+                  "kind": "Text",
+                  "text": "Hello"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-good",
+        "sessionId": "session-a",
+        "contextEpoch": "0",
+        "expectedNextSequence": "1",
+        "entries": [
+          {
+            "entryId": "u-b",
+            "sequence": "1",
+            "body": {
+              "kind": "UserMessage",
+              "content": [
+                {
+                  "kind": "Text",
+                  "text": "Changed"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "expected": [
+      "Accepted",
+      "Rejected"
+    ],
+    "expectedNext": [
+      2,
+      2
+    ]
+  },
+  {
+    "kind": "Transcript",
+    "id": "epoch-boundary-and-old-native-evidence",
+    "batches": [
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-switch",
+        "sessionId": "session-a",
+        "contextEpoch": "1",
+        "expectedNextSequence": "1",
+        "entries": [
+          {
+            "entryId": "epoch-change",
+            "sequence": "1",
+            "body": {
+              "kind": "ContextEpochChanged",
+              "previousEpoch": "0",
+              "nextEpoch": "1",
+              "reason": "Compaction",
+              "context": {
+                "artifactId": "artifact-a",
+                "versionId": "version-a",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "byteLength": "2",
+                "mediaType": "application/json"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "batch-old-context",
+        "sessionId": "session-a",
+        "contextEpoch": "0",
+        "expectedNextSequence": "2",
+        "entries": [
+          {
+            "entryId": "old-observation",
+            "sequence": "2",
+            "body": {
+              "kind": "NativeItem",
+              "binding": {
+                "connectionId": "connection-a",
+                "accountRevision": "1",
+                "endpointProfile": "OpenAiResponses",
+                "modelId": "model-a",
+                "contextEpoch": "0"
+              },
+              "artifact": {
+                "artifactId": "artifact-a",
+                "versionId": "version-a",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "byteLength": "2",
+                "mediaType": "application/json"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "protocol": "1.0-draft.1",
+        "batchId": "history-current-context",
+        "sessionId": "session-a",
+        "contextEpoch": "1",
+        "expectedNextSequence": "2",
+        "entries": [
+          {
+            "entryId": "old-observation",
+            "sequence": "2",
+            "body": {
+              "kind": "NativeItem",
+              "binding": {
+                "connectionId": "connection-a",
+                "accountRevision": "1",
+                "endpointProfile": "OpenAiResponses",
+                "modelId": "model-a",
+                "contextEpoch": "0"
+              },
+              "artifact": {
+                "artifactId": "artifact-a",
+                "versionId": "version-a",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "byteLength": "2",
+                "mediaType": "application/json"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "expected": [
+      "Accepted",
+      "Rejected",
+      "Accepted"
+    ],
+    "expectedNext": [
+      2,
+      2,
+      3
+    ]
+  }
+]

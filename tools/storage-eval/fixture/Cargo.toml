@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name = "eval-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-typescript = "0.23"

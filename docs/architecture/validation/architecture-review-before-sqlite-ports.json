@@ -1,0 +1,261 @@
+{
+  "title": "DevWorks architecture review verification",
+  "date": "2026-11-01",
+  "status": "Documentation review only; no native product acceptance claimed",
+  "browser": {
+    "results": {
+      "sections": 21,
+      "requirements": 327,
+      "images": [
+        {
+          "name": "01-components.svg",
+          "ok": true
+        },
+        {
+          "name": "02-domain.svg",
+          "ok": true
+        },
+        {
+          "name": "03-storage.svg",
+          "ok": true
+        },
+        {
+          "name": "04-operation-state.svg",
+          "ok": true
+        },
+        {
+          "name": "05-execution.svg",
+          "ok": true
+        },
+        {
+          "name": "06-screen-context.svg",
+          "ok": true
+        },
+        {
+          "name": "07-routing.svg",
+          "ok": true
+        },
+        {
+          "name": "08-policy.svg",
+          "ok": true
+        },
+        {
+          "name": "09-delivery.svg",
+          "ok": true
+        },
+        {
+          "name": "10-indexing.svg",
+          "ok": true
+        },
+        {
+          "name": "11-knowledge.svg",
+          "ok": true
+        },
+        {
+          "name": "12-extension-interfaces.svg",
+          "ok": true
+        },
+        {
+          "name": "13-extension-lifecycle.svg",
+          "ok": true
+        },
+        {
+          "name": "14-lifecycle.svg",
+          "ok": true
+        },
+        {
+          "name": "15-testing.svg",
+          "ok": true
+        }
+      ],
+      "anchors": true,
+      "overflow": false,
+      "storageComparison": true
+    },
+    "filter": 1,
+    "corrected": true,
+    "ownerLink": true,
+    "proposed": 134,
+    "widths": [
+      {
+        "width": 1600,
+        "overflow": false
+      },
+      {
+        "width": 1280,
+        "overflow": false
+      },
+      {
+        "width": 1000,
+        "overflow": false
+      },
+      {
+        "width": 750,
+        "overflow": false
+      }
+    ],
+    "offlineSearch": 9,
+    "reset": 21,
+    "ui": {
+      "route": "harness-workbench.html?page=databases&project=sw",
+      "engineCorrected": true,
+      "oldEngineVisible": false,
+      "overflow": false
+    },
+    "errors": [],
+    "bad": []
+  },
+  "requirementsWord": {
+    "pages": 64,
+    "renderedWith": "Bundled LibreOffice through render_docx.py",
+    "changedPagesReviewedAtFullResolution": [
+      3,
+      6,
+      39,
+      44
+    ],
+    "unchangedPages": 60,
+    "unchangedVerification": "Pixel-identical at matching 129 DPI to the previously reviewed sidebar edition"
+  },
+  "visualReview": {
+    "diagrams": 15,
+    "method": "Three contact sheets and targeted full-size object/interface/state reviews; corrected relationship-label contrast, state layout, standalone XML and edge padding",
+    "nativeImplementation": false,
+    "realInference": false
+  },
+  "notPerformed": [
+    "Cross-platform native UI and packaging validation",
+    "Complete retained CodeGraph operations and production storage acceptance",
+    "Application unit/integration suites (no native application exists yet)",
+    "Live inference E2E (intentionally excluded here)",
+    "Production-scale, migration/backup and broad power-loss recovery acceptance"
+  ],
+  "requirementsInputSha256": "6fdbd3458ed69614dadc2caa05a61b47f00fce551e7c1f873cdafbc95ae07293",
+  "diagramAssets": [
+    {
+      "file": "01-components.svg",
+      "sha256": "cbf2d04f05103bf454cac64d4408a7d17a1ee8708ca230052fc46db8f2a2daa0"
+    },
+    {
+      "file": "02-domain.svg",
+      "sha256": "e8e56734f109ecb17fcba084807a9fd985af77ff1681600a14940e6eefc05155"
+    },
+    {
+      "file": "03-storage.svg",
+      "sha256": "3b547b2b22526a07670dfb998e49d8c0b07f506226d808f609dfb79d48009a5d"
+    },
+    {
+      "file": "04-operation-state.svg",
+      "sha256": "359fcef4bcb38a728c681432c43b9ce6fb4d986f42c569deb93a5edb4f2650e1"
+    },
+    {
+      "file": "05-execution.svg",
+      "sha256": "071f0e522e462f604d8a455a1b9181c0f79c9f62c4d5a0d8c6aea84a8b2b3347"
+    },
+    {
+      "file": "06-screen-context.svg",
+      "sha256": "4d9e4095f932e89e4698502f9af9b2e9ed32f56b9bd7b494f5b0a4ccb7ff47db"
+    },
+    {
+      "file": "07-routing.svg",
+      "sha256": "bb950e64dab5fd90ecb154b3c31c95ecb8c1eaed48cbc6d4e25afe14a610d636"
+    },
+    {
+      "file": "08-policy.svg",
+      "sha256": "6c95f47ccf63b0cb36114413ad46801b552d4c81fc39da7aeae3ddc01b6dd53f"
+    },
+    {
+      "file": "09-delivery.svg",
+      "sha256": "bdcc150d3dc977f66cca897f9a6d889236dea3272318d870f1ae2afc362c0854"
+    },
+    {
+      "file": "10-indexing.svg",
+      "sha256": "3028bc6e0bb80aa1613e386c976175f7dbb5c28f1adf0a9c6eb5e8e716fa33ca"
+    },
+    {
+      "file": "11-knowledge.svg",
+      "sha256": "47753cde91e76a07acfc75a90a31e4002873cbe17b34f44f049ee4b5f84b7441"
+    },
+    {
+      "file": "12-extension-interfaces.svg",
+      "sha256": "3671ddbc6126fa41e86b989c10a828aad46e8fa5cc00047cb423476ceb2cc739"
+    },
+    {
+      "file": "13-extension-lifecycle.svg",
+      "sha256": "e0030cc611a5aaf47d7bb6e65ca907199c9642032b6a42a7a909001d3acfb388"
+    },
+    {
+      "file": "14-lifecycle.svg",
+      "sha256": "67c465b6190dda0561c7fa448649cef6b8e3bed4eab22d30c9095e6190584630"
+    },
+    {
+      "file": "15-testing.svg",
+      "sha256": "13deea582fe6188254954a79b21718ef241932daef6ee0e13bca631a5f0ebe07"
+    }
+  ],
+  "dependencyValidation": {
+    "activeCandidates": [
+      "OverGraph 0.18.0",
+      "Grafeo 0.6.0",
+      "Helix engine db at 6f2a696",
+      "SQLite 3.54.1 + sqlite-vec 0.1.7"
+    ],
+    "helixDirectEngine": "Pinned source links and executes local graph/vector, mutation and fault probes; original registry mismatch retained separately",
+    "kuzu": "Excluded by user; historical inspection/build attempts are not pending acceptance",
+    "localEvaluation": "36 measured cases; 27 without checked failures, 9 correctness-failed OverGraph cases; raw evidence separate from reader QA"
+  },
+  "storageEvaluationReader": {
+    "date": "2026-11-01",
+    "activeCandidates": 4,
+    "kuzuExcluded": true,
+    "comparison": {
+      "title": "DevWorks storage evaluation",
+      "headings": 10,
+      "tables": 7,
+      "layoutWidths": [
+        1600,
+        1280,
+        1000,
+        750
+      ],
+      "horizontalOverflow": false,
+      "javaScriptErrors": [],
+      "visualReview": "Full 1280px overview and graph/lifecycle table screenshots inspected; headings, values and text readable"
+    },
+    "main": {
+      "requirements": 327,
+      "images": 15,
+      "imagesGood": true,
+      "anchorsGood": true,
+      "requirementSearchRAGVisibleRows": 43,
+      "layoutWidths": [
+        1600,
+        1280,
+        1000,
+        750
+      ],
+      "horizontalOverflow": false,
+      "javaScriptErrors": []
+    },
+    "localLinks": {
+      "checked": 68,
+      "missing": []
+    },
+    "evidenceArchive": {
+      "file": "devworks-storage-evidence.zip",
+      "bytes": 30256077,
+      "entries": 357,
+      "zipCRC": "passed",
+      "decompressedFixtureSha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034"
+    }
+  },
+  "overgraphAttributionFollowup": {
+    "nativeProbeOnly": true,
+    "formattedRepetitions": 3,
+    "defaultPublishedVersion": "0.18.0",
+    "graphScope": "Adapter misuse",
+    "flushedDeletion": "Raw API reproduces deleted vector IDs before/after reopen",
+    "exactEngineRootCause": "Not established",
+    "evidence": "validation/storage-evaluation/direct-overgraph-attribution"
+  }
+}

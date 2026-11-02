@@ -1,0 +1,183 @@
+{
+  "title": "Router/provider contract refinement and price policy",
+  "date": "2026-11-01",
+  "status": "Adopted architecture and reference mechanics; no native provider implementation or live qualification",
+  "adoptedTechnicalDecisions": [
+    "AD 27",
+    "AD 28",
+    "AD 29",
+    "AD 30",
+    "AD 31",
+    "AD 32"
+  ],
+  "confirmedRequirements": [
+    "ROUTE-16",
+    "ROUTE-17"
+  ],
+  "requirements": 339,
+  "priorRequirementsUnchanged": true,
+  "traceability": "All IDs, statements and statuses match",
+  "diagrams": 26,
+  "allSvgXmlValid": true,
+  "sourceRevision": "a556b3531b577173195bbc3876b556196447721d",
+  "sourceDigestsVerified": true,
+  "fixtures": {
+    "referenceChecks": 33,
+    "sqliteMechanicsChecks": 28,
+    "nativeSchemaVectorChecks": {
+      "dimensionMismatchRejected": true,
+      "distanceCorrect": true,
+      "globalNearestIsDenied": true,
+      "schemaLoads": true,
+      "scopeBeforeRanking": true
+    }
+  },
+  "priorPersistenceSchemaPreservedAndDigestMatched": true,
+  "word": {
+    "pages": 67,
+    "unchangedPageBodies": 17,
+    "changedPagesVisuallyReviewed": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66
+    ],
+    "reviewMethod": "Baseline body pixel comparison, 13 contact sheets and full-page policy/acceptance inspection at pages 17 and 58",
+    "allIdsAndNewPolicyTextPresent": true
+  },
+  "reader": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 26
+      },
+      {
+        "width": 800,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 26
+      }
+    ],
+    "browser": "local headless Chromium; no user-facing tab opened",
+    "decisionRows": 32,
+    "anchors": 9,
+    "localLinksValid": true,
+    "sectionSearch": true,
+    "requirementSearch": true,
+    "statusFilter": true,
+    "pageErrors": []
+  },
+  "visualReview": {
+    "standalone": [
+      "07-routing",
+      "24-provider-turn",
+      "25-provider-recovery",
+      "26-pricing-ledger"
+    ],
+    "inlineWidth": 800,
+    "requestReaderWidths": [
+      1440,
+      800
+    ]
+  },
+  "limitations": [
+    "No actual Rust router/provider/secret-store implementation",
+    "No provider credentials, login, generation or cache-hit checks",
+    "No working official price parser or scheduled automation created",
+    "No current live price values copied into product",
+    "Reference decoder/policy fixtures do not certify actual endpoint compatibility"
+  ],
+  "confidence": {
+    "internalContracts": "high",
+    "subscriptionAndPriceParserCompatibility": "medium until G03 qualification"
+  },
+  "next": "Executable plugin/tool protocol and SDK/lifecycle contracts",
+  "sourcesChecked": [
+    "https://developers.openai.com/api/docs/guides/streaming-responses",
+    "https://developers.openai.com/api/docs/guides/function-calling",
+    "https://developers.openai.com/api/docs/guides/prompt-caching",
+    "https://developers.openai.com/api/docs/guides/reasoning",
+    "https://developers.openai.com/api/docs/pricing",
+    "https://platform.claude.com/docs/en/build-with-claude/streaming",
+    "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://openrouter.ai/docs/api/reference/streaming",
+    "https://openrouter.ai/docs/api/api-reference/generations/get-generation"
+  ],
+  "documentSha256": {
+    "docs/architecture/devworks-architecture.md": "cb5892e695571715f3ad0b16ab16356d7a7143bf9705816dc498d8b828e7b86a",
+    "docs/architecture/devworks-architecture.html": "7bf588634cd7db3f9b9b35d4c66f075348fed6d375a00cb74d4de0863ca21684",
+    "docs/architecture/persistence-schema.sql": "e7558ecde52496b171bfd8a05acc205a0122b4b1b4b132391dc44a3e8232a508",
+    "docs/architecture/architecture-contracts.json": "aa758e57a1761e3ddddabc0053fb87b4a2861ebc99ded806bc5108eed7514b45",
+    "docs/architecture/devworks-requirements-traceability.json": "94946c8d583d8e5a5b7623b20ba6a850d12b03ba0ccbcc9fae0425b8aebac666",
+    "docs/architecture/devworks-capability-catalog.json": "5af3ee2ef02b154bc82fce43b53ffaebf176da1e2b584a195a462b668b9d21e7",
+    "docs/architecture/architecture-diagrams/manifest.json": "c1120ae3ce6dc4d417e3a4d47b02b062c0a8b0a6b892a45b627f1f4978f7f591",
+    "docs/planning/requirements-content.json": "82ed01bc61c9cfd7f3f7f0d998f1ce18f3362176388c8c932db8c64adb34e608",
+    "docs/planning/requirements-interview.json": "d51f7c0ceb79ade32f8662360debe41d2bcf6f1e7f6fba7e819bcc9597f7c696",
+    "docs/planning/devworks-requirements.html": "72280c5f5e72d7f8fd3dd3944fbb5ec76a81b5bce6d013b8217ec8c4267aecc6",
+    "docs/planning/devworks-requirements.docx": "29f6a94e8d8cb4a6a256e84f634fe6a72e817b3dea94b3d8b8dd495f5a88ea2f",
+    "tools/planning/requirements_expansion.py": "8c4aa1e82d9fadc0a37d9899e0cde2444a27f3d2144e0437d2f0296fe1cfc503",
+    "tools/planning/probe_router_contracts.py": "9b0664766330512c21865b717011271b31e3fd47d18118fff89a1e499df491f2",
+    "tools/storage-eval/persistence_contract_probe.py": "efb4aa78e1acd59a557304fc26f7b1d4704da5fd5240691fc49a8ee4279ae9aa",
+    "docs/architecture/validation/router-refinement/source-audit.json": "77f641aa7824148cb6c40c0a06e4237e3e5b54822455b9c707b5b808d898724b",
+    "docs/architecture/validation/router-refinement/contract-probe.json": "1510ed84ad281ab53ad14c6c07f5cadb0ae4d9b3750cb91946167de64992fdfd",
+    "docs/architecture/validation/router-refinement/sqlite-mechanics.json": "0c9a8950b05fb767979fc78cd542fa818af191973dc9a81e5920fd3bddd34346",
+    "docs/architecture/validation/router-refinement/vector-schema-check.json": "b7370accc3cdc38e9640d823596d019402ed534c180c71e350e145a3a85e9c18",
+    "docs/architecture/architecture-diagrams/07-routing.mmd": "72a41d4925e9d6906a8c2cb1572bbe954c103bf0ccc88023fc6dec5a3efb85e0",
+    "docs/architecture/architecture-diagrams/07-routing.svg": "3840423a8a7c9cbda4ff54165e6c40383c1d237a03ea197c45f00a1d196adfc8",
+    "docs/architecture/architecture-diagrams/24-provider-turn.mmd": "6d69546122fedc6a5d114cdb032653b71a3d8ba47b07fa8ee9550682c146f506",
+    "docs/architecture/architecture-diagrams/24-provider-turn.svg": "66d06b55b0733a111810cea91f3208ef04e6ab6dbdfa540ec4e02cc9e9be69c0",
+    "docs/architecture/architecture-diagrams/25-provider-recovery.mmd": "d6990cec0d685af0a45e974cb96938502a1c88fd4627cf5933518a78309f2065",
+    "docs/architecture/architecture-diagrams/25-provider-recovery.svg": "cace4ce9ad5908c4f0e9f45ead0f84ea6bc85c692b1f3be514b8adb6c3d9ab23",
+    "docs/architecture/architecture-diagrams/26-pricing-ledger.mmd": "359e21ad56ffb8537bc9983e767abce6b0a8e3e9d8e7698a86ca279c4f0c6608",
+    "docs/architecture/architecture-diagrams/26-pricing-ledger.svg": "0fe6cba19bf350a29e87ae584fc3a5b0c77141ca43f961846c4cb3d82130ce6a"
+  }
+}

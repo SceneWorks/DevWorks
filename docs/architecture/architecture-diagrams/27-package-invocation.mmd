@@ -1,0 +1,27 @@
+sequenceDiagram
+    participant C as Coordinator or UI
+    participant H as Package host
+    participant J as Control and journal
+    participant P as Package process
+    participant B as Capability broker
+    C->>H: Invoke qualified contribution
+    H->>J: Check authority and pin version
+    J-->>H: Durable operation and invocation token
+    H->>P: host.invoke with fixed context
+    P->>B: broker.call with token and action key
+    B->>J: Recheck control and deduplicate effect
+    J-->>B: Admit or return recorded outcome
+    B-->>P: Structured outcome
+    alt Normal completion
+        P-->>H: One terminal result
+        H->>J: Persist outcome and release pin
+        H-->>C: Saved result and artifacts
+    else Cancellation or lost process
+        H->>J: Fence further broker effects
+        H->>P: host.cancel with bounded deadline
+        Note over H,P: Acknowledgement is not proof of stop
+        H->>P: Terminate owned tree if needed
+        H->>J: Reconcile each admitted operation
+        J-->>C: Committed or stopped or Unknown
+        Note over C,J: Uncertain mutation blocks dependents only
+    end

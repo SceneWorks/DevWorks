@@ -1,0 +1,445 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactCommand": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedBytes": {
+              "$ref": "#/$defs/Counter"
+            },
+            "expectedDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "kind": {
+              "const": "Save",
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            },
+            "source": {
+              "$ref": "#/$defs/ArtifactSource"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId",
+            "title",
+            "mediaType",
+            "source",
+            "expectedDigest",
+            "expectedBytes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedBytes": {
+              "$ref": "#/$defs/Counter"
+            },
+            "expectedDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "Replace",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/ArtifactSource"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "expectedRevision",
+            "source",
+            "expectedDigest",
+            "expectedBytes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "Reference",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/Subject"
+            },
+            "versionId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "versionId",
+            "subject",
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedReferenceRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "DeleteVersion",
+              "type": "string"
+            },
+            "versionId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "versionId",
+            "expectedRevision",
+            "expectedReferenceRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedReferenceRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "DetachProject",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "projectId",
+            "expectedReferenceRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedScopeRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "Share",
+              "type": "string"
+            },
+            "targetProjectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "targetProjectId",
+            "expectedScopeRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedScopeRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "Move",
+              "type": "string"
+            },
+            "targetProjectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "targetProjectId",
+            "expectedScopeRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "DisableRetrieval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "RemoveIndex",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "expectedRevision"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ArtifactSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Upload",
+              "type": "string"
+            },
+            "ticketId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attachmentId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Attachment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "attachmentId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fileHandle": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "WorkOutput",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fileHandle"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "Subject": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "root",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "assignment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "resource",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "blocker",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:artifact-command-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/ArtifactCommand"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "requestKey": {
+      "$ref": "#/$defs/Id"
+    }
+  },
+  "required": [
+    "protocol",
+    "requestKey",
+    "command"
+  ],
+  "title": "ArtifactCommandRequest",
+  "type": "object"
+}

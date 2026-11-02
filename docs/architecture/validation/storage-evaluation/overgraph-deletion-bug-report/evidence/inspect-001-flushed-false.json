@@ -1,0 +1,16 @@
+{
+  "direct_api_only": true,
+  "engine": "overgraph",
+  "inference": false,
+  "mode": "inspect",
+  "observation": {
+    "deleted_id_in_vectors": false,
+    "phase": "fresh_process_reopen",
+    "point_exists": false,
+    "vector_ids": [
+      2
+    ]
+  },
+  "observed_stale_vector": false,
+  "version": "0.18.0"
+}

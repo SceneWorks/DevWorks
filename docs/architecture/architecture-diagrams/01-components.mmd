@@ -1,0 +1,13 @@
+flowchart TB
+ UI["devworks native binary<br/>egui shell and composition root"] --> CORE["devworks-core<br/>domain policies, operations and ports"]
+ UI --> ENG["devworks-engine<br/>agents, router, context and supervision"]
+ UI --> ADAPT["devworks-adapters<br/>storage, providers, Git and OS"]
+ ENG --> CORE
+ ADAPT --> CORE
+ ENG --> PROTO["extension-protocol<br/>versioned public DTOs"]
+ ADAPT --> PROTO
+ SDK["extension-sdk<br/>package-side Rust client"] --> PROTO
+ PKG["Managed executable packages"] --> SDK
+ UI -. "constructs and injects adapters" .-> ENG
+ ADAPT --> LOCAL["SQLite + sqlite-vec + files + OS secrets"]
+ ADAPT --> EXT["Providers, GitHub and optional project tools"]

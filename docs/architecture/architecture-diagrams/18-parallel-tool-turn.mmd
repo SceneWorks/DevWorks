@@ -1,0 +1,39 @@
+sequenceDiagram
+ participant Provider as Provider transport
+ participant Turn as Session turn assembler
+ participant Store as SQLite write owner
+ participant Broker as Tool broker
+ participant Tools as Tool targets
+
+ Provider-->>Turn: Complete native calls A, B and C
+ Turn->>Store: Persist call IDs, ordinals, arguments and native blocks
+ Store-->>Turn: Envelopes durable
+ Turn->>Broker: Request admission under current controls
+ Note over Broker,Tools: Only independent permitted calls run concurrently
+
+ par A - permitted read succeeds
+  Broker->>Tools: Dispatch A after durable admission
+  Tools-->>Broker: Result A
+  Broker->>Store: Persist completed result A
+ and B - approval required
+  Broker->>Store: Record waiting operation B and approval proposal
+  Note over Broker,Tools: B is not dispatched
+  Broker->>Store: Persist ApprovalRequired response B
+ and C - independent read fails
+  Broker->>Tools: Dispatch C after durable admission
+  Tools-->>Broker: Known read failure C
+  Broker->>Store: Persist failure response C
+ end
+
+ Note over Turn,Store: Completion order may differ from recorded call order
+ Turn->>Store: Read durable responses in A, B, C order
+ Store-->>Turn: Completed A, ApprovalRequired B, Failed C
+ Turn->>Store: Persist provider continuation material
+ Turn->>Provider: Adapter-native ordered tool results
+ Note over Provider,Broker: Independent work may continue while B waits
+
+ opt Later human decision on operation B
+  Broker->>Store: Record new decision and attributed event
+  Note over Store,Tools: Revalidate parent controls, ownership, plan and approval
+  Note over Turn,Store: Append later outcome without rewriting old response B
+ end

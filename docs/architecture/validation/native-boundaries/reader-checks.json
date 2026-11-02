@@ -1,0 +1,63 @@
+{
+  "visibleTabsOpened": 0,
+  "status": "Document/reader verification only; separate from 39 native experiment assertions",
+  "readers": [
+    {
+      "stem": "devworks-architecture",
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "imageCount": 41,
+      "localLinksChecked": 116,
+      "decisionRows": 68,
+      "sectionSearch": true,
+      "requirementSearch": true,
+      "confirmedStatusFilter": 208
+    },
+    {
+      "stem": "native-backend-feasibility",
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "imageCount": 1,
+      "localLinksChecked": 5
+    },
+    {
+      "stem": "implementation-plan",
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "imageCount": 1,
+      "localLinksChecked": 67,
+      "sliceAnchors": 62
+    }
+  ],
+  "pageErrors": []
+}

@@ -1,0 +1,152 @@
+{
+  "deletion_cases": [
+    {
+      "flush_before_delete": false,
+      "kept": 2,
+      "phases": [
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_before_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_and_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_reopen",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        }
+      ],
+      "rename_before_delete": false,
+      "victim": 1
+    },
+    {
+      "flush_before_delete": false,
+      "kept": 2,
+      "phases": [
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_before_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_and_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_reopen",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        }
+      ],
+      "rename_before_delete": true,
+      "victim": 1
+    },
+    {
+      "flush_before_delete": true,
+      "kept": 2,
+      "phases": [
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_before_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "after_delete_and_flush",
+          "point_exists": false,
+          "vector_ids": [
+            1,
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "after_reopen",
+          "point_exists": false,
+          "vector_ids": [
+            1,
+            2
+          ]
+        }
+      ],
+      "rename_before_delete": false,
+      "victim": 1
+    },
+    {
+      "flush_before_delete": true,
+      "kept": 2,
+      "phases": [
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_before_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "after_delete_and_flush",
+          "point_exists": false,
+          "vector_ids": [
+            1,
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "after_reopen",
+          "point_exists": false,
+          "vector_ids": [
+            1,
+            2
+          ]
+        }
+      ],
+      "rename_before_delete": true,
+      "victim": 1
+    }
+  ],
+  "direct_api_only": true,
+  "engine": "overgraph",
+  "graph_scope": {
+    "a_project0": 1,
+    "b_project1": 2,
+    "c_project0": 3,
+    "c_returned": true,
+    "interpretation": "label_filter selects result nodes; no intermediate-project restriction was specified",
+    "path": "A(project0) -> B(project1) -> C(project0)",
+    "returned_ids": [
+      3,
+      1
+    ]
+  },
+  "inference": false,
+  "version": "0.18.0"
+}

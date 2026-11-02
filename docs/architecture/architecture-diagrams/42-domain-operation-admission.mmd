@@ -1,0 +1,15 @@
+flowchart TB
+ A["Selected capability and strict envelope"] --> B["Validate schema, exact operation<br/>and effective Query / Command action"]
+ B --> C["Current host authority<br/>role, scope, grants and schema registry"]
+ C --> Q["Query<br/>bounded snapshot or external read"]
+ C --> R["Command<br/>durable receipt and intent"]
+ Q --> QR["Correlated typed result + read stamp<br/>or structured fault"]
+ R --> REPLAY["Existing request key<br/>replay original receipt or conflict"]
+ R --> RUN["Current owner and dispatch fence<br/>local / external / inference work"]
+ RUN --> DONE["Observed outcome<br/>typed result or failure"]
+ RUN --> UNKNOWN["Uncertain external outcome<br/>durable operation + reconcile"]
+ UNKNOWN --> HOLD["Observe or hold<br/>no blind replay or pause bypass"]
+ DONE --> PUB["Match originating result kind<br/>revalidate scope before publication"]
+ QR --> PUB
+ classDef pending fill:#fff5df,stroke:#b3843f,color:#4f3a1a;
+ class UNKNOWN,HOLD pending;
