@@ -12,17 +12,18 @@
   },
   "sourcePlan": "implementation-plan.json",
   "fullSourceRequirements": {
-    "count": 350,
+    "count": 353,
     "documentId": "3ab2d98c-4bcf-4c3d-b415-df422cbf33e0",
     "statusesPreserved": true,
-    "individuallyStructuredAcrossDeliveryFeatures": true
+    "individuallyStructuredAcrossDeliveryFeatures": true,
+    "latestAmendment": "AGENT-12/18–20 and AD79: materiality-based readiness; autonomous resolution before escalation."
   },
   "structuredSharedRequirements": 3,
   "nativeImplementationItems": 63,
   "publicationItem": "DW-64",
   "dependencyEdges": 250,
   "nativeInitialStatus": "backlog",
-  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, acceptance criteria and250 dependencies are preserved. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All350 source requirements are individually structured across related delivery features. Native implementation remains unstarted.",
+  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, acceptance criteria and250 dependencies are preserved. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All353 source requirements are individually structured across related delivery features. Native implementation remains unstarted.",
   "items": [
     {
       "ref": "slice-contracts",
@@ -142,7 +143,7 @@
         "DW-8",
         "DW-6"
       ],
-      "acceptanceCriteria": 2,
+      "acceptanceCriteria": 3,
       "featureKey": "DW-F3"
     },
     {
@@ -187,7 +188,7 @@
         "DW-7",
         "DW-10"
       ],
-      "acceptanceCriteria": 2,
+      "acceptanceCriteria": 3,
       "featureKey": "DW-F5"
     },
     {
@@ -201,7 +202,7 @@
         "DW-12",
         "DW-9"
       ],
-      "acceptanceCriteria": 2,
+      "acceptanceCriteria": 3,
       "featureKey": "DW-F5"
     },
     {
@@ -216,7 +217,7 @@
         "DW-12",
         "DW-9"
       ],
-      "acceptanceCriteria": 2,
+      "acceptanceCriteria": 3,
       "featureKey": "DW-F3"
     },
     {
@@ -231,7 +232,7 @@
         "DW-13",
         "DW-14"
       ],
-      "acceptanceCriteria": 2,
+      "acceptanceCriteria": 3,
       "featureKey": "DW-F5"
     },
     {
@@ -1041,7 +1042,7 @@
       "featureKey": "DW-F1"
     }
   ],
-  "structuredSourceRequirements": 350,
+  "structuredSourceRequirements": 353,
   "deliveryFeatures": [
     {
       "id": "11568b6e-16b6-48b5-b0c1-3f0c3b0cdf10",
@@ -1216,7 +1217,7 @@
     {
       "id": "92f9884f-37d7-49af-8a1c-bc7f8a6617f5",
       "key": "DW-F3",
-      "version": 1,
+      "version": 4,
       "title": "Execution controls and permissions",
       "items": [
         "DW-5",
@@ -1499,7 +1500,7 @@
     {
       "id": "6ef5d8f5-635a-4629-9a59-5c5cb5389953",
       "key": "DW-F5",
-      "version": 1,
+      "version": 5,
       "title": "Work planning and agent coordination",
       "items": [
         "DW-12",
@@ -1740,6 +1741,21 @@
         {
           "id": "COORD-10",
           "codegraphRequirement": "E47",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-18",
+          "codegraphRequirement": "E48",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-19",
+          "codegraphRequirement": "E49",
+          "status": "Confirmed"
+        },
+        {
+          "id": "AGENT-20",
+          "codegraphRequirement": "E50",
           "status": "Confirmed"
         }
       ]
@@ -2966,5 +2982,30 @@
         }
       ]
     }
-  ]
+  ],
+  "nativeCurrentStatus": "ready",
+  "nativeInitialStatusIsHistorical": true,
+  "readinessAmendment": {
+    "date": "2026-11-02",
+    "requirements": [
+      "AGENT-12",
+      "AGENT-18",
+      "AGENT-19",
+      "AGENT-20"
+    ],
+    "architectureDecision": "AD79",
+    "features": [
+      "DW-F3",
+      "DW-F5"
+    ],
+    "items": [
+      "DW-9",
+      "DW-12",
+      "DW-13",
+      "DW-14",
+      "DW-15"
+    ],
+    "nativeImplementation": "Pending; documentation and plan amendment only",
+    "dependenciesPreserved": true
+  }
 }

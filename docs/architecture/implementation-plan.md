@@ -4,7 +4,7 @@ Status: architecture baseline 1.1. This is the complete ownership and dependency
 
 ## Success and remaining commitments
 
-The register assigns all 350 requirements, 353 operations across 48 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 63 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 353 requirements, 353 operations across 48 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 63 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -230,13 +230,15 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 One coordinator owner per root and one continuation per session. Explicit Continue, renewed holds, accepted/unlaunched recovery, eligible descendants, parallel-tool isolation and received/acknowledged/incorporated redirect stages pass deterministic races. Eligibility uses the active approved plan while a revision is pending; pending changes cannot authorize dispatch. Approved replacement adopts at safe boundaries and fences only incompatible work.
 
+Feature implementation dispatch requires current readiness evidence for the affected approved scope, independently of plan approval. Start permits planning; Continue reuses current assessments. Changed scope/evidence fences affected dispatch without clearing pauses or blocking unaffected assessed work. UI, tools, schedules and delegated entry paths cannot bypass the gate.
+
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
 **Operations:** `runs.start`, `runs.pause`, `runs.continue`, `runs.redirect`, `runs.inspect`, `runs.stop`, `runs.eligibility`
 
 **Primary requirement cases:** AT-CONTROL-01, AT-CONTROL-02, AT-CONTROL-03, AT-CONTROL-04, AT-CONTROL-05, AT-CONTROL-06, AT-CONTROL-07, AT-CONTROL-08, AT-CONTROL-09, AT-CONTROL-10, AT-CONTROL-11, AT-CONTROL-12, AT-CONTROL-13, AT-POWER-01, AT-POWER-02
 
-**Supporting requirements:** AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, AGENT-07, AGENT-08, AGENT-09, AGENT-10, AGENT-11, AGENT-12, AGENT-13, AGENT-14, AGENT-15, AGENT-16, AGENT-17, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17, JOB-01, JOB-02, JOB-03, JOB-04, JOB-05, JOB-06, JOB-07, JOB-08, JOB-09, OP-01, OP-02, OP-03
+**Supporting requirements:** AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, AGENT-07, AGENT-08, AGENT-09, AGENT-10, AGENT-11, AGENT-12, AGENT-13, AGENT-14, AGENT-15, AGENT-16, AGENT-17, AGENT-18, AGENT-19, AGENT-20, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17, JOB-01, JOB-02, JOB-03, JOB-04, JOB-05, JOB-06, JOB-07, JOB-08, JOB-09, OP-01, OP-02, OP-03
 
 **Behavior/workload obligations:** W09. Frozen source entries bound: 10. Pending input schemas: 0.
 
@@ -278,13 +280,15 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 Multi-repository work, editable requirements/plans/acceptance, task dependencies/assignments and evidence links use revisions. Plan approval is scope-bound; clear standalone issues retain immediate implementation behavior. Native list/board/detail and tools share the same operations. Every task requires a project and accepts an optional feature relationship. Standalone tasks use the issue view of the same identity; task/issue entry points never duplicate work. Validate feature membership and existing standalone execution/accounting/delivery semantics. Plans belong to the feature: one active approved plan and one pending replacement. Draft edits, submission and rejection preserve active authority and eligible work; no plan-version management UI. Shared human/agent task and issue priority edits plus bulk task ordering commit revisioned history. Screens expose Blocked by/Blocks and editable same-project cross-feature/standalone links; reject invalid/self/duplicate/cyclic changes without partial writes. Human/agent tasks.set_feature and optional feature at issue creation share authoritative membership. Link authorizes delivery without revised-plan approval; clear pauses until manual resume. Preserve stable identity, active agent/workspace, history and holds; coordinator owns integration. Direct transfers retain holds without creating a pause.
 
+Shared native work detail and agent tools retain revision-bound readiness assessments, requirement-linked findings, resolved decisions with confidence/evidence, investigation limits/dependent-work gates, attempted resolutions, specific questions/recommendations and closure evidence. Present remaining findings together; approval is visibly distinct from readiness. Reuse current evidence and invalidate only affected scope on material change.
+
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
 **Operations:** `features.list`, `features.get`, `features.create`, `features.edit_plan`, `features.prioritize`, `features.dependencies`, `features.request_plan_approval`, `features.edit`, `issues.list`, `issues.get`, `issues.create`, `issues.edit`, `issues.prioritize`, `tasks.list`, `tasks.get`, `tasks.create`, `tasks.edit`, `tasks.prioritize`, `tasks.move`, `tasks.assign`, `tasks.dependency_links`, `tasks.acceptance_evidence`, `tasks.sync_plan`, `tasks.set_feature`
 
 **Primary requirement cases:** AT-MODEL-01, AT-MODEL-02, AT-MODEL-03, AT-WORK-01, AT-WORK-02, AT-WORK-03, AT-WORK-04, AT-WORK-05, AT-WORK-06, AT-WORK-07, AT-WORK-08, AT-WORK-09, AT-WORK-10, AT-WORK-11, AT-WORK-12, AT-WORK-13, AT-WORK-14, AT-WORK-15, AT-WORK-16, AT-WORK-17
 
-**Supporting requirements:** UI-01, UI-02, UI-03, UI-04, UI-05, UI-06, UI-07, UI-08, UI-09, MCP-07, MCP-08, MCP-09, MCP-10, MCP-11, UI-11, UI-12, UI-13
+**Supporting requirements:** AGENT-12, AGENT-18, AGENT-19, AGENT-20, UI-01, UI-02, UI-03, UI-04, UI-05, UI-06, UI-07, UI-08, UI-09, MCP-07, MCP-08, MCP-09, MCP-10, MCP-11, UI-11, UI-12, UI-13
 
 **Behavior/workload obligations:** CAP-WORK, W02. Frozen source entries bound: 15. Pending input schemas: 0.
 
@@ -294,13 +298,15 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 Priority features/issues share a project queue; automatic feature claims require current implementation approval. Child-task claims stay within their feature. Status removal reassigns occupied records atomically; inspect/release claims obey ownership fences. Filter unsatisfied dependencies before priority and manual rank; use atomic queue revisions for edits/claims. Prove concurrent dependency edits cannot form a project-wide cycle and high-priority blocked tasks cannot bypass prerequisites. No automatic preemption on priority changes. Keep-working yields a fully dependency-blocked root only after quiescence, allowing prerequisite roots to run while preserving one active root, coordinator lineage and explicit holds; valid task-level interleaving across features must not deadlock. Membership changes update root/feature queue eligibility atomically and fence stale claims; an owned task never gains a second execution. Relinking cannot clear an unlink pause.
 
+Automatic allocation skips incomplete/unapproved plans and wholly blocked roots without eligible independent work. An otherwise eligible approved feature with missing/stale assessment can activate its coordinator to assess readiness, but cannot dispatch implementation until cleared. Locally blocked roots may allocate assessed independent tasks. Activation/dispatch rechecks changed readiness and finding revisions; keep-working and schedules preserve the shared gate and independent holds.
+
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
 **Operations:** `workflows.list`, `workflows.create_status`, `workflows.rename_status`, `workflows.order`, `workflows.reassign_and_remove`, `next_work.claim_project_queue`, `next_work.claim_feature_task`, `next_work.inspect_claim`, `next_work.release_claim`
 
 **Primary requirement cases:** See supporting and integration obligations.
 
-**Supporting requirements:** COORD-01, COORD-02, COORD-03, COORD-04, COORD-05, COORD-06, COORD-07, COORD-08, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17, COORD-09, COORD-10
+**Supporting requirements:** COORD-01, COORD-02, COORD-03, COORD-04, COORD-05, COORD-06, COORD-07, COORD-08, AGENT-12, AGENT-18, AGENT-19, AGENT-20, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17, COORD-09, COORD-10
 
 **Behavior/workload obligations:** CAP-WORK. Frozen source entries bound: 2. Pending input schemas: 0.
 
@@ -310,13 +316,15 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 Approval proposals bind contents/target/revision, only host human interaction mints decisions, and approval wakeups re-admit saved operations without clearing pauses. Notifications and acknowledgment never resolve their linked decisions. Native OS denial retains in-app access. Feature-plan approval atomically promotes the exact pending draft with active scope/acceptance and history. Stale approval/edit races preserve the original plan; rejection leaves it approved. Approval never clears a pause.
 
+Generic plan approval or notification acknowledgment cannot close readiness findings. Finding-specific human risk acceptance binds the finding/scope/revision and rationale, preserves history and still requires actual prerequisites, enforced permissions and required verification; stale decisions cannot clear changed findings or make incomplete work complete.
+
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
 **Operations:** `approvals.list`, `approvals.inspect`, `approvals.propose`, `approvals.record_human_decision`, `notifications.list`, `notifications.read`, `notifications.acknowledge`, `notifications.settings`
 
 **Primary requirement cases:** AT-NOTIFY-01, AT-NOTIFY-02, AT-NOTIFY-03, AT-NOTIFY-04
 
-**Supporting requirements:** CONTROL-01, CONTROL-02, CONTROL-03, CONTROL-04, CONTROL-05, CONTROL-06, CONTROL-07, CONTROL-08, CONTROL-09, CONTROL-10, CONTROL-11, CONTROL-12, CONTROL-13, DREAM-01, DREAM-02, DREAM-03, DREAM-04, DREAM-05, REVIEW-01, REVIEW-02, REVIEW-03, SELF-01, SELF-02, SELF-03, SELF-04
+**Supporting requirements:** AGENT-12, AGENT-18, AGENT-19, AGENT-20, CONTROL-01, CONTROL-02, CONTROL-03, CONTROL-04, CONTROL-05, CONTROL-06, CONTROL-07, CONTROL-08, CONTROL-09, CONTROL-10, CONTROL-11, CONTROL-12, CONTROL-13, DREAM-01, DREAM-02, DREAM-03, DREAM-04, DREAM-05, REVIEW-01, REVIEW-02, REVIEW-03, SELF-01, SELF-02, SELF-03, SELF-04
 
 **Behavior/workload obligations:** CAP-DECISIONS. Frozen source entries bound: 6. Pending input schemas: 0.
 
@@ -326,11 +334,13 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 Root coordinators delegate within independent per-root caps, retain role/scope/lineage, durable messages/acks/checkpoints and waits. No manual child Pause or global cap. Independent work continues while affected dependencies wait. Prove delegation from an issue with no feature or feature cards, using a root-scoped brief and optional task references. Assignment parentage is independent of feature membership; retain issue ownership and independent concurrency. Adding a blocker fences affected future dispatch; safe interruption/reconciliation preserves in-flight effects. Completion/removal wakes eligible dependents without clearing independent controls. Link notifications and supervisor rebinding are durable; existing worker continues, coordinator tracks it and launches/resumes only eligible unowned work. Shared-repository project work coordinates overlap through the message board with scoped access.
 
+Before escalation, coordinators inspect current requirements, code, knowledge and conventions and resolve routine in-scope choices or bounded authorized investigations, recording evidence/rationale/confidence. Hold vague approved outcomes; block only material threats lacking reasonable autonomous resolution before dependent implementation. Questions identify attempted resolution, concrete consequence and exact closure condition with a recommendation. Keep independent work moving. Ready with zero findings, consolidated closure, reuse on Continue and evidence-based reopening pass deterministic scripted cases without model inference.
+
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
 **Operations:** `agents.inspect`, `agents.delegate`, `agents.messages`, `agents.inbox`, `agents.acknowledge`, `agents.checkpoint`
 
-**Primary requirement cases:** AT-COORD-01, AT-COORD-02, AT-COORD-03, AT-COORD-04, AT-COORD-05, AT-COORD-06, AT-COORD-07, AT-COORD-08, AT-AGENT-01, AT-AGENT-02, AT-AGENT-03, AT-AGENT-04, AT-AGENT-05, AT-AGENT-06, AT-AGENT-07, AT-AGENT-08, AT-AGENT-09, AT-AGENT-10, AT-AGENT-11, AT-AGENT-12, AT-AGENT-13, AT-AGENT-14, AT-AGENT-15, AT-AGENT-16, AT-AGENT-17, AT-COORD-09, AT-COORD-10
+**Primary requirement cases:** AT-COORD-01, AT-COORD-02, AT-COORD-03, AT-COORD-04, AT-COORD-05, AT-COORD-06, AT-COORD-07, AT-COORD-08, AT-AGENT-01, AT-AGENT-02, AT-AGENT-03, AT-AGENT-04, AT-AGENT-05, AT-AGENT-06, AT-AGENT-07, AT-AGENT-08, AT-AGENT-09, AT-AGENT-10, AT-AGENT-11, AT-AGENT-12, AT-AGENT-13, AT-AGENT-14, AT-AGENT-15, AT-AGENT-16, AT-AGENT-17, AT-AGENT-18, AT-AGENT-19, AT-AGENT-20, AT-COORD-09, AT-COORD-10
 
 **Supporting requirements:** CONTROL-01, CONTROL-02, CONTROL-03, CONTROL-04, CONTROL-05, CONTROL-06, CONTROL-07, CONTROL-08, CONTROL-09, CONTROL-10, CONTROL-11, CONTROL-12, CONTROL-13, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17
 
@@ -412,7 +422,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** AT-CACHE-01, AT-CACHE-02, AT-CACHE-03, AT-CACHE-04, AT-CACHE-05, AT-CACHE-06, AT-CONTEXT-01, AT-CONTEXT-02, AT-CONTEXT-03, AT-CONTEXT-04, AT-CONTEXT-05, AT-CONTEXT-06, AT-TOOL-01, AT-TOOL-02, AT-TOOL-03, AT-TOOL-04, AT-TOOL-05, AT-TOOL-06, AT-TOOL-07, AT-TOOL-08, AT-TOOL-09
 
-**Supporting requirements:** COORD-01, COORD-02, COORD-03, COORD-04, COORD-05, COORD-06, COORD-07, COORD-08, AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, AGENT-07, AGENT-08, AGENT-09, AGENT-10, AGENT-11, AGENT-12, AGENT-13, AGENT-14, AGENT-15, AGENT-16, AGENT-17, COORD-09, COORD-10
+**Supporting requirements:** COORD-01, COORD-02, COORD-03, COORD-04, COORD-05, COORD-06, COORD-07, COORD-08, AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, AGENT-07, AGENT-08, AGENT-09, AGENT-10, AGENT-11, AGENT-13, AGENT-14, AGENT-15, AGENT-16, AGENT-17, COORD-09, COORD-10
 
 **Behavior/workload obligations:** CAP-SESSIONS. Frozen source entries bound: 0. Pending input schemas: 0.
 

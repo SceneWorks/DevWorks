@@ -147,7 +147,8 @@
     {
       "id": "start_reviews_feature_planning_readiness",
       "source": "User interview answer",
-      "decision": "A feature should ideally be fully planned already. If not, its coordinator reviews the feature, plans what it can and asks for plan approval or more input rather than immediately executing incomplete/unapproved work."
+      "decision": "A feature should ideally be fully planned already. If not, its coordinator reviews the feature, plans what it can and asks for plan approval or more input rather than immediately executing incomplete/unapproved work.",
+      "superseded_in_part_by": "feature_readiness_materiality_and_resolution_20261102"
     },
     {
       "id": "continuous_plan_refinement",
@@ -1045,6 +1046,17 @@
       "source": "User replaced the repository workflow with CodeGraph, approved creation of DevWorks project DW, requested commit/push, and explicitly approved the proposed eleven-feature split.",
       "decision": "Use CodeGraph project DW as the operational tracker. Retain DW-F1 for architecture/publication and DW-F2 through DW-F12 for related native delivery areas. Preserve all63 native item identities/acceptance criteria and250 dependency edges. All350 source requirements retain their identifiers/statuses and are individually structured across the delivery features. Native implementation remains in backlog. Local architecture, requirement sources and evidence remain versioned in this repository; use codegraph-work-map.json to distinguish local zero-padded slice IDs from actual tracker keys.",
       "status": "Applied and verified; publication tracked by DW-64"
+    },
+    {
+      "id": "feature_readiness_materiality_and_resolution_20261102",
+      "source": "User approved readiness-review proposal on 2 November 2026 and explicitly required coordinator resolution before escalation",
+      "decision": "Require coordinator-owned feature execution-readiness review even for approved plans. Resolve reasonably answerable gaps using current requirements/code/knowledge/conventions and bounded authorized investigation before escalating. Only material threats to delivery/verification without a reasonable autonomous resolution before affected implementation can block. Record resolved decisions, bounded investigations and specific human decisions with evidence, confidence, affected work and closure conditions. Keep unrelated work moving. No finding quota; consolidate remaining findings and reuse current assessments. New blockers require changed scope/assumptions or newly discovered material evidence. Approval alone cannot clear findings; explicit risk acceptance cannot waive actual prerequisites, authority, required verification or honest completion. No universal extra reviewer.",
+      "requirements": [
+        "AGENT-12",
+        "AGENT-18",
+        "AGENT-19",
+        "AGENT-20"
+      ]
     }
   ],
   "open_next": "Execute native work from CodeGraph items after revalidation; all native items remain backlog. DW-64 tracks the current commit/push closeout.",
@@ -1486,6 +1498,11 @@
       "id": "AD-71",
       "status": "Adopted architecture candidate; DTO/schema/pure invariant checks passed, actual service/authority/platform qualification pending",
       "decision": "Descriptor-bound extension/settings/job/MCP/decision data with explicit limits and current registry validation; concrete native SystemOne question/media/result candidates and host-owned attribution/pricing provenance. No inference or production behavior proof."
+    },
+    {
+      "id": "AD-79",
+      "status": "User-confirmed readiness policy; native implementation pending",
+      "decision": "Feature-owned revision-bound reusable assessments, autonomous resolution before escalation, justified material blockers, bounded investigations, affected-work admission and explicit finding-specific risk decisions."
     }
   ],
   "historical_pending_questions_pre_architecture_closure": [

@@ -2,8 +2,8 @@
   "title": "DevWorks architecture requirement traceability",
   "status": "Proposed design coverage, not implemented or tested capability",
   "date": "2026-11-02",
-  "requirementsInputSha256": "5a2af2803ebcda95367c80c368363e473fd0e590ee5bd8c946e432f8f5faaced",
-  "requirementsCount": 350,
+  "requirementsInputSha256": "ef54c725542534deb97464e5aec87a545a811bb4e3e65552bd5260cc7384dd4f",
+  "requirementsCount": 353,
   "architectureVersion": "1.1",
   "requirements": [
     {
@@ -681,7 +681,7 @@
     {
       "requirement": "AGENT-12",
       "requirementStatus": "Confirmed",
-      "statement": "Features should ideally be fully planned before execution. On Start, the feature coordinator must review the feature and its existing plan. If planning is incomplete, develop what can be planned from the available information, identify gaps, and ask the user for plan approval or more input before executing unapproved work. A complete existing plan must not trigger redundant planning or repeated approval requests where authorization already exists.",
+      "statement": "Before feature implementation starts, its coordinator must assess execution readiness even when the user has already approved the plan. Review the intended outcome and scope, observable acceptance, implementation coverage, dependencies, access and resources, verification and delivery path, and material uncertainties across the whole feature. Every implementation detail need not be settled, but each material uncertainty needs a credible resolution path. On Start, develop incomplete planning from available evidence and seek required plan approval before implementing unapproved scope. Apply AGENT-18–20 to resolve gaps, justify blockers and reuse current assessments. An approved, ready plan must proceed without redundant planning or repeated approval requests.",
       "sourceSection": "8 Feature coordinators and autonomous execution",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "AgentSupervisor and work activation",
@@ -748,6 +748,42 @@
       "validationFamily": "Activation, root concurrency and fresh-session tests",
       "validationGate": "G07",
       "plannedCase": "AT-AGENT-17",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result"
+    },
+    {
+      "requirement": "AGENT-18",
+      "requirementStatus": "Confirmed",
+      "statement": "The coordinator must resolve what it reasonably can before escalating readiness gaps to the user: inspect current requirements, repository code, project knowledge and conventions; use available evidence and ordinary engineering judgment; and perform bounded investigation within existing authority and budgets. Record the decision and its confidence. A gap blocks affected implementation only when it materially threatens delivery or verification of an approved requirement and cannot reasonably be resolved through those means before that implementation proceeds. Routine reversible technical choices, stylistic preferences and requests for extra detail without a concrete consequence are not blockers. Escalate only remaining material choices or constraints requiring user input, authority or resources, with a specific question and recommended answer. Do not silently narrow approved scope, replace acceptance criteria or invent product intent to avoid escalation.",
+      "sourceSection": "8 Feature coordinators and autonomous execution",
+      "architectureSection": "coordinator-execution-and-concurrency",
+      "owner": "AgentSupervisor and work activation",
+      "validationFamily": "Activation, root concurrency and fresh-session tests",
+      "validationGate": "G07",
+      "plannedCase": "AT-AGENT-18",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result"
+    },
+    {
+      "requirement": "AGENT-19",
+      "requirementStatus": "Confirmed",
+      "statement": "Record readiness findings against the feature and relevant requirements as resolved decisions, bounded investigations, or matters needing a user decision. Each blocking finding must identify the missing or contradictory requirement/evidence, concrete delivery or verification consequence, affected work, what the coordinator checked or attempted, why autonomous resolution is insufficient, and the specific answer or evidence that closes it. Investigations must have a bounded objective, authority/resource limits, closure evidence and dependent-work gate; they do not authorize unapproved implementation. Keep unrelated eligible work moving. An undefined overall outcome may block the whole feature; a local gap must block only affected work and its dependents. Show the assessment, findings, resolutions and remaining questions through the shared work UI, agent tools and history.",
+      "sourceSection": "8 Feature coordinators and autonomous execution",
+      "architectureSection": "coordinator-execution-and-concurrency",
+      "owner": "AgentSupervisor and work activation",
+      "validationFamily": "Activation, root concurrency and fresh-session tests",
+      "validationGate": "G07",
+      "plannedCase": "AT-AGENT-19",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result"
+    },
+    {
+      "requirement": "AGENT-20",
+      "requirementStatus": "Confirmed",
+      "statement": "Readiness review has no finding quota; ready with no blockers is valid. Present remaining findings together after reasonable autonomous resolution, then check their closure without repeatedly reopening settled choices. Additional blockers require newly discovered material evidence or changed scope or assumptions. Reuse an assessment while its reviewed plan/scope and relevant evidence remain current; Continue alone does not require another full review. Material changes trigger reassessment of affected scope without invalidating unaffected approved work. Plan approval alone does not clear findings: record resolution or explicit, finding-specific human acceptance of an identified risk. Risk acceptance cannot supply missing prerequisites, make contradictory criteria achievable, waive enforced permissions or required verification, or authorize incomplete work to be reported complete. The feature coordinator remains accountable; a separate reviewer is not universally required.",
+      "sourceSection": "8 Feature coordinators and autonomous execution",
+      "architectureSection": "coordinator-execution-and-concurrency",
+      "owner": "AgentSupervisor and work activation",
+      "validationFamily": "Activation, root concurrency and fresh-session tests",
+      "validationGate": "G07",
+      "plannedCase": "AT-AGENT-20",
       "designStatus": "Proposed architecture mapping; not an implementation/test result"
     },
     {

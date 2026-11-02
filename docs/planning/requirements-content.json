@@ -742,7 +742,7 @@
         "req",
         "AGENT-12",
         "Confirmed",
-        "Features should ideally be fully planned before execution. On Start, the feature coordinator must review the feature and its existing plan. If planning is incomplete, develop what can be planned from the available information, identify gaps, and ask the user for plan approval or more input before executing unapproved work. A complete existing plan must not trigger redundant planning or repeated approval requests where authorization already exists."
+        "Before feature implementation starts, its coordinator must assess execution readiness even when the user has already approved the plan. Review the intended outcome and scope, observable acceptance, implementation coverage, dependencies, access and resources, verification and delivery path, and material uncertainties across the whole feature. Every implementation detail need not be settled, but each material uncertainty needs a credible resolution path. On Start, develop incomplete planning from available evidence and seek required plan approval before implementing unapproved scope. Apply AGENT-18\u201320 to resolve gaps, justify blockers and reuse current assessments. An approved, ready plan must proceed without redundant planning or repeated approval requests."
       ],
       [
         "req",
@@ -773,6 +773,24 @@
         "AGENT-17",
         "Confirmed",
         "Every newly started feature, standalone issue or task assignment must begin in a new session with clear context for that work, including when launched by keep-working mode, a scheduled agent or a user action. Assemble the relevant brief, instructions, project knowledge and scoped evidence; do not carry over the prior work item\u2019s conversation as the new session\u2019s transcript. Retain links to the originating action and relevant history without conflating session identities. Continuing an existing item preserves its established history and continuity; it is not a new work item."
+      ],
+      [
+        "req",
+        "AGENT-18",
+        "Confirmed",
+        "The coordinator must resolve what it reasonably can before escalating readiness gaps to the user: inspect current requirements, repository code, project knowledge and conventions; use available evidence and ordinary engineering judgment; and perform bounded investigation within existing authority and budgets. Record the decision and its confidence. A gap blocks affected implementation only when it materially threatens delivery or verification of an approved requirement and cannot reasonably be resolved through those means before that implementation proceeds. Routine reversible technical choices, stylistic preferences and requests for extra detail without a concrete consequence are not blockers. Escalate only remaining material choices or constraints requiring user input, authority or resources, with a specific question and recommended answer. Do not silently narrow approved scope, replace acceptance criteria or invent product intent to avoid escalation."
+      ],
+      [
+        "req",
+        "AGENT-19",
+        "Confirmed",
+        "Record readiness findings against the feature and relevant requirements as resolved decisions, bounded investigations, or matters needing a user decision. Each blocking finding must identify the missing or contradictory requirement/evidence, concrete delivery or verification consequence, affected work, what the coordinator checked or attempted, why autonomous resolution is insufficient, and the specific answer or evidence that closes it. Investigations must have a bounded objective, authority/resource limits, closure evidence and dependent-work gate; they do not authorize unapproved implementation. Keep unrelated eligible work moving. An undefined overall outcome may block the whole feature; a local gap must block only affected work and its dependents. Show the assessment, findings, resolutions and remaining questions through the shared work UI, agent tools and history."
+      ],
+      [
+        "req",
+        "AGENT-20",
+        "Confirmed",
+        "Readiness review has no finding quota; ready with no blockers is valid. Present remaining findings together after reasonable autonomous resolution, then check their closure without repeatedly reopening settled choices. Additional blockers require newly discovered material evidence or changed scope or assumptions. Reuse an assessment while its reviewed plan/scope and relevant evidence remain current; Continue alone does not require another full review. Material changes trigger reassessment of affected scope without invalidating unaffected approved work. Plan approval alone does not clear findings: record resolution or explicit, finding-specific human acceptance of an identified risk. Risk acceptance cannot supply missing prerequisites, make contradictory criteria achievable, waive enforced permissions or required verification, or authorize incomplete work to be reported complete. The feature coordinator remains accountable; a separate reviewer is not universally required."
       ],
       [
         "h2",
@@ -2786,7 +2804,7 @@
           ],
           [
             "G11",
-            "Retained scope. The 350 requirements and all 351 operations/48 families have owners and candidate contracts. The 63 active local slices cover 494 retained source entries, 64 audited exclusions and 33 acceptance groups. Qualify actual services/source semantics, import and drift."
+            "Retained scope. The 353 requirements and all 353 operations/48 families have owners and candidate contracts. The 63 active local slices cover 494 retained source entries, 64 audited exclusions and 33 acceptance groups. Qualify actual services/source semantics, import and drift."
           ],
           [
             "G12",
