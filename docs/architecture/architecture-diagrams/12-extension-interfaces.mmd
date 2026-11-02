@@ -1,0 +1,68 @@
+classDiagram
+ class PackageManifest {
+  PackageId id
+  Version version
+  Digest content_digest
+  CapabilitySet requested
+ }
+ class PackageProcess {
+  ProcessId pid
+  ProtocolVersion negotiated
+ }
+ class PackageHost {
+  initialize_without_grants()
+  route_pinned_invocation()
+  cancel_and_reconcile()
+ }
+ class PackageService {
+  verify_trust_and_exact_approval()
+  commit_activation_with_state()
+ }
+ class ContributionRegistry {
+  ActivePackageSet revision
+  publish_complete_candidate()
+ }
+ class PackageStateGeneration {
+  SchemaVersion schema
+  Revision expected
+ }
+ class HostCapabilityBroker {
+  invoke_scoped_operation()
+  request_inference()
+ }
+ class Contribution {
+  ContributionKind kind
+  CapabilityId id
+ }
+ class NativePanelSpec {
+  FormTableReport schema
+  ActionId actions
+ }
+ class NativePanelRenderer {
+  validate_spec()
+  render_in_egui()
+ }
+ class ProviderTransport {
+  <<trait>>
+  dispatch_native_request()
+ }
+ class BuiltinTransport {
+  EndpointCapabilities capabilities
+ }
+ class PackageProviderAdapter {
+  PackageVersion version
+ }
+ PackageHost *-- PackageProcess : owns lifecycle
+ PackageService --> PackageHost : controls prepared activation
+ PackageService --> ContributionRegistry : atomic publication
+ PackageService --> PackageStateGeneration : selects generation
+ ContributionRegistry o-- Contribution : immutable registration
+ PackageHost --> ContributionRegistry : resolves pinned revision
+ PackageHost --> PackageManifest : validates version
+ PackageHost --> HostCapabilityBroker : delegates host calls
+ Contribution --> NativePanelSpec : may describe UI
+ NativePanelRenderer --> NativePanelSpec : renders data only
+ HostCapabilityBroker --> ProviderTransport : routed transport access
+ ProviderTransport <|.. BuiltinTransport : implements
+ ProviderTransport <|.. PackageProviderAdapter : implements
+ PackageProviderAdapter --> PackageProcess : framed RPC

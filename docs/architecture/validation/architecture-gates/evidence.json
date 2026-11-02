@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-02",
+  "status": "Architecture feasibility evidence; production/target acceptance pending",
+  "host": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "macOS": "27.0.1"
+  },
+  "rust": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+  "sourceSha256": {
+    "tools/architecture-gates-eval/Cargo.toml": "dba265a798707edff40a2bf9c183fc5bea7deab6449158d13f029b7d56eeedcc",
+    "tools/architecture-gates-eval/Cargo.lock": "c03af84f743edf65fecfadadbea284b83b0812cf91875e8efb7a797ba2c6d577",
+    "tools/architecture-gates-eval/src/main.rs": "b974c075b69edcfe179104df2e6a674d395e0dbc238c7e7fb7611af26061391b"
+  },
+  "binarySha256": "a33be366ff0ff73c56b52bf1b21bf672e7a5cbf1c7a8a44db5b0c8976b239d43",
+  "resultsSha256": {
+    "ui.json": "70f5430a29c39d15476698d49f9a9682dd0e5599e124071591e497efbb478a34",
+    "secret.json": "e3002c0ea4a1ac449711b52f2c3900c039a5d61bb23498cb4471fd9a64b9ba81",
+    "process.json": "7d6a11653bb67d1e9b7dc4da66f368d246ced64309280f1890ab67c28f4550ac"
+  },
+  "nativeExperiments": [
+    "hidden_eframe_glow_window",
+    "synthetic_keychain_lifecycle",
+    "owned_cooperative_process_group"
+  ],
+  "simpleRouterSource": {
+    "revision": "a556b3531b577173195bbc3876b556196447721d",
+    "files": {
+      "Claude/ClaudeOAuthClient.cs": "d76c5cfea8b3fa12eafc63f342f73e4b25b9f6199d4a915ae7c9b3e34b178ee0",
+      "Claude/ClaudeUpstream.cs": "0eb7d4629d5a5e5d01c2a4fdbc0d8bc87b727754345e4ef71a79b62128328921",
+      "Claude/ClaudeIdentity.cs": "6c6b0e5ad60efb394d748f4bd7b5d1de282601d0f914dd92f24009cd6763b8a1",
+      "Claude/ClaudeTokenProvider.cs": "8d0d08dfb7fbd8d4ab235a7349f01ca4b85925c5e99d80520ecd988346f12429",
+      "Claude/ClaudeCredentialStore.cs": "088b892ba2a6b4c392189d9cb755318c8efd271e81297c00dc8dbb21bc0fa87f",
+      "RouterOptions.cs": "b05d30d9e83ba60ed188b8aee7dca7093a6189a017681a7357e54befb6c72b36"
+    },
+    "evidence": "Source inspection only; no authentication or inference"
+  },
+  "userDecisions": [
+    "Retain direct simple-router Claude subscription as optional user risk; add separate Anthropic API-key option.",
+    "Remove external HelixDB schema reader; retire DW-038; internal indexes remain SQLite/FTS5/sqlite-vec."
+  ],
+  "noInference": true,
+  "visibleBrowserTabsOpened": 0,
+  "limits": [
+    "No production gateway/security/SDK/transport services implemented.",
+    "No signed identity/ACL, locked-store, escaped-process, OS screen-reader or other-target qualification.",
+    "No live subscription/API compatibility, provider approval or account entitlement established.",
+    "Full production correctness/recovery/parity, all twelve workloads and six target builds remain acceptance."
+  ]
+}

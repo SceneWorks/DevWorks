@@ -1,0 +1,9 @@
+{
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "database": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/small-1-graphqlite/database",
+  "output": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/small-1-graphqlite/result.json",
+  "limit": 1000,
+  "overlay": false,
+  "samples": 2000,
+  "vector_samples": 80
+}

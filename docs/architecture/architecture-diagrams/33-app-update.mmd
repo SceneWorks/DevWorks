@@ -1,0 +1,28 @@
+sequenceDiagram
+    participant U as User
+    participant S as UpdateService
+    participant R as Release source
+    participant A as App and store
+    participant H as Installer helper
+    participant N as New build
+    S->>R: Due check for selected channel and target
+    R-->>S: Metadata and signed release manifest
+    S->>S: Verify trust, version, target and staged bytes
+    S-->>U: Version, compatibility and migration plan
+    U->>S: Approve exact manifest and installation
+    S->>A: Stop admission and bounded checkpoint/shutdown
+    A-->>H: Confirm process exit and released data locks
+    H->>H: Verify receipt and journal replacement
+    H->>N: Apply approved asset and launch once
+    N->>A: Open compatible data and validate matching Help
+    alt Startup health succeeds
+        N-->>H: Health handshake
+        H->>H: Commit installed authority
+    else Startup fails before incompatible data writes
+        H->>H: Restore only compatible previous binary
+        Note over H,A: Preserve data and recovery journal
+    else Incompatible data transition already happened
+        H-->>U: Explicit recovery with retained current data
+        Note over U,A: No automatic data restore or downgrade
+    end
+    Note over A,N: Feature and issue work still require explicit Continue

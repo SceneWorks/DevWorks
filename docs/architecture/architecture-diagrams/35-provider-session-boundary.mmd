@@ -1,0 +1,25 @@
+sequenceDiagram
+    participant P as Provider codec
+    participant R as Router and assembler
+    participant H as Session store
+    participant B as Tool broker
+    P->>R: Bound attempt events and complete tool observations
+    R->>R: Validate identity, ordinals and native continuation
+    Note over P,R: Incomplete stream retains evidence, tools stay unready
+    P->>R: Valid terminal tool-call turn
+    R->>H: Atomic batch of native items and complete calls
+    H-->>R: Durable sequence and batch receipt
+    R->>B: Admit calls under current authority and root controls
+    par Independent call A
+        B->>H: Save completed response A
+    and Call B needs approval
+        B->>H: Save initial ApprovalRequired response B
+    end
+    R->>H: Read durable responses by original call ordinal
+    H-->>R: Ordered results and retained native items
+    R->>P: Provider-valid continuation with current context
+    Note over B,H: Later approval resumes saved operation through fresh admission
+    B->>H: Append later operation outcome as a new event
+    Note over P,H: No second result for the old native call ID
+    R->>H: Explicit epoch change for provider switch or compaction
+    Note over R,H: Preserve history and exclude incompatible opaque state

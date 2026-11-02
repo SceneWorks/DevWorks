@@ -1,0 +1,842 @@
+[
+  {
+    "id": "generation-spec",
+    "entry": "inference-spec",
+    "raw": "{\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "host-owned-feature-attribution",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Implementation\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-broker-attribution-injection",
+    "entry": "inference-spec",
+    "raw": "{\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true},\"attribution\":{\"kind\":\"Job\",\"runId\":\"job-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-provider-secret-input",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Implementation\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true},\"apiKey\":\"forged\"}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-ambiguous-tool-alias",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Implementation\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "purpose-Conversation",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Conversation\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "purpose-Planning",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Planning\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "purpose-Review",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Review\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "purpose-Dreaming",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Dreaming\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "purpose-Compaction",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Compaction\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "purpose-Title",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Title\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "purpose-Vision",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Vision\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "purpose-Semantic",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Semantic\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "purpose-Package",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"purpose\":\"Package\",\"attribution\":{\"kind\":\"Feature\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"jobRunId\":\"job-a\"},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"input\":{\"kind\":\"Generation\",\"sessionId\":\"session-a\",\"context\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextEpoch\":\"0\",\"tools\":[{\"capabilityId\":\"core/read\",\"wireName\":\"read_file\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],\"responseHeadroomTokens\":\"100\",\"requiresImages\":false,\"requiresParallelTools\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "embedding-no-fake-session",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"embed-a\",\"purpose\":\"Embedding\",\"attribution\":{\"kind\":\"Service\",\"operationId\":\"op-a\"},\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"input\":{\"kind\":\"Embedding\",\"embeddingSpaceId\":\"space-a\",\"dimensions\":384,\"inputs\":[{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-embedding-purpose-mismatch",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"embed-a\",\"purpose\":\"Conversation\",\"attribution\":{\"kind\":\"Service\",\"operationId\":\"op-a\"},\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"input\":{\"kind\":\"Embedding\",\"embeddingSpaceId\":\"space-a\",\"dimensions\":384,\"inputs\":[{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}]}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-empty-embedding-batch",
+    "entry": "inference-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"embed-a\",\"purpose\":\"Embedding\",\"attribution\":{\"kind\":\"Service\",\"operationId\":\"op-a\"},\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"instructionRevision\":\"1\",\"cancellationRevision\":\"1\",\"input\":{\"kind\":\"Embedding\",\"embeddingSpaceId\":\"space-a\",\"dimensions\":384,\"inputs\":[]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "complete-tool-observation",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"ToolCallComplete\",\"toolCall\":{\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"capabilityId\":\"core/read\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"arguments\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"nativeItem\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "provider-text",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"TextDelta\",\"blockIndex\":\"0\",\"text\":\"Hello\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "provider-native",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"NativeContinuation\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "provider-terminal",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"Terminal\",\"outcome\":\"ToolCallsReady\",\"nativeStopReason\":\"tool_calls\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "provider-heartbeat",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"Heartbeat\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "usage-reported-zero",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"Usage\",\"observation\":{\"inputTokens\":\"0\",\"cost\":{\"kind\":\"Reported\",\"amount\":\"0\",\"currency\":\"USD\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "usage-subscription-estimate",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"Usage\",\"observation\":{\"inputTokens\":\"0\",\"cost\":{\"kind\":\"Estimated\",\"amount\":\"0.025\",\"currency\":\"USD\",\"priceSnapshotId\":\"price-a\",\"subscriptionEquivalent\":true}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "usage-local-free",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"Usage\",\"observation\":{\"inputTokens\":\"0\",\"cost\":{\"kind\":\"Free\",\"basis\":\"LocalProvider\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "usage-untracked",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"Usage\",\"observation\":{\"inputTokens\":\"0\",\"cost\":{\"kind\":\"Untracked\",\"reason\":\"no-price\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "usage-unknown",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"Usage\",\"observation\":{\"inputTokens\":\"0\",\"cost\":{\"kind\":\"Unknown\",\"reason\":\"interrupted\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-foreign-call-attempt",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"ToolCallComplete\",\"toolCall\":{\"call\":{\"attemptId\":\"attempt-other\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"capabilityId\":\"core/read\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"arguments\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"nativeItem\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-cross-connection-opaque-replay",
+    "entry": "provider-event",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"sequence\":\"1\",\"event\":{\"kind\":\"NativeContinuation\",\"binding\":{\"connectionId\":\"connection-other\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "codec-reported-zero",
+    "entry": "provider-codec-event",
+    "raw": "{\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"Usage\",\"observation\":{\"reportedCost\":{\"amount\":\"0\",\"currency\":\"USD\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-codec-free-cost-authority",
+    "entry": "provider-codec-event",
+    "raw": "{\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"Usage\",\"observation\":{\"reportedCost\":{\"amount\":\"0\",\"currency\":\"USD\"},\"cost\":{\"kind\":\"Free\",\"basis\":\"LocalProvider\"}}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-codec-billing-owner",
+    "entry": "provider-codec-event",
+    "raw": "{\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"Usage\",\"observation\":{\"reportedCost\":{\"amount\":\"0\",\"currency\":\"USD\"}}},\"attribution\":{\"kind\":\"Job\",\"runId\":\"job-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "session-user-message",
+    "entry": "session-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"message-a\",\"sessionId\":\"session-a\",\"expectedSessionRevision\":\"1\",\"content\":[{\"kind\":\"Text\",\"text\":\"Continue this work\"},{\"kind\":\"Attachment\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-message-role",
+    "entry": "session-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"message-a\",\"sessionId\":\"session-a\",\"expectedSessionRevision\":\"1\",\"content\":[{\"kind\":\"Text\",\"text\":\"Continue this work\"},{\"kind\":\"Attachment\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}],\"role\":\"forged\"}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-message-actorId",
+    "entry": "session-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"message-a\",\"sessionId\":\"session-a\",\"expectedSessionRevision\":\"1\",\"content\":[{\"kind\":\"Text\",\"text\":\"Continue this work\"},{\"kind\":\"Attachment\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}],\"actorId\":\"forged\"}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-message-authorityReceipt",
+    "entry": "session-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"message-a\",\"sessionId\":\"session-a\",\"expectedSessionRevision\":\"1\",\"content\":[{\"kind\":\"Text\",\"text\":\"Continue this work\"},{\"kind\":\"Attachment\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}],\"authorityReceipt\":\"forged\"}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-message-hostNotice",
+    "entry": "session-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"message-a\",\"sessionId\":\"session-a\",\"expectedSessionRevision\":\"1\",\"content\":[{\"kind\":\"Text\",\"text\":\"Continue this work\"},{\"kind\":\"Attachment\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}],\"hostNotice\":\"forged\"}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "transcript-query",
+    "entry": "session-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"q-a\",\"sessionId\":\"session-a\",\"limit\":100}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "transcript-query-too-large",
+    "entry": "session-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"q-a\",\"sessionId\":\"session-a\",\"limit\":501}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "durable-call-and-wait-response",
+    "entry": "transcript-batch",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"batchId\":\"batch-a\",\"sessionId\":\"session-a\",\"contextEpoch\":\"0\",\"expectedNextSequence\":\"1\",\"entries\":[{\"entryId\":\"entry-call\",\"sequence\":\"1\",\"body\":{\"kind\":\"ToolCallRecorded\",\"toolCall\":{\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"capabilityId\":\"core/read\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"arguments\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"nativeItem\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}},{\"entryId\":\"entry-response\",\"sequence\":\"2\",\"body\":{\"kind\":\"ToolResponseRecorded\",\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"outcome\":{\"kind\":\"ApprovalRequired\",\"approvalId\":\"approval-a\",\"operationId\":\"op-a\"}}}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-gapped-transcript-batch",
+    "entry": "transcript-batch",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"batchId\":\"batch-a\",\"sessionId\":\"session-a\",\"contextEpoch\":\"0\",\"expectedNextSequence\":\"1\",\"entries\":[{\"entryId\":\"entry-call\",\"sequence\":\"1\",\"body\":{\"kind\":\"ToolCallRecorded\",\"toolCall\":{\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"capabilityId\":\"core/read\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"arguments\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"nativeItem\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}},{\"entryId\":\"entry-response\",\"sequence\":\"3\",\"body\":{\"kind\":\"ToolResponseRecorded\",\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"outcome\":{\"kind\":\"ApprovalRequired\",\"approvalId\":\"approval-a\",\"operationId\":\"op-a\"}}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-duplicate-entry-id",
+    "entry": "transcript-batch",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"batchId\":\"batch-a\",\"sessionId\":\"session-a\",\"contextEpoch\":\"0\",\"expectedNextSequence\":\"1\",\"entries\":[{\"entryId\":\"entry-call\",\"sequence\":\"1\",\"body\":{\"kind\":\"ToolCallRecorded\",\"toolCall\":{\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"capabilityId\":\"core/read\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"arguments\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"nativeItem\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}},{\"entryId\":\"entry-call\",\"sequence\":\"2\",\"body\":{\"kind\":\"ToolResponseRecorded\",\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"outcome\":{\"kind\":\"ApprovalRequired\",\"approvalId\":\"approval-a\",\"operationId\":\"op-a\"}}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "session-command-receipt",
+    "entry": "session-command-reply",
+    "raw": "{\"kind\":\"Recorded\",\"protocol\":\"1.0-draft.1\",\"receipt\":{\"commandId\":\"cmd-a\",\"committedSequence\":\"3\",\"acceptedAtMs\":\"1\",\"requestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"decision\":{\"kind\":\"MessageSaved\",\"sessionId\":\"session-a\",\"sessionRevision\":\"2\",\"entryId\":\"entry-user\",\"sequence\":\"3\"}},\"replayed\":false}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "transcript-page",
+    "entry": "transcript-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"q-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"9\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"sessionId\":\"session-a\",\"entries\":[{\"entryId\":\"entry-call\",\"sequence\":\"1\",\"body\":{\"kind\":\"ToolCallRecorded\",\"toolCall\":{\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"capabilityId\":\"core/read\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"arguments\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"nativeItem\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}},{\"entryId\":\"entry-response\",\"sequence\":\"2\",\"body\":{\"kind\":\"ToolResponseRecorded\",\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"outcome\":{\"kind\":\"ApprovalRequired\",\"approvalId\":\"approval-a\",\"operationId\":\"op-a\"}}}],\"nextCursor\":\"cursor-a\",\"hasMore\":false}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-unordered-transcript-page",
+    "entry": "transcript-page",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"q-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"9\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"sessionId\":\"session-a\",\"entries\":[{\"entryId\":\"entry-response\",\"sequence\":\"2\",\"body\":{\"kind\":\"ToolResponseRecorded\",\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"outcome\":{\"kind\":\"ApprovalRequired\",\"approvalId\":\"approval-a\",\"operationId\":\"op-a\"}}},{\"entryId\":\"entry-call\",\"sequence\":\"1\",\"body\":{\"kind\":\"ToolCallRecorded\",\"toolCall\":{\"call\":{\"attemptId\":\"attempt-a\",\"nativeCallId\":\"call:a\",\"ordinal\":\"0\"},\"capabilityId\":\"core/read\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"arguments\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"nativeItem\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}],\"nextCursor\":\"cursor-a\",\"hasMore\":false}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "all-eight-contribution-categories",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"fixture/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"},{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"},{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]},{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0},{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]},{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "contribution-Semantic",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"fixture/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "contribution-Tool",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "contribution-Workflow",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "contribution-EventHandler",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "contribution-ContextHook",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "contribution-Content",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "contribution-Provider",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "contribution-NativeUi",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-contribution-namespace-hijack",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"core/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"},{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"},{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]},{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0},{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]},{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-aliased-package-files",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"},{\"path\":\"BIN/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"1\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"fixture/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"},{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"},{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]},{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0},{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]},{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-package-traversal",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"../helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"fixture/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"},{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"},{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]},{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0},{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]},{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-missing-entrypoint",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/absent\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"fixture/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"},{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"},{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]},{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0},{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]},{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-wrong-entrypoint-case",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"BIN/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"fixture/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"},{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"},{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]},{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0},{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]},{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-bad-semver",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"latest\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"fixture/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"},{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"},{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]},{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0},{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]},{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-self-dependency",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[{\"packageId\":\"fixture\",\"versionRequirement\":\"^1\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"required\":true}],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"fixture/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"},{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"},{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]},{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0},{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]},{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-supplied-trust-receipt",
+    "entry": "package-manifest",
+    "raw": "{\"packageId\":\"fixture\",\"version\":\"1.2.3\",\"publisherId\":\"publisher-a\",\"protocolMin\":{\"major\":1,\"minor\":0},\"protocolMax\":{\"major\":1,\"minor\":0},\"minimumHostVersion\":\"1.0.0\",\"dependencies\":[],\"runtimes\":[],\"schemaAssets\":[],\"requestedLimits\":{\"maxConcurrent\":4,\"queueCapacity\":32,\"maxMemoryBytes\":\"268435456\",\"streamCreditBytes\":262144},\"targets\":[{\"targetTriple\":\"aarch64-apple-darwin\",\"entrypoint\":\"bin/helper\"}],\"files\":[{\"path\":\"bin/helper\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"100\"},{\"path\":\"help.md\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"20\"}],\"helpFile\":\"help.md\",\"stateSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"configurationSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"requestedPermissions\":[{\"kind\":\"WorktreeRead\"},{\"kind\":\"Inference\"},{\"kind\":\"StateWrite\"},{\"kind\":\"UiContribution\"}],\"contributions\":[{\"kind\":\"Semantic\",\"meta\":{\"id\":\"fixture/semantic\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"languages\":[\"rust\"],\"format\":\"Scip\"},{\"kind\":\"Tool\",\"meta\":{\"id\":\"fixture/tool\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"requestedEffect\":\"ReadCandidate\"},{\"kind\":\"Workflow\",\"meta\":{\"id\":\"fixture/workflow\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"role\":\"VerificationGate\",\"evidenceSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"EventHandler\",\"meta\":{\"id\":\"fixture/event\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"eventSchemas\":[{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]},{\"kind\":\"ContextHook\",\"meta\":{\"id\":\"fixture/context\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"phase\":\"Compact\",\"priority\":0},{\"kind\":\"Content\",\"meta\":{\"id\":\"fixture/content\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"contentKind\":\"Skill\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},{\"kind\":\"Provider\",\"meta\":{\"id\":\"fixture/provider\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"profiles\":[\"OpenAiResponses\"],\"endpointIds\":[\"endpoint-a\"]},{\"kind\":\"NativeUi\",\"meta\":{\"id\":\"fixture/ui\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"outputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"helpTopic\":\"fixture-guide\",\"required\":true,\"cancellation\":\"Cooperative\"},\"view\":{\"kind\":\"Group\",\"children\":[{\"kind\":\"Text\",\"text\":\"Package report\"},{\"kind\":\"Field\",\"fieldId\":\"name\",\"label\":\"Name\",\"fieldKind\":\"Text\",\"readOnly\":false},{\"kind\":\"Action\",\"actionId\":\"fixture/tool\",\"label\":\"Inspect\"},{\"kind\":\"Table\",\"columns\":[\"name\"],\"dataSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},{\"kind\":\"Image\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}}],\"trustedPublisher\":true}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "rpc-initialize",
+    "entry": "package-host-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"method\":\"host.initialize\",\"params\":{\"processSessionId\":\"session-a\",\"offeredMin\":{\"major\":1,\"minor\":0},\"offeredMax\":{\"major\":1,\"minor\":0},\"expectedManifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"requiredFeatures\":[\"cancel\",\"credits\"],\"maxFrameBytes\":1048576}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-activate",
+    "entry": "package-host-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:2\",\"method\":\"host.activate\",\"params\":{\"processSessionId\":\"session-a\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\",\"configurationRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-invoke",
+    "entry": "package-host-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:3\",\"method\":\"host.invoke\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"contributionId\":\"fixture/tool\",\"scope\":{\"kind\":\"Root\",\"projectId\":\"project-a\",\"rootId\":\"root-a\"},\"allowedOperations\":[\"core/read\"],\"registryRevision\":\"1\",\"stateGeneration\":\"1\",\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"operationId\":\"op-a\",\"deadlineMs\":1000,\"input\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-cancel",
+    "entry": "package-host-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:4\",\"method\":\"host.cancel\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"cancellationRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-shutdown",
+    "entry": "package-host-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:5\",\"method\":\"host.shutdown\",\"params\":{\"processSessionId\":\"session-a\",\"deadlineMs\":1000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-host-unknown-major",
+    "entry": "package-host-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"method\":\"host.initialize\",\"params\":{\"processSessionId\":\"session-a\",\"offeredMin\":{\"major\":1,\"minor\":0},\"offeredMax\":{\"major\":2,\"minor\":0},\"expectedManifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"requiredFeatures\":[\"cancel\",\"credits\"],\"maxFrameBytes\":1048576}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-host-credential-argument",
+    "entry": "package-host-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:3\",\"method\":\"host.invoke\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"contributionId\":\"fixture/tool\",\"scope\":{\"kind\":\"Root\",\"projectId\":\"project-a\",\"rootId\":\"root-a\"},\"allowedOperations\":[\"core/read\"],\"registryRevision\":\"1\",\"stateGeneration\":\"1\",\"authorityRevision\":\"1\",\"controlGeneration\":\"1\",\"operationId\":\"op-a\",\"deadlineMs\":1000,\"input\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"credential\":\"forged\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "broker-artifact-read",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:1\",\"method\":\"broker.call\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"actionKey\":\"read-input\",\"call\":{\"kind\":\"ArtifactRead\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "broker-application",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:1\",\"method\":\"broker.call\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"actionKey\":\"read-input\",\"call\":{\"kind\":\"Application\",\"operation\":\"core/read\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"arguments\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "broker-inference",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:1\",\"method\":\"broker.call\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"actionKey\":\"read-input\",\"call\":{\"kind\":\"Inference\",\"inputSchema\":{\"schemaId\":\"core/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"request\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "broker-http",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:1\",\"method\":\"broker.call\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"actionKey\":\"read-input\",\"call\":{\"kind\":\"Http\",\"connectionHandle\":\"connection-handle\",\"endpointId\":\"endpoint-a\",\"httpMethod\":\"Post\",\"relativePath\":\"/v1/messages\",\"body\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "broker-write-artifact",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:1\",\"method\":\"broker.call\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"actionKey\":\"read-input\",\"call\":{\"kind\":\"ArtifactWrite\",\"proposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-broker-scope-injection",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:1\",\"method\":\"broker.call\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"actionKey\":\"read-input\",\"call\":{\"kind\":\"ArtifactRead\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}},\"rootId\":\"root-other\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-broker-absolute-url",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:1\",\"method\":\"broker.call\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"actionKey\":\"read-input\",\"call\":{\"kind\":\"Http\",\"connectionHandle\":\"connection-handle\",\"endpointId\":\"endpoint-a\",\"httpMethod\":\"Get\",\"relativePath\":\"https://other.invalid/\"}}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "broker-state-Read",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:2\",\"method\":\"broker.state\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"actionKey\":\"state-a\",\"stateGeneration\":\"1\",\"action\":{\"kind\":\"Read\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "broker-state-CompareAndSet",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:2\",\"method\":\"broker.state\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"actionKey\":\"state-a\",\"stateGeneration\":\"1\",\"action\":{\"kind\":\"CompareAndSet\",\"expectedRevision\":\"1\",\"proposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "event-commit-state-intents-checkpoint",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:3\",\"method\":\"broker.commit_event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"subscriptionId\":\"subscription-a\",\"eventId\":\"event-a\",\"expectedCheckpoint\":\"0\",\"stateGeneration\":\"1\",\"expectedStateRevision\":\"1\",\"stateProposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"intents\":[{\"actionKey\":\"follow-up\",\"call\":{\"kind\":\"ArtifactWrite\",\"proposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-duplicate-event-intent",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:3\",\"method\":\"broker.commit_event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"subscriptionId\":\"subscription-a\",\"eventId\":\"event-a\",\"expectedCheckpoint\":\"0\",\"stateGeneration\":\"1\",\"expectedStateRevision\":\"1\",\"stateProposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"intents\":[{\"actionKey\":\"follow-up\",\"call\":{\"kind\":\"ArtifactWrite\",\"proposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}},{\"actionKey\":\"follow-up\",\"call\":{\"kind\":\"ArtifactWrite\",\"proposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}]}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "event-commit-checkpoint-only",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:3\",\"method\":\"broker.commit_event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"subscriptionId\":\"subscription-a\",\"eventId\":\"event-a\",\"expectedCheckpoint\":\"0\",\"stateGeneration\":\"1\",\"expectedStateRevision\":\"1\",\"intents\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-forged-event-processing-receipt",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:3\",\"method\":\"broker.commit_event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"subscriptionId\":\"subscription-a\",\"eventId\":\"event-a\",\"expectedCheckpoint\":\"0\",\"stateGeneration\":\"1\",\"expectedStateRevision\":\"1\",\"stateProposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"intents\":[{\"actionKey\":\"follow-up\",\"call\":{\"kind\":\"ArtifactWrite\",\"proposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}],\"processingReceipt\":\"forged\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-missing-event-checkpoint",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:3\",\"method\":\"broker.commit_event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"subscriptionId\":\"subscription-a\",\"eventId\":\"event-a\",\"stateGeneration\":\"1\",\"expectedStateRevision\":\"1\",\"stateProposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"intents\":[{\"actionKey\":\"follow-up\",\"call\":{\"kind\":\"ArtifactWrite\",\"proposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-event-intent-absolute-url",
+    "entry": "package-request",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:3\",\"method\":\"broker.commit_event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"subscriptionId\":\"subscription-a\",\"eventId\":\"event-a\",\"expectedCheckpoint\":\"0\",\"stateGeneration\":\"1\",\"expectedStateRevision\":\"1\",\"stateProposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"intents\":[{\"actionKey\":\"follow-up\",\"call\":{\"kind\":\"Http\",\"connectionHandle\":\"connection-a\",\"endpointId\":\"endpoint-a\",\"httpMethod\":\"Post\",\"relativePath\":\"https://other.invalid/\"}}]}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "event-commit-host-accepted",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:p:3\",\"result\":{\"kind\":\"EventCommitAccepted\",\"processingReceipt\":\"receipt-a\",\"checkpoint\":\"1\",\"stateRevision\":\"2\",\"operationIds\":[\"operation-a\"]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "progress-not-terminal",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.progress\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"sequence\":\"1\",\"text\":\"Working\",\"droppedCount\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-notification-request-id",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.progress\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"sequence\":\"1\",\"text\":\"Working\",\"droppedCount\":\"0\"},\"id\":\"not-a-notification\"}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "bounded-stream-credit",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"broker.streamCredit\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"streamId\":\"stream-a\",\"sequence\":\"1\",\"grantBytes\":262144}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-unbounded-credit",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"broker.streamCredit\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"streamId\":\"stream-a\",\"sequence\":\"1\",\"grantBytes\":262145}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "package-event-codec",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"Provider\",\"event\":{\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"Usage\",\"observation\":{\"reportedCost\":{\"amount\":\"0\",\"currency\":\"USD\"}}}}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "package-event-artifact",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"ArtifactProduced\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "package-event-semantic",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"SemanticIndex\",\"sourceSnapshot\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"index\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"format\":\"Scip\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "package-event-context",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"ContextProposal\",\"inputDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposal\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "package-event-verification",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"Verification\",\"passed\":true,\"evidence\":[{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "package-event-view",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"ViewUpdate\",\"revision\":\"1\",\"data\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "package-event-event",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.event\",\"params\":{\"processSessionId\":\"session-a\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"sequence\":\"1\",\"event\":{\"kind\":\"EventProcessed\",\"subscriptionId\":\"sub-a\",\"eventId\":\"event-a\",\"processingReceipt\":\"receipt-a\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-result-0",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"result\":{\"kind\":\"Initialized\",\"selected\":{\"major\":1,\"minor\":0},\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-result-1",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-result-2",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"result\":{\"kind\":\"InvocationFinished\",\"invocationId\":\"invocation-a\",\"outcome\":{\"kind\":\"Completed\",\"artifacts\":[{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-result-3",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"result\":{\"kind\":\"InvocationFinished\",\"invocationId\":\"invocation-a\",\"outcome\":{\"kind\":\"OutcomeUnknown\",\"operationId\":\"op-a\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-result-4",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"result\":{\"kind\":\"CancelAcknowledged\",\"invocationId\":\"invocation-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-result-5",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"result\":{\"kind\":\"ShutdownAcknowledged\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-result-6",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"result\":{\"kind\":\"BrokerCompleted\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-result-7",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"result\":{\"kind\":\"StateSnapshot\",\"stateGeneration\":\"1\",\"revision\":\"1\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-error",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"error\":{\"code\":-32020,\"message\":\"Unavailable\",\"data\":{\"class\":\"Unavailable\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "rpc-parse-error-null-id",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Unavailable\",\"data\":{\"class\":\"Unavailable\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-both-result-and-error",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":\"session-a:h:1\",\"error\":{\"code\":-32020,\"message\":\"Unavailable\",\"data\":{\"class\":\"Unavailable\"}},\"result\":{\"kind\":\"Initialized\",\"selected\":{\"major\":1,\"minor\":0},\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-inappropriate-null-id",
+    "entry": "package-response",
+    "raw": "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32020,\"message\":\"Unavailable\",\"data\":{\"class\":\"Unavailable\"}}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "addon-Install",
+    "entry": "addon-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"addon-a\",\"command\":{\"kind\":\"Install\",\"bundle\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"expectedRegistryRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "addon-Update",
+    "entry": "addon-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"addon-a\",\"command\":{\"kind\":\"Update\",\"packageId\":\"fixture\",\"bundle\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"expectedRegistryRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "addon-Enable",
+    "entry": "addon-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"addon-a\",\"command\":{\"kind\":\"Enable\",\"packageId\":\"fixture\",\"expectedRegistryRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "addon-Disable",
+    "entry": "addon-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"addon-a\",\"command\":{\"kind\":\"Disable\",\"packageId\":\"fixture\",\"expectedRegistryRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "addon-Rollback",
+    "entry": "addon-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"addon-a\",\"command\":{\"kind\":\"Rollback\",\"packageId\":\"fixture\",\"targetManifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedRegistryRevision\":\"1\",\"expectedStateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "addon-Uninstall",
+    "entry": "addon-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"addon-a\",\"command\":{\"kind\":\"Uninstall\",\"packageId\":\"fixture\",\"expectedRegistryRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "addon-staged-not-activated",
+    "entry": "addon-command-reply",
+    "raw": "{\"kind\":\"Recorded\",\"protocol\":\"1.0-draft.1\",\"receipt\":{\"commandId\":\"cmd-a\",\"committedSequence\":\"3\",\"acceptedAtMs\":\"1\",\"requestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"decision\":{\"kind\":\"Staged\",\"packageId\":\"fixture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"waits\":[\"ExactVersionApproval\",\"Quiescence\"]}},\"replayed\":false}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "selected-route-with-revisions",
+    "entry": "route-decision",
+    "raw": "{\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"attemptNumber\":\"1\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"accessMode\":\"Subscription\",\"connectionRevision\":\"1\",\"credentialRevision\":\"1\",\"capabilityRevision\":\"1\",\"catalogRevision\":\"1\",\"policyRevision\":\"1\",\"pinRevision\":\"1\",\"reason\":\"SessionPin\",\"capacityGrantId\":\"capacity-a\",\"priceBasis\":{\"kind\":\"RateSnapshot\",\"snapshotId\":\"price-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "durable-attempt-with-native-binding",
+    "entry": "attempt-envelope",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"route\":{\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"attemptNumber\":\"1\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"accessMode\":\"Subscription\",\"connectionRevision\":\"1\",\"credentialRevision\":\"1\",\"capabilityRevision\":\"1\",\"catalogRevision\":\"1\",\"policyRevision\":\"1\",\"pinRevision\":\"1\",\"reason\":\"SessionPin\",\"capacityGrantId\":\"capacity-a\",\"priceBasis\":{\"kind\":\"RateSnapshot\",\"snapshotId\":\"price-a\"}},\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"requestArtifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cacheEpoch\":\"0\",\"nativeContinuation\":[{\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-foreign-attempt-native-item",
+    "entry": "attempt-envelope",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"route\":{\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"attemptNumber\":\"1\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"accessMode\":\"Subscription\",\"connectionRevision\":\"1\",\"credentialRevision\":\"1\",\"capabilityRevision\":\"1\",\"catalogRevision\":\"1\",\"policyRevision\":\"1\",\"pinRevision\":\"1\",\"reason\":\"SessionPin\",\"capacityGrantId\":\"capacity-a\",\"priceBasis\":{\"kind\":\"RateSnapshot\",\"snapshotId\":\"price-a\"}},\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"requestArtifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cacheEpoch\":\"0\",\"nativeContinuation\":[{\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"2\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}]}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-persisted-authorization-header",
+    "entry": "attempt-envelope",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"route\":{\"requestId\":\"request-a\",\"attemptId\":\"attempt-a\",\"attemptNumber\":\"1\",\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"accessMode\":\"Subscription\",\"connectionRevision\":\"1\",\"credentialRevision\":\"1\",\"capabilityRevision\":\"1\",\"catalogRevision\":\"1\",\"policyRevision\":\"1\",\"pinRevision\":\"1\",\"reason\":\"SessionPin\",\"capacityGrantId\":\"capacity-a\",\"priceBasis\":{\"kind\":\"RateSnapshot\",\"snapshotId\":\"price-a\"}},\"options\":{\"selection\":{\"kind\":\"Auto\"},\"deadlineMs\":60000},\"requestArtifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"},\"contextDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cacheEpoch\":\"0\",\"nativeContinuation\":[{\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"2\",\"mediaType\":\"application/json\"}}],\"authorization\":\"Bearer forbidden\"}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "capability-unknown-is-explicit",
+    "entry": "capability-snapshot",
+    "raw": "{\"binding\":{\"connectionId\":\"connection-a\",\"accountRevision\":\"1\",\"endpointProfile\":\"OpenAiResponses\",\"modelId\":\"model-a\",\"contextEpoch\":\"0\"},\"revision\":\"1\",\"tools\":\"Supported\",\"parallelTools\":\"Unknown\",\"inputImages\":\"Supported\",\"structuredOutput\":\"Unknown\",\"embeddings\":\"Unsupported\",\"cancellation\":\"Unknown\",\"requestObservation\":\"Unsupported\",\"cacheMetrics\":\"Unknown\",\"contextTokens\":\"128000\",\"outputTokens\":\"16000\"}",
+    "typedValid": true,
+    "schemaValid": true
+  }
+]

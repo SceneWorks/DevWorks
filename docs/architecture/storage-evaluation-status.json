@@ -1,0 +1,165 @@
+{
+  "date": "2026-11-01",
+  "state": "Plain SQLite and sqlite-vec selected; GraphQLite not selected; persistence traits required",
+  "baseline": "SQLite app storage; historical HelixDB baseline superseded",
+  "candidates": [
+    {
+      "id": "helix_sqlite",
+      "source": "https://github.com/HelixDB/helix-db",
+      "revision": "6f2a69653772b60ea099d8d36a02a1d4408147ec",
+      "package": "db",
+      "version": "0.1.0",
+      "evidence": [
+        "Linked native release helper executes on macOS arm64",
+        "Three fresh repetitions of small/source/materialized-overlay profiles",
+        "Graph, vector, hybrid, concurrent rename/read and deletion cases measured",
+        "Acknowledged rename survives owned-process SIGKILL; partial-import store reopens"
+      ],
+      "notDemonstrated": [
+        "Complete retained CodeGraph operation surface",
+        "Optimized delta/multiple overlays and full indexing publication/reconciliation",
+        "Larger representative projects and matched-recall ANN comparison",
+        "Sustained indexing contention and broad crash/power-loss recovery",
+        "Migration/backup restoration and actual app idle/startup",
+        "Windows/Linux and minimum-macOS packaging"
+      ],
+      "checkedFailureCases": 0,
+      "selection": "Not selected"
+    },
+    {
+      "id": "sqlite_graph_vector",
+      "source": "https://www.sqlite.org",
+      "vectorCandidate": "https://github.com/asg017/sqlite-vec",
+      "revision": "Pinned registry versions in tools/storage-eval/Cargo.lock",
+      "evidence": [
+        "Linked native release helper executes on macOS arm64",
+        "Three fresh repetitions of small/source/materialized-overlay profiles",
+        "Graph, vector, hybrid, concurrent rename/read and deletion cases measured",
+        "Acknowledged rename survives owned-process SIGKILL; partial-import store reopens"
+      ],
+      "notDemonstrated": [
+        "Complete retained CodeGraph operation surface",
+        "Optimized delta/multiple overlays and full indexing publication/reconciliation",
+        "Larger representative projects and matched-recall ANN comparison",
+        "Sustained indexing contention and broad crash/power-loss recovery",
+        "Migration/backup restoration and actual app idle/startup",
+        "Windows/Linux and minimum-macOS packaging"
+      ],
+      "checkedFailureCases": 0,
+      "selection": "SQLite selected; sqlite-vec measured baseline; GraphQLite extension decision open",
+      "version": "SQLite 3.54.1 / rusqlite 0.41.1 / sqlite-vec 0.1.7"
+    },
+    {
+      "id": "overgraph_sqlite",
+      "version": "0.18.0",
+      "inspectedSourceRevision": "bf834023508be5a9b28b349a6982a4735d59d918",
+      "evidence": [
+        "Linked native release helper executes on macOS arm64",
+        "Three fresh repetitions of small/source/materialized-overlay profiles",
+        "Graph, vector, hybrid, concurrent rename/read and deletion cases measured",
+        "Acknowledged rename survives owned-process SIGKILL; partial-import store reopens"
+      ],
+      "notDemonstrated": [
+        "Complete retained CodeGraph operation surface",
+        "Optimized delta/multiple overlays and full indexing publication/reconciliation",
+        "Larger representative projects and matched-recall ANN comparison",
+        "Sustained indexing contention and broad crash/power-loss recovery",
+        "Migration/backup restoration and actual app idle/startup",
+        "Windows/Linux and minimum-macOS packaging"
+      ],
+      "checkedFailureCases": 9,
+      "selection": "Not selected"
+    },
+    {
+      "id": "grafeo_sqlite",
+      "version": "0.6.0",
+      "inspectedSourceRevision": "efbb0519d1134f10a636db904bc56f1fdaf0ccb2",
+      "evidence": [
+        "Linked native release helper executes on macOS arm64",
+        "Three fresh repetitions of small/source/materialized-overlay profiles",
+        "Graph, vector, hybrid, concurrent rename/read and deletion cases measured",
+        "Acknowledged rename survives owned-process SIGKILL; partial-import store reopens"
+      ],
+      "notDemonstrated": [
+        "Complete retained CodeGraph operation surface",
+        "Optimized delta/multiple overlays and full indexing publication/reconciliation",
+        "Larger representative projects and matched-recall ANN comparison",
+        "Sustained indexing contention and broad crash/power-loss recovery",
+        "Migration/backup restoration and actual app idle/startup",
+        "Windows/Linux and minimum-macOS packaging"
+      ],
+      "checkedFailureCases": 0,
+      "selection": "Not selected"
+    }
+  ],
+  "protocol": "devworks-storage-evaluation.md",
+  "requirementsInputSha256": "6fdbd3458ed69614dadc2caa05a61b47f00fce551e7c1f873cdafbc95ae07293",
+  "inferencePolicy": "No real model inference in this evaluation; fixed existing vectors or explicitly labeled deterministic numeric fixtures only.",
+  "nextEvidence": [
+    "Resolve OverGraph raw-API stale-vector defect and correct our adapter path scoping before adoption",
+    "Investigate Grafeo graceful reopen cost",
+    "Tune and compare approximate retrieval at matched recall",
+    "Complete retained graph/analysis inventory, publication/recovery, scale and target packaging gates before production selection"
+  ],
+  "excludedCandidates": [
+    {
+      "id": "kuzu_sqlite",
+      "reason": "User excluded archived/dead project",
+      "date": "2026-11-01",
+      "source": "https://github.com/kuzudb/kuzu"
+    }
+  ],
+  "localEvaluation": {
+    "measuredCases": 36,
+    "checkedWithoutFailure": 27,
+    "correctnessFailedCases": 9,
+    "processFailedCases": 0,
+    "workloadChecks": 906276,
+    "sharedOracleUnitTestsPassed": 3,
+    "faultProbesPassed": 8,
+    "results": "storage-evaluation-results.json",
+    "rawEvidence": "validation/storage-evaluation",
+    "inference": false
+  },
+  "observedIssues": {
+    "overgraph": [
+      "Engine attribution: raw API reproduction returns deleted vector IDs after flush/reopen, without our adapter",
+      "Adapter attribution: our result label filter did not restrict intermediate traversal nodes"
+    ],
+    "grafeo": [
+      "Full-source graceful reopen median 27.634 seconds",
+      "Full-source mean project/view recall@10 0.95375"
+    ],
+    "helix": [
+      "Full-source mean project/view recall@10 0.7870833",
+      "Higher resource/latency costs in this configuration"
+    ],
+    "sqlite": [
+      "Exact vec0 search is not a large-scale ANN qualification",
+      "Slower adjacency and concurrent-read tail in this fixture"
+    ]
+  },
+  "failureAttribution": {
+    "date": "2026-11-01",
+    "rawApiProbe": "validation/storage-evaluation/direct-overgraph-attribution/attribution.json",
+    "graphScope": "Our adapter misuses result filtering as path filtering",
+    "deletion": "Raw engine API reproduces stale vectors after flushing a deletion of an already-flushed node",
+    "confidence": "High for both classifications; exact engine root cause not established",
+    "benchmarkRerun": false,
+    "standaloneBugReport": "validation/storage-evaluation/overgraph-deletion-bug-report/BUG-REPORT.md",
+    "standaloneRepetitions": 3,
+    "freshProcessInspections": 6
+  },
+  "graphqliteFollowup": {
+    "report": "devworks-graphqlite-evaluation.html",
+    "results": "graphqlite-evaluation-results.json",
+    "commonChecks": 906276,
+    "cacheProfiles": 18,
+    "nativeCacheStalenessObserved": true,
+    "managedFinalFreshnessRepetitions": 3,
+    "finalFaultProbes": 4,
+    "selection": "Not selected by user",
+    "inference": false,
+    "commonCases": 36
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:session-query-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "after": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "format": "uint16",
+      "maximum": 500,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "queryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "sessionId": {
+      "$ref": "#/$defs/Id"
+    }
+  },
+  "required": [
+    "protocol",
+    "queryId",
+    "sessionId",
+    "limit"
+  ],
+  "title": "SessionQueryRequest",
+  "type": "object"
+}

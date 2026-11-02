@@ -1,0 +1,307 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "EffortOption": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "value": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "value",
+        "required"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "InferenceInput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "contextEpoch": {
+              "$ref": "#/$defs/Counter"
+            },
+            "kind": {
+              "const": "Generation",
+              "type": "string"
+            },
+            "requiresImages": {
+              "type": "boolean"
+            },
+            "requiresParallelTools": {
+              "type": "boolean"
+            },
+            "responseHeadroomTokens": {
+              "$ref": "#/$defs/Revision"
+            },
+            "sessionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "tools": {
+              "items": {
+                "$ref": "#/$defs/ToolSchema"
+              },
+              "maxItems": 256,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "sessionId",
+            "context",
+            "contextEpoch",
+            "tools",
+            "responseHeadroomTokens",
+            "requiresImages",
+            "requiresParallelTools"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "dimensions": {
+              "format": "uint32",
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "embeddingSpaceId": {
+              "$ref": "#/$defs/Id"
+            },
+            "inputs": {
+              "items": {
+                "$ref": "#/$defs/ArtifactRef"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            },
+            "kind": {
+              "const": "Embedding",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "embeddingSpaceId",
+            "dimensions",
+            "inputs"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InferenceOptions": {
+      "additionalProperties": false,
+      "properties": {
+        "deadlineMs": {
+          "format": "uint32",
+          "maximum": 86400000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EffortOption"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputSchema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchemaRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selection": {
+          "$ref": "#/$defs/ModelSelection"
+        }
+      },
+      "required": [
+        "selection",
+        "deadlineMs"
+      ],
+      "type": "object"
+    },
+    "ModelSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Auto",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Model",
+              "type": "string"
+            },
+            "modelId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "modelId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Pool",
+              "type": "string"
+            },
+            "poolId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "poolId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "QualifiedId": {
+      "pattern": "^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$",
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "SchemaRef": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "schemaId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "schemaId",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ToolSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilityId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "inputSchema": {
+          "$ref": "#/$defs/SchemaRef"
+        },
+        "wireName": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "capabilityId",
+        "wireName",
+        "inputSchema"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:inference-spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Untrusted inference input; host fills purpose, attribution and request identity separately.",
+  "properties": {
+    "input": {
+      "$ref": "#/$defs/InferenceInput"
+    },
+    "options": {
+      "$ref": "#/$defs/InferenceOptions"
+    }
+  },
+  "required": [
+    "options",
+    "input"
+  ],
+  "title": "InferenceSpec",
+  "type": "object"
+}

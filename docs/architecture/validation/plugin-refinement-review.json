@@ -1,0 +1,135 @@
+{
+  "title": "DevWorks executable package architecture refinement review",
+  "date": "2026-11-01",
+  "status": "Documentation and mapping verified; native host/SDK implementation and platform conformance pending",
+  "confirmedDecision": "EXT-07 allows compatible signed updates within explicit publisher trust without expanded access; EXT-02 exact agent-version approval remains",
+  "adoptedDecisions": [
+    "AD-33",
+    "AD-34",
+    "AD-35",
+    "AD-36"
+  ],
+  "requirements": {
+    "count": 340,
+    "confirmed": 203,
+    "proposed": 137,
+    "previous339Unchanged": true,
+    "added": [
+      "EXT-07"
+    ],
+    "inputSha256": "a9ccdcdd0bb1ab3fbce22df7729229dbb1bdb25a2c7c77acb6eb8a1acbe2642a",
+    "allIdsInWord": true
+  },
+  "reader": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 28
+      },
+      {
+        "width": 800,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 28
+      }
+    ],
+    "browser": "local headless Chromium; no user-facing tab opened",
+    "decisionRows": 36,
+    "anchors": 6,
+    "localLinksValid": true,
+    "sectionSearch": true,
+    "requirementSearch": true,
+    "statusFilter": true,
+    "pageErrors": []
+  },
+  "diagrams": {
+    "total": 28,
+    "allXmlValid": true,
+    "changedAndVisuallyReviewed": [
+      "12-extension-interfaces",
+      "13-extension-lifecycle",
+      "27-package-invocation",
+      "28-package-update"
+    ],
+    "inlineViewsChecked": [
+      1440,
+      800
+    ]
+  },
+  "word": {
+    "renderedPages": 67,
+    "changedPagesVisuallyReviewed": [
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66
+    ],
+    "exactBodyMatchesToPriorVerifiedRender": 52,
+    "comparison": "Exact body pixels excluding bottom 7 percent footer against verified router-pass render",
+    "footerNumbersVerified": true,
+    "newPolicyPage": 39,
+    "newAcceptancePage": 58
+  },
+  "referenceEvidence": {
+    "ohMyPiLocalHead": "0b5c27ab24719c86a5986b95ee55f4e75bc1aaa0",
+    "ohMyPiIndexHead": "186e524be688f6fa1fffb7974640e25f7df74e1e",
+    "targetedSourceReads": [
+      "packages/coding-agent/src/extensibility/extensions/types.ts",
+      "packages/coding-agent/src/extensibility/extensions/runner.ts",
+      "packages/coding-agent/test/extension-provider-registration-rollback.test.ts"
+    ],
+    "standards": [
+      "https://www.jsonrpc.org/specification",
+      "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports",
+      "https://semver.org/"
+    ],
+    "limits": "Targeted source inspection; no claim of full Pi/Oh My Pi parity or tested source runtime"
+  },
+  "qualificationStillRequired": [
+    "Real Rust host/SDK fixtures for every contribution category",
+    "Wire framing/backpressure/cancellation and process fault tests",
+    "Trust/signature verification and authority revocation enforcement",
+    "Package metadata/state schema adapter and atomic activation recovery",
+    "OS containment, credential protection and supported OS/CPU qualification"
+  ],
+  "notClaimed": [
+    "Native DevWorks application or SDK implementation",
+    "Initial SQL fixture implementing package activation/state tables",
+    "Live inference/authentication tests",
+    "Production security or complete target acceptance"
+  ],
+  "nextPass": "Security/access enforcement and platform matrix, followed by retained capability coverage and representative validation workloads",
+  "documentSha256": {
+    "docs/architecture/devworks-architecture.md": "4af62c76fb8e9cb7d0e1e65c4ed437137e62862167d9849caec40226b9b049d4",
+    "docs/architecture/devworks-architecture.html": "300eb7d6a93a62141b311e4e393b4607f4b7d33e93369123fe25e65801582f35",
+    "docs/architecture/architecture-contracts.json": "265fae004c8ac5519e3f738c96d430b0ff21317b99270e052ea0aa609c2ede25",
+    "docs/architecture/devworks-requirements-traceability.json": "8d7fe6bacae1977b5b6d68058c40ad73ba4882317a32a00afcf83f930866b078",
+    "docs/architecture/architecture-diagrams/manifest.json": "a479c95cf10d7cb814e77616275070af2ec938ff8344375e0d53d483b8213120",
+    "docs/planning/requirements-content.json": "a9ccdcdd0bb1ab3fbce22df7729229dbb1bdb25a2c7c77acb6eb8a1acbe2642a",
+    "docs/planning/requirements-interview.json": "4f25e93694ead39b1a4d7689d90d8431adb249de009207ac2fce8bd54bf0edc3",
+    "docs/planning/devworks-requirements.docx": "d913264681b1adb44bcfc3d3b33326e692b3a4d70908a34f77166cc03a2ee1cd",
+    "tools/planning/requirements_expansion.py": "7d9377b44739527e51eaa1673512c089f8c23cf1bccdc41ff512ba79cd77c478",
+    "docs/architecture/architecture-diagrams/12-extension-interfaces.mmd": "0a7d0faf4cdd5907a9d164b049363bc3c621e0cc11394348e43bee00a27bf735",
+    "docs/architecture/architecture-diagrams/12-extension-interfaces.svg": "9ff1acbfea2d88f6f962e6e96854af4b28a7571e16e3023b64e361e9d25dc250",
+    "docs/architecture/architecture-diagrams/13-extension-lifecycle.mmd": "bf61996a5fee9629a5e8ba16dc02efda9c05e48c1fb00c30a340ea877574d031",
+    "docs/architecture/architecture-diagrams/13-extension-lifecycle.svg": "98183ec6f5882e128ba6480eef1d1224f9be0345ebb37fa50cdebcb82636f096",
+    "docs/architecture/architecture-diagrams/27-package-invocation.mmd": "ba5e3c2eb28a2453a59104757c844c76b65f45469e7e7e28f4d0fd2c2983e52e",
+    "docs/architecture/architecture-diagrams/27-package-invocation.svg": "e41b64299a7e8fa18858d5eb1c55ee3c189d7534a3c686637068aa9b7b31c087",
+    "docs/architecture/architecture-diagrams/28-package-update.mmd": "d20609b9451ef53551d337364587ddea649c8d85f652b0809980527d9e483c21",
+    "docs/architecture/architecture-diagrams/28-package-update.svg": "e9cd4cb2f0e8c4bdea415e752dac00f188882be6a9bbeddbbe250aa091892f68"
+  },
+  "confidence": "High in design/document consistency; native execution/enforcement qualification remains pending"
+}

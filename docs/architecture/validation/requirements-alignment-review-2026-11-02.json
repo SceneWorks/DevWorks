@@ -1,0 +1,580 @@
+{
+  "title": "DevWorks architecture versus product requirements review",
+  "date": "2026-11-02",
+  "reviewer": "codex",
+  "branch": "codex/devworks-planning",
+  "baseline": "1.1",
+  "status": "AR-01 through AR-08 resolved at architecture/candidate level; native implementation and acceptance remain planned",
+  "assessment": "The modular native architecture is coherent. Candidate contract omissions and unresolved cross-boundary semantics prevent treating requirement alignment as complete. No broad rewrite is recommended.",
+  "confidence": {
+    "overall": "High in the identified document/contract gaps; medium in inferred behavior where production services do not exist",
+    "implementationReadiness": "Not assessed as production-ready; G01-G12 remain implementation acceptance"
+  },
+  "successCriteria": [
+    "Compare confirmed requirements, proposed details and interview decisions with the current architecture and concrete contract candidates.",
+    "Identify actionable omissions, contradictions and unresolved behavior with source evidence and affected implementation owners.",
+    "Distinguish design gaps from already documented, unexecuted implementation qualification.",
+    "Verify suspected candidate-expressiveness gaps without inference or production side effects."
+  ],
+  "coverage": {
+    "requirements": 350,
+    "confirmed": 209,
+    "proposed": 141,
+    "operationFamilies": 48,
+    "operations": 353,
+    "activeImplementationSlices": 63,
+    "retainedSourceEntriesAccountedFor": 494,
+    "acceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "subsystemsReviewed": [
+      "Native composition, dependency direction, shared gateway and persistence ports",
+      "Work, plans, assignments, allocation, concurrency and root controls",
+      "Receipts, queues, effects, approval wakeups, redirect and recovery",
+      "Routing, effort, credentials, native continuation, context, prices and budgets",
+      "Graph generations, overlays, semantic packs, schema/data boundaries and retrieval",
+      "Knowledge, artifacts, documents, citations, dreaming, skills and role instructions",
+      "GitHub polling, issue synchronization, review, delivery, cleanup and release authority",
+      "Packages, SDK contributions, event/state lifecycle and updates",
+      "Incoming/outgoing MCP, automation, resources and container ownership",
+      "Native UI and sidebar identity, platform/security matrix, Help, import, backup and distribution",
+      "Requirement/operation ownership, acceptance and workload coverage"
+    ],
+    "limits": [
+      "This is an architecture/requirements review, not a production code audit: the native application has not been implemented.",
+      "Frozen CodeGraph source accounting and acceptance ownership were examined; this pass does not independently establish semantic parity of every retained source method.",
+      "Existing HTML/Word/UI and native probe evidence were considered as references; full visual document QA and platform/provider qualification were not rerun.",
+      "No live provider access, sign-in, inference, GitHub mutations, installation or browser/desktop control was performed.",
+      "CodeGraph discovery was attempted first; the indexed default branch has no usable graph architecture or service analysis for the current local planning content."
+    ]
+  },
+  "verification": {
+    "currentPlanSourceDigests": "All eight implementation-plan input digests match current source files.",
+    "candidateChecksRerun": {
+      "schemas": 44,
+      "operationBindings": 351,
+      "messageFixtures": 1049,
+      "nativeModelScenarios": 12,
+      "nativeModelSteps": 26,
+      "allPassed": true,
+      "scope": "Current schema/native candidate fixture checks, not actual domain service behavior or authority enforcement"
+    },
+    "focusedChecks": {
+      "positiveControlsPassed": 3,
+      "predictedRequirementShapeRejectionsConfirmed": 4,
+      "cases": [
+        "Delegation without feature task IDs rejects an empty taskIds list.",
+        "Issue creation rejects featureId as an unknown field.",
+        "Task edit rejects priority as an unknown patch field.",
+        "tasks.prioritize is not a registered command variant."
+      ],
+      "interpretation": "These reproduce limitations of the current candidates. They are not passing acceptance tests for the required capabilities."
+    },
+    "reproduction": {
+      "directory": ".planning-build/architecture-requirements-review-2026-11-02",
+      "baselineVerifier": "tools/contracts-eval/verify_domain_contracts.py",
+      "focusedScript": ".planning-build/architecture-requirements-review-2026-11-02/check_gaps.py",
+      "authoringPython": "/Users/michael/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+      "pythonPath": ".planning-build/operation-contracts/python",
+      "nativeCandidateBinary": ".planning-build/data-delivery-contracts/cargo-target/release/devworks-contract-probe",
+      "note": "Detailed rerun outputs are ignored authoring artifacts; this review register preserves the findings and verification summary."
+    },
+    "historicalBaselineNote": "The baseline checks/rejections below preserve the original review snapshot; use per-finding resolutions and currentResolutionVerification for the corrected design."
+  },
+  "findings": [
+    {
+      "id": "AR-01",
+      "severity": "P1",
+      "title": "Standalone issue delegation has no coherent assignment target",
+      "kind": "Contract gap",
+      "confidence": "High",
+      "requirements": [
+        "AGENT-14",
+        "AGENT-10",
+        "AGENT-11",
+        "WORK-11"
+      ],
+      "evidence": [
+        {
+          "path": "tools/planning/requirements_content.py",
+          "line": 147
+        },
+        {
+          "path": "docs/architecture/domain-operation-reference.md",
+          "line": 113
+        },
+        {
+          "path": "tools/contracts-eval/domain-spec.json",
+          "line": 6188
+        },
+        {
+          "path": "tools/contracts-eval/src/domain_rules.rs",
+          "line": 117
+        }
+      ],
+      "finding": "agents.delegate requires a nonempty taskIds list, but Tasks and task claims are defined as feature-owned. A standalone issue has no feature task set to supply. There is no documented alternative target variant for an issue-scoped subassignment.",
+      "consequence": "An implementation following these candidates cannot express required issue delegation without inventing a feature, misusing an issue ID as a task ID, or expanding task ownership semantics.",
+      "proposedRefinement": "Model assignment ownership separately from optional feature-card links. Add an explicit issue-scoped delegation target/brief and preserve the issue root for concurrency, lineage, controls, costs and delivery.",
+      "verificationNeeded": "Create an issue with no feature/tasks, delegate two independent assignments, exercise nested delegation and the changed per-issue limit, then verify isolation, lineage and parent Continue.",
+      "owners": [
+        "DW-012",
+        "DW-015"
+      ],
+      "resolution": {
+        "status": "Resolved design and candidate contract; production service acceptance pending",
+        "date": "2026-11-02",
+        "userDecision": "Tasks belong to a project and have an optional feature relationship. A feature is not a prerequisite for issues.",
+        "changes": [
+          "Optional tasks.create.parentId; removed feature-parent invariant from WorkRecord.",
+          "Task operation results accept Task/Issue representations with one identity.",
+          "Issue-root delegation accepts an empty card list and scoped brief.",
+          "Requirements, interview, architecture, implementation acceptance and regenerated candidates aligned."
+        ],
+        "evidence": "optional-task-feature/refinement-review.json",
+        "verification": {
+          "allMessageFixtures": 1055,
+          "sqliteChecks": 8,
+          "wordSourceRequirementsMatched": 350,
+          "readerDocuments": 13
+        }
+      }
+    },
+    {
+      "id": "AR-02",
+      "severity": "P1",
+      "title": "Plan edits do not define how unaffected approved work continues",
+      "kind": "Cross-contract ambiguity",
+      "confidence": "Medium-high",
+      "requirements": [
+        "AGENT-13",
+        "WORK-08",
+        "REVIEW-03"
+      ],
+      "evidence": [
+        {
+          "path": "tools/planning/requirements_content.py",
+          "line": 146
+        },
+        {
+          "path": "tools/contracts-eval/domain-spec.json",
+          "line": 2568
+        },
+        {
+          "path": "docs/architecture/domain-operation-reference.md",
+          "line": 866
+        },
+        {
+          "path": "docs/architecture/devworks-architecture.md",
+          "line": 465
+        },
+        {
+          "path": "docs/architecture/devworks-architecture.md",
+          "line": 499
+        }
+      ],
+      "finding": "The requirement preserves unblocked work valid under the existing approved plan while changed scope awaits approval. The candidate edit invalidates prior approval when bound content changes; WorkRecord carries one plan/approval and root admission requires current approved scope. No concrete coexistence/assignment-binding rule explains how unchanged work stays eligible.",
+      "consequence": "The default implementation can stop the entire feature on a small pending scope change, or keep running without proving which approved revision covers each assignment.",
+      "proposedRefinement": "Keep an immutable approved baseline separate from a pending amendment and bind assignments/acceptance to approved requirement revisions. Invalidate only changed and dependent obligations; define approval, rejection and supersession transitions.",
+      "verificationNeeded": "While independent tasks A/B run, propose a change affecting B. A continues under its approved basis; B and actual dependents wait. Race approval/rejection and dispatch without losing directions or accepting stale evidence.",
+      "owners": [
+        "DW-009",
+        "DW-012",
+        "DW-014",
+        "DW-015"
+      ],
+      "resolution": {
+        "date": "2026-11-02",
+        "status": "Resolved design and candidate contracts under explicit user clarification; production acceptance pending",
+        "decision": "Each feature owns one active approved plan and at most one pending revision. Keep the original plan open and approved until replacement approval; no separate plan lifecycle or user-facing version management.",
+        "supersedesOriginalProposedRefinement": true,
+        "evidence": "active-pending-plan/refinement-review.json",
+        "verification": {
+          "candidateFixtures": 1062,
+          "sqliteChecks": 9,
+          "prototypeChecks": 6,
+          "wordRequirementsMatched": 350
+        }
+      }
+    },
+    {
+      "id": "AR-03",
+      "severity": "P2",
+      "title": "Task reprioritization is absent from the concrete command surface",
+      "kind": "Contract omission",
+      "confidence": "High",
+      "requirements": [
+        "WORK-02",
+        "WORK-03",
+        "WORK-09",
+        "WORK-10"
+      ],
+      "evidence": [
+        {
+          "path": "tools/planning/requirements_content.py",
+          "line": 205
+        },
+        {
+          "path": "docs/architecture/domain-operation-reference.md",
+          "line": 62
+        },
+        {
+          "path": "docs/architecture/domain-operation-reference.md",
+          "line": 2159
+        },
+        {
+          "path": "docs/architecture/domain-operation-reference.md",
+          "line": 2524
+        }
+      ],
+      "finding": "Tasks get an initial priority, but TaskPatch and TaskPlanEntry cannot change it. The catalog provides only features.prioritize/issues.prioritize for the project root queue; no feature-task ordering operation is defined.",
+      "consequence": "The required board/tool reprioritization cannot reach the task allocator through the shared validated boundary after task creation.",
+      "proposedRefinement": "Add a revision-checked feature-local task priority/order command, or an equivalent explicit task patch, and specify its relationship to dependencies and existing claims.",
+      "verificationNeeded": "Reorder ready tasks through UI and tools; next_work selects the resulting highest-priority eligible task. Concurrent reorder/claim has a deterministic revision outcome.",
+      "owners": [
+        "DW-012",
+        "DW-013"
+      ],
+      "resolution": {
+        "date": "2026-11-02",
+        "status": "Resolved design, candidate contracts and prototype; production service acceptance pending",
+        "decision": "Humans and agents must be able to reprioritize tasks and manage task-blocking dependencies.",
+        "evidence": "task-order-dependencies/refinement-review.json",
+        "verification": {
+          "candidateFixtures": 1074,
+          "sqliteChecks": 13,
+          "prototypeChecks": 13,
+          "wordRequirementsMatched": 350
+        }
+      }
+    },
+    {
+      "id": "AR-04",
+      "severity": "P2",
+      "title": "Optional issue-to-feature association lacks an authoritative contract",
+      "kind": "Contract omission",
+      "confidence": "High",
+      "requirements": [
+        "WORK-11",
+        "WORK-12",
+        "WORK-09"
+      ],
+      "evidence": [
+        {
+          "path": "tools/planning/requirements_content.py",
+          "line": 214
+        },
+        {
+          "path": "docs/architecture/devworks-architecture.md",
+          "line": 65
+        },
+        {
+          "path": "docs/architecture/domain-operation-reference.md",
+          "line": 47
+        },
+        {
+          "path": "docs/architecture/domain-operation-reference.md",
+          "line": 2507
+        }
+      ],
+      "finding": "Requirements and the domain overview allow optional feature association. Issue creation/editing has no feature association or explicit clear action. Generic WorkLink values do not define authoritative membership, queue eligibility or a transition into/out of standalone status.",
+      "consequence": "An issue can appear feature-linked in the UI while still being allocated independently, or an implementation can invent incompatible parent, delivery and accounting behavior.",
+      "proposedRefinement": "Define a distinct optional feature association with set/clear commands, revisions and project-membership checks. State whether association changes execution root, priority, budget, branch target or only discoverability; do not conflate association with task parenting.",
+      "verificationNeeded": "Associate/unassociate an issue before and during execution; verify exactly one eligible execution owner, defined queue behavior, preserved history and consistent UI/tool results.",
+      "owners": [
+        "DW-012",
+        "DW-013",
+        "DW-039"
+      ],
+      "interviewProgress": {
+        "date": "2026-11-02",
+        "status": "Interview decisions incorporated into current design/candidates; original progress retained for chronology",
+        "decisionSource": "docs/planning/requirements-interview.json",
+        "decisionId": "issue_feature_delivery_membership_20261102",
+        "remaining": "Align canonical requirement text and generated readers, architecture, candidate operations/storage, implementation-slice acceptance and applicable prototype behavior, then verify. AR-05 also needs a concrete field/identity/project-ownership and replay-safe publication contract."
+      },
+      "resolution": {
+        "date": "2026-11-02",
+        "status": "Resolved architecture and candidate-contract refinement; native service/UI/authority acceptance remains planned",
+        "decision": "One task identity and authoritative optional feature membership. Humans/agents link and unlink; link authorizes delivery without revised-plan approval, preserves agents/workspaces/holds and makes the coordinator responsible. Unlink pauses until manual resume; future costs follow membership and earlier costs stay fixed.",
+        "evidence": "interview-refinements/refinement-review.json",
+        "supersedesOriginalProposedRefinement": true,
+        "verification": {
+          "candidateFixtures": 1099,
+          "sqliteAndReferenceChecks": 28,
+          "wordRequirementsMatched": 350
+        },
+        "limits": "Shape/scalar/pure rules plus SQLite/scripted model and document checks; no native services, live GitHub effects or new interactive-workbench implementation."
+      }
+    },
+    {
+      "id": "AR-05",
+      "severity": "P2",
+      "title": "GitHub issue synchronization needs a field, state and shared-repository ownership contract",
+      "kind": "Behavior needing refinement",
+      "confidence": "High",
+      "requirements": [
+        "GH-05",
+        "GH-06",
+        "GH-07",
+        "GH-09",
+        "WORK-13",
+        "WORK-14"
+      ],
+      "evidence": [
+        {
+          "path": "docs/architecture/devworks-requirements-traceability.json",
+          "line": 2854
+        },
+        {
+          "path": "docs/architecture/devworks-architecture.md",
+          "line": 823
+        },
+        {
+          "path": "docs/architecture/domain-operation-reference.md",
+          "line": 441
+        }
+      ],
+      "finding": "The architecture repeats two-way field synchronization and conflict reconciliation without specifying the synchronized fields, project-status/open-closed mapping, close/reopen reasons or linkage cardinality when a repository belongs to multiple projects. The current interview has no pending questions despite these unresolved semantics.",
+      "consequence": "Different implementations can lose local workflow detail, repeatedly reopen/close remote issues, create competing local owners, or leak project-private fields through synchronization.",
+      "proposedRefinement": "Define the supported field matrix and explicit sync opt-outs, state mapping and reverse mapping, base/local/remote conflict model, and one remote issue's permitted local identities/owners across projects. Keep local-only work fields local and suppress echo by versioned observations.",
+      "verificationNeeded": "Round-trip all synchronized fields, close/reopen with custom statuses, concurrent offline edits and a repository shared by two projects. Assert no duplicate issue, sync loop, unintended start or cross-project text publication.",
+      "owners": [
+        "DW-012",
+        "DW-013",
+        "DW-041"
+      ],
+      "interviewProgress": {
+        "date": "2026-11-02",
+        "status": "Interview decisions incorporated into current design/candidates; original progress retained for chronology",
+        "decisionSource": "docs/planning/requirements-interview.json",
+        "decisionId": "github_issue_intake_and_resolution_20261102",
+        "remaining": "Align canonical requirements/generated readers, architecture, candidate operations/storage and slice/prototype acceptance. Define inbound/local fields, durable identities, coordinator/message-board overlap coordination, paced triage routing and replay-safe resolution publication.",
+        "decisionIds": [
+          "github_issue_intake_and_resolution_20261102",
+          "github_issue_triage_rate_limit_20261102",
+          "shared_repositories_independent_project_work_20261102",
+          "shared_repository_github_issue_triage_routing_20261102"
+        ]
+      },
+      "resolution": {
+        "date": "2026-11-02",
+        "status": "Resolved architecture and candidate-contract refinement; native service/UI/authority acceptance remains planned",
+        "decision": "Inbound GitHub updates and verified-resolution publication replace blanket two-way mirroring. Use app-wide configurable paced triage (30-minute default), verify bugs before automatic work, notify on feature requests/unverifiable bugs/new scope, retain prescribed remote-closure behavior and triage routing across shared repositories without a repository-wide project owner.",
+        "evidence": "interview-refinements/refinement-review.json",
+        "supersedesOriginalProposedRefinement": true,
+        "verification": {
+          "candidateFixtures": 1099,
+          "sqliteAndReferenceChecks": 28,
+          "wordRequirementsMatched": 350
+        },
+        "limits": "Shape/scalar/pure rules plus SQLite/scripted model and document checks; no native services, live GitHub effects or new interactive-workbench implementation."
+      }
+    },
+    {
+      "id": "AR-06",
+      "severity": "P2",
+      "title": "Automated review discovery and completion need a normalized evidence contract",
+      "kind": "Behavior needing refinement",
+      "confidence": "High",
+      "requirements": [
+        "DELIVERY-02",
+        "DELIVERY-03",
+        "DELIVERY-05",
+        "DELIVERY-07"
+      ],
+      "evidence": [
+        {
+          "path": "docs/architecture/devworks-requirements-traceability.json",
+          "line": 2974
+        },
+        {
+          "path": "docs/architecture/devworks-architecture.md",
+          "line": 813
+        },
+        {
+          "path": "docs/architecture/domain-operation-reference.md",
+          "line": 415
+        }
+      ],
+      "finding": "The architecture correctly requires exact-head completed automation and forbids a duplicate in-app reviewer. It does not define the configured automation identity, supported discovery mechanism, completion evidence (including zero findings), rerun/head binding or the transition for disabled, missing or permanently failed automation. ReviewRecord.state and generic GitHub observations do not establish those rules.",
+      "consequence": "The delivery implementation may wait indefinitely or infer review success from absent comments or an unrelated successful check.",
+      "proposedRefinement": "Define a per-repository review-source descriptor and normalized Requested/Running/Completed/Failed/Unavailable evidence bound to source identity and head. Specify zero-finding completion, stale runs and bounded failure escalation without silently adding another reviewer.",
+      "verificationNeeded": "No-findings completion, delayed/failed/disabled automation, multiple bots, a changed head, duplicate observations and fix-cycle exhaustion all produce the required gate and task-scoped recovery.",
+      "owners": [
+        "DW-041",
+        "DW-042"
+      ],
+      "interviewProgress": {
+        "date": "2026-11-02",
+        "status": "Interview decisions incorporated into current design/candidates; original progress retained for chronology",
+        "decisionSource": "docs/planning/requirements-interview.json",
+        "decisionId": "github_review_unavailable_independent_fallback_20261102",
+        "remaining": "Align review requirements/architecture and slice acceptance; specify source identity/discovery, exact-head completion evidence, bounded wait/failure detection and single fallback admission. Fallback does not bypass required GitHub checks or branch protection."
+      },
+      "resolution": {
+        "date": "2026-11-02",
+        "status": "Resolved architecture and candidate-contract refinement; native service/UI/authority acceptance remains planned",
+        "decision": "Normalize source/run/head/policy/cycle review evidence including explicit zero-findings completion. Failed/unavailable/stalled automation automatically admits one independent in-app fallback while retaining findings and required external gates.",
+        "evidence": "interview-refinements/refinement-review.json",
+        "supersedesOriginalProposedRefinement": true,
+        "verification": {
+          "candidateFixtures": 1099,
+          "sqliteAndReferenceChecks": 28,
+          "wordRequirementsMatched": 350
+        },
+        "limits": "Shape/scalar/pure rules plus SQLite/scripted model and document checks; no native services, live GitHub effects or new interactive-workbench implementation."
+      }
+    },
+    {
+      "id": "AR-07",
+      "severity": "P2",
+      "title": "Package event atomicity is promised without a concrete combined commit request",
+      "kind": "Protocol refinement",
+      "confidence": "Medium",
+      "requirements": [
+        "STORE-03",
+        "EXT-04",
+        "EXT-06"
+      ],
+      "evidence": [
+        {
+          "path": "docs/architecture/devworks-architecture.md",
+          "line": 976
+        },
+        {
+          "path": "docs/architecture/provider-session-package-contracts.md",
+          "line": 99
+        },
+        {
+          "path": "tools/contracts-eval/src/package.rs",
+          "line": 471
+        },
+        {
+          "path": "tools/contracts-eval/src/package.rs",
+          "line": 515
+        },
+        {
+          "path": "tools/contracts-eval/src/package.rs",
+          "line": 666
+        }
+      ],
+      "finding": "The design requires event checkpoint, package state and effect intent to commit atomically when one handler needs them. The candidate protocol offers separate broker.call, broker.state CAS and EventProcessed(receipt) messages. It does not define a combined transaction proposal, what mints the processing receipt, or which writes remain provisional until that commit.",
+      "consequence": "A state CAS can survive a crash before the corresponding effect/checkpoint. Replay can then skip the intended action or apply a second state transition; independent action deduplication alone does not specify the whole handler transaction.",
+      "proposedRefinement": "Specify a host-validated handler commit envelope binding subscription/event, expected state revision, state changes and typed follow-up intents. Commit these and the receipt/checkpoint together, or document an equally explicit recoverable staged-action protocol. Remote completion stays outside the transaction.",
+      "verificationNeeded": "Inject crashes between state proposal, action admission and acknowledgment; replay the event and assert one logical state transition, retained action intent and no unsafe external repeat.",
+      "owners": [
+        "DW-003",
+        "DW-044",
+        "DW-045"
+      ],
+      "resolution": {
+        "date": "2026-11-02",
+        "status": "Resolved architecture and candidate-contract refinement; native service/UI/authority acceptance remains planned",
+        "decision": "Typed broker.commit_event binds CAS state proposal, typed outbox intents, host receipt and checkpoint in one transaction; replay returns the original committed result and EventProcessed has no commit authority.",
+        "evidence": "interview-refinements/refinement-review.json",
+        "supersedesOriginalProposedRefinement": false,
+        "verification": {
+          "candidateFixtures": 1099,
+          "sqliteAndReferenceChecks": 28,
+          "wordRequirementsMatched": 350
+        },
+        "limits": "Shape/scalar/pure rules plus SQLite/scripted model and document checks; no native services, live GitHub effects or new interactive-workbench implementation."
+      }
+    },
+    {
+      "id": "AR-08",
+      "severity": "P2",
+      "title": "Instruction discovery and conflict resolution remain nondeterministic",
+      "kind": "Behavior needing refinement",
+      "confidence": "High",
+      "requirements": [
+        "CONTEXT-03",
+        "CONTEXT-06",
+        "SET-04",
+        "SKILL-05"
+      ],
+      "evidence": [
+        {
+          "path": "tools/planning/requirements_content.py",
+          "line": 299
+        },
+        {
+          "path": "tools/planning/requirements_content.py",
+          "line": 302
+        },
+        {
+          "path": "docs/architecture/devworks-architecture.md",
+          "line": 863
+        }
+      ],
+      "finding": "Human directions and tool policy have clear precedence, and safe-step adoption is specified. The ordering/conflict algorithm among role, workspace/project/repository/feature/session supplements, AGENTS.md versus CLAUDE.md, and multiple path/repository instructions remains only proposed visible reconciliation. Discovery roots and externally changed skill/instruction version adoption are not concretely resolved.",
+      "consequence": "Two agents can act on incompatible effective instructions for the same work, or repeatedly escalate routine conflicts. A broader instruction can accidentally apply to unrelated directories.",
+      "proposedRefinement": "Adopt a deterministic instruction resolver with explicit applicability, discovery/file precedence, instruction digests and same-level conflict handling. Record effective bundles per assignment/path and a tested adoption boundary; escalate only material unresolved conflicts.",
+      "verificationNeeded": "Nested and sibling instructions, contradictory AGENTS/CLAUDE files, multi-repository assignments, user overrides and edits during an active tool turn preserve path applicability, authority and recorded revision provenance.",
+      "owners": [
+        "DW-020",
+        "DW-034"
+      ],
+      "interviewProgress": {
+        "date": "2026-11-02",
+        "status": "Interview decisions incorporated into current design/candidates; original progress retained for chronology",
+        "decisionSource": "docs/planning/requirements-interview.json",
+        "decisionId": "repository_instructions_override_default_roles_20261102",
+        "remaining": "Align source requirements/architecture and define deterministic remaining scoped supplement resolution, directory applicability, effective instruction provenance and safe-boundary adoption; verify nested/sibling/multi-repository conflicts and edits during active work.",
+        "decisionIds": [
+          "repository_instructions_override_default_roles_20261102",
+          "agents_md_precedes_claude_md_20261102",
+          "nearest_directory_instruction_precedence_20261102"
+        ]
+      },
+      "resolution": {
+        "date": "2026-11-02",
+        "status": "Resolved architecture and candidate-contract refinement; native service/UI/authority acceptance remains planned",
+        "decision": "User directions/enforced permissions outrank applicable repository rules, which outrank default roles. Nearest directory wins only within its subtree; at one level AGENTS.md wins conflicts while CLAUDE.md adds compatible instructions. Record exact bundles and adopt changes at safe boundaries.",
+        "evidence": "interview-refinements/refinement-review.json",
+        "supersedesOriginalProposedRefinement": false,
+        "verification": {
+          "candidateFixtures": 1099,
+          "sqliteAndReferenceChecks": 28,
+          "wordRequirementsMatched": 350
+        },
+        "limits": "Shape/scalar/pure rules plus SQLite/scripted model and document checks; no native services, live GitHub effects or new interactive-workbench implementation."
+      }
+    }
+  ],
+  "recommendedOrder": [
+    "Resolve AR-01 and AR-02 before freezing work/assignment/admission interfaces.",
+    "Resolve AR-03 and AR-04 with the same work-model pass.",
+    "Define AR-05 and AR-06 before GitHub/review implementation.",
+    "Resolve AR-07 before SDK event/state protocol freeze and AR-08 before context/instruction integration."
+  ],
+  "tracking": {
+    "location": "CodeGraph DW-F1 / DW-64; this local register retains review evidence",
+    "kanbanToolAvailable": false,
+    "shortcutRecordsCreated": false,
+    "note": "The original review was read-only. Subsequent explicit user interview decisions and adopted engineering refinements are incorporated in local sources/contracts and slice acceptance. No Shortcut records or native application implementation were created.",
+    "codegraphProject": "DW",
+    "deliveryFeatures": [
+      "DW-F2",
+      "DW-F3",
+      "DW-F4",
+      "DW-F5",
+      "DW-F6",
+      "DW-F7",
+      "DW-F8",
+      "DW-F9",
+      "DW-F10",
+      "DW-F11",
+      "DW-F12"
+    ]
+  },
+  "currentResolutionVerification": {
+    "evidence": "interview-refinements/refinement-review.json",
+    "candidateFixtures": 1099,
+    "operations": 353,
+    "sqliteAndReferenceChecks": 28,
+    "earlierRegressionChecks": 30,
+    "requirementsMatched": 350,
+    "implementationPlanDigestsMatched": 8,
+    "noInference": true
+  }
+}

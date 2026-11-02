@@ -1,0 +1,523 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "DataScope": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Workspace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Project",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Direction": {
+      "enum": [
+        "Forward",
+        "Reverse",
+        "Both"
+      ],
+      "type": "string"
+    },
+    "GraphQuery": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Search",
+              "type": "string"
+            },
+            "nodeKinds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "text": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text",
+            "nodeKinds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Overview",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Schema",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Node",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "nodeId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Source",
+              "type": "string"
+            },
+            "maxLines": {
+              "format": "uint16",
+              "maximum": 2000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "nodeId",
+            "maxLines"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/Direction"
+            },
+            "edgeKinds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "kind": {
+              "const": "Traverse",
+              "type": "string"
+            },
+            "maxDepth": {
+              "format": "uint16",
+              "maximum": 128,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "startIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "startIds",
+            "direction",
+            "edgeKinds",
+            "maxDepth"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fromId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Path",
+              "type": "string"
+            },
+            "maxDepth": {
+              "format": "uint16",
+              "maximum": 128,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "toId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "fromId",
+            "toId",
+            "maxDepth"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "NodeImpact",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "nodeId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "FileImpact",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "unitKey": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId",
+            "unitKey"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "NodesByFile",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "unitKey": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId",
+            "unitKey"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "RepositoryDependencies",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Consumers",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "nodeId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Publishers",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "nodeId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "DataLineage",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "nodeId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ScopeStatus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "QueryLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "deadlineMs": {
+          "format": "uint32",
+          "maximum": 300000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxResults": {
+          "format": "uint16",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxVisited": {
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxResults",
+        "maxVisited",
+        "deadlineMs"
+      ],
+      "type": "object"
+    },
+    "ViewSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+            },
+            "kind": {
+              "const": "SchemaPublished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "connectionIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Published",
+              "type": "string"
+            },
+            "repositoryIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Exact",
+              "type": "string"
+            },
+            "viewIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "viewIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Pinned",
+              "type": "string"
+            },
+            "pinId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "pinId"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:graph-read-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cursor": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limits": {
+      "$ref": "#/$defs/QueryLimits"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "query": {
+      "$ref": "#/$defs/GraphQuery"
+    },
+    "queryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "scope": {
+      "$ref": "#/$defs/DataScope"
+    },
+    "view": {
+      "$ref": "#/$defs/ViewSelection"
+    }
+  },
+  "required": [
+    "protocol",
+    "queryId",
+    "scope",
+    "view",
+    "query",
+    "limits"
+  ],
+  "title": "GraphReadRequest",
+  "type": "object"
+}

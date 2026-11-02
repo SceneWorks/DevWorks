@@ -1,0 +1,17 @@
+{
+  "date": "2026-11-02",
+  "scope": "Real SQLite against the architecture DDL; host membership-kind, queue, authority, delegation and delivery policies are not implemented by this probe",
+  "schemaSha256": "8a775ae5d9bb60e1bd61283b9091a768784c5d359475acbd659a0446dd64a7fa",
+  "checks": [
+    "feature-linked task accepted",
+    "task without a feature accepted",
+    "standalone issue accepted",
+    "project is still required",
+    "unknown feature refused",
+    "cross-project feature refused",
+    "feature cannot become a child task",
+    "duplicate stable work identity refused"
+  ],
+  "passed": true,
+  "noInference": true
+}

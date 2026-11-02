@@ -1,0 +1,9 @@
+[package]
+name = "devworks-helix-source-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+helix-core = { git = "https://github.com/HelixDB/helix-db.git", rev = "6f2a69653772b60ea099d8d36a02a1d4408147ec", package = "db" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

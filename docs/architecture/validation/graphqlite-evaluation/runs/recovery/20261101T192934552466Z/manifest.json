@@ -1,0 +1,78 @@
+{
+  "inference": false,
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "cases": [
+    {
+      "engine": "graphqlite",
+      "action": "recovery_writer",
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/recovery/20261101T192934552466Z/graphqlite-recovery_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.3183235409669578,
+      "result": {
+        "action": "recovery_check",
+        "checks": 1028,
+        "engine": "graphqlite",
+        "real_inference": false,
+        "reopen_ns": 19618209
+      }
+    },
+    {
+      "engine": "graphqlite",
+      "action": "interrupted_writer",
+      "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/recovery/20261101T192934552466Z/graphqlite-interrupted_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.024304833030328155,
+      "result": {
+        "action": "interrupted_open",
+        "checks": 0,
+        "engine": "graphqlite",
+        "real_inference": false,
+        "reopen_ns": 7265125
+      }
+    },
+    {
+      "engine": "sqlite",
+      "action": "recovery_writer",
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/recovery/20261101T192934552466Z/sqlite-recovery_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.2586442918982357,
+      "result": {
+        "action": "recovery_check",
+        "checks": 1028,
+        "engine": "sqlite",
+        "real_inference": false,
+        "reopen_ns": 425250
+      }
+    },
+    {
+      "engine": "sqlite",
+      "action": "interrupted_writer",
+      "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/recovery/20261101T192934552466Z/sqlite-interrupted_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.024743208894506097,
+      "result": {
+        "action": "interrupted_open",
+        "checks": 0,
+        "engine": "sqlite",
+        "real_inference": false,
+        "reopen_ns": 2520750
+      }
+    }
+  ]
+}

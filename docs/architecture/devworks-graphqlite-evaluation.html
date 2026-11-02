@@ -1,0 +1,414 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><title>DevWorks GraphQLite evaluation</title><style>
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:95px}body{margin:0;color:#233044;background:#f5f6f8;font:calc(14px + 1pt)/1.8 "Avenir Next","Segoe UI",sans-serif}a{color:#285d9c;text-underline-offset:3px}button,input,select{font:inherit}button{cursor:pointer}.top{height:66px;position:sticky;top:0;z-index:5;background:#172536;color:#e7edf5;display:flex;align-items:center;gap:22px;padding:0 28px}.top strong{font-size:calc(14px + 1pt);letter-spacing:.2px}.top .version{font-size:calc(11px + 1pt);color:#b4c2d4;margin-right:auto}.top a{color:#c6d8ef;font-size:calc(11px + 1pt);text-decoration:none}.layout{display:grid;grid-template-columns:245px minmax(0,1fr);max-width:1560px;margin:auto}.contents{position:sticky;top:66px;height:calc(100vh - 66px);overflow:auto;padding:24px 19px;border-right:1px solid #dce2ea;background:#f0f3f7}.contents h2{font-size:calc(11px + 1pt);text-transform:uppercase;letter-spacing:1.2px;color:#64748a;margin:0 0 12px}.contents a{display:block;padding:6px 8px;font-size:calc(11px + 1pt);line-height:1.6;text-decoration:none;color:#44546b;border-radius:4px}.contents a:hover{background:#e2eaf4;color:#214e86}.contents input{width:100%;border:1px solid #bfccdc;background:#fff;border-radius:4px;font-size:calc(11px + 1pt);padding:8px;margin:8px 0 18px}.paper{padding:32px 42px 70px;min-width:0;background:#fff}.document>h1{font-size:calc(34px + 1pt);line-height:1.25;letter-spacing:-.8px;color:#172536;margin:12px 0 18px}.document h2,.trace h2{font-size:calc(23px + 1pt);line-height:1.4;font-weight:600;color:#172536;margin:54px 0 17px;padding-top:12px;border-top:1px solid #dae2ec}.document h3{font-size:calc(17px + 1pt);margin:29px 0 12px;color:#304764}.document p{margin:14px 0;max-width:1000px}.document li{margin:10px 0}.document table,.trace table{border-collapse:collapse;table-layout:auto;width:100%;font-size:calc(12px + 1pt);margin:23px 0}.document th,.trace th{background:#eaf0f6;text-align:left;font-weight:600;color:#293f5b;padding:12px;border:1px solid #d9e1eb}.document td,.trace td{padding:12px;vertical-align:top;border:1px solid #d9e1eb;line-height:1.8;overflow-wrap:anywhere}.document tr:nth-child(even) td{background:#f8fafc}.document code{font:calc(12px + 1pt)/1.7 ui-monospace,"SFMono-Regular",Consolas,monospace;background:#eef2f7;border-radius:3px;padding:2px 4px;overflow-wrap:anywhere}.document pre{overflow:auto;background:#152537;color:#d7e5f5;padding:20px;border-radius:5px}.document pre code{color:inherit;background:none;padding:0;white-space:pre}.document img{display:block;max-width:100%;height:auto;margin:28px auto;border:1px solid #d9e1eb;border-radius:5px;padding:16px;background:#fff}.document p:has(>img){max-width:100%}.figure-link{display:block;font-size:calc(11px + 1pt);text-align:right;margin-top:-20px;margin-bottom:28px}.facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid #d5dfeb;border-radius:5px;margin:0 0 26px}.facts>div{padding:14px 17px;border-right:1px solid #d5dfeb}.facts>div:last-child{border:0}.facts b{display:block;font-size:calc(22px + 1pt);color:#244e80}.facts span{display:block;font-size:calc(10px + 1pt);color:#617087}.gate{border:1px solid #d1b987;background:#fff9ec;padding:16px 18px;margin:0 0 26px;border-radius:5px;font-size:calc(12px + 1pt);line-height:1.9}.gate strong{color:#705117}.muted{font-size:calc(11px + 1pt);color:#68788e}.trace .filters{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.filters input,.filters select{background:white;border:1px solid #b9c7d8;border-radius:4px;padding:9px;font-size:calc(12px + 1pt)}.filters input{min-width:280px}.trace details summary{cursor:pointer;display:flex;align-items:center;gap:9px;font-size:calc(12px + 1pt);list-style-position:outside}.trace details p{font-size:calc(12px + 1pt);margin-bottom:8px}.tag{padding:1px 6px;border:1px solid #c2d0e0;border-radius:4px;font-size:calc(10px + 1pt);color:#60738d}.trace td:first-child{width:41%}.trace td:nth-child(2){width:28%}.trace td:nth-child(3){width:31%}.trace small{display:block;font-size:calc(10px + 1pt);color:#63758e;margin-top:6px}.doc-hidden,[hidden]{display:none!important}input:focus-visible,select:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid #3c74ba;outline-offset:3px}.footer{margin-top:45px;border-top:1px solid #d9e1eb;padding-top:17px;color:#63758e;font-size:calc(11px + 1pt)}@media(max-width:1050px){.layout{grid-template-columns:195px minmax(0,1fr)}.paper{padding:25px}.contents{padding:18px 10px}.top{padding:0 18px;gap:14px}.document h1{font-size:calc(29px + 1pt)}.facts{grid-template-columns:repeat(2,1fr)}.document table{font-size:calc(11px + 1pt)}}@media(max-width:750px){.layout{display:block}.contents{position:static;height:auto;border-right:0;border-bottom:1px solid #d9e1eb}.contents #toc{display:none}.paper{padding:20px}.top a:not(:first-of-type){display:none}.document table,.trace table{display:block;overflow:auto}.document img{padding:7px}.trace .filters input{min-width:0;width:100%}}@media print{.top,.contents,.filters,.gate{display:none}.layout{display:block}.paper{padding:0}.document h2{break-after:avoid}.document img{max-height:90vh;break-inside:avoid}.trace{break-before:page}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style></head><body><header class="top"><strong>DevWorks GraphQLite evaluation</strong><span class="version">Local results &amp; protocol · 1 November 2026</span><a href="devworks-architecture.html">Architecture</a><a href="devworks-graphqlite-evaluation.md">Markdown source</a></header><main class="paper document" style="max-width:1200px;margin:auto"><h1 id="devworks-graphqlite-and-sqlite-vec-evaluation">DevWorks GraphQLite and sqlite vec evaluation</h1>
+<p>GraphQLite 0.12.0 and sqlite-vec 0.1.7 passed the shared graph, vector, scope, mutation, deletion and reopen workload on this Mac. Native cached algorithms can return stale results after writes or rollback unless the application refreshes their snapshot. SQLite remains the selected storage engine; this evaluation does not select GraphQLite.</p>
+<p><strong>Recommendation:</strong> use application-owned SQLite graph tables and sqlite-vec for the core store. GraphQLite is viable as a query and analysis dependency if Cypher and its algorithms justify their cost, but its cache must have an explicit owner and refresh contract. It did not improve the common workload performance. Confidence is high for the recorded local results and moderate for general performance conclusions; Windows, Linux, minimum macOS, production scale and the complete retained CodeGraph operation surface are not qualified.</p>
+<h2 id="what-ran">What ran</h2>
+<p>Native Rust release helpers ran serially on 1 November 2026 on an Apple M5 Max, 18 logical cores and 128 GiB RAM, macOS 27.0.1 arm64, APFS and AC power. GraphQLite and the plain-SQLite baseline used the same bundled SQLite 3.54.1, rusqlite 0.41.1, sqlite-vec 0.1.7, WAL, synchronous FULL and a 64 MiB page-cache setting per connection. Rust was nightly-2026-10-06, opt-level 3, no LTO and 16 codegen units. No model or provider inference ran.</p>
+<p>The frozen fixture contains 1,077 files from CodeGraph, simple-router and dark-factory. Tree-sitter supplies structural relationships and unique-name reference candidates, not compiler-resolved calls. The source graph has 13,087 source nodes plus 2,500 control-project nodes. Scope boundary controls bring the source workload to 15,587 nodes and 24,861 edges. The small profile has 1,000 nodes and 1,002 edges; the materialized overlay has 28,540 nodes and 46,182 edges. Vectors are deterministic normalized 384-dimensional numeric fixtures, not semantic embeddings.</p>
+<p>Fixture SHA-256: <code>84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034</code>. The exact compressed input is included in the evidence archive. Re-extracting changed repositories produces a different test.</p>
+<p>Each matrix comprises two backends × three profiles × three fresh database/process repetitions. The original native-ID adapter and a revised indexed external-ID adapter both ran all 18 cases. The revised matrix is the primary comparison; original results are preserved. Filesystem caches were not purged. Table values are medians of three per-run summaries; a p95 column is the median of three p95 values, not a pooled percentile or confidence interval.</p>
+<h2 id="correctness-and-recovery">Correctness and recovery</h2>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Observed result</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Revised common workload</td>
+<td>18/18 cases, 453,138 explicit checks, no process or correctness failures</td>
+</tr>
+<tr>
+<td>Original adapter workload</td>
+<td>18/18 cases, 453,138 explicit checks, no process or correctness failures</td>
+</tr>
+<tr>
+<td>Point lookup and bounded graph traversal</td>
+<td>Exact independent-oracle matches, including project/view boundary controls</td>
+</tr>
+<tr>
+<td>Project/view and graph-scoped vector recall@10</td>
+<td>1.000 mean and minimum; no underfilled queries, both backends, every profile</td>
+</tr>
+<tr>
+<td>Rename/read concurrency</td>
+<td>10 and 20 readers, with and without a rename writer; expected values and acknowledged final write verified</td>
+</tr>
+<tr>
+<td>Deletion</td>
+<td>12 nodes per case; points, incident edges and vectors absent before and after reopen</td>
+</tr>
+<tr>
+<td>Hybrid FTS and vector fusion</td>
+<td>Scope and source-locator checks passed; shared FTS5 auxiliary database and shared fusion code</td>
+</tr>
+<tr>
+<td>Final process-kill recovery</td>
+<td>4/4 probes: two acknowledged-write checks and two partial-import reopen checks</td>
+</tr>
+<tr>
+<td>Native cached analysis on revised stores</td>
+<td>9/9 profiles; 136,038 checks of BFS, degrees, counts and reload restoration</td>
+</tr>
+<tr>
+<td>Final cache-coherence scenarios</td>
+<td>3/3 repetitions, no guarded-result mismatch; raw stale-cache controls reproduced</td>
+</tr>
+<tr>
+<td>Shared oracle unit tests</td>
+<td>3 passed</td>
+</tr>
+</tbody></table>
+<p>Each acknowledged-write recovery probe kills an owned process after its final rename, without a following checkpoint. A fresh process verifies 1,000 names and 28 scoped-vector checks. Partial-import probes kill 50 ms after opening and verify reopen/checkpoint/close, with no import-complete marker. These are process-crash probes, not power-loss durability or automatic job-resume proofs.</p>
+<h2 id="common-workload-performance">Common workload performance</h2>
+<p>GraphQLite stores graph rows through its public bulk API and queries them through parameterized Cypher. The baseline uses application-owned indexed tables and prepared SQL. Both use exact vec0 KNN. The common bounded BFS expands scoped adjacency on every hop; it does not use GraphQLite’s whole-database algorithm cache.</p>
+<h3 id="small">Small</h3>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th align="right">GraphQLite plus sqlite vec</th>
+<th align="right">Plain SQLite plus sqlite vec</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Import and index ready</td>
+<td align="right">0.094 s</td>
+<td align="right">0.017 s</td>
+</tr>
+<tr>
+<td>Point lookup median</td>
+<td align="right">45.708 µs</td>
+<td align="right">0.875 µs</td>
+</tr>
+<tr>
+<td>Neighbors p95</td>
+<td align="right">134.042 µs</td>
+<td align="right">9.834 µs</td>
+</tr>
+<tr>
+<td>Scoped depth 3 reach p95</td>
+<td align="right">618.208 µs</td>
+<td align="right">68.916 µs</td>
+</tr>
+<tr>
+<td>Project/view vector KNN p95</td>
+<td align="right">0.407 ms</td>
+<td align="right">0.405 ms</td>
+</tr>
+<tr>
+<td>Hybrid retrieval p95</td>
+<td align="right">0.369 ms</td>
+<td align="right">0.390 ms</td>
+</tr>
+<tr>
+<td>20 readers total wall time</td>
+<td align="right">613.521 ms</td>
+<td align="right">4.022 ms</td>
+</tr>
+<tr>
+<td>20 readers plus writer wall time</td>
+<td align="right">636.666 ms</td>
+<td align="right">9.736 ms</td>
+</tr>
+<tr>
+<td>Scoped degree histogram</td>
+<td align="right">82.275 ms</td>
+<td align="right">8.482 ms</td>
+</tr>
+<tr>
+<td>Graceful reopen</td>
+<td align="right">18.476 ms</td>
+<td align="right">0.327 ms</td>
+</tr>
+<tr>
+<td>Logical storage bytes</td>
+<td align="right">3.819 MiB</td>
+<td align="right">3.270 MiB</td>
+</tr>
+<tr>
+<td>Process RSS after queries</td>
+<td align="right">62.109 MiB</td>
+<td align="right">53.781 MiB</td>
+</tr>
+</tbody></table>
+<h3 id="full-source">Full source</h3>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th align="right">GraphQLite plus sqlite vec</th>
+<th align="right">Plain SQLite plus sqlite vec</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Import and index ready</td>
+<td align="right">1.341 s</td>
+<td align="right">0.217 s</td>
+</tr>
+<tr>
+<td>Point lookup median</td>
+<td align="right">46.375 µs</td>
+<td align="right">1.000 µs</td>
+</tr>
+<tr>
+<td>Neighbors p95</td>
+<td align="right">152.875 µs</td>
+<td align="right">12.875 µs</td>
+</tr>
+<tr>
+<td>Scoped depth 3 reach p95</td>
+<td align="right">1,218.750 µs</td>
+<td align="right">126.500 µs</td>
+</tr>
+<tr>
+<td>Project/view vector KNN p95</td>
+<td align="right">5.975 ms</td>
+<td align="right">5.783 ms</td>
+</tr>
+<tr>
+<td>Hybrid retrieval p95</td>
+<td align="right">5.938 ms</td>
+<td align="right">6.071 ms</td>
+</tr>
+<tr>
+<td>20 readers total wall time</td>
+<td align="right">593.873 ms</td>
+<td align="right">6.351 ms</td>
+</tr>
+<tr>
+<td>20 readers plus writer wall time</td>
+<td align="right">638.886 ms</td>
+<td align="right">8.847 ms</td>
+</tr>
+<tr>
+<td>Scoped degree histogram</td>
+<td align="right">1,324.441 ms</td>
+<td align="right">135.531 ms</td>
+</tr>
+<tr>
+<td>Graceful reopen</td>
+<td align="right">292.738 ms</td>
+<td align="right">0.396 ms</td>
+</tr>
+<tr>
+<td>Logical storage bytes</td>
+<td align="right">34.058 MiB</td>
+<td align="right">27.129 MiB</td>
+</tr>
+<tr>
+<td>Process RSS after queries</td>
+<td align="right">189.266 MiB</td>
+<td align="right">152.891 MiB</td>
+</tr>
+</tbody></table>
+<h3 id="materialized-overlay">Materialized overlay</h3>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th align="right">GraphQLite plus sqlite vec</th>
+<th align="right">Plain SQLite plus sqlite vec</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Import and index ready</td>
+<td align="right">2.499 s</td>
+<td align="right">0.419 s</td>
+</tr>
+<tr>
+<td>Point lookup median</td>
+<td align="right">47.042 µs</td>
+<td align="right">1.125 µs</td>
+</tr>
+<tr>
+<td>Neighbors p95</td>
+<td align="right">140.459 µs</td>
+<td align="right">13.542 µs</td>
+</tr>
+<tr>
+<td>Scoped depth 3 reach p95</td>
+<td align="right">1,166.791 µs</td>
+<td align="right">155.666 µs</td>
+</tr>
+<tr>
+<td>Project/view vector KNN p95</td>
+<td align="right">5.965 ms</td>
+<td align="right">5.975 ms</td>
+</tr>
+<tr>
+<td>Hybrid retrieval p95</td>
+<td align="right">6.364 ms</td>
+<td align="right">6.918 ms</td>
+</tr>
+<tr>
+<td>20 readers total wall time</td>
+<td align="right">602.097 ms</td>
+<td align="right">6.550 ms</td>
+</tr>
+<tr>
+<td>20 readers plus writer wall time</td>
+<td align="right">633.646 ms</td>
+<td align="right">9.157 ms</td>
+</tr>
+<tr>
+<td>Scoped degree histogram</td>
+<td align="right">2,380.412 ms</td>
+<td align="right">292.519 ms</td>
+</tr>
+<tr>
+<td>Graceful reopen</td>
+<td align="right">695.380 ms</td>
+<td align="right">0.419 ms</td>
+</tr>
+<tr>
+<td>Logical storage bytes</td>
+<td align="right">62.678 MiB</td>
+<td align="right">49.684 MiB</td>
+</tr>
+<tr>
+<td>Process RSS after queries</td>
+<td align="right">295.938 MiB</td>
+<td align="right">251.938 MiB</td>
+</tr>
+</tbody></table>
+<p>Concurrent wall time includes reader connection setup and 100 lookups per reader; lookup distributions time individual queries after setup. The mixed run adds 100 acknowledged renames. These are adapter-level costs, not proof of an engine locking defect. Each reader has its own connection. The test does not model sustained full-file reindexing or many concurrent writers.</p>
+<p>Graph-constrained vector timing excludes construction of the eligible-ID set. Full-source project/view vector p95 is 5.975 ms versus 5.783 ms; both execute the same exact-search strategy and achieve 100% recall. This is neither ANN qualification nor a RAG-quality test.</p>
+<p>Logical bytes include the graph/vector files, mapping and shared lexical files. RSS includes fixture parsing, oracle and harness state; it is not database-only memory. The revised release helpers are 4,622,432 bytes for GraphQLite and 3,160,256 bytes for plain SQLite; these are benchmark binaries, not predicted app sizes.</p>
+<h3 id="query-shape-materially-changes-graphqlite-performance">Query shape materially changes GraphQLite performance</h3>
+<p>The first adapter used <code>WHERE id(n) = $native</code>. On the source profile it measured 436.709 µs median point lookup and 773.875 µs neighbor p95. Replacing that predicate with the published indexed pattern <code>MATCH (n {id: $key})</code> reduced those values to 46.375 µs and 152.875 µs. Import and reopen costs remained similar. Both versions passed correctness. The initial penalty was partly our query choice and must not be presented as unavoidable GraphQLite overhead.</p>
+<p>A separate fixed-point probe used 100 warmups and 2,000 measured samples per query shape and retained generated SQL from EXPLAIN. Medians were 437 µs for the native-ID predicate, 45.208 µs for the external-ID property pattern and 10,937.166 µs for <code>WHERE n.id = $external</code>. This diagnostic supports choosing the indexed form; it does not replace the varied-workload matrix.</p>
+<h2 id="native-cached-algorithm-performance">Native cached algorithm performance</h2>
+<p>This separate profile uses GraphQLite’s native cached BFS and degree API on the whole post-deletion database. It validates 80 depth-3 BFS queries against a global oracle and every node’s raw-edge in/out/total degree. It deliberately includes all projects/views. Its scope and deduplication semantics differ from the common scoped BFS and degree histogram, so the numbers are not a direct speedup comparison.</p>
+<table>
+<thead>
+<tr>
+<th>Post-deletion profile</th>
+<th align="right">Nodes / edges</th>
+<th align="right">Initial cache load</th>
+<th align="right">Warm BFS p95</th>
+<th align="right">All-node degree analysis</th>
+<th align="right">Reload after insert</th>
+<th align="right">Reload after delete</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>small</td>
+<td align="right">988 / 925</td>
+<td align="right">0.594 ms</td>
+<td align="right">11.292 µs</td>
+<td align="right">1.217 ms</td>
+<td align="right">0.261 ms</td>
+<td align="right">0.213 ms</td>
+</tr>
+<tr>
+<td>source</td>
+<td align="right">15,575 / 24,140</td>
+<td align="right">4.443 ms</td>
+<td align="right">30.750 µs</td>
+<td align="right">18.012 ms</td>
+<td align="right">3.839 ms</td>
+<td align="right">3.949 ms</td>
+</tr>
+<tr>
+<td>overlay</td>
+<td align="right">28,528 / 45,471</td>
+<td align="right">8.262 ms</td>
+<td align="right">31.833 µs</td>
+<td align="right">34.642 ms</td>
+<td align="right">8.530 ms</td>
+<td align="right">7.651 ms</td>
+</tr>
+</tbody></table>
+<p>For the source profile, process RSS rose from a median 43.844 MiB before explicit cache load to 49.828 MiB afterward. Overlay RSS rose from 73.438 MiB to 80.703 MiB. These are observed whole-process deltas, not isolated cache allocations. Explicit reload after another connection’s insert and after deletion restored oracle results and original graph/vector cardinality on every store. The original nine stores were also profiled independently and passed the same 136,038 checks.</p>
+<h2 id="cache-freshness-after-writes">Cache freshness after writes</h2>
+<p>Raw native cached BFS retained its snapshot in several tested cases. This is a cache-coherence hazard for the app, not evidence of committed SQLite row corruption. The documented explicit-load/reload model means DevWorks must not assume automatic invalidation across every API and connection. The public Cypher and public bulk paths behaved differently.</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Raw native observation</th>
+<th>Explicit or guarded refresh</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Same-connection Cypher node/edge insert and edge deletion</td>
+<td>Fresh in tested traces</td>
+<td>Correct</td>
+</tr>
+<tr>
+<td>Another connection commits an edge or deletes a node</td>
+<td>BFS stale</td>
+<td>Correct</td>
+</tr>
+<tr>
+<td>Same-connection public bulk helpers</td>
+<td>Writer cache stale after bulk graph writes</td>
+<td>Correct</td>
+</tr>
+<tr>
+<td>Another connection uses public bulk helpers</td>
+<td>Reader cache stale</td>
+<td>Correct</td>
+</tr>
+<tr>
+<td>Load cache inside write transaction, then roll back</td>
+<td>BFS retained rolled-back node</td>
+<td>Correct after reload; guarded read refuses write transaction</td>
+</tr>
+<tr>
+<td>Read snapshot ends after another writer commits</td>
+<td>Cache remained on prior snapshot</td>
+<td>Correct</td>
+</tr>
+<tr>
+<td>Rollback, then commit with reused numeric generation</td>
+<td>Native BFS still returned ghost node</td>
+<td>Correct; guarded protocol rejected dirty read and refreshed</td>
+</tr>
+<tr>
+<td>Another writer has not committed or rolls back</td>
+<td>Uncommitted graph/vector data stayed invisible to reader</td>
+<td>Correct</td>
+</tr>
+<tr>
+<td>Edge weight changes from total path cost 9 to 16</td>
+<td>Dijkstra returned 16 without explicit CSR reload</td>
+<td>Correct; not all algorithms share BFS freshness behavior</td>
+</tr>
+<tr>
+<td>Graph and vector writes in one explicit transaction</td>
+<td>Commit visible; rolled-back rows absent after reopen</td>
+<td>Correct</td>
+</tr>
+<tr>
+<td>No intervening change</td>
+<td>Guard reused cache without reload</td>
+<td>Correct</td>
+</tr>
+</tbody></table>
+<p>The strongest control starts with cached reachability <code>[a, bulk, r, y]</code>, loads an uncommitted <code>ghost</code>, rolls back, then commits a different node reachable only from an unrelated root. The transactional numeric generation deliberately returns to the same value as the dirty generation. Native cached BFS still reports <code>ghost</code>; guarded BFS returns exactly <code>[a, bulk, r, y]</code>. Repeated three times. A generation counter alone is insufficient.</p>
+<p>The tested guard tracks transactional generation, <code>PRAGMA data_version</code> and <code>sqlite3_total_changes64</code> for its connection. A managed read during a write transaction is rejected and invalidates the guard stamp. Changed stamps trigger explicit reload; unchanged read-only snapshots reuse the cache. The protocol assumes exclusive ownership of cache lifecycle and controlled graph mutations. Production reads must bind version check, reload and algorithm execution to one coherent read snapshot and prevent an unrelated caller from replacing the cache. The scenario tests exercise interleavings at defined boundaries, not every concurrent race.</p>
+<p>Whole-database native algorithms are not a permission or project/view boundary. The common adapter’s per-hop filtering passed scope controls, but no production project-scoped CSR cache, atomic index-generation publication or optimized branch overlay was implemented.</p>
+<h2 id="packaging-and-capability-boundaries">Packaging and capability boundaries</h2>
+<p>The published <code>graphqlite = &quot;=0.12.0&quot;</code> crate with its default <code>bundled-extension</code> feature embeds platform-specific extension bytes, extracts the selected library and dynamically loads it. The tested macOS arm64 library is 854,528 bytes and local <code>otool</code> inspection shows only libSystem linkage. No Python, Node, database server or GraphQLite service was required by the native helper. This is not a fully static extension build.</p>
+<p>Use an app-owned, versioned extension directory and validate trusted packaged bytes before loading. The evaluation supplies an isolated <code>GRAPHQLITE_EXTENSION_DIR</code> per process/case: the default loader may clean other extracted versions in its shared directory. The release payload, signing/notarization, Windows loading, Linux libc compatibility and minimum supported OS still require target packaging tests.</p>
+<p>The published archive’s VCS metadata records revision <code>995a8b9bc25cdd86d4c2b50ff7ff87f0eb236629</code> with <code>dirty: true</code>; a clean checkout at that revision must not be called byte-identical to this tested package. Runtime reports GraphQLite 0.12.0 and SQLite 3.54.1. Capability flags are recorded, but flags do not prove every advertised Cypher construct or graph algorithm was validated.</p>
+<p>Public bulk import commits chunks through the package helpers; graph and vector import batches are not published as one atomic whole-index generation. The explicit graph/vector mutation transaction tests passed, which is a narrower guarantee. Full schema migration, backup/restore, indexing publication, sustained update load and large representative graphs remain application acceptance work.</p>
+<h2 id="evidence-and-reproduction">Evidence and reproduction</h2>
+<p><a href="graphqlite-evaluation-results.json">Machine-readable results</a> contain both workload matrices, cache summaries, final freshness traces and recovery records. <a href="validation/graphqlite-evaluation/README.md">Validation index</a> lists retained raw records and source snapshots. The downloadable evidence archive also includes the exact compressed fixture and published crate payload; generated database files and build caches are excluded.</p>
+<p>The indexed workload executable hash is <code>01eca79c5ad5e3091dcc9e7dbb8b113c0fb5e2379de6bbd61aa8c09f5e2786b6</code>. The original native-ID executable hash is <code>42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb</code>. The final guard/cache/recovery executable hash is <code>a58b9444838ece5aa2f4d69f82aad5e3db2f9582cd92ca239b22f1f089453f71</code>. The guard was strengthened after common timing runs; the timed adapter/common/cache-profile source files are unchanged, and each full source snapshot is preserved. The baseline executable hash is <code>e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9</code>.</p>
+<p>From the archived <code>harness-final</code> directory, build before running:</p>
+<pre><code class="language-sh">rustup run nightly-2026-10-06 cargo build --release --locked -p eval-graphqlite -p eval-sqlite
+rustup run nightly-2026-10-06 cargo test --locked -p eval-common
+python3 run.py --fixture /absolute/source.json --work-dir /fresh/measured --phase measured --repeats 3 --engines graphqlite,sqlite
+python3 graphqlite_cache.py /fresh/measured/TIMESTAMP/manifest.json
+GRAPHQLITE_EXTENSION_DIR=/fresh/extension target/release/eval-graphqlite --freshness /fresh/freshness
+python3 recovery.py --fixture /absolute/source.json --work-dir /fresh/recovery --engines graphqlite,sqlite
+python3 summarize.py /fresh/measured/TIMESTAMP/manifest.json --output /fresh/results.json
+</code></pre>
+<p>Every output root must be disposable and new. Freshness is a diagnostic: raw stale controls are expected and are reported explicitly even when <code>case_errors</code> is empty. A passing diagnostic means those controls and managed results matched their declared expectations; it does not mean native caching stayed fresh automatically.</p>
+<p>Primary package and interface references: <a href="https://github.com/colliery-io/graphqlite">GraphQLite source</a>, <a href="https://colliery-io.github.io/graphqlite/reference/sql-interface/">SQL interface and explicit cache reload</a>, <a href="https://colliery-io.github.io/graphqlite/how-to/other-extensions/">other SQLite extensions</a>, <a href="https://colliery-io.github.io/graphqlite/reference/algorithms/">native algorithms</a>, <a href="https://github.com/asg017/sqlite-vec">sqlite-vec source</a>. Performance and observed behavior above come from the retained local runtime evidence.</p>
+<footer class="footer">SQLite selected; GraphQLite not selected. Local runtime evidence; target packaging and full application acceptance remain open.</footer></main></body></html>

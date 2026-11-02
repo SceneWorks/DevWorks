@@ -1,0 +1,14 @@
+flowchart TB
+ C["Validated application command"] --> PORT["ApplicationStore trait"]
+ PORT --> TX["One write transaction<br/>domain records + history + intent"]
+ TX --> DB["SQLite implementation<br/>application-owned tables"]
+ DB --> ACK["Authoritative commit result"]
+ TX --> JOB["Durable derived-index job"]
+ SRC["Repositories, schemas and documents"] --> STAGE["Prepare graph, lexical and vector batches"]
+ JOB --> STAGE
+ STAGE --> IDX["Unpublished SQLite generation<br/>graph tables + FTS + sqlite-vec"]
+ IDX --> VERIFY["Verify generation and provenance"]
+ VERIFY --> PUB["Atomic published-pointer update"]
+ PUB --> READ["Read view pinned to<br/>scope, revision and generation"]
+ FILE["Immutable artifact files"] --> REF["Journaled metadata publication"]
+ REF --> DB

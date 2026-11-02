@@ -1,0 +1,16 @@
+{
+  "date": "2026-11-02",
+  "status": "Mock UI only; no actual credential/provider/database/host authority acceptance",
+  "checks": [
+    "subscription_disabled_by_default",
+    "separate_api_connection",
+    "explicit_sample_opt_in",
+    "sample_opt_out",
+    "api_independent_billing_form",
+    "sqlite_storage_text",
+    "removed_reader_and_engine_selector"
+  ],
+  "passed": true,
+  "pageErrors": [],
+  "visibleTabsOpened": 0
+}

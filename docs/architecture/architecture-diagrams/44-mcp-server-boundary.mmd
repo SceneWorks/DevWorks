@@ -1,0 +1,23 @@
+flowchart TB
+  H["Other harness or MCP client"]
+  S["Native stdio bridge"]
+  T["Opt-in loopback Streamable HTTP"]
+  H --> S
+  H --> T
+  S --> A["Authenticate registered external client<br/>current scopes and selected operations"]
+  T --> A
+  A --> M["McpServerAdapter<br/>versioned tools, resources and prompts"]
+  M --> G["Shared application gateway<br/>authority, revisions, attribution and receipts"]
+  U["Native UI and DevWorks agent tools"] --> G
+  G --> C["Indexed code<br/>architecture, source and citations"]
+  G --> W["Planned work<br/>plans, tasks, blockers and history"]
+  G --> K["Knowledge<br/>claims, evidence and documents"]
+  G --> P["Existing command policies<br/>explicit grants; human-only holds retained"]
+  C --> R["Bounded authorized result<br/>view, coverage and freshness<br/>recheck revocation before publication"]
+  W --> R
+  K --> R
+  P --> R
+  R --> H
+  L["Desktop lifetime owns serving<br/>close stops both bindings<br/>no daemon or second store writer"] -.-> M
+  classDef boundary fill:#eef3fa,stroke:#50749b,color:#243e5a;
+  class A,G,L boundary;

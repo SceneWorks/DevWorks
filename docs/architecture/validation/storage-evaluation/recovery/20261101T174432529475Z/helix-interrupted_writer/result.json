@@ -1,0 +1,7 @@
+{
+  "action": "interrupted_open",
+  "checks": 0,
+  "engine": "helix",
+  "real_inference": false,
+  "reopen_ns": 148576250
+}

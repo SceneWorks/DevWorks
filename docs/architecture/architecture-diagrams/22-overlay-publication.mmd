@@ -1,0 +1,14 @@
+flowchart TB
+ BASE["Baseline generation: units A, B, C"] --> VIEW["Resolve one immutable view"]
+ BRANCH["Branch: replace A, delete C<br/>bound to exact baseline"] --> VIEW
+ DIRTY["Captured worktree: replace A<br/>bound to exact branch and content digests"] --> VIEW
+ VIEW --> MASK["Highest layer mentioning each unit wins<br/>visible: worktree A and baseline B; C absent"]
+ MASK --> POLICY["Current project/source scope and endpoint validity"]
+ POLICY --> QUERY["Bounded graph, FTS and exact vector candidates<br/>same view and compatible embedding space"]
+ BUILD["Idempotent graph / lexical / vector staging batches"] --> SEAL["Verify manifest, references and declared coverage"]
+ SEAL --> CAS["Compare expected source and previous pointer"]
+ CAS --> PUBLISH["Atomic view pointer + watermark + event"]
+ CAS --> STALE["Stale builder: no pointer change"]
+ PUBLISH --> PIN["Acquire view pin before derived payload reclamation"]
+ PIN --> VIEW
+ QUERY --> ACCESS["Recheck current access before snippets / delivery"]

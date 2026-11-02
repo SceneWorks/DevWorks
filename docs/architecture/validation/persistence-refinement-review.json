@@ -1,0 +1,154 @@
+{
+  "title": "Persistence architecture refinement and material product decisions",
+  "date": "2026-11-01",
+  "status": "Adopted design and narrow mechanics evidence; application adapter remains unimplemented",
+  "adoptedTechnicalDecisions": [
+    "AD 21",
+    "AD 22",
+    "AD 23",
+    "AD 24",
+    "AD 25",
+    "AD 26"
+  ],
+  "confirmedProductDecisions": {
+    "RAG-13": "Retain all document versions until explicit deletion",
+    "STORE-13": "Restored schedules and keep-working require explicit reactivation"
+  },
+  "requirements": 337,
+  "removedRequirements": [],
+  "priorStatusesUnchanged": true,
+  "priorStatementClarifications": [
+    "RAG-12 references confirmed retention policy"
+  ],
+  "traceability": "All IDs, statements and statuses match",
+  "diagrams": 23,
+  "allSvgXmlValid": true,
+  "mechanics": {
+    "sqliteChecks": 28,
+    "sqliteVersion": "3.53.1",
+    "nativeVectorChecks": {
+      "dimensionMismatchRejected": true,
+      "distanceCorrect": true,
+      "globalNearestIsDenied": true,
+      "schemaLoads": true,
+      "scopeBeforeRanking": true
+    },
+    "nativeSqliteVersion": "3.54.1",
+    "sqliteVecVersion": "v0.1.7"
+  },
+  "word": {
+    "pages": 66,
+    "unchangedPageBodies": 34,
+    "changedPagesVisuallyReviewed": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66
+    ],
+    "reviewMethod": "Baseline pixel body matching, eight changed-page contact sheets and full-page review of new policies on pages 7 and 61",
+    "newPolicyTextAndAllIdsPresent": true
+  },
+  "reader": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 23
+      },
+      {
+        "width": 800,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 23
+      }
+    ],
+    "browser": "local headless Chromium; no user-facing tab opened",
+    "decisionRows": 26,
+    "anchors": 8,
+    "localLinksValid": true,
+    "sectionSearch": true,
+    "requirementSearch": true,
+    "statusFilter": true,
+    "pageErrors": []
+  },
+  "visualReview": {
+    "standalone": [
+      "21-persistence-transactions",
+      "22-overlay-publication",
+      "23-backup-restore"
+    ],
+    "inlineWidth": 800,
+    "schemaReaderWidths": [
+      1440,
+      800
+    ]
+  },
+  "limitations": [
+    "Not a production migration or Rust persistence adapter",
+    "No real inference",
+    "No complete broker/scope/resource/process policy execution",
+    "No representative performance, power-loss or target filesystem acceptance",
+    "Restore journal, artifact deletion barriers and logical export/import require integrated conformance"
+  ],
+  "sourcesChecked": [
+    "https://www.sqlite.org/wal.html",
+    "https://www.sqlite.org/pragma.html",
+    "https://www.sqlite.org/backup.html",
+    "https://www.sqlite.org/lang_transaction.html",
+    "https://www.sqlite.org/lang_altertable.html",
+    "https://alexgarcia.xyz/sqlite-vec/api-reference.html"
+  ],
+  "next": "Router/provider integration contracts against simple-router",
+  "documentSha256": {
+    "docs/architecture/devworks-architecture.md": "9a3d3b49c58cfed762d0ec4639b9793494cbb8eb1432b839906ac74a8a70e133",
+    "docs/architecture/devworks-architecture.html": "20c3b2076e5e000bc5ba2474fd129339f95369b7ac2b6f24f141a27919897510",
+    "docs/architecture/persistence-schema.sql": "eef17888c985db43d986560ef6a1b0a627036111f5441dc7d926f47a92c25c0b",
+    "docs/architecture/architecture-contracts.json": "4541b9375225621319046bc805b2f090ce695301369f32a2a5742898fbf5726a",
+    "docs/architecture/devworks-requirements-traceability.json": "13d8b5f62254ec896c79a0e2d2dceab86b0d070a2a138ac715acae2b955ab710",
+    "docs/architecture/architecture-diagrams/manifest.json": "458eeeae8ad297d6c68364f90fd2c53471a7795983fbed74fbd32a6fbc0173a0",
+    "docs/planning/requirements-content.json": "7ec329423135cb74a26b16016867eaf4486f550e81926c4f46941617485cc81c",
+    "docs/planning/requirements-interview.json": "ab6af0a0ebcab6140f913c65e3122d02760f49951d2777cac4f0b34364ac48a7",
+    "docs/planning/devworks-requirements.html": "354f0b3fd7996349977b004b25480498f2252f1298b61f6a9ba98ee845270d49",
+    "docs/planning/devworks-requirements.docx": "29c1f0bd27de205c3acf5b101d12a5d78b3f6a1d31eb83a98a95d3afa8305df6",
+    "tools/planning/requirements_expansion.py": "c18e6c7833c9ffc9e2b8b7cb91451971391c491e049d9dffc53cea7f4da2d016",
+    "tools/planning/build_architecture.cjs": "908d38f560d80f24f9ed0c55f743b6484b07f6eafe230f796ea3c4ff267010c6",
+    "tools/storage-eval/persistence_contract_probe.py": "a27763459a3e0dc8130a55e7b299a06d6e0a58a1e7d150dd9fc70a644fa4e13d",
+    "docs/architecture/validation/persistence-refinement/sqlite-mechanics.json": "eab5f09c064b6ff468b08364f0c8e54128add6b4ea113079d06ba3806018af53",
+    "docs/architecture/validation/persistence-refinement/vector-distance.json": "b7370accc3cdc38e9640d823596d019402ed534c180c71e350e145a3a85e9c18",
+    "docs/architecture/architecture-diagrams/21-persistence-transactions.mmd": "33ac1ee73fb34de00163ca330ec4b8a7a7b33e0527331803b6f22f6094e74072",
+    "docs/architecture/architecture-diagrams/21-persistence-transactions.svg": "d6c56769ba62cdd28d7cb4501d27604597ce9be79bea82084e5d476ef39e18c6",
+    "docs/architecture/architecture-diagrams/22-overlay-publication.mmd": "b84c9b063f0da3663e548f44e92eb6799d062cb71467001746d6b51cc14011c5",
+    "docs/architecture/architecture-diagrams/22-overlay-publication.svg": "acbfadf44f57a502a9fbd437d78a206ba874b2f8af30d2e258b7b9bb2aa6527a",
+    "docs/architecture/architecture-diagrams/23-backup-restore.mmd": "158962d4a95150528967d6c6a9bfe2c972f5c6e5930e2dec1b3ae1ab75cb2661",
+    "docs/architecture/architecture-diagrams/23-backup-restore.svg": "8193ebb220e80373f1e1e555dbe2768a6328fa278505d3c8f9c98912ae195a1d"
+  }
+}

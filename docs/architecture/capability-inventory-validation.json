@@ -1,0 +1,34 @@
+{
+  "status": "Structural design validation only",
+  "sourceRevision": "afe73560215bbe7593fc59451de5cc3237e3eeca",
+  "entries": 558,
+  "uniqueIds": true,
+  "missingDestinations": 0,
+  "unknownNativeOperations": 0,
+  "missingAcceptanceCases": 0,
+  "acceptanceGroups": 33,
+  "workloads": 12,
+  "sourceKinds": {
+    "consumer": 10,
+    "http": 258,
+    "minimal_http": 1,
+    "extractor": 7,
+    "semantic_adapter": 28,
+    "job": 13,
+    "mcp": 115,
+    "resource": 5,
+    "assistant_tool": 18,
+    "index_stage": 16,
+    "work_tool": 30,
+    "ui": 57
+  },
+  "dispositions": {
+    "adapt": 226,
+    "native": 187,
+    "replace": 19,
+    "excluded": 64,
+    "support": 51,
+    "alias": 11
+  },
+  "nativeImplementationOrBenchmarkPass": false
+}

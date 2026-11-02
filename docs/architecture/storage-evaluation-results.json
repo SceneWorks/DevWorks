@@ -1,0 +1,4635 @@
+{
+  "date": "2026-11-01",
+  "classification": "Local native evaluation, not production selection or platform acceptance",
+  "manifest": "work/storage-eval-runs/measured/20261101T174520146593Z/manifest.json",
+  "input": {
+    "phase": "measured",
+    "created_utc": "20261101T174520146593Z",
+    "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+    "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+    "workspace_lock_sha256": "de4aeb3ae95d95389dac8d0fe5d6486c413fefeffe44884421cc506fc0540f66",
+    "hardware": {
+      "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "logical_cpus": 18
+    },
+    "inference": false,
+    "order_seed": 67321,
+    "rayon_threads": 4,
+    "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: aarch64-apple-darwin\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3",
+    "cache_policy": "Fresh process/database each case; OS filesystem cache not flushed; queries include first-access and warm samples",
+    "release_profile": {
+      "opt_level": 3,
+      "lto": false,
+      "codegen_units": 16
+    }
+  },
+  "profiles": {
+    "small": {
+      "overgraph": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 3,
+        "metrics": {
+          "nodes": {
+            "median": 1000,
+            "min": 1000,
+            "max": 1000,
+            "runs": 3
+          },
+          "edges": {
+            "median": 1002,
+            "min": 1002,
+            "max": 1002,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 276103250,
+            "min": 266396833,
+            "max": 283433833,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 13155042,
+            "min": 12349167,
+            "max": 13207917,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 13143167,
+            "min": 12348917,
+            "max": 13528167,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 43103625,
+            "min": 32145750,
+            "max": 47532666,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 43728,
+            "min": 43696,
+            "max": 43808,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 62128,
+            "min": 61840,
+            "max": 62432,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 68272,
+            "min": 68000,
+            "max": 69328,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 2627190,
+            "min": 2627143,
+            "max": 2627831,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 11138,
+            "min": 11138,
+            "max": 11138,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 12125152,
+            "min": 12125152,
+            "max": 12125152,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 69910528,
+            "min": 69632000,
+            "max": 70991872,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 2833,
+            "min": 2791,
+            "max": 3083,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 6958,
+            "min": 6875,
+            "max": 7500,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 18667,
+            "min": 14417,
+            "max": 21375,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 537125,
+            "min": 529292,
+            "max": 594833,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 537125,
+            "min": 529292,
+            "max": 594833,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 2750,
+            "min": 2667,
+            "max": 2875,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 3625,
+            "min": 3583,
+            "max": 3875,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 4875,
+            "min": 4292,
+            "max": 12333,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 614125,
+            "min": 609917,
+            "max": 768458,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 614125,
+            "min": 609917,
+            "max": 768458,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 393541,
+            "min": 384541,
+            "max": 460042,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 393541,
+            "min": 384541,
+            "max": 460042,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 514959,
+            "min": 502125,
+            "max": 539750,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 596958,
+            "min": 596334,
+            "max": 624209,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 3748167,
+            "min": 3736000,
+            "max": 4033375,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 3992833,
+            "min": 3942083,
+            "max": 4157875,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 3375,
+            "min": 3125,
+            "max": 3458,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 9416,
+            "min": 8500,
+            "max": 13250,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 520334,
+            "min": 492166,
+            "max": 535709,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 611959,
+            "min": 583583,
+            "max": 627250,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 1083,
+            "min": 1083,
+            "max": 1083,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 1917,
+            "min": 1833,
+            "max": 2125,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 4333,
+            "min": 3834,
+            "max": 10334,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 209,
+            "min": 209,
+            "max": 250,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 1667,
+            "min": 1666,
+            "max": 1750,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 250,
+            "min": 250,
+            "max": 250,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 5458,
+            "min": 5166,
+            "max": 5792,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 2458,
+            "min": 2417,
+            "max": 2500,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 3334,
+            "min": 3292,
+            "max": 3375,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 4042,
+            "min": 4000,
+            "max": 8083,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 3826042,
+            "min": 3190958,
+            "max": 4014166,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 4142625,
+            "min": 4087958,
+            "max": 4229334,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 368138958,
+            "min": 345509500,
+            "max": 389046959,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 368138958,
+            "min": 345509500,
+            "max": 389046959,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 2625,
+            "min": 2166,
+            "max": 2667,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 3125,
+            "min": 2750,
+            "max": 4000,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 5417,
+            "min": 3667,
+            "max": 18125,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 3726250,
+            "min": 3710417,
+            "max": 3832375,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 4137292,
+            "min": 4113333,
+            "max": 4160458,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 356318333,
+            "min": 356026875,
+            "max": 367884041,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 356318333,
+            "min": 356026875,
+            "max": 367884041,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 708,
+            "min": 667,
+            "max": 709,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 1542,
+            "min": 1458,
+            "max": 2042,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": [
+          "Deleted vector remained visible after reopen: query=1 stale=[1]",
+          "Deleted vector remained visible after reopen: query=167 stale=[167]",
+          "Deleted vector remained visible after reopen: query=84 stale=[84]",
+          "Deleted vector remained visible: query=1 stale=[1]",
+          "Deleted vector remained visible: query=167 stale=[167]",
+          "Deleted vector remained visible: query=84 stale=[84]"
+        ]
+      },
+      "grafeo": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 1000,
+            "min": 1000,
+            "max": 1000,
+            "runs": 3
+          },
+          "edges": {
+            "median": 1002,
+            "min": 1002,
+            "max": 1002,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 193631750,
+            "min": 190144083,
+            "max": 201637916,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 25428125,
+            "min": 24188250,
+            "max": 30533417,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 12695417,
+            "min": 12551833,
+            "max": 14053458,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 119532208,
+            "min": 102338667,
+            "max": 120631166,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 43856,
+            "min": 43840,
+            "max": 44016,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 53392,
+            "min": 53248,
+            "max": 53488,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 62128,
+            "min": 59968,
+            "max": 62704,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 1784100,
+            "min": 1784100,
+            "max": 1784100,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 11138,
+            "min": 11138,
+            "max": 11138,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 14450800,
+            "min": 14450800,
+            "max": 14450800,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 64274432,
+            "min": 62078976,
+            "max": 64897024,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 2375,
+            "min": 2375,
+            "max": 2500,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 5417,
+            "min": 4459,
+            "max": 7167,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 16083,
+            "min": 15416,
+            "max": 16500,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 487750,
+            "min": 463417,
+            "max": 513875,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 487750,
+            "min": 463417,
+            "max": 513875,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 2833,
+            "min": 2666,
+            "max": 3000,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 4834,
+            "min": 4458,
+            "max": 5083,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 11167,
+            "min": 10292,
+            "max": 11917,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 616833,
+            "min": 604708,
+            "max": 619459,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 616833,
+            "min": 604708,
+            "max": 619459,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 86667,
+            "min": 86333,
+            "max": 144750,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 86667,
+            "min": 86333,
+            "max": 144750,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 218916,
+            "min": 215625,
+            "max": 222625,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 284500,
+            "min": 265291,
+            "max": 289792,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 3782291,
+            "min": 3033625,
+            "max": 3894750,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 3980084,
+            "min": 3226750,
+            "max": 4150000,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 86875,
+            "min": 83959,
+            "max": 92750,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 141459,
+            "min": 140000,
+            "max": 143209,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 208875,
+            "min": 203542,
+            "max": 211666,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 270792,
+            "min": 256583,
+            "max": 279666,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 334,
+            "min": 334,
+            "max": 375,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 542,
+            "min": 542,
+            "max": 542,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 875,
+            "min": 833,
+            "max": 958,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 42,
+            "min": 42,
+            "max": 42,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 250,
+            "min": 208,
+            "max": 250,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 84,
+            "min": 84,
+            "max": 125,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 1208,
+            "min": 1125,
+            "max": 1292,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 2209,
+            "min": 2125,
+            "max": 2375,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 3500,
+            "min": 3334,
+            "max": 3709,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 14375,
+            "min": 13459,
+            "max": 15500,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 3812334,
+            "min": 3165916,
+            "max": 3922875,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 4116708,
+            "min": 4024333,
+            "max": 4184958,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 366216000,
+            "min": 337950292,
+            "max": 381346125,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 366216000,
+            "min": 337950292,
+            "max": 381346125,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 1875,
+            "min": 1666,
+            "max": 2875,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 5375,
+            "min": 2041,
+            "max": 5750,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 12416,
+            "min": 11792,
+            "max": 782292,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 3782875,
+            "min": 3112916,
+            "max": 4014792,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 4140875,
+            "min": 3912208,
+            "max": 4261708,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 363222417,
+            "min": 316061916,
+            "max": 400081375,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 363222417,
+            "min": 316061916,
+            "max": 400081375,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 125,
+            "min": 125,
+            "max": 125,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 334,
+            "min": 333,
+            "max": 375,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      },
+      "helix": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 1000,
+            "min": 1000,
+            "max": 1000,
+            "runs": 3
+          },
+          "edges": {
+            "median": 1002,
+            "min": 1002,
+            "max": 1002,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 846896166,
+            "min": 837920458,
+            "max": 898664833,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 384981333,
+            "min": 382353292,
+            "max": 385406417,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 397731125,
+            "min": 355046750,
+            "max": 517866125,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 153494541,
+            "min": 151693125,
+            "max": 156872417,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 48704,
+            "min": 48688,
+            "max": 48736,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 169280,
+            "min": 168704,
+            "max": 170576,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 188784,
+            "min": 186832,
+            "max": 189088,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 12498411,
+            "min": 12498062,
+            "max": 12501587,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 11138,
+            "min": 11138,
+            "max": 11138,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 54513280,
+            "min": 54513280,
+            "max": 54513280,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 209321984,
+            "min": 207765504,
+            "max": 209649664,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 406625,
+            "min": 405250,
+            "max": 414625,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 505875,
+            "min": 487625,
+            "max": 522625,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 553375,
+            "min": 534083,
+            "max": 591875,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 42281334,
+            "min": 41914708,
+            "max": 43234000,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 42281334,
+            "min": 41914708,
+            "max": 43234000,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 851000,
+            "min": 839834,
+            "max": 862584,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 987916,
+            "min": 948750,
+            "max": 1146166,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 1098875,
+            "min": 1070584,
+            "max": 1294584,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 86564708,
+            "min": 85276625,
+            "max": 89967125,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 86564708,
+            "min": 85276625,
+            "max": 89967125,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 40402583,
+            "min": 40230542,
+            "max": 40907167,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 40402583,
+            "min": 40230542,
+            "max": 40907167,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 1194125,
+            "min": 1171667,
+            "max": 1196583,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 1376833,
+            "min": 1328167,
+            "max": 1388292,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 12764459,
+            "min": 9656375,
+            "max": 15268292,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 13909166,
+            "min": 13815709,
+            "max": 19247750,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 67958,
+            "min": 66792,
+            "max": 70750,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 121084,
+            "min": 105667,
+            "max": 126459,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 1204042,
+            "min": 1193750,
+            "max": 1206833,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 1419625,
+            "min": 1375667,
+            "max": 1550958,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 35166,
+            "min": 35042,
+            "max": 35417,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 66667,
+            "min": 60833,
+            "max": 80000,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 107167,
+            "min": 101542,
+            "max": 118750,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 39083,
+            "min": 37084,
+            "max": 39250,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 79000,
+            "min": 72500,
+            "max": 83917,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 38875,
+            "min": 36458,
+            "max": 39458,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 315333,
+            "min": 303083,
+            "max": 370875,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 419958,
+            "min": 413292,
+            "max": 442209,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 541167,
+            "min": 540875,
+            "max": 559292,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 604083,
+            "min": 585667,
+            "max": 636333,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 9051666,
+            "min": 9011583,
+            "max": 9936959,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 12990416,
+            "min": 9244042,
+            "max": 13065291,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 968641709,
+            "min": 908957208,
+            "max": 1018119417,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 968641709,
+            "min": 908957208,
+            "max": 1018119417,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 998958,
+            "min": 953083,
+            "max": 1011500,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 1580042,
+            "min": 1516125,
+            "max": 2325875,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 1835000,
+            "min": 1721291,
+            "max": 2602334,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 9110750,
+            "min": 9045625,
+            "max": 9244208,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 13168167,
+            "min": 10059375,
+            "max": 13919250,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 979918917,
+            "min": 922032791,
+            "max": 1024907042,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 979918917,
+            "min": 922032791,
+            "max": 1024907042,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 38750,
+            "min": 36792,
+            "max": 38916,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 83459,
+            "min": 66916,
+            "max": 87084,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 0.99875,
+            "minimum": 0.9,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      },
+      "sqlite": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 1000,
+            "min": 1000,
+            "max": 1000,
+            "runs": 3
+          },
+          "edges": {
+            "median": 1002,
+            "min": 1002,
+            "max": 1002,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 17611792,
+            "min": 16906542,
+            "max": 18438291,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 1928125,
+            "min": 1918250,
+            "max": 2015833,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 19250,
+            "min": 16584,
+            "max": 20958,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 293333,
+            "min": 282125,
+            "max": 309834,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 43744,
+            "min": 43696,
+            "max": 43760,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 49328,
+            "min": 49280,
+            "max": 49344,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 55136,
+            "min": 54896,
+            "max": 55504,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 3428352,
+            "min": 3428352,
+            "max": 3428352,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 11138,
+            "min": 11138,
+            "max": 11138,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 3159872,
+            "min": 3159872,
+            "max": 3159872,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 56836096,
+            "min": 56688640,
+            "max": 57229312,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 1000,
+            "min": 708,
+            "max": 1042,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 34542,
+            "min": 12958,
+            "max": 36833,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 65917,
+            "min": 34292,
+            "max": 66208,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 2268000,
+            "min": 2157291,
+            "max": 2369750,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 2268000,
+            "min": 2157291,
+            "max": 2369750,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 750,
+            "min": 709,
+            "max": 792,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 39583,
+            "min": 37541,
+            "max": 49417,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 107541,
+            "min": 94750,
+            "max": 111916,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 3888375,
+            "min": 3604250,
+            "max": 3921541,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 3888375,
+            "min": 3604250,
+            "max": 3921541,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 8657917,
+            "min": 8544834,
+            "max": 8661916,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 8657917,
+            "min": 8544834,
+            "max": 8661916,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 310000,
+            "min": 301625,
+            "max": 312541,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 354625,
+            "min": 350833,
+            "max": 360042,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 136959,
+            "min": 123083,
+            "max": 142500,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 155541,
+            "min": 154208,
+            "max": 227042,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 288667,
+            "min": 285833,
+            "max": 291500,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 348916,
+            "min": 333334,
+            "max": 368917,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 291417,
+            "min": 289375,
+            "max": 294000,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 370709,
+            "min": 353166,
+            "max": 372542,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 916,
+            "min": 875,
+            "max": 917,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 1208,
+            "min": 1208,
+            "max": 1208,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 1708,
+            "min": 1667,
+            "max": 1750,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 7625,
+            "min": 7500,
+            "max": 7708,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 9708,
+            "min": 9416,
+            "max": 9958,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 7625,
+            "min": 7500,
+            "max": 7750,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 63750,
+            "min": 56083,
+            "max": 72625,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 1583,
+            "min": 1125,
+            "max": 1666,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 66084,
+            "min": 39041,
+            "max": 71291,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 123334,
+            "min": 88042,
+            "max": 159125,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 44250,
+            "min": 44125,
+            "max": 48917,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 171791,
+            "min": 78417,
+            "max": 177417,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 7440958,
+            "min": 6935958,
+            "max": 7505875,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 7440958,
+            "min": 6935958,
+            "max": 7505875,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 4375,
+            "min": 4250,
+            "max": 5417,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 140208,
+            "min": 127000,
+            "max": 143500,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 277208,
+            "min": 255083,
+            "max": 286333,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 49625,
+            "min": 42792,
+            "max": 50125,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 290625,
+            "min": 262958,
+            "max": 291292,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 9660042,
+            "min": 9135750,
+            "max": 9768458,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 9660042,
+            "min": 9135750,
+            "max": 9768458,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 8041,
+            "min": 7917,
+            "max": 8084,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 9917,
+            "min": 9834,
+            "max": 10042,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      }
+    },
+    "source": {
+      "overgraph": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 3,
+        "metrics": {
+          "nodes": {
+            "median": 15587,
+            "min": 15587,
+            "max": 15587,
+            "runs": 3
+          },
+          "edges": {
+            "median": 24861,
+            "min": 24861,
+            "max": 24861,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 5253683667,
+            "min": 5234199917,
+            "max": 5286102958,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 13413625,
+            "min": 13411250,
+            "max": 14632250,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 13180000,
+            "min": 12298667,
+            "max": 13399125,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 447173125,
+            "min": 437435333,
+            "max": 456162750,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 74064,
+            "min": 74032,
+            "max": 74064,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 231840,
+            "min": 231232,
+            "max": 232160,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 275024,
+            "min": 274672,
+            "max": 299408,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 43102606,
+            "min": 43102391,
+            "max": 43103084,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 25716,
+            "min": 25716,
+            "max": 25716,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 12125152,
+            "min": 12125152,
+            "max": 12125152,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 281640960,
+            "min": 281264128,
+            "max": 306593792,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 3209,
+            "min": 3167,
+            "max": 3458,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 5500,
+            "min": 5459,
+            "max": 6041,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 13625,
+            "min": 13042,
+            "max": 28750,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 598958,
+            "min": 583250,
+            "max": 637500,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 598958,
+            "min": 583250,
+            "max": 637500,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 3000,
+            "min": 2958,
+            "max": 3042,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 3958,
+            "min": 3917,
+            "max": 4000,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 8042,
+            "min": 6458,
+            "max": 12708,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 709417,
+            "min": 706209,
+            "max": 742750,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 709417,
+            "min": 706209,
+            "max": 742750,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 21101042,
+            "min": 20363875,
+            "max": 21572625,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 21101042,
+            "min": 20363875,
+            "max": 21572625,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 4482250,
+            "min": 4430292,
+            "max": 4514250,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 4966167,
+            "min": 4895541,
+            "max": 5654459,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 3142167,
+            "min": 3108042,
+            "max": 3684125,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 3931709,
+            "min": 3862625,
+            "max": 4200958,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 15458,
+            "min": 14875,
+            "max": 16375,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 48375,
+            "min": 47666,
+            "max": 49791,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 4752208,
+            "min": 4590125,
+            "max": 4765083,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 5219292,
+            "min": 4968125,
+            "max": 5363542,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 2167,
+            "min": 2125,
+            "max": 2250,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 3875,
+            "min": 3792,
+            "max": 4208,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 6209,
+            "min": 5375,
+            "max": 7750,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 750,
+            "min": 750,
+            "max": 958,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 10708,
+            "min": 10083,
+            "max": 11125,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 542,
+            "min": 500,
+            "max": 750,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 32583,
+            "min": 24917,
+            "max": 37958,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 2834,
+            "min": 2833,
+            "max": 3250,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 4000,
+            "min": 3666,
+            "max": 4209,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 6875,
+            "min": 5917,
+            "max": 12583,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 3742416,
+            "min": 3169208,
+            "max": 3899792,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 4170250,
+            "min": 4018958,
+            "max": 4193458,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 355221208,
+            "min": 334460625,
+            "max": 381077459,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 355221208,
+            "min": 334460625,
+            "max": 381077459,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 3292,
+            "min": 2500,
+            "max": 3500,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 3875,
+            "min": 3250,
+            "max": 4125,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 9500,
+            "min": 5958,
+            "max": 10458,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 3101458,
+            "min": 3078125,
+            "max": 3153750,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 3957917,
+            "min": 3861958,
+            "max": 4067083,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 319877958,
+            "min": 310062166,
+            "max": 340099667,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 319877958,
+            "min": 310062166,
+            "max": 340099667,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 1709,
+            "min": 1625,
+            "max": 1791,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 6750,
+            "min": 5958,
+            "max": 7333,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": [
+          "Deleted vector remained visible after reopen: query=1 stale=[1]",
+          "Deleted vector remained visible after reopen: query=1299 stale=[1299]",
+          "Deleted vector remained visible after reopen: query=2597 stale=[2597]",
+          "Deleted vector remained visible: query=1 stale=[1]",
+          "Deleted vector remained visible: query=1299 stale=[1299]",
+          "Deleted vector remained visible: query=2597 stale=[2597]",
+          "Graph KNN traversed a foreign-project bridge: root=1 query=13087 results=[13087, 2704, 6607, 7062, 1714, 7683, 2598, 1331, 809, 2937]"
+        ]
+      },
+      "grafeo": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 15587,
+            "min": 15587,
+            "max": 15587,
+            "runs": 3
+          },
+          "edges": {
+            "median": 24861,
+            "min": 24861,
+            "max": 24861,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 24553233125,
+            "min": 24547173625,
+            "max": 25209700875,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 24765917,
+            "min": 24467417,
+            "max": 25127083,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 18066042,
+            "min": 17422041,
+            "max": 18247916,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 27633631375,
+            "min": 27070057583,
+            "max": 27739506542,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 74176,
+            "min": 74176,
+            "max": 74192,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 148544,
+            "min": 147808,
+            "max": 148592,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 189664,
+            "min": 189616,
+            "max": 192352,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 27365251,
+            "min": 27365251,
+            "max": 27365251,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 25716,
+            "min": 25716,
+            "max": 25716,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 14450800,
+            "min": 14450800,
+            "max": 14450800,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 215973888,
+            "min": 215384064,
+            "max": 217350144,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 2375,
+            "min": 2167,
+            "max": 2375,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 5917,
+            "min": 5792,
+            "max": 6250,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 15833,
+            "min": 13459,
+            "max": 21666,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 466834,
+            "min": 453333,
+            "max": 481542,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 466834,
+            "min": 453333,
+            "max": 481542,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 2375,
+            "min": 2334,
+            "max": 2459,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 4541,
+            "min": 4083,
+            "max": 4625,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 11000,
+            "min": 6125,
+            "max": 12250,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 567042,
+            "min": 527125,
+            "max": 578375,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 567042,
+            "min": 527125,
+            "max": 578375,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 2158167,
+            "min": 1957334,
+            "max": 2176250,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 2158167,
+            "min": 1957334,
+            "max": 2176250,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 2791833,
+            "min": 2635417,
+            "max": 2828875,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 3366750,
+            "min": 3062917,
+            "max": 3405084,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 3152084,
+            "min": 3080125,
+            "max": 3974958,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 5171209,
+            "min": 4979208,
+            "max": 6536208,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 2127375,
+            "min": 2065958,
+            "max": 2169459,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 2556292,
+            "min": 2395541,
+            "max": 2573167,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 2993000,
+            "min": 2945667,
+            "max": 3005333,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 3362584,
+            "min": 3162500,
+            "max": 3452000,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 667,
+            "min": 625,
+            "max": 709,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 1083,
+            "min": 1000,
+            "max": 1125,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 1541,
+            "min": 1167,
+            "max": 1625,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 167,
+            "min": 167,
+            "max": 167,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 875,
+            "min": 833,
+            "max": 959,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 125,
+            "min": 125,
+            "max": 125,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 4792,
+            "min": 3583,
+            "max": 4958,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 2083,
+            "min": 2041,
+            "max": 2125,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 3250,
+            "min": 2916,
+            "max": 4916,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 12916,
+            "min": 8833,
+            "max": 19750,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 3632041,
+            "min": 3135833,
+            "max": 3877833,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 4113708,
+            "min": 4016500,
+            "max": 4182459,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 351317084,
+            "min": 331885375,
+            "max": 373808375,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 351317084,
+            "min": 331885375,
+            "max": 373808375,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 2375,
+            "min": 2083,
+            "max": 2500,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 3000,
+            "min": 2584,
+            "max": 4875,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 5750,
+            "min": 5042,
+            "max": 237708,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 3117083,
+            "min": 3097833,
+            "max": 3901375,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 3974000,
+            "min": 3792833,
+            "max": 4211916,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 325041875,
+            "min": 310942875,
+            "max": 381118333,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 325041875,
+            "min": 310942875,
+            "max": 381118333,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 458,
+            "min": 417,
+            "max": 458,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 750,
+            "min": 750,
+            "max": 875,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 0.95375,
+            "minimum": 0.7,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      },
+      "helix": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 15587,
+            "min": 15587,
+            "max": 15587,
+            "runs": 3
+          },
+          "edges": {
+            "median": 24861,
+            "min": 24861,
+            "max": 24861,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 25181321541,
+            "min": 23900383292,
+            "max": 25600981542,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 383050708,
+            "min": 370376375,
+            "max": 392776625,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 290093667,
+            "min": 243294125,
+            "max": 520885500,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 468651166,
+            "min": 462434042,
+            "max": 478468000,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 79008,
+            "min": 78960,
+            "max": 79008,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 535840,
+            "min": 477280,
+            "max": 540944,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 644928,
+            "min": 563456,
+            "max": 657168,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 387895889,
+            "min": 385922589,
+            "max": 394402857,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 25716,
+            "min": 25716,
+            "max": 25716,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 54513280,
+            "min": 54513280,
+            "max": 54513280,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 660930560,
+            "min": 577290240,
+            "max": 673300480,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 1026708,
+            "min": 933000,
+            "max": 1406125,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 1335542,
+            "min": 1143208,
+            "max": 1946833,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 1493958,
+            "min": 1295041,
+            "max": 2179666,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 105038792,
+            "min": 94645625,
+            "max": 144583583,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 105038792,
+            "min": 94645625,
+            "max": 144583583,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 2060417,
+            "min": 1843000,
+            "max": 2540458,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 2604250,
+            "min": 2090334,
+            "max": 2898333,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 2813917,
+            "min": 2173000,
+            "max": 3188917,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 212286916,
+            "min": 185410875,
+            "max": 255569958,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 212286916,
+            "min": 185410875,
+            "max": 255569958,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 2620845458,
+            "min": 2400542167,
+            "max": 3368947333,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 2620845458,
+            "min": 2400542167,
+            "max": 3368947333,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 10751041,
+            "min": 10085625,
+            "max": 11356000,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 17472000,
+            "min": 12785375,
+            "max": 19965292,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 13846292,
+            "min": 13768667,
+            "max": 14076333,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 17226375,
+            "min": 14250542,
+            "max": 17997750,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 395125,
+            "min": 364792,
+            "max": 477667,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 749041,
+            "min": 561416,
+            "max": 881250,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 37725792,
+            "min": 10878125,
+            "max": 40557333,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 66068584,
+            "min": 25275583,
+            "max": 67565833,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 228667,
+            "min": 221500,
+            "max": 240083,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 373750,
+            "min": 327083,
+            "max": 398625,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 528750,
+            "min": 407292,
+            "max": 551375,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 216292,
+            "min": 204834,
+            "max": 235125,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 317208,
+            "min": 312458,
+            "max": 389958,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 260792,
+            "min": 237916,
+            "max": 295209,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 2991417,
+            "min": 2796542,
+            "max": 3967917,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 973125,
+            "min": 917792,
+            "max": 1618375,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 1237875,
+            "min": 1166584,
+            "max": 1953750,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 1604042,
+            "min": 1271667,
+            "max": 2068666,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 9329333,
+            "min": 9069125,
+            "max": 13134708,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 13327625,
+            "min": 12851375,
+            "max": 16180875,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 1027457250,
+            "min": 953372375,
+            "max": 1265226792,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 1027457250,
+            "min": 953372375,
+            "max": 1265226792,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 2198208,
+            "min": 2057458,
+            "max": 3374542,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 3255250,
+            "min": 3143458,
+            "max": 5065125,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 4153084,
+            "min": 3774167,
+            "max": 9022792,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 9186459,
+            "min": 9131792,
+            "max": 13295542,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 13301667,
+            "min": 13092458,
+            "max": 16112875,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 1017336292,
+            "min": 991887708,
+            "max": 1316970125,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 1017336292,
+            "min": 991887708,
+            "max": 1316970125,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 183833,
+            "min": 177958,
+            "max": 201834,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 266458,
+            "min": 257958,
+            "max": 327125,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 0.7870833333333334,
+            "minimum": 0.4,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      },
+      "sqlite": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 15587,
+            "min": 15587,
+            "max": 15587,
+            "runs": 3
+          },
+          "edges": {
+            "median": 24861,
+            "min": 24861,
+            "max": 24861,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 225270625,
+            "min": 207849666,
+            "max": 237180750,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 1825459,
+            "min": 1660125,
+            "max": 1891791,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 30083,
+            "min": 27875,
+            "max": 30750,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 373917,
+            "min": 356125,
+            "max": 396083,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 74048,
+            "min": 74048,
+            "max": 74080,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 109776,
+            "min": 109744,
+            "max": 109808,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 157392,
+            "min": 155152,
+            "max": 157728,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 28446720,
+            "min": 28446720,
+            "max": 28446720,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 25716,
+            "min": 25716,
+            "max": 25716,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 3159872,
+            "min": 3159872,
+            "max": 3159872,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 161464320,
+            "min": 159252480,
+            "max": 161808384,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 6083,
+            "min": 4792,
+            "max": 7250,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 50417,
+            "min": 48958,
+            "max": 56334,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 95209,
+            "min": 91542,
+            "max": 117042,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 3503791,
+            "min": 3500458,
+            "max": 3596709,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 3503791,
+            "min": 3500458,
+            "max": 3596709,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 17167,
+            "min": 15500,
+            "max": 17291,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 100625,
+            "min": 97083,
+            "max": 103500,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 180041,
+            "min": 158750,
+            "max": 222542,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 6268875,
+            "min": 6193209,
+            "max": 6273084,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 6268875,
+            "min": 6193209,
+            "max": 6273084,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 139443375,
+            "min": 137032916,
+            "max": 140058958,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 139443375,
+            "min": 137032916,
+            "max": 140058958,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 5435541,
+            "min": 5425500,
+            "max": 5513917,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 5952792,
+            "min": 5888333,
+            "max": 6393084,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 125250,
+            "min": 121333,
+            "max": 131708,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 164250,
+            "min": 153000,
+            "max": 168250,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 3093959,
+            "min": 2999417,
+            "max": 3268958,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 5687583,
+            "min": 5645916,
+            "max": 5834041,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 5538417,
+            "min": 5413250,
+            "max": 5577542,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 6024167,
+            "min": 5952916,
+            "max": 6096166,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 1041,
+            "min": 1000,
+            "max": 1042,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 1875,
+            "min": 1875,
+            "max": 1958,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 2458,
+            "min": 2458,
+            "max": 2667,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 8375,
+            "min": 8250,
+            "max": 8750,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 12292,
+            "min": 12084,
+            "max": 13167,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 9333,
+            "min": 9000,
+            "max": 9334,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 126417,
+            "min": 122375,
+            "max": 136958,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 7416,
+            "min": 5833,
+            "max": 8958,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 74041,
+            "min": 71417,
+            "max": 83333,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 148666,
+            "min": 139667,
+            "max": 175625,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 41000,
+            "min": 40125,
+            "max": 41333,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 176750,
+            "min": 133500,
+            "max": 194334,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 7364791,
+            "min": 7175667,
+            "max": 7783500,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 7364791,
+            "min": 7175667,
+            "max": 7783500,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 14375,
+            "min": 11167,
+            "max": 14959,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 116500,
+            "min": 111416,
+            "max": 124667,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 229458,
+            "min": 184375,
+            "max": 288583,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 37208,
+            "min": 35666,
+            "max": 37416,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 204042,
+            "min": 184709,
+            "max": 236917,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 9602625,
+            "min": 9127292,
+            "max": 10055084,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 9602625,
+            "min": 9127292,
+            "max": 10055084,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 8708,
+            "min": 8500,
+            "max": 8958,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 11708,
+            "min": 11584,
+            "max": 12041,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      }
+    },
+    "overlay": {
+      "overgraph": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 3,
+        "metrics": {
+          "nodes": {
+            "median": 28540,
+            "min": 28540,
+            "max": 28540,
+            "runs": 3
+          },
+          "edges": {
+            "median": 46182,
+            "min": 46182,
+            "max": 46182,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 9947800667,
+            "min": 9764814833,
+            "max": 10108988416,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 13302542,
+            "min": 13266375,
+            "max": 14266042,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 13680833,
+            "min": 13626709,
+            "max": 14114042,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 973406959,
+            "min": 963268500,
+            "max": 979211250,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 126656,
+            "min": 126624,
+            "max": 126768,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 391232,
+            "min": 389696,
+            "max": 391552,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 501264,
+            "min": 455920,
+            "max": 501904,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 79878805,
+            "min": 79878620,
+            "max": 79879671,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 38669,
+            "min": 38669,
+            "max": 38669,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 12125152,
+            "min": 12125152,
+            "max": 12125152,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 513294336,
+            "min": 466862080,
+            "max": 513949696,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 3916,
+            "min": 3792,
+            "max": 4083,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 6833,
+            "min": 6250,
+            "max": 6833,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 13875,
+            "min": 11666,
+            "max": 14167,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 667375,
+            "min": 642083,
+            "max": 794875,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 667375,
+            "min": 642083,
+            "max": 794875,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 3166,
+            "min": 3083,
+            "max": 3208,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 4042,
+            "min": 4000,
+            "max": 4125,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 5125,
+            "min": 5083,
+            "max": 8125,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 767958,
+            "min": 754333,
+            "max": 770125,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 767958,
+            "min": 754333,
+            "max": 770125,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 55903500,
+            "min": 53433208,
+            "max": 56344500,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 55903500,
+            "min": 53433208,
+            "max": 56344500,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 6587125,
+            "min": 6524583,
+            "max": 6631875,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 7322833,
+            "min": 7256417,
+            "max": 7344250,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 3165000,
+            "min": 3154541,
+            "max": 3168916,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 3940917,
+            "min": 3918042,
+            "max": 4023709,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 14959,
+            "min": 14958,
+            "max": 16250,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 83084,
+            "min": 81958,
+            "max": 86875,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 6592291,
+            "min": 6549292,
+            "max": 6633625,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 7003875,
+            "min": 6998917,
+            "max": 7187500,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 2500,
+            "min": 2458,
+            "max": 2583,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 4375,
+            "min": 4375,
+            "max": 4875,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 12625,
+            "min": 9334,
+            "max": 20375,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 1250,
+            "min": 1209,
+            "max": 1291,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 16791,
+            "min": 15625,
+            "max": 18333,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 833,
+            "min": 709,
+            "max": 834,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 40500,
+            "min": 31708,
+            "max": 40541,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 3250,
+            "min": 3125,
+            "max": 3458,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 4458,
+            "min": 4000,
+            "max": 4666,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 5459,
+            "min": 5458,
+            "max": 9042,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 3215292,
+            "min": 3154833,
+            "max": 3745000,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 4098125,
+            "min": 4097958,
+            "max": 4143875,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 349040500,
+            "min": 339962709,
+            "max": 353121666,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 349040500,
+            "min": 339962709,
+            "max": 353121666,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 3125,
+            "min": 3000,
+            "max": 3666,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 4208,
+            "min": 4083,
+            "max": 4583,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 4917,
+            "min": 4667,
+            "max": 8458,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 3134708,
+            "min": 3084708,
+            "max": 3148458,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 3973042,
+            "min": 3703916,
+            "max": 4011458,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 330006500,
+            "min": 308023417,
+            "max": 335046458,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 330006500,
+            "min": 308023417,
+            "max": 335046458,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 2166,
+            "min": 1917,
+            "max": 2333,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 10125,
+            "min": 8459,
+            "max": 10958,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": [
+          "Deleted vector remained visible after reopen: query=1 stale=[1]",
+          "Deleted vector remained visible after reopen: query=2379 stale=[2379]",
+          "Deleted vector remained visible after reopen: query=4757 stale=[4757]",
+          "Deleted vector remained visible: query=1 stale=[1]",
+          "Deleted vector remained visible: query=2379 stale=[2379]",
+          "Deleted vector remained visible: query=4757 stale=[4757]",
+          "Graph KNN traversed a foreign-project bridge: root=1 query=13087 results=[13087, 2704, 6607, 7062, 1714, 7683, 2598, 1331, 809, 2937]"
+        ]
+      },
+      "grafeo": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 28540,
+            "min": 28540,
+            "max": 28540,
+            "runs": 3
+          },
+          "edges": {
+            "median": 46182,
+            "min": 46182,
+            "max": 46182,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 25635839833,
+            "min": 25606830292,
+            "max": 26408040500,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 23241583,
+            "min": 20459417,
+            "max": 25348666,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 22372958,
+            "min": 21956584,
+            "max": 22483083,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 27833015584,
+            "min": 27752886625,
+            "max": 28183403625,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 126864,
+            "min": 126752,
+            "max": 126928,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 247536,
+            "min": 246960,
+            "max": 247760,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 316000,
+            "min": 311488,
+            "max": 320240,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 50579230,
+            "min": 50579230,
+            "max": 50579230,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 38669,
+            "min": 38669,
+            "max": 38669,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 14450800,
+            "min": 14450800,
+            "max": 14450800,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 364986368,
+            "min": 355860480,
+            "max": 372326400,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 2750,
+            "min": 2583,
+            "max": 2792,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 5917,
+            "min": 5875,
+            "max": 6542,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 16458,
+            "min": 14375,
+            "max": 19875,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 527250,
+            "min": 513833,
+            "max": 572000,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 527250,
+            "min": 513833,
+            "max": 572000,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 2833,
+            "min": 2625,
+            "max": 2916,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 4750,
+            "min": 4750,
+            "max": 5333,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 10792,
+            "min": 10250,
+            "max": 11333,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 624291,
+            "min": 613125,
+            "max": 664084,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 624291,
+            "min": 613125,
+            "max": 664084,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 4037875,
+            "min": 3952125,
+            "max": 4515916,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 4037875,
+            "min": 3952125,
+            "max": 4515916,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 3170916,
+            "min": 3104708,
+            "max": 3447709,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 3774875,
+            "min": 3584750,
+            "max": 4095875,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 3986167,
+            "min": 3157166,
+            "max": 3995250,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 4222292,
+            "min": 4027083,
+            "max": 4273125,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 2122042,
+            "min": 2085667,
+            "max": 2280375,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 2872292,
+            "min": 2645125,
+            "max": 3022500,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 3451250,
+            "min": 3424750,
+            "max": 3610000,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 4078375,
+            "min": 3862333,
+            "max": 4889750,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 834,
+            "min": 750,
+            "max": 917,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 1166,
+            "min": 1000,
+            "max": 1167,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 1416,
+            "min": 1250,
+            "max": 1458,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 167,
+            "min": 167,
+            "max": 167,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 959,
+            "min": 917,
+            "max": 1000,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 167,
+            "min": 125,
+            "max": 167,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 4416,
+            "min": 3958,
+            "max": 4417,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 2375,
+            "min": 2333,
+            "max": 2458,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 4291,
+            "min": 3750,
+            "max": 5333,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 27250,
+            "min": 17250,
+            "max": 32583,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 3727208,
+            "min": 3718333,
+            "max": 3813333,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 4142667,
+            "min": 4131459,
+            "max": 4161375,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 363859834,
+            "min": 356254167,
+            "max": 367296875,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 363859834,
+            "min": 356254167,
+            "max": 367296875,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 3000,
+            "min": 2458,
+            "max": 3417,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 5500,
+            "min": 3583,
+            "max": 5542,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 8125,
+            "min": 6209,
+            "max": 81083,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 3715875,
+            "min": 3227625,
+            "max": 3779875,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 4160625,
+            "min": 4052000,
+            "max": 4189041,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 360005625,
+            "min": 344966250,
+            "max": 370176708,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 360005625,
+            "min": 344966250,
+            "max": 370176708,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 416,
+            "min": 375,
+            "max": 416,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 791,
+            "min": 750,
+            "max": 792,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 0.95875,
+            "minimum": 0.7,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      },
+      "helix": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 28540,
+            "min": 28540,
+            "max": 28540,
+            "runs": 3
+          },
+          "edges": {
+            "median": 46182,
+            "min": 46182,
+            "max": 46182,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 48687753167,
+            "min": 48196017125,
+            "max": 48837876875,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 395055625,
+            "min": 392246583,
+            "max": 408001250,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 260851417,
+            "min": 158063500,
+            "max": 323927416,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 850638542,
+            "min": 812045291,
+            "max": 864548250,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 131584,
+            "min": 131584,
+            "max": 131648,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 730944,
+            "min": 673696,
+            "max": 747888,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 827152,
+            "min": 749104,
+            "max": 865296,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 883894277,
+            "min": 881191349,
+            "max": 884807756,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 38669,
+            "min": 38669,
+            "max": 38669,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 54513280,
+            "min": 54513280,
+            "max": 54513280,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 869171200,
+            "min": 807993344,
+            "max": 909115392,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 2056084,
+            "min": 2029875,
+            "max": 2250833,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 2721375,
+            "min": 2389417,
+            "max": 3768292,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 3477417,
+            "min": 2610500,
+            "max": 4458375,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 212846875,
+            "min": 203216333,
+            "max": 248757792,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 212846875,
+            "min": 203216333,
+            "max": 248757792,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 4029084,
+            "min": 3945541,
+            "max": 4079583,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 4723625,
+            "min": 4377875,
+            "max": 6121541,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 5186041,
+            "min": 4906875,
+            "max": 6611750,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 407609667,
+            "min": 397790375,
+            "max": 423277708,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 407609667,
+            "min": 397790375,
+            "max": 423277708,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 7690161208,
+            "min": 7628800083,
+            "max": 7922957708,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 7690161208,
+            "min": 7628800083,
+            "max": 7922957708,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 15794917,
+            "min": 15246292,
+            "max": 17194458,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 26805750,
+            "min": 25038542,
+            "max": 40786750,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 13279916,
+            "min": 13253667,
+            "max": 13281584,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 18066625,
+            "min": 17008083,
+            "max": 19837458,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 468584,
+            "min": 457292,
+            "max": 536708,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 825000,
+            "min": 785625,
+            "max": 830792,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 16118250,
+            "min": 14935459,
+            "max": 16429542,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 54442750,
+            "min": 39732792,
+            "max": 86785250,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 278875,
+            "min": 257042,
+            "max": 301208,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 432667,
+            "min": 361916,
+            "max": 562917,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 739792,
+            "min": 443083,
+            "max": 809084,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 250209,
+            "min": 240166,
+            "max": 251875,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 353750,
+            "min": 339375,
+            "max": 361916,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 269875,
+            "min": 255792,
+            "max": 298375,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 3386458,
+            "min": 3377917,
+            "max": 3537584,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 1914750,
+            "min": 1898000,
+            "max": 1933083,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 2270125,
+            "min": 2250667,
+            "max": 2314125,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 2538125,
+            "min": 2473833,
+            "max": 2571917,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 10643833,
+            "min": 9301084,
+            "max": 13220084,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 14313417,
+            "min": 13731792,
+            "max": 16311333,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 1137586667,
+            "min": 1015171166,
+            "max": 1267235500,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 1137586667,
+            "min": 1015171166,
+            "max": 1267235500,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 4125041,
+            "min": 3915833,
+            "max": 4336375,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 5842334,
+            "min": 5773084,
+            "max": 5996042,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 8512583,
+            "min": 7843625,
+            "max": 9104959,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 12292041,
+            "min": 9833917,
+            "max": 13199125,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 16401000,
+            "min": 16360167,
+            "max": 16663917,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 1181318125,
+            "min": 1120082916,
+            "max": 1284872584,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 1181318125,
+            "min": 1120082916,
+            "max": 1284872584,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 205833,
+            "min": 196500,
+            "max": 212000,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 291958,
+            "min": 276334,
+            "max": 299833,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 0.7575,
+            "minimum": 0.4,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      },
+      "sqlite": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 28540,
+            "min": 28540,
+            "max": 28540,
+            "runs": 3
+          },
+          "edges": {
+            "median": 46182,
+            "min": 46182,
+            "max": 46182,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 410873250,
+            "min": 405314000,
+            "max": 411748375,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 1957750,
+            "min": 1703833,
+            "max": 2019208,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 29334,
+            "min": 27583,
+            "max": 30709,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 377667,
+            "min": 362292,
+            "max": 539042,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 126736,
+            "min": 126624,
+            "max": 126768,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 190992,
+            "min": 190896,
+            "max": 191168,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 258640,
+            "min": 258352,
+            "max": 258784,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 52097024,
+            "min": 52097024,
+            "max": 52097024,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 38669,
+            "min": 38669,
+            "max": 38669,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 3159872,
+            "min": 3159872,
+            "max": 3159872,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 265175040,
+            "min": 264929280,
+            "max": 265322496,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 7667,
+            "min": 7417,
+            "max": 9542,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 46542,
+            "min": 44459,
+            "max": 51250,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 94667,
+            "min": 83667,
+            "max": 117667,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 3520750,
+            "min": 3312417,
+            "max": 3660875,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 3520750,
+            "min": 3312417,
+            "max": 3660875,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 17209,
+            "min": 16042,
+            "max": 17250,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 92000,
+            "min": 91958,
+            "max": 96708,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 168458,
+            "min": 143291,
+            "max": 204750,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 5973208,
+            "min": 5817958,
+            "max": 6446458,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 5973208,
+            "min": 5817958,
+            "max": 6446458,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 253053583,
+            "min": 249970334,
+            "max": 255125209,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 253053583,
+            "min": 249970334,
+            "max": 255125209,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 5484959,
+            "min": 5450125,
+            "max": 5508625,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 6114834,
+            "min": 6072083,
+            "max": 6263708,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 117292,
+            "min": 100000,
+            "max": 119709,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 137041,
+            "min": 119334,
+            "max": 167875,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 3502958,
+            "min": 2982125,
+            "max": 4666875,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 5726625,
+            "min": 5550708,
+            "max": 5762541,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 5452292,
+            "min": 5440791,
+            "max": 5607000,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 5934875,
+            "min": 5880125,
+            "max": 5973417,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 1084,
+            "min": 1084,
+            "max": 1125,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 2166,
+            "min": 2084,
+            "max": 2292,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 4041,
+            "min": 2625,
+            "max": 4708,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 8916,
+            "min": 8500,
+            "max": 9125,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 13166,
+            "min": 12875,
+            "max": 13542,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 9166,
+            "min": 8416,
+            "max": 9375,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 121250,
+            "min": 119459,
+            "max": 133250,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 6708,
+            "min": 5625,
+            "max": 8708,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 75750,
+            "min": 71500,
+            "max": 95333,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 167125,
+            "min": 162875,
+            "max": 181084,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 41167,
+            "min": 36083,
+            "max": 42291,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 167333,
+            "min": 163000,
+            "max": 190208,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 7514584,
+            "min": 7014542,
+            "max": 7549542,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 7514584,
+            "min": 7014542,
+            "max": 7549542,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 14250,
+            "min": 11334,
+            "max": 15334,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 130292,
+            "min": 118583,
+            "max": 134000,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 247375,
+            "min": 236875,
+            "max": 255000,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 33917,
+            "min": 28375,
+            "max": 39875,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 219250,
+            "min": 204959,
+            "max": 241666,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 9134208,
+            "min": 7882875,
+            "max": 9693291,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 9134208,
+            "min": 7882875,
+            "max": 9693291,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 9209,
+            "min": 8708,
+            "max": 9333,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 13625,
+            "min": 13334,
+            "max": 13875,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      }
+    }
+  },
+  "failures": [
+    {
+      "engine": "overgraph",
+      "profile": "small",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/small-1-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/small-1-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 1.6997298751957715,
+      "process_peak_rss_bytes": 69632000,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 11138,
+      "case_errors": [
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=84 stale=[84]",
+        "Deleted vector remained visible: query=167 stale=[167]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=84 stale=[84]",
+        "Deleted vector remained visible after reopen: query=167 stale=[167]"
+      ]
+    },
+    {
+      "engine": "overgraph",
+      "profile": "small",
+      "iteration": 2,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/small-2-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/small-2-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 1.7573730000294745,
+      "process_peak_rss_bytes": 70991872,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 11138,
+      "case_errors": [
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=84 stale=[84]",
+        "Deleted vector remained visible: query=167 stale=[167]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=84 stale=[84]",
+        "Deleted vector remained visible after reopen: query=167 stale=[167]"
+      ]
+    },
+    {
+      "engine": "overgraph",
+      "profile": "small",
+      "iteration": 3,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/small-3-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/small-3-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 1.6926328749395907,
+      "process_peak_rss_bytes": 69910528,
+      "nodes": 1000,
+      "edges": 1002,
+      "correctness_checks": 11138,
+      "case_errors": [
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=84 stale=[84]",
+        "Deleted vector remained visible: query=167 stale=[167]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=84 stale=[84]",
+        "Deleted vector remained visible after reopen: query=167 stale=[167]"
+      ]
+    },
+    {
+      "engine": "overgraph",
+      "profile": "source",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/source-1-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/source-1-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 8.382493291981518,
+      "process_peak_rss_bytes": 281640960,
+      "nodes": 15587,
+      "edges": 24861,
+      "correctness_checks": 25716,
+      "case_errors": [
+        "Graph KNN traversed a foreign-project bridge: root=1 query=13087 results=[13087, 2704, 6607, 7062, 1714, 7683, 2598, 1331, 809, 2937]",
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=1299 stale=[1299]",
+        "Deleted vector remained visible: query=2597 stale=[2597]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=1299 stale=[1299]",
+        "Deleted vector remained visible after reopen: query=2597 stale=[2597]"
+      ]
+    },
+    {
+      "engine": "overgraph",
+      "profile": "source",
+      "iteration": 2,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/source-2-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/source-2-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 8.566245832946151,
+      "process_peak_rss_bytes": 281264128,
+      "nodes": 15587,
+      "edges": 24861,
+      "correctness_checks": 25716,
+      "case_errors": [
+        "Graph KNN traversed a foreign-project bridge: root=1 query=13087 results=[13087, 2704, 6607, 7062, 1714, 7683, 2598, 1331, 809, 2937]",
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=1299 stale=[1299]",
+        "Deleted vector remained visible: query=2597 stale=[2597]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=1299 stale=[1299]",
+        "Deleted vector remained visible after reopen: query=2597 stale=[2597]"
+      ]
+    },
+    {
+      "engine": "overgraph",
+      "profile": "source",
+      "iteration": 3,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/source-3-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/source-3-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 8.422491458011791,
+      "process_peak_rss_bytes": 306593792,
+      "nodes": 15587,
+      "edges": 24861,
+      "correctness_checks": 25716,
+      "case_errors": [
+        "Graph KNN traversed a foreign-project bridge: root=1 query=13087 results=[13087, 2704, 6607, 7062, 1714, 7683, 2598, 1331, 809, 2937]",
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=1299 stale=[1299]",
+        "Deleted vector remained visible: query=2597 stale=[2597]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=1299 stale=[1299]",
+        "Deleted vector remained visible after reopen: query=2597 stale=[2597]"
+      ]
+    },
+    {
+      "engine": "overgraph",
+      "profile": "overlay",
+      "iteration": 1,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/overlay-1-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/overlay-1-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 14.364692917093635,
+      "process_peak_rss_bytes": 513294336,
+      "nodes": 28540,
+      "edges": 46182,
+      "correctness_checks": 38669,
+      "case_errors": [
+        "Graph KNN traversed a foreign-project bridge: root=1 query=13087 results=[13087, 2704, 6607, 7062, 1714, 7683, 2598, 1331, 809, 2937]",
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=2379 stale=[2379]",
+        "Deleted vector remained visible: query=4757 stale=[4757]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=2379 stale=[2379]",
+        "Deleted vector remained visible after reopen: query=4757 stale=[4757]"
+      ]
+    },
+    {
+      "engine": "overgraph",
+      "profile": "overlay",
+      "iteration": 2,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/overlay-2-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/overlay-2-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 14.548256416106597,
+      "process_peak_rss_bytes": 466862080,
+      "nodes": 28540,
+      "edges": 46182,
+      "correctness_checks": 38669,
+      "case_errors": [
+        "Graph KNN traversed a foreign-project bridge: root=1 query=13087 results=[13087, 2704, 6607, 7062, 1714, 7683, 2598, 1331, 809, 2937]",
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=2379 stale=[2379]",
+        "Deleted vector remained visible: query=4757 stale=[4757]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=2379 stale=[2379]",
+        "Deleted vector remained visible after reopen: query=4757 stale=[4757]"
+      ]
+    },
+    {
+      "engine": "overgraph",
+      "profile": "overlay",
+      "iteration": 3,
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/overlay-3-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/measured/20261101T174520146593Z/overlay-3-overgraph",
+      "binary_bytes": 12125152,
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "exit_code": 0,
+      "wall_seconds": 14.216307667084038,
+      "process_peak_rss_bytes": 513949696,
+      "nodes": 28540,
+      "edges": 46182,
+      "correctness_checks": 38669,
+      "case_errors": [
+        "Graph KNN traversed a foreign-project bridge: root=1 query=13087 results=[13087, 2704, 6607, 7062, 1714, 7683, 2598, 1331, 809, 2937]",
+        "Deleted vector remained visible: query=1 stale=[1]",
+        "Deleted vector remained visible: query=2379 stale=[2379]",
+        "Deleted vector remained visible: query=4757 stale=[4757]",
+        "Deleted vector remained visible after reopen: query=1 stale=[1]",
+        "Deleted vector remained visible after reopen: query=2379 stale=[2379]",
+        "Deleted vector remained visible after reopen: query=4757 stale=[4757]"
+      ]
+    }
+  ]
+}

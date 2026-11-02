@@ -1,0 +1,21 @@
+erDiagram
+ PROJECT ||--o{ MEMBERSHIP : contains
+ REPOSITORY ||--o{ MEMBERSHIP : participates
+ PROJECT ||--o{ WORK_ITEM : owns
+ WORK_ITEM |o--o{ WORK_ITEM : parent_feature
+ WORK_ITEM ||--o{ ASSIGNMENT : executes
+ AGENT ||--o{ ASSIGNMENT : owns
+ AGENT ||--o{ SESSION : activates
+ CONVERSATION ||--o{ SESSION : retains
+ SESSION ||--o{ TRANSCRIPT_EVENT : appends
+ SESSION ||--o{ ASSIGNMENT : performs
+ ASSIGNMENT ||--o{ GIT_RESOURCE_LINK : locates
+ REPOSITORY ||--o{ GIT_RESOURCE_LINK : contains
+ PROJECT ||--o{ ARTIFACT_REFERENCE : authorizes
+ WORK_ITEM |o--o{ ARTIFACT_REFERENCE : links
+ ARTIFACT ||--o{ ARTIFACT_REFERENCE : shared_by
+ WORK_ITEM { string id string kind string workflow_status string execution_state }
+ SESSION { string id string agent_id string context_epoch string model_pin }
+ CONVERSATION { string id string origin_scope }
+ TRANSCRIPT_EVENT { string id int sequence string kind }
+ ARTIFACT { string id string content_digest }

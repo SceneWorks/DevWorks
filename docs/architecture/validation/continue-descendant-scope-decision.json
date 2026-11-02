@@ -1,0 +1,41 @@
+{
+  "title": "Coordinator and eligible descendant Continue scope decision",
+  "date": "2026-11-01",
+  "status": "CONTROL-13 confirmed; child Continue under paused parent remains unresolved",
+  "requirements": 334,
+  "traceability": "All IDs, statements and statuses match; no removals",
+  "word": {
+    "pages": 65,
+    "bodyMatchedPages": 59,
+    "changedPagesVisuallyReviewedBeforeAndAfter": [
+      14,
+      15,
+      16,
+      17,
+      48,
+      49
+    ],
+    "allRequirementIdsPresent": true,
+    "layout": "No clipping, text overlap or broken tables observed; changed-page body/footer separation verified"
+  },
+  "readers": {
+    "widths": [
+      1440,
+      800
+    ],
+    "decisionPresent": true,
+    "horizontalOverflow": false,
+    "brokenImages": 0
+  },
+  "nativeRuntime": "No product implementation or inference executed",
+  "documentSha256": {
+    "tools/planning/requirements_content.py": "916e86baaa78d15b66666cd6fde137ed3661fce5dd1400da64ff04efeac7f771",
+    "docs/planning/requirements-interview.json": "55842e419c7543ccad2fbf7b16cc8446ff243ef137d00ebb4cc90a423088e00a",
+    "docs/planning/requirements-content.json": "85b8f946b0879ff2dddce3ee47385d43f1bcc19267f243604a7fe3bc3470a639",
+    "docs/planning/devworks-requirements.html": "05b4381a033949266b842dde895dcd6b2a3bf71ac80f1ac3b516ce7ce05af4af",
+    "docs/planning/devworks-requirements.docx": "632e2d02c42bafd2636c59eb484fde4463afa7dbbbcca1c81cba60f7649d546a",
+    "docs/architecture/devworks-architecture.md": "f56c97f773d1935b2fc2fa092be1d71391219a325f2ed6c0862035c1facc059e",
+    "docs/architecture/devworks-architecture.html": "dd32c97b26a9fdcda265fd2e07f27a4d1d6a83dcff5742e128282e36a49a0b5a",
+    "docs/architecture/devworks-requirements-traceability.json": "2523a266eb6341ad9bc5de759706590f201530eb367d3434df3d183c8abdd970"
+  }
+}

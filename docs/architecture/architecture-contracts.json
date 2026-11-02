@@ -1,0 +1,1425 @@
+{
+  "status": "Architecture baseline 1.1 catalog; serialized protocol candidates and actual service acceptance remain explicit",
+  "requirementsSource": "../planning/requirements-content.json",
+  "routingRules": {
+    "ARCH": {
+      "section": "component-and-dependency-structure",
+      "owner": "Composition root and core boundaries",
+      "validationFamily": "Architecture dependency rules",
+      "gate": "G02"
+    },
+    "MODEL": {
+      "section": "domain-objects-and-identity",
+      "owner": "Work and identity model",
+      "validationFamily": "Domain and relationship invariants",
+      "gate": "G11"
+    },
+    "STORE": {
+      "section": "storage-ownership-and-consistency",
+      "owner": "Core persistence traits, SQLite adapter and recovery",
+      "validationFamily": "Real-adapter transaction, scope, freshness, migration and recovery conformance",
+      "gate": "G01"
+    },
+    "CODE": {
+      "section": "indexing-graphs-and-schemas",
+      "owner": "IndexCoordinator and GraphView",
+      "validationFamily": "Snapshot/overlay and source-provenance conformance",
+      "gate": "G06"
+    },
+    "ADDON": {
+      "section": "managed-executable-packages",
+      "owner": "PackageHost and semantic adapters",
+      "validationFamily": "Executable pack protocol and semantic coverage",
+      "gate": "G05"
+    },
+    "COORD": {
+      "section": "coordinator-execution-and-concurrency",
+      "owner": "Workspace coordinator and supervisor",
+      "validationFamily": "Current-state delegation and control behavior",
+      "gate": "G07"
+    },
+    "AGENT": {
+      "section": "coordinator-execution-and-concurrency",
+      "owner": "AgentSupervisor and work activation",
+      "validationFamily": "Activation, root concurrency and fresh-session tests",
+      "gate": "G07"
+    },
+    "CONTROL": {
+      "section": "durable-dispatch-and-recovery",
+      "owner": "Control service and operation journal",
+      "validationFamily": "Interruption, hold and stale-result tests",
+      "gate": "G07"
+    },
+    "ROUTE": {
+      "section": "inference-router-and-provider-contracts",
+      "owner": "InferenceRouter and transport adapters",
+      "validationFamily": "Deterministic provider/routing/budget conformance",
+      "gate": "G03"
+    },
+    "CACHE": {
+      "section": "inference-router-and-provider-contracts",
+      "owner": "RequestBuilder and ContextAssembler",
+      "validationFamily": "Native wire/prefix/continuation fixtures",
+      "gate": "G03"
+    },
+    "WORK": {
+      "section": "coordinator-execution-and-concurrency",
+      "owner": "WorkService and domain policies",
+      "validationFamily": "Shared UI/tool work transition and ownership tests",
+      "gate": "G11"
+    },
+    "HISTORY": {
+      "section": "domain-objects-and-identity",
+      "owner": "History queries and event journal",
+      "validationFamily": "Lineage, source identity and retained-link tests",
+      "gate": "G11"
+    },
+    "GIT": {
+      "section": "git-delivery-and-github-synchronization",
+      "owner": "GitService and delivery coordinator",
+      "validationFamily": "Real temporary Git and controlled GitHub delivery cases",
+      "gate": "G07"
+    },
+    "ART": {
+      "section": "storage-ownership-and-consistency",
+      "owner": "ArtifactStore and reference service",
+      "validationFamily": "Atomic file/reference publication and retained-share tests",
+      "gate": "G10"
+    },
+    "UI": {
+      "section": "conversation-ui-and-screen-context",
+      "owner": "Native UI and navigation registry",
+      "validationFamily": "Native view/composer/control identity tests",
+      "gate": "G02"
+    },
+    "HELP": {
+      "section": "offline-help-diagnostics-updates-and-migration",
+      "owner": "Local Help service and capability registry",
+      "validationFamily": "Offline/topic/version/coverage checks",
+      "gate": "G10"
+    },
+    "KNOW": {
+      "section": "knowledge-documents-and-dreaming",
+      "owner": "KnowledgeService",
+      "validationFamily": "Tagged identity, source revision and scope tests",
+      "gate": "G06"
+    },
+    "CONTEXT": {
+      "section": "inference-router-and-provider-contracts",
+      "owner": "ContextAssembler",
+      "validationFamily": "Instruction, token-accounting and compaction fixtures",
+      "gate": "G03"
+    },
+    "DREAM": {
+      "section": "knowledge-documents-and-dreaming",
+      "owner": "Dreaming workflow and KnowledgeService",
+      "validationFamily": "Journaled consolidation, conflicts and guarded revert",
+      "gate": "G06"
+    },
+    "REVIEW": {
+      "section": "tool-authority-and-trust-boundaries",
+      "owner": "ApprovalService",
+      "validationFamily": "Revision-bound attributed decisions and task-scoped holds",
+      "gate": "G04"
+    },
+    "NOTIFY": {
+      "section": "offline-help-diagnostics-updates-and-migration",
+      "owner": "Notification service and OS adapter",
+      "validationFamily": "Inbox/deduplication/deep-link/OS-permission checks",
+      "gate": "G10"
+    },
+    "PLAT": {
+      "section": "supported-platforms-and-execution-adapters",
+      "owner": "Native distribution and platform adapters",
+      "validationFamily": "Clean machine target/dependency audit",
+      "gate": "G10"
+    },
+    "PERF": {
+      "section": "testing-and-evidence",
+      "owner": "Native UI, engine and adapter owners",
+      "validationFamily": "Representative resource and latency measurements",
+      "gate": "G12"
+    },
+    "SEC": {
+      "section": "tool-authority-and-trust-boundaries",
+      "owner": "ToolBroker and restricted platform adapter",
+      "validationFamily": "Effect classification, scope and destructive-path adversarial cases",
+      "gate": "G04"
+    },
+    "OPS": {
+      "section": "offline-help-diagnostics-updates-and-migration",
+      "owner": "Diagnostics and workspace lifecycle",
+      "validationFamily": "Data preservation, observability and no-server audit",
+      "gate": "G10"
+    },
+    "UIQA": {
+      "section": "integrations-automation-and-resource-ownership",
+      "owner": "AutomationBackend and ResourceService",
+      "validationFamily": "Browser/native control conformance and OK/Wait behavior",
+      "gate": "G09"
+    },
+    "RES": {
+      "section": "integrations-automation-and-resource-ownership",
+      "owner": "ResourceService",
+      "validationFamily": "Capacity, fencing and physical-owner reconciliation",
+      "gate": "G09"
+    },
+    "SET": {
+      "section": "conversation-ui-and-screen-context",
+      "owner": "ConfigurationService and native Settings",
+      "validationFamily": "Scope/inheritance/revision/conflict and safe-boundary tests",
+      "gate": "G02"
+    },
+    "MCP": {
+      "section": "integrations-automation-and-resource-ownership",
+      "owner": "McpClient, McpServerAdapter and shared gateway",
+      "validationFamily": "Outgoing capability integration plus incoming transport, grant, scope, publication and recovery conformance",
+      "gate": "G04"
+    },
+    "GH": {
+      "section": "git-delivery-and-github-synchronization",
+      "owner": "GitHubPort and synchronization service",
+      "validationFamily": "Conditional polling, sync conflict and event-consumer tests",
+      "gate": "G07"
+    },
+    "DELIVERY": {
+      "section": "git-delivery-and-github-synchronization",
+      "owner": "Delivery policies and review service",
+      "validationFamily": "Head-bound review/fix/barrier/release-policy tests",
+      "gate": "G07"
+    },
+    "TOOL": {
+      "section": "tool-authority-and-trust-boundaries",
+      "owner": "ToolRegistry and ToolBroker",
+      "validationFamily": "Shared selection, role and nested-operation enforcement",
+      "gate": "G04"
+    },
+    "CONTAINER": {
+      "section": "integrations-automation-and-resource-ownership",
+      "owner": "ContainerBackend and owned-resource ledger",
+      "validationFamily": "Selected-runtime capabilities and owned stop behavior",
+      "gate": "G09"
+    },
+    "POWER": {
+      "section": "scheduling-lifecycle-and-project-deletion",
+      "owner": "Platform power adapter",
+      "validationFamily": "Idle-sleep inhibition/display/exit policy checks",
+      "gate": "G09"
+    },
+    "GRAPH": {
+      "section": "indexing-graphs-and-schemas",
+      "owner": "Repository explorer and GraphView",
+      "validationFamily": "Scoped node/source/relationship navigation",
+      "gate": "G06"
+    },
+    "DB": {
+      "section": "indexing-graphs-and-schemas",
+      "owner": "SchemaAdapter and target data executor",
+      "validationFamily": "Metadata-only, project/connection policy and actual read-only boundary",
+      "gate": "G08"
+    },
+    "SCHEMA": {
+      "section": "indexing-graphs-and-schemas",
+      "owner": "Schema explorer",
+      "validationFamily": "Objects/relationships/freshness/capability display",
+      "gate": "G08"
+    },
+    "HEALTH": {
+      "section": "indexing-graphs-and-schemas",
+      "owner": "Repository analysis service",
+      "validationFamily": "Revision-bound evidence, partial/failure and coverage behavior",
+      "gate": "G06"
+    },
+    "CODEREVIEW": {
+      "section": "git-delivery-and-github-synchronization",
+      "owner": "Review service and review views",
+      "validationFamily": "Local/external finding lineage and head applicability",
+      "gate": "G07"
+    },
+    "CONV": {
+      "section": "knowledge-documents-and-dreaming",
+      "owner": "ConventionService",
+      "validationFamily": "Project scope, versions and retrieval provenance",
+      "gate": "G06"
+    },
+    "SKILL": {
+      "section": "knowledge-documents-and-dreaming",
+      "owner": "SkillService and instruction resolver",
+      "validationFamily": "File references, precedence, approval and adoption checks",
+      "gate": "G05"
+    },
+    "SELF": {
+      "section": "offline-help-diagnostics-updates-and-migration",
+      "owner": "Self-improvement delivery and updater",
+      "validationFamily": "Normal work gates, required docs and explicit activation",
+      "gate": "G10"
+    },
+    "JOB": {
+      "section": "scheduling-lifecycle-and-project-deletion",
+      "owner": "Scheduler and AgentSupervisor",
+      "validationFamily": "Injected clock skip/resume/overlap and effect-dedup cases",
+      "gate": "G07"
+    },
+    "OP": {
+      "section": "shared-operations-and-interfaces",
+      "owner": "ApplicationGateway and operation catalog",
+      "validationFamily": "Manual/scheduled/tool parity and retained capability inventory",
+      "gate": "G11"
+    },
+    "LOG": {
+      "section": "offline-help-diagnostics-updates-and-migration",
+      "owner": "Diagnostics and operation observers",
+      "validationFamily": "Stage/correlation/redaction/retention and error-state tests",
+      "gate": "G10"
+    },
+    "IMPORT": {
+      "section": "offline-help-diagnostics-updates-and-migration",
+      "owner": "Legacy work importer",
+      "validationFamily": "Snapshot counts/links/idempotent restart and exclusion checks",
+      "gate": "G11"
+    },
+    "EXT": {
+      "section": "managed-executable-packages",
+      "owner": "PackageHost, protocol and SDK",
+      "validationFamily": "Every contribution kind, approval and guarded version transition",
+      "gate": "G05"
+    },
+    "UPDATE": {
+      "section": "offline-help-diagnostics-updates-and-migration",
+      "owner": "Release watcher and installer adapter",
+      "validationFamily": "Signature, asset, restart and schema compatibility fixtures",
+      "gate": "G10"
+    },
+    "RAG": {
+      "section": "knowledge-documents-and-dreaming",
+      "owner": "DocumentService and RetrievalService",
+      "validationFamily": "Extraction/chunk/version/scope/citation and embedding fixtures",
+      "gate": "G08"
+    },
+    "DOC": {
+      "section": "offline-help-diagnostics-updates-and-migration",
+      "owner": "All module owners and Help service",
+      "validationFamily": "Source/docs/behavior consistency review",
+      "gate": "G10"
+    },
+    "TEST": {
+      "section": "testing-and-evidence",
+      "owner": "All module owners and test architecture",
+      "validationFamily": "No-inference normal entry points and meaningful behavior cases",
+      "gate": "G12"
+    },
+    "VIS": {
+      "section": "testing-and-evidence",
+      "owner": "Architecture and module owners",
+      "validationFamily": "Editable diagram rendering and contract/source consistency",
+      "gate": "G05"
+    }
+  },
+  "overrides": {
+    "UI-11": {
+      "section": "conversation-ui-and-screen-context",
+      "owner": "Shared conversation presenter and screen registry",
+      "validationFamily": "Same-session sidebar, deduplicated notices, Help/tools and no authority escalation",
+      "gate": "G02"
+    },
+    "UI-12": {
+      "section": "conversation-ui-and-screen-context",
+      "owner": "Shared conversation presenter and screen registry",
+      "validationFamily": "Same-session sidebar, deduplicated notices, Help/tools and no authority escalation",
+      "gate": "G02"
+    },
+    "UI-13": {
+      "section": "conversation-ui-and-screen-context",
+      "owner": "Shared conversation presenter and screen registry",
+      "validationFamily": "Same-session sidebar, deduplicated notices, Help/tools and no authority escalation",
+      "gate": "G02"
+    },
+    "COORD-09": {
+      "section": "conversation-ui-and-screen-context",
+      "owner": "Shared conversation presenter and screen registry",
+      "validationFamily": "Same-session sidebar, deduplicated notices, Help/tools and no authority escalation",
+      "gate": "G02"
+    },
+    "COORD-10": {
+      "section": "conversation-ui-and-screen-context",
+      "owner": "Shared conversation presenter and screen registry",
+      "validationFamily": "Same-session sidebar, deduplicated notices, Help/tools and no authority escalation",
+      "gate": "G02"
+    },
+    "CONTROL-08": {
+      "section": "shutdown-and-recovery-protocol",
+      "owner": "Application lifecycle, supervisor, process host and recovery",
+      "validationFamily": "Close/crash/wake recovery classes, boot fencing and uncertain effects",
+      "gate": "G10"
+    },
+    "CONTROL-09": {
+      "section": "shutdown-and-recovery-protocol",
+      "owner": "Application lifecycle, supervisor, process host and recovery",
+      "validationFamily": "Close/crash/wake recovery classes, boot fencing and uncertain effects",
+      "gate": "G10"
+    },
+    "CONTROL-10": {
+      "section": "shutdown-and-recovery-protocol",
+      "owner": "Application lifecycle, supervisor, process host and recovery",
+      "validationFamily": "Close/crash/wake recovery classes, boot fencing and uncertain effects",
+      "gate": "G10"
+    },
+    "CONTROL-11": {
+      "section": "shutdown-and-recovery-protocol",
+      "owner": "Application lifecycle, supervisor, process host and recovery",
+      "validationFamily": "Close/crash/wake recovery classes, boot fencing and uncertain effects",
+      "gate": "G10"
+    },
+    "WORK-15": {
+      "section": "scheduling-lifecycle-and-project-deletion",
+      "owner": "Workspace lifecycle and control service",
+      "validationFamily": "Close/wake/archive/manual resume and no-resource-deletion boundary",
+      "gate": "G07"
+    },
+    "WORK-16": {
+      "section": "scheduling-lifecycle-and-project-deletion",
+      "owner": "Workspace lifecycle and control service",
+      "validationFamily": "Close/wake/archive/manual resume and no-resource-deletion boundary",
+      "gate": "G07"
+    },
+    "WORK-17": {
+      "section": "scheduling-lifecycle-and-project-deletion",
+      "owner": "Workspace lifecycle and control service",
+      "validationFamily": "Close/wake/archive/manual resume and no-resource-deletion boundary",
+      "gate": "G07"
+    },
+    "STORE-04": {
+      "section": "durable-dispatch-and-recovery",
+      "owner": "OperationJournal and per-effect reconciler",
+      "validationFamily": "Crash-before/after effect and unknown-outcome hold cases",
+      "gate": "G07"
+    },
+    "TOOL-09": {
+      "section": "parallel-tool-turns-and-scoped-waits",
+      "owner": "ToolBroker and provider-turn assembly",
+      "validationFamily": "Independent-call completion, scoped failures/waits, ordered wire results and crash recovery",
+      "gate": "G03"
+    },
+    "CONTROL-01": {
+      "section": "redirect-cancellation-and-late-observations",
+      "owner": "Application control boundary and AgentSupervisor",
+      "validationFamily": "Durable redirect stages, admission ordering, scoped cancellation and stale results",
+      "gate": "G07"
+    },
+    "CONTROL-02": {
+      "section": "redirect-cancellation-and-late-observations",
+      "owner": "Application control boundary and AgentSupervisor",
+      "validationFamily": "Durable redirect stages, admission ordering, scoped cancellation and stale results",
+      "gate": "G07"
+    },
+    "CONTROL-03": {
+      "section": "redirect-cancellation-and-late-observations",
+      "owner": "Application control boundary and AgentSupervisor",
+      "validationFamily": "Durable redirect stages, admission ordering, scoped cancellation and stale results",
+      "gate": "G07"
+    },
+    "CONTROL-04": {
+      "section": "redirect-cancellation-and-late-observations",
+      "owner": "Application control boundary and AgentSupervisor",
+      "validationFamily": "Durable redirect stages, admission ordering, scoped cancellation and stale results",
+      "gate": "G07"
+    },
+    "CONTROL-07": {
+      "section": "execution-eligibility-and-resume-authorization",
+      "owner": "Application eligibility and root execution controls",
+      "validationFamily": "Cause-specific blockers, revision-bound Continue and descendant eligibility",
+      "gate": "G07"
+    },
+    "CONTROL-12": {
+      "section": "execution-eligibility-and-resume-authorization",
+      "owner": "Application eligibility and root execution controls",
+      "validationFamily": "Cause-specific blockers, revision-bound Continue and descendant eligibility",
+      "gate": "G07"
+    },
+    "CONTROL-13": {
+      "section": "execution-eligibility-and-resume-authorization",
+      "owner": "Application eligibility and root execution controls",
+      "validationFamily": "Cause-specific blockers, revision-bound Continue and descendant eligibility",
+      "gate": "G07"
+    },
+    "STORE-01": {
+      "section": "persistence-contracts-and-consistency-rules",
+      "owner": "Core storage ports, application transactions and SQLite write owner",
+      "validationFamily": "Real-adapter unit-of-work, typed errors, durability and replacement conformance",
+      "gate": "G01"
+    },
+    "STORE-08": {
+      "section": "persistence-contracts-and-consistency-rules",
+      "owner": "Core storage ports, application transactions and SQLite write owner",
+      "validationFamily": "Real-adapter unit-of-work, typed errors, durability and replacement conformance",
+      "gate": "G01"
+    },
+    "STORE-09": {
+      "section": "persistence-contracts-and-consistency-rules",
+      "owner": "Core storage ports, application transactions and SQLite write owner",
+      "validationFamily": "Real-adapter unit-of-work, typed errors, durability and replacement conformance",
+      "gate": "G01"
+    },
+    "STORE-10": {
+      "section": "persistence-contracts-and-consistency-rules",
+      "owner": "Core storage ports, application transactions and SQLite write owner",
+      "validationFamily": "Real-adapter unit-of-work, typed errors, durability and replacement conformance",
+      "gate": "G01"
+    },
+    "STORE-11": {
+      "section": "persistence-contracts-and-consistency-rules",
+      "owner": "Core storage ports, application transactions and SQLite write owner",
+      "validationFamily": "Real-adapter unit-of-work, typed errors, durability and replacement conformance",
+      "gate": "G01"
+    },
+    "STORE-02": {
+      "section": "transaction-boundaries-and-queue-claims",
+      "owner": "Application transaction handlers and durable queue",
+      "validationFamily": "Atomic claims, history/intent/receipt, fenced ownership and consumer gaps",
+      "gate": "G01"
+    },
+    "STORE-03": {
+      "section": "transaction-boundaries-and-queue-claims",
+      "owner": "Application transaction handlers and durable queue",
+      "validationFamily": "Atomic claims, history/intent/receipt, fenced ownership and consumer gaps",
+      "gate": "G01"
+    },
+    "STORE-05": {
+      "section": "manual-backup-restore-and-export",
+      "owner": "StorageMaintenance, artifact lifecycle and restore journal",
+      "validationFamily": "Consistent manual images, interrupted restore, stopped restored automation and no implicit backup",
+      "gate": "G10"
+    },
+    "STORE-07": {
+      "section": "manual-backup-restore-and-export",
+      "owner": "StorageMaintenance, artifact lifecycle and restore journal",
+      "validationFamily": "Consistent manual images, interrupted restore, stopped restored automation and no implicit backup",
+      "gate": "G10"
+    },
+    "STORE-13": {
+      "section": "manual-backup-restore-and-export",
+      "owner": "StorageMaintenance, artifact lifecycle and restore journal",
+      "validationFamily": "Consistent manual images, interrupted restore, stopped restored automation and no implicit backup",
+      "gate": "G10"
+    },
+    "STORE-06": {
+      "section": "migrations-and-compatibility",
+      "owner": "StorageMaintenance and adapter migrations",
+      "validationFamily": "Compatibility/checksum gates, rollback, interruption and destructive migration backup guard",
+      "gate": "G01"
+    },
+    "STORE-12": {
+      "section": "overlay-views-and-index-publication",
+      "owner": "IndexStore, scoped graph/retrieval views and pins",
+      "validationFamily": "Replacement/delete masking, atomic publish, stale builder, scope and cache freshness",
+      "gate": "G06"
+    },
+    "RAG-13": {
+      "section": "immutable-files-and-document-versions",
+      "owner": "Artifact versions and document lifecycle",
+      "validationFamily": "Retained immutable versions, citation identity, explicit deletion and shared references",
+      "gate": "G08"
+    },
+    "ROUTE-01": {
+      "section": "request-records-and-provider-boundaries",
+      "owner": "InferenceRouter and typed request attribution",
+      "validationFamily": "One inference boundary, purpose lanes and complete request semantics",
+      "gate": "G03"
+    },
+    "ROUTE-09": {
+      "section": "request-records-and-provider-boundaries",
+      "owner": "Provider profiles and adapters",
+      "validationFamily": "Required provider/endpoint capability matrix",
+      "gate": "G03"
+    },
+    "ROUTE-10": {
+      "section": "authentication-lifecycle-and-credential-revisions",
+      "owner": "Connection lifecycle and SecretStore",
+      "validationFamily": "Device/PKCE, refresh, revision races and credential removal",
+      "gate": "G03"
+    },
+    "ROUTE-04": {
+      "section": "streaming-tool-calls-and-native-continuation",
+      "owner": "Provider transport and turn assembler",
+      "validationFamily": "Framing, terminal state, native call identity and ordered results",
+      "gate": "G03"
+    },
+    "ROUTE-05": {
+      "section": "selection-pins-capacity-and-cooldowns",
+      "owner": "Route selection and availability",
+      "validationFamily": "Classified cooldowns, bounded waits and current eligibility",
+      "gate": "G03"
+    },
+    "ROUTE-14": {
+      "section": "selection-pins-capacity-and-cooldowns",
+      "owner": "Session pins and route allocation",
+      "validationFamily": "Persisted repin, cursor race and auxiliary lane isolation",
+      "gate": "G03"
+    },
+    "ROUTE-15": {
+      "section": "selection-pins-capacity-and-cooldowns",
+      "owner": "Route availability and durable wakeups",
+      "validationFamily": "Earliest applicable reset and no implicit manual hold",
+      "gate": "G03"
+    },
+    "ROUTE-16": {
+      "section": "price-catalog-refresh-and-provenance",
+      "owner": "PriceCatalog and native source adapters",
+      "validationFamily": "Weekly freshness, atomic snapshot, parser failure and override preservation",
+      "gate": "G03"
+    },
+    "ROUTE-17": {
+      "section": "usage-accounting-and-spending-admission",
+      "owner": "Usage ledger and feature budget admission",
+      "validationFamily": "Reported/estimated/free/untracked cost, coverage and subscription estimates",
+      "gate": "G03"
+    },
+    "ROUTE-06": {
+      "section": "usage-accounting-and-spending-admission",
+      "owner": "Usage ledger and feature budget admission",
+      "validationFamily": "Attribution, cumulative/delta usage, reservation settlement and manual cap resumption",
+      "gate": "G03"
+    },
+    "ROUTE-07": {
+      "section": "usage-accounting-and-spending-admission",
+      "owner": "Usage ledger and feature budget admission",
+      "validationFamily": "Attribution, cumulative/delta usage, reservation settlement and manual cap resumption",
+      "gate": "G03"
+    },
+    "ROUTE-08": {
+      "section": "usage-accounting-and-spending-admission",
+      "owner": "Usage ledger and feature budget admission",
+      "validationFamily": "Attribution, cumulative/delta usage, reservation settlement and manual cap resumption",
+      "gate": "G03"
+    },
+    "ROUTE-11": {
+      "section": "usage-accounting-and-spending-admission",
+      "owner": "Usage ledger and feature budget admission",
+      "validationFamily": "Attribution, cumulative/delta usage, reservation settlement and manual cap resumption",
+      "gate": "G03"
+    },
+    "ROUTE-12": {
+      "section": "usage-accounting-and-spending-admission",
+      "owner": "Usage ledger and feature budget admission",
+      "validationFamily": "Attribution, cumulative/delta usage, reservation settlement and manual cap resumption",
+      "gate": "G03"
+    },
+    "CACHE-01": {
+      "section": "cache-and-context-epochs",
+      "owner": "Context assembler and provider capability profiles",
+      "validationFamily": "Native prefix stability, context epochs, cache semantics and observable usage",
+      "gate": "G03"
+    },
+    "CACHE-02": {
+      "section": "cache-and-context-epochs",
+      "owner": "Context assembler and provider capability profiles",
+      "validationFamily": "Native prefix stability, context epochs, cache semantics and observable usage",
+      "gate": "G03"
+    },
+    "CACHE-03": {
+      "section": "cache-and-context-epochs",
+      "owner": "Context assembler and provider capability profiles",
+      "validationFamily": "Native prefix stability, context epochs, cache semantics and observable usage",
+      "gate": "G03"
+    },
+    "CACHE-04": {
+      "section": "cache-and-context-epochs",
+      "owner": "Context assembler and provider capability profiles",
+      "validationFamily": "Native prefix stability, context epochs, cache semantics and observable usage",
+      "gate": "G03"
+    },
+    "CACHE-05": {
+      "section": "cache-and-context-epochs",
+      "owner": "Context assembler and provider capability profiles",
+      "validationFamily": "Native prefix stability, context epochs, cache semantics and observable usage",
+      "gate": "G03"
+    },
+    "CACHE-06": {
+      "section": "cache-and-context-epochs",
+      "owner": "Context assembler and provider capability profiles",
+      "validationFamily": "Native prefix stability, context epochs, cache semantics and observable usage",
+      "gate": "G03"
+    },
+    "EXT-07": {
+      "section": "manifest-installation-and-compatibility",
+      "owner": "PackageService trust and activation policy",
+      "validationFamily": "Signed update authority, exact agent approval and guarded activation",
+      "gate": "G05"
+    },
+    "OP-03": {
+      "section": "capability-coverage-and-validation-workloads",
+      "owner": "Capability inventory and integration scope",
+      "validationFamily": "Explicit legacy integration exclusions and preserved selected import provenance",
+      "gate": "G11"
+    },
+    "MCP-07": {
+      "section": "devworks-mcp-server-for-other-harnesses",
+      "owner": "McpServerAdapter and ApplicationGateway",
+      "validationFamily": "Independent-client context parity, authenticated scope, explicit command grants and recovery",
+      "gate": "G11"
+    },
+    "MCP-08": {
+      "section": "devworks-mcp-server-for-other-harnesses",
+      "owner": "McpServerAdapter and ApplicationGateway",
+      "validationFamily": "Independent-client context parity, authenticated scope, explicit command grants and recovery",
+      "gate": "G04"
+    },
+    "MCP-09": {
+      "section": "devworks-mcp-server-for-other-harnesses",
+      "owner": "McpServerAdapter and ApplicationGateway",
+      "validationFamily": "Independent-client context parity, authenticated scope, explicit command grants and recovery",
+      "gate": "G04"
+    },
+    "MCP-10": {
+      "section": "devworks-mcp-server-for-other-harnesses",
+      "owner": "McpServerAdapter and ApplicationGateway",
+      "validationFamily": "Independent-client context parity, authenticated scope, explicit command grants and recovery",
+      "gate": "G04"
+    },
+    "MCP-11": {
+      "section": "devworks-mcp-server-for-other-harnesses",
+      "owner": "McpServerAdapter and ApplicationGateway",
+      "validationFamily": "Independent-client context parity, authenticated scope, explicit command grants and recovery",
+      "gate": "G11"
+    }
+  },
+  "capabilityFamilies": [
+    {
+      "family": "projects",
+      "owner": "WorkService",
+      "operations": [
+        "list",
+        "get",
+        "create",
+        "edit",
+        "membership",
+        "archive",
+        "restore",
+        "delete"
+      ],
+      "effectAndAuthority": "Read queries; mutations revisioned; active archive and purge require concrete confirmation",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "features",
+      "owner": "WorkService",
+      "operations": [
+        "list",
+        "get",
+        "create",
+        "edit_plan",
+        "prioritize",
+        "dependencies",
+        "request_plan_approval",
+        "edit"
+      ],
+      "effectAndAuthority": "Read and revisioned write; agents request approval, never impersonate a human approver",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "issues",
+      "owner": "WorkService",
+      "operations": [
+        "list",
+        "get",
+        "create",
+        "edit",
+        "prioritize",
+        "publish",
+        "link"
+      ],
+      "effectAndAuthority": "Read and revisioned write; local stays local until explicit publication/link",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "tasks",
+      "owner": "WorkService",
+      "operations": [
+        "list",
+        "get",
+        "create",
+        "edit",
+        "prioritize",
+        "move",
+        "assign",
+        "dependency_links",
+        "acceptance_evidence",
+        "sync_plan",
+        "set_feature"
+      ],
+      "effectAndAuthority": "Shared UI/agent revisioned membership, priority/order and project-wide task blocking links; clear membership pauses, linking preserves holds and makes resolution part of feature delivery.",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "workflows",
+      "owner": "ConfigurationService",
+      "operations": [
+        "list",
+        "create_status",
+        "rename_status",
+        "order",
+        "reassign_and_remove"
+      ],
+      "effectAndAuthority": "Read and revisioned write with stable semantic status IDs",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "next_work",
+      "owner": "WorkService",
+      "operations": [
+        "claim_project_queue",
+        "claim_feature_task",
+        "inspect_claim",
+        "release_claim"
+      ],
+      "effectAndAuthority": "Atomic scoped write; claim/start distinct, idempotency and pauses respected",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "runs",
+      "owner": "ControlService",
+      "operations": [
+        "start",
+        "pause",
+        "continue",
+        "redirect",
+        "inspect",
+        "stop",
+        "eligibility"
+      ],
+      "effectAndAuthority": "Mutating control; plan/readiness/holds and root ownership enforced",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "agents",
+      "owner": "AgentSupervisor",
+      "operations": [
+        "inspect",
+        "delegate",
+        "messages",
+        "inbox",
+        "acknowledge",
+        "checkpoint"
+      ],
+      "effectAndAuthority": "Read and scoped control; parent ownership and root subagent allowance",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "sessions",
+      "owner": "ConversationService",
+      "operations": [
+        "list",
+        "get",
+        "transcript",
+        "briefing",
+        "append_message",
+        "context_sources",
+        "start",
+        "end"
+      ],
+      "effectAndAuthority": "Read and host-attributed append; conversation and provider state distinct",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "ui",
+      "owner": "NavigationContextService",
+      "operations": [
+        "current_screen"
+      ],
+      "effectAndAuthority": "Read only; stable screen/selection/Help references, no form secrets",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "history",
+      "owner": "HistoryService",
+      "operations": [
+        "events",
+        "work_lineage",
+        "git_links",
+        "evidence_links",
+        "operation_status",
+        "tool_usage",
+        "command_receipt"
+      ],
+      "effectAndAuthority": "Scoped read with cursor, observed facts and original provenance",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "code",
+      "owner": "GraphService",
+      "operations": [
+        "search",
+        "architecture",
+        "dependency",
+        "impact",
+        "source",
+        "traverse",
+        "graph_scope_status",
+        "overview",
+        "nodes_by_file",
+        "node_detail",
+        "set_trust",
+        "file_impact",
+        "graph_schema",
+        "call_path",
+        "data_lineage",
+        "consumers",
+        "publishers",
+        "snippet",
+        "repository_dependencies"
+      ],
+      "effectAndAuthority": "Scoped read; correct snapshot set and confidence/coverage",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "indexing",
+      "owner": "IndexCoordinator",
+      "operations": [
+        "discover",
+        "index",
+        "reindex",
+        "refresh_overlay",
+        "retire_view",
+        "cancel",
+        "status",
+        "runs",
+        "configure_sources"
+      ],
+      "effectAndAuthority": "Read status and explicit derived-state writes; bounded owned processes",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "analysis",
+      "owner": "AnalysisService",
+      "operations": [
+        "health",
+        "cross_repo_links",
+        "community_analysis",
+        "status",
+        "clusters",
+        "cluster_detail",
+        "link_and_detect",
+        "process_batch",
+        "security",
+        "metrics",
+        "hotspots",
+        "reanalyze",
+        "synthesize",
+        "fleet_health",
+        "archival_candidates",
+        "file_hotspot"
+      ],
+      "effectAndAuthority": "Read results and controlled analysis jobs; retained algorithms freeze under G11",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "schemas",
+      "owner": "SchemaService",
+      "operations": [
+        "connections",
+        "objects",
+        "relationships",
+        "index",
+        "refresh",
+        "remove_index",
+        "configure"
+      ],
+      "effectAndAuthority": "Metadata-only read against source; derived-state writes, never row retention",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "database",
+      "owner": "DataExecutor",
+      "operations": [
+        "read",
+        "execute_write",
+        "apply_migration",
+        "direct_schema_change",
+        "configure_sensitive_columns"
+      ],
+      "effectAndAuthority": "Read-only connection and project defaults; explicit write enablement and migration provenance",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "knowledge",
+      "owner": "KnowledgeService",
+      "operations": [
+        "search",
+        "read",
+        "record",
+        "revise",
+        "relate",
+        "tag",
+        "verify",
+        "retract",
+        "scope",
+        "diagnostics",
+        "delete_by_source",
+        "delete_selected",
+        "write_status",
+        "subgraph",
+        "entity_bundle",
+        "entity_graph",
+        "claim_bundle",
+        "expand_frontier",
+        "render_summary",
+        "query",
+        "import_user_data",
+        "promote",
+        "challenge",
+        "tagged_lessons"
+      ],
+      "effectAndAuthority": "One identity for tagged memory/facts/lessons; project/shared policy separate",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "dreaming",
+      "owner": "DreamingWorkflow",
+      "operations": [
+        "run",
+        "runs",
+        "report",
+        "settings",
+        "instructions",
+        "propose",
+        "revert",
+        "review"
+      ],
+      "effectAndAuthority": "Read and journaled consolidation; unresolved conflicts enter decisions",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "documents",
+      "owner": "DocumentService",
+      "operations": [
+        "import",
+        "list",
+        "read",
+        "search",
+        "share",
+        "move",
+        "index",
+        "retry",
+        "disable_retrieval",
+        "remove_index"
+      ],
+      "effectAndAuthority": "Managed artifact ownership/sharing, revision-bound citations and no implicit file deletion",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "artifacts",
+      "owner": "ArtifactService",
+      "operations": [
+        "save",
+        "list",
+        "read",
+        "preview",
+        "export",
+        "reference",
+        "delete"
+      ],
+      "effectAndAuthority": "Scoped file reads/writes; explicit deletion and surviving-reference checks",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "conventions",
+      "owner": "ConventionService",
+      "operations": [
+        "list",
+        "read",
+        "edit",
+        "version",
+        "applicability",
+        "retire",
+        "index",
+        "import",
+        "delete",
+        "move",
+        "resources",
+        "delete_resource",
+        "search"
+      ],
+      "effectAndAuthority": "Project-scoped versioned guidance, no wiki dependency",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "skills",
+      "owner": "SkillService",
+      "operations": [
+        "discover",
+        "read",
+        "resources",
+        "draft",
+        "propose",
+        "history",
+        "rollback"
+      ],
+      "effectAndAuthority": "Harness precedence; agent changes need exact-version human approval",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "roles",
+      "owner": "InstructionService",
+      "operations": [
+        "read",
+        "draft",
+        "propose",
+        "history",
+        "rollback"
+      ],
+      "effectAndAuthority": "Approved or human-saved revisions adopt next safe step; no permission grant",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "approvals",
+      "owner": "ApprovalService",
+      "operations": [
+        "list",
+        "inspect",
+        "propose",
+        "record_human_decision"
+      ],
+      "effectAndAuthority": "Agent read/propose; human decision actor is host-bound and not agent-callable authority",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "notifications",
+      "owner": "NotificationService",
+      "operations": [
+        "list",
+        "read",
+        "acknowledge",
+        "settings"
+      ],
+      "effectAndAuthority": "Read/acknowledge separate from linked decision resolution",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "git",
+      "owner": "GitService",
+      "operations": [
+        "worktree",
+        "inspect",
+        "diff",
+        "commit",
+        "push",
+        "pull_request",
+        "integrate",
+        "cleanup"
+      ],
+      "effectAndAuthority": "Owned isolated worktrees; exact ref/head authority; no main force-push",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "reviews",
+      "owner": "ReviewService",
+      "operations": [
+        "list",
+        "inspect",
+        "request",
+        "findings",
+        "respond",
+        "adjudicate",
+        "readiness"
+      ],
+      "effectAndAuthority": "Exact-head evidence; selected external/in-app source and all actionable findings",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "releases",
+      "owner": "DeliveryService",
+      "operations": [
+        "inspect",
+        "prepare",
+        "publish",
+        "deploy"
+      ],
+      "effectAndAuthority": "Separate inherited Automatic/Ask me/Disabled policies; concrete-target approval",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "github",
+      "owner": "GitHubService",
+      "operations": [
+        "account",
+        "repositories",
+        "poll_status",
+        "issue_sync",
+        "checks",
+        "reviews"
+      ],
+      "effectAndAuthority": "One GitHub.com account plus organizations; typed observed events and preserved links",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "resources",
+      "owner": "ResourceService",
+      "operations": [
+        "list",
+        "acquire",
+        "renew",
+        "release",
+        "holders",
+        "waiters"
+      ],
+      "effectAndAuthority": "Atomic capacities/fencing and ownership, distinct from active-user consent",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "browser",
+      "owner": "BrowserBackend",
+      "operations": [
+        "sessions",
+        "inspect",
+        "navigate",
+        "input",
+        "upload",
+        "screenshot",
+        "console",
+        "network"
+      ],
+      "effectAndAuthority": "Isolated targets, resource ownership and attributable test evidence; writes denied to reviewers",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "desktop",
+      "owner": "DesktopBackend",
+      "operations": [
+        "inspect",
+        "capture",
+        "request_control",
+        "input",
+        "release_control"
+      ],
+      "effectAndAuthority": "Read capture under OS permissions; mutation needs lease and OK when non-idle",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "process",
+      "owner": "ProcessHost",
+      "operations": [
+        "execute",
+        "output",
+        "cancel",
+        "install_project_dependencies",
+        "request_system_install"
+      ],
+      "effectAndAuthority": "Implementation shell default on; process trees, scopes and system-install approval",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "web",
+      "owner": "WebAdapter",
+      "operations": [
+        "search",
+        "fetch"
+      ],
+      "effectAndAuthority": "Selected read tools default on; provider-backed search inference still uses router",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "containers",
+      "owner": "ContainerBackend",
+      "operations": [
+        "capabilities",
+        "build",
+        "pull",
+        "create",
+        "start",
+        "exec",
+        "inspect",
+        "logs",
+        "stop"
+      ],
+      "effectAndAuthority": "Honor selected backend; tracked owned resources, no unapproved volume/image deletion",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "jobs",
+      "owner": "Scheduler",
+      "operations": [
+        "list",
+        "create",
+        "edit",
+        "enable",
+        "run_now",
+        "inspect",
+        "cancel",
+        "delete",
+        "disable"
+      ],
+      "effectAndAuthority": "App/project scope; same operations/router and skip/resume policies",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "settings",
+      "owner": "ConfigurationService",
+      "operations": [
+        "read_effective",
+        "validate",
+        "save_revision",
+        "explain_source"
+      ],
+      "effectAndAuthority": "Typed values/scopes, expected revisions; policy cannot grant forbidden reviewer/main actions",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "router",
+      "owner": "InferenceRouter",
+      "operations": [
+        "catalog",
+        "connections",
+        "route",
+        "pin",
+        "availability",
+        "usage",
+        "request_status",
+        "price_status",
+        "price_refresh",
+        "price_override",
+        "configure",
+        "decision_models",
+        "decide"
+      ],
+      "effectAndAuthority": "All inference through host-bound router; inspect routes/cost coverage, permissioned native connection and price controls; no secret disclosure or reviewer config writes; SystemOne discovery/structured decisions share host inference authority, attribution and capability checks and never join chat tiers",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "mcp",
+      "owner": "McpClient",
+      "operations": [
+        "servers",
+        "configure",
+        "connect",
+        "discover",
+        "select_tools",
+        "resources",
+        "prompts",
+        "capabilities"
+      ],
+      "effectAndAuthority": "Outgoing client; scoped namespaced contributions and authorized routed sampling. Distinct from incoming mcp_server administration.",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "addons",
+      "owner": "PackageHost",
+      "operations": [
+        "catalog",
+        "install",
+        "configure",
+        "enable",
+        "disable",
+        "update",
+        "propose",
+        "logs",
+        "rollback",
+        "uninstall"
+      ],
+      "effectAndAuthority": "Version/digest-bound activation approval for agent-authored packages; declared effect classification",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "help",
+      "owner": "HelpService",
+      "operations": [
+        "search",
+        "read",
+        "topic_for_screen",
+        "package_guides",
+        "generate_capability_docs"
+      ],
+      "effectAndAuthority": "Entirely local, version-matched read; same content for humans/agents",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "workspace",
+      "owner": "WorkspaceLifecycle",
+      "operations": [
+        "diagnostics",
+        "backup",
+        "restore",
+        "migrate",
+        "update_status",
+        "approve_install",
+        "logs",
+        "record_diagnostic"
+      ],
+      "effectAndAuthority": "Backup manual; installer approval and local data/compatibility preflight",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "repositories",
+      "owner": "RepositoryService",
+      "operations": [
+        "list",
+        "get",
+        "nodes",
+        "remove_index",
+        "readme",
+        "summary",
+        "search"
+      ],
+      "effectAndAuthority": "Indexed repository metadata, scope, source/index distinction and dedicated local-deletion authority",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "queue",
+      "owner": "QueueDispatcher",
+      "operations": [
+        "inspect",
+        "resolve",
+        "retry",
+        "consumer_status",
+        "reconcile"
+      ],
+      "effectAndAuthority": "Durable inspection/retry/reconciliation under current control and operation safety",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "imports",
+      "owner": "ImportService",
+      "operations": [
+        "preview",
+        "configure",
+        "apply",
+        "runs",
+        "inspect"
+      ],
+      "effectAndAuthority": "Read-only source snapshot and explicit selected work/history import; no legacy live connector",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "maintenance",
+      "owner": "MaintenanceService",
+      "operations": [
+        "prune_diagnostics",
+        "prune_index_runs",
+        "prune_messages",
+        "prune_sessions"
+      ],
+      "effectAndAuthority": "Explicit eligible retention/pruning with history, artifact and active-pin protection",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "repository_docs",
+      "owner": "DocumentationService",
+      "operations": [
+        "generate"
+      ],
+      "effectAndAuthority": "Exact evidence and owned-worktree Git/review authority",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "mcp_server",
+      "owner": "McpServerAdapter and ConfigurationService",
+      "operations": [
+        "status",
+        "configure",
+        "clients",
+        "set_client_access"
+      ],
+      "effectAndAuthority": "Incoming server status plus human-only listener/client administration; protected credential flow, no self-grants, exact revision and scoped publication",
+      "status": "Architecture candidate; actual protocol/authentication and gateway acceptance required"
+    }
+  ]
+}

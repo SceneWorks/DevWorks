@@ -1,0 +1,45 @@
+{
+  "memory_bytes": "137438953472",
+  "physical_cores": "18",
+  "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=24969315)\t80%; AC attached; not charging present: true",
+  "filesystem": "Filesystem   512-blocks       Used Available Capacity  iused      ifree %iused  Mounted on\n/dev/disk3s5 7805228320 6996072000 696566304    91% 15155250 3482831520    0%   /System/Volumes/Data",
+  "dependencies": {
+    "overgraph": "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.40.3)\n",
+    "grafeo": "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-grafeo:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.40.3)\n",
+    "helix": "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-helix:\n\t/usr/lib/libobjc.A.dylib (compatibility version 1.0.0, current version 228.0.0)\n\t/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit (compatibility version 1.0.0, current version 275.0.0)\n\t/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 5027.1.8)\n\t/System/Library/Frameworks/Security.framework/Versions/A/Security (compatibility version 1.0.0, current version 62460.40.78)\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.40.3)\n",
+    "sqlite": "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.40.3)\n"
+  },
+  "source_files": {
+    "Cargo.lock": "de4aeb3ae95d95389dac8d0fe5d6486c413fefeffe44884421cc506fc0540f66",
+    "Cargo.toml": "808081d6ff090f775da7f6b69d57756b6bbe21c3b6f18774c1870bd7d30beb5b",
+    "common/Cargo.toml": "b06e6ea11f6f777ca51c7d77432951ad1b2934666b43012b6a6b3b4ee92edd0a",
+    "common/src/lib.rs": "c6fde9ab645412f1b7541e908915a0cb8d65f76b494b25ae734ce3001ddea527",
+    "common/src/mapping.rs": "f5335365f62f8f6d769a14193f56f87fa5a44b75781d25279fa9893a1a5277b3",
+    "common/src/workload.rs": "b4873b671b8cf5a75536e2cf2d8564b5bbf3e0794bdc0c0e72ad1cbbf3ad3a43",
+    "fixture/Cargo.lock": "e60b60bf7f5ea6475dfd136807760f3d5ec0f36439207a53d72d86b29ac6dee9",
+    "fixture/Cargo.toml": "c2e426d97f99dfdf8ad0959ec9a9e49724d3c1f63c59ff010bbf393be77cb3d8",
+    "fixture/src/main.rs": "36026509d233d4b67b5e16f0c808790c7b5ee4e14393a382fdb850a602475e86",
+    "grafeo/Cargo.toml": "592917f7c54b7f6655125c38930ce61356c6813d446e40cc34b370744bc2f5cf",
+    "grafeo/src/adapter.rs": "b00534b7e1e3c5a27c9431d289eda4af8dca1478a70ffb6ab5c196d00d3cc8ff",
+    "grafeo/src/main.rs": "012f40fe847d8a1945450b16b4dcaf2db652c5e85d311146c6cdb339d9101ea9",
+    "helix/Cargo.toml": "898d2f86936dc00677992615156fba6ef4f3282c4027599a6c990828cc35e11a",
+    "helix/src/adapter.rs": "15f9fa890622ba74b76f9244c3bcb1e8b531ab8339e11ed669d7e5092f0fe53f",
+    "helix/src/main.rs": "d433563b0fa5afe20fc8d2e6a0168b5a57debe795117073519122a5917fdbecb",
+    "overgraph/Cargo.toml": "490b4377fc0290c37cbd1840adf7ce8e175ea87862db97dae52f0dc49d17b2b5",
+    "overgraph/src/adapter.rs": "99251768f0da460d13e4a761ba2e7170d5318e176e22ae3b8e3b0c94c657faa4",
+    "overgraph/src/main.rs": "396677e5d83f05e58ac75341bfb40a58e835843292b2a2f5ade7b63d7db3b2cd",
+    "recovery.py": "e96e577db32b72f65f489ca02d7ca3e8da65a9d4a4189f21deb2b91f44a25172",
+    "run.py": "6820cd180f944c11c87425455211492ebb4ce0fd70298a5820a6b29789ba8a32",
+    "sqlite/Cargo.toml": "ed9a46640e54182837122cc748b018bad0e3cccc66e755ebfe83c7ea11a905a4",
+    "sqlite/src/adapter.rs": "de84d80753edc19e07939607691bacf8e93e023f17cdcd2e46bf0a0069a56eab",
+    "sqlite/src/main.rs": "a1281d934a21659313760f06bb06dce96231a97de861c732bc9af15a69cf5278"
+  },
+  "cpu_model": "Apple M5 Max",
+  "declared_build_environment": {
+    "RUSTFLAGS": null,
+    "CARGO_BUILD_RUSTFLAGS": null,
+    "RUSTC_WRAPPER": null,
+    "MACOSX_DEPLOYMENT_TARGET": null
+  },
+  "notes": "Captured on development desktop; no exclusive-host control, cache purge or power-loss test. File digests were captured before later README/report additions; native Rust sources remained unchanged during measured runs."
+}

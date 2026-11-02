@@ -1,0 +1,9 @@
+{
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "database": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-sqlite/database",
+  "output": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-sqlite/result.json",
+  "limit": 1000,
+  "overlay": false,
+  "samples": 120,
+  "vector_samples": 8
+}

@@ -1,0 +1,57 @@
+classDiagram
+ direction TB
+ class ApplicationService {
+   +execute_domain_command()
+   +query_scoped_view()
+ }
+ class ApplicationStore {
+   <<trait>>
+   +read_snapshot(scope, view)
+   +write_transaction(operation)
+ }
+ class WriteTransaction {
+   <<trait>>
+   +work()
+   +execution()
+   +knowledge()
+   +commit()
+   +rollback()
+ }
+ class WorkRepository {
+   <<trait>>
+   +get_work(id)
+   +claim_next_work(scope, revision)
+ }
+ class ExecutionRepository {
+   <<trait>>
+   +append_history(event)
+   +enqueue_intent(operation)
+ }
+ class GraphReadView {
+   <<trait>>
+   +neighbors(node, limits)
+   +traverse(query)
+ }
+ class RetrievalIndex {
+   <<trait>>
+   +search(eligible_view, embedding_space)
+ }
+ class SqliteStore {
+   -write_owner
+   -read_workers
+   -sql_and_row_mapping
+ }
+ class CompositionRoot {
+   +construct_and_inject()
+ }
+ CompositionRoot --> SqliteStore : constructs
+ CompositionRoot --> ApplicationService : injects traits
+ ApplicationService --> ApplicationStore : depends on
+ ApplicationService --> GraphReadView : bounded reads
+ ApplicationService --> RetrievalIndex : scoped search
+ ApplicationStore --> WriteTransaction : creates
+ WriteTransaction *-- WorkRepository : transaction scoped
+ WriteTransaction *-- ExecutionRepository : transaction scoped
+ SqliteStore ..|> ApplicationStore : implements
+ SqliteStore ..|> GraphReadView : supplies read implementation
+ SqliteStore ..|> RetrievalIndex : supplies search implementation

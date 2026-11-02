@@ -1,0 +1,12 @@
+flowchart TB
+    SOURCE["Frozen CodeGraph Git objects<br/>declarations aliases jobs consumers and indexing stages"] --> INVENTORY["Versioned source inventory<br/>exact spans and digests"]
+    INVENTORY --> DECIDE{"Disposition recorded?"}
+    DECIDE -- Retain or adapt --> OPS["Shared native operation IDs<br/>owner scope effects and recovery"]
+    DECIDE -- Explicitly excluded --> EX["User decision and requirement reference<br/>no silent omission"]
+    DECIDE -- Unresolved --> BLOCK["Design blocker<br/>resolve before implementation handoff"]
+    OPS --> CASES["Acceptance contracts<br/>positive negative recovery and source provenance"]
+    CASES --> RUN["Actual Rust adapters and deterministic fixtures<br/>normal tests execute no inference"]
+    RUN --> EVIDENCE["Measured results tied to binary and fixture digests<br/>design mapping alone is not a pass"]
+    PERF["Representative workspace workloads<br/>UI queue storage graph and optional helpers"] --> EVIDENCE
+    EX --> CHECK["Source drift and scope validation"]
+    EVIDENCE --> CHECK

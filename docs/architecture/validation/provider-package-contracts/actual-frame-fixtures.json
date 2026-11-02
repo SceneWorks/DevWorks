@@ -1,0 +1,387 @@
+[
+  {
+    "id": "actual-frame-0",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-1",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-2",
+    "entry": "package-request",
+    "raw": "{\"id\":\"session-a:p:invocation-a\",\"jsonrpc\":\"2.0\",\"method\":\"broker.call\",\"params\":{\"actionKey\":\"read-input\",\"call\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"},\"kind\":\"ArtifactRead\"},\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-3",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:3\",\"jsonrpc\":\"2.0\",\"result\":{\"invocationId\":\"invocation-a\",\"kind\":\"InvocationFinished\",\"outcome\":{\"artifacts\":[{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"}],\"kind\":\"Completed\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-4",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:99\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"ShutdownAcknowledged\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-5",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-6",
+    "entry": "package-response",
+    "raw": "{\"error\":{\"code\":-32020,\"data\":{\"class\":\"ProtocolViolation\"},\"message\":\"invocation is not in active generation\"},\"id\":\"session-a:h:3\",\"jsonrpc\":\"2.0\"}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-7",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:99\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"ShutdownAcknowledged\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-8",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-9",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-10",
+    "entry": "package-request",
+    "raw": "{\"id\":\"session-a:p:invocation-a\",\"jsonrpc\":\"2.0\",\"method\":\"broker.call\",\"params\":{\"actionKey\":\"read-input\",\"call\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"},\"kind\":\"ArtifactRead\"},\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-11",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:4\",\"jsonrpc\":\"2.0\",\"result\":{\"invocationId\":\"invocation-a\",\"kind\":\"CancelAcknowledged\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-12",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:3\",\"jsonrpc\":\"2.0\",\"result\":{\"invocationId\":\"invocation-a\",\"kind\":\"InvocationFinished\",\"outcome\":{\"kind\":\"OutcomeUnknown\",\"operationId\":\"op-a\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-13",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:99\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"ShutdownAcknowledged\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-14",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-15",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-16",
+    "entry": "package-response",
+    "raw": "{\"error\":{\"code\":-32020,\"data\":{\"class\":\"ProtocolViolation\"},\"message\":\"invocation is not in active generation\"},\"id\":\"session-a:h:3\",\"jsonrpc\":\"2.0\"}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-17",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:99\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"ShutdownAcknowledged\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-18",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-19",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-20",
+    "entry": "package-request",
+    "raw": "{\"id\":\"session-a:p:invocation-a\",\"jsonrpc\":\"2.0\",\"method\":\"broker.call\",\"params\":{\"actionKey\":\"read-input\",\"call\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"},\"kind\":\"ArtifactRead\"},\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-21",
+    "entry": "package-response",
+    "raw": "{\"error\":{\"code\":-32020,\"data\":{\"class\":\"ProtocolViolation\"},\"message\":\"activation requires quiescence\"},\"id\":\"session-a:h:6\",\"jsonrpc\":\"2.0\"}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-22",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:3\",\"jsonrpc\":\"2.0\",\"result\":{\"invocationId\":\"invocation-a\",\"kind\":\"InvocationFinished\",\"outcome\":{\"artifacts\":[{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"}],\"kind\":\"Completed\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-23",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:7\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"2\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-24",
+    "entry": "package-response",
+    "raw": "{\"error\":{\"code\":-32020,\"data\":{\"class\":\"ProtocolViolation\"},\"message\":\"invocation is not in active generation\"},\"id\":\"session-a:h:8\",\"jsonrpc\":\"2.0\"}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-25",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:99\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"ShutdownAcknowledged\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-26",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-27",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-28",
+    "entry": "package-request",
+    "raw": "{\"id\":\"session-a:p:invocation-a\",\"jsonrpc\":\"2.0\",\"method\":\"broker.call\",\"params\":{\"actionKey\":\"read-input\",\"call\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"},\"kind\":\"ArtifactRead\"},\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-29",
+    "entry": "package-request",
+    "raw": "{\"id\":\"session-a:p:invocation-b\",\"jsonrpc\":\"2.0\",\"method\":\"broker.call\",\"params\":{\"actionKey\":\"read-input\",\"call\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"},\"kind\":\"ArtifactRead\"},\"invocationId\":\"invocation-b\",\"invocationToken\":\"token-b\",\"processSessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-30",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.progress\",\"params\":{\"droppedCount\":\"0\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\",\"sequence\":\"1\",\"text\":\"fixture credit received\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-31",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.progress\",\"params\":{\"droppedCount\":\"0\",\"invocationId\":\"invocation-b\",\"invocationToken\":\"token-b\",\"processSessionId\":\"session-a\",\"sequence\":\"1\",\"text\":\"fixture credit received\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-32",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:6\",\"jsonrpc\":\"2.0\",\"result\":{\"invocationId\":\"invocation-b\",\"kind\":\"InvocationFinished\",\"outcome\":{\"artifacts\":[{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"}],\"kind\":\"Completed\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-33",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:3\",\"jsonrpc\":\"2.0\",\"result\":{\"invocationId\":\"invocation-a\",\"kind\":\"InvocationFinished\",\"outcome\":{\"artifacts\":[{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"}],\"kind\":\"Completed\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-34",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:99\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"ShutdownAcknowledged\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-35",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-36",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-37",
+    "entry": "package-request",
+    "raw": "{\"id\":\"session-a:p:invocation-a\",\"jsonrpc\":\"2.0\",\"method\":\"broker.call\",\"params\":{\"actionKey\":\"read-input\",\"call\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"},\"kind\":\"ArtifactRead\"},\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-38",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:3\",\"jsonrpc\":\"2.0\",\"result\":{\"invocationId\":\"invocation-a\",\"kind\":\"InvocationFinished\",\"outcome\":{\"artifacts\":[{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"}],\"kind\":\"Completed\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-39",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-40",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-41",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-42",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-43",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-44",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-45",
+    "entry": "package-request",
+    "raw": "{\"id\":\"session-a:p:invocation-a\",\"jsonrpc\":\"2.0\",\"method\":\"broker.call\",\"params\":{\"actionKey\":\"read-input\",\"call\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"},\"kind\":\"ArtifactRead\"},\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-46",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.progress\",\"params\":{\"droppedCount\":\"0\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\",\"sequence\":\"1\",\"text\":\"fixture credit received\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-47",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-48",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-49",
+    "entry": "package-request",
+    "raw": "{\"id\":\"session-a:p:invocation-a\",\"jsonrpc\":\"2.0\",\"method\":\"broker.call\",\"params\":{\"actionKey\":\"read-input\",\"call\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"},\"kind\":\"ArtifactRead\"},\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-50",
+    "entry": "package-notification",
+    "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"package.progress\",\"params\":{\"droppedCount\":\"0\",\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\",\"sequence\":\"1\",\"text\":\"fixture credit received\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-51",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:1\",\"jsonrpc\":\"2.0\",\"result\":{\"contributionIds\":[\"fixture/tool\"],\"features\":[\"cancel\",\"credits\"],\"kind\":\"Initialized\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"selected\":{\"major\":1,\"minor\":0}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-52",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:2\",\"jsonrpc\":\"2.0\",\"result\":{\"kind\":\"Activated\",\"registryRevision\":\"1\",\"stateGeneration\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-53",
+    "entry": "package-request",
+    "raw": "{\"id\":\"session-a:p:invocation-a\",\"jsonrpc\":\"2.0\",\"method\":\"broker.call\",\"params\":{\"actionKey\":\"read-input\",\"call\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"byteLength\":\"2\",\"mediaType\":\"application/json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"versionId\":\"version-a\"},\"kind\":\"ArtifactRead\"},\"invocationId\":\"invocation-a\",\"invocationToken\":\"token-a\",\"processSessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "actual-frame-54",
+    "entry": "package-response",
+    "raw": "{\"id\":\"session-a:h:4\",\"jsonrpc\":\"2.0\",\"result\":{\"invocationId\":\"invocation-a\",\"kind\":\"CancelAcknowledged\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  }
+]

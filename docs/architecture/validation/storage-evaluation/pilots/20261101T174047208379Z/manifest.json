@@ -1,0 +1,85 @@
+{
+  "phase": "pilot",
+  "created_utc": "20261101T174047208379Z",
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "workspace_lock_sha256": "898797663205c848e262b3e6b229490d3eb041e5100005b69dd99e9db8ff14fc",
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "logical_cpus": 18
+  },
+  "inference": false,
+  "runs": [
+    {
+      "engine": "overgraph",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-overgraph",
+      "binary_bytes": 10211568,
+      "binary_sha256": "1afa9453d34fe7136727aaa5d17ad7ded0ee00e0fb6155c56030968f2a655db3",
+      "exit_code": 1,
+      "wall_seconds": 1.5036725839599967,
+      "error_tail": "Error: Deleted vector remained visible\n"
+    },
+    {
+      "engine": "grafeo",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-grafeo",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-grafeo/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-grafeo",
+      "binary_bytes": 12540304,
+      "binary_sha256": "0736dbc4418d8dc80c32644e7ce488e42336932f65bed23b387ca6789998d86f",
+      "exit_code": 1,
+      "wall_seconds": 1.330500583164394,
+      "error_tail": "Error: GRAFEO-V001: Invalid value: Constraint violation: Cannot delete node with 31 connected edge(s). Use DETACH DELETE.\n"
+    },
+    {
+      "engine": "sqlite",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-sqlite",
+      "binary_bytes": 3088544,
+      "binary_sha256": "fa763353ee418488b6f3b49ab9c6fd0f9e7b1684b5b1dec212775d51c5c576c0",
+      "exit_code": 0,
+      "wall_seconds": 0.49537220783531666,
+      "nodes": 1000,
+      "edges": 1001,
+      "correctness_checks": 7810,
+      "case_errors": []
+    },
+    {
+      "engine": "helix",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-helix",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-helix/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T174047208379Z/pilot-1-helix",
+      "binary_bytes": 52603568,
+      "binary_sha256": "3a228057b702c1169fa51b3f0a42e04ab340455caca929d450a9b6933fc664d0",
+      "exit_code": 0,
+      "wall_seconds": 5.1383374580182135,
+      "nodes": 1000,
+      "edges": 1001,
+      "correctness_checks": 7810,
+      "case_errors": []
+    }
+  ]
+}

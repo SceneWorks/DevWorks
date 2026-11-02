@@ -1,0 +1,147 @@
+{
+  "binary_sha256": "a58b9444838ece5aa2f4d69f82aad5e3db2f9582cd92ca239b22f1f089453f71",
+  "runs": [
+    {
+      "i": 8,
+      "exit": 0,
+      "case_errors": [],
+      "aba": [
+        {
+          "before_stamp": [
+            10,
+            7,
+            70
+          ],
+          "committed_stamp": [
+            11,
+            7,
+            89
+          ],
+          "dirty_stamp": [
+            11,
+            7,
+            80
+          ],
+          "generation_reused": true,
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_after_new_commit": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "native_uncommitted": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "phase": "rollback_then_new_commit_generation_reuse"
+        }
+      ]
+    },
+    {
+      "i": 9,
+      "exit": 0,
+      "case_errors": [],
+      "aba": [
+        {
+          "before_stamp": [
+            10,
+            7,
+            70
+          ],
+          "committed_stamp": [
+            11,
+            7,
+            89
+          ],
+          "dirty_stamp": [
+            11,
+            7,
+            80
+          ],
+          "generation_reused": true,
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_after_new_commit": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "native_uncommitted": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "phase": "rollback_then_new_commit_generation_reuse"
+        }
+      ]
+    },
+    {
+      "i": 10,
+      "exit": 0,
+      "case_errors": [],
+      "aba": [
+        {
+          "before_stamp": [
+            10,
+            7,
+            70
+          ],
+          "committed_stamp": [
+            11,
+            7,
+            89
+          ],
+          "dirty_stamp": [
+            11,
+            7,
+            80
+          ],
+          "generation_reused": true,
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_after_new_commit": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "native_uncommitted": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "phase": "rollback_then_new_commit_generation_reuse"
+        }
+      ]
+    }
+  ],
+  "no_inference": true
+}

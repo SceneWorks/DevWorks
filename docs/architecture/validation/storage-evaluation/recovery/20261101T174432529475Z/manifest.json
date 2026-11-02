@@ -1,0 +1,150 @@
+{
+  "inference": false,
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "cases": [
+    {
+      "engine": "overgraph",
+      "action": "recovery_writer",
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/overgraph-recovery_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.38065320788882673,
+      "result": {
+        "action": "recovery_check",
+        "checks": 1028,
+        "engine": "overgraph",
+        "real_inference": false,
+        "reopen_ns": 29824791
+      }
+    },
+    {
+      "engine": "overgraph",
+      "action": "interrupted_writer",
+      "binary_sha256": "096986ed5b64403ae39be85d2cfc49bc876c903f7ea5f42dace296e0bba28684",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/overgraph-interrupted_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.8348358329385519,
+      "result": {
+        "action": "interrupted_open",
+        "checks": 0,
+        "engine": "overgraph",
+        "real_inference": false,
+        "reopen_ns": 55935958
+      }
+    },
+    {
+      "engine": "grafeo",
+      "action": "recovery_writer",
+      "binary_sha256": "e6eb1c9197026f6fd05b2f9898c5f9ea0baaef9590251297f6e28cdd9ac689c9",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/grafeo-recovery_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.436165708117187,
+      "result": {
+        "action": "recovery_check",
+        "checks": 1028,
+        "engine": "grafeo",
+        "real_inference": false,
+        "reopen_ns": 105191125
+      }
+    },
+    {
+      "engine": "grafeo",
+      "action": "interrupted_writer",
+      "binary_sha256": "e6eb1c9197026f6fd05b2f9898c5f9ea0baaef9590251297f6e28cdd9ac689c9",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/grafeo-interrupted_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.09081204212270677,
+      "result": {
+        "action": "interrupted_open",
+        "checks": 0,
+        "engine": "grafeo",
+        "real_inference": false,
+        "reopen_ns": 14642541
+      }
+    },
+    {
+      "engine": "helix",
+      "action": "recovery_writer",
+      "binary_sha256": "e7d7783549fd269410a46ee08d8437cf89137078af607b8caa96a2d018202ad5",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/helix-recovery_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 1.2634508751798421,
+      "result": {
+        "action": "recovery_check",
+        "checks": 1028,
+        "engine": "helix",
+        "real_inference": false,
+        "reopen_ns": 183465625
+      }
+    },
+    {
+      "engine": "helix",
+      "action": "interrupted_writer",
+      "binary_sha256": "e7d7783549fd269410a46ee08d8437cf89137078af607b8caa96a2d018202ad5",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/helix-interrupted_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.20671350019983947,
+      "result": {
+        "action": "interrupted_open",
+        "checks": 0,
+        "engine": "helix",
+        "real_inference": false,
+        "reopen_ns": 148576250
+      }
+    },
+    {
+      "engine": "sqlite",
+      "action": "recovery_writer",
+      "binary_sha256": "4d67bddb457792cafc98060f8657cf45b5aa7e47cad97be2365b613754093897",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/sqlite-recovery_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.25469149998389184,
+      "result": {
+        "action": "recovery_check",
+        "checks": 1028,
+        "engine": "sqlite",
+        "real_inference": false,
+        "reopen_ns": 432208
+      }
+    },
+    {
+      "engine": "sqlite",
+      "action": "interrupted_writer",
+      "binary_sha256": "4d67bddb457792cafc98060f8657cf45b5aa7e47cad97be2365b613754093897",
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/sqlite-interrupted_writer",
+      "acknowledgment_seen": true,
+      "import_finished_before_kill": false,
+      "writer_exit": -9,
+      "verify_exit": 0,
+      "verify_wall_seconds": 0.01271874993108213,
+      "result": {
+        "action": "interrupted_open",
+        "checks": 0,
+        "engine": "sqlite",
+        "real_inference": false,
+        "reopen_ns": 1230333
+      }
+    }
+  ]
+}

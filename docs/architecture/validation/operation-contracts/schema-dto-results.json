@@ -1,0 +1,454 @@
+{
+  "status": "Passed candidate schema/DTO checks only; not production gateway or native JCS conformance",
+  "date": "2026-11-01",
+  "host": "macOS-27.0.1-arm64-arm-64bit",
+  "authoringPackages": {
+    "jsonschema": "4.26.0",
+    "rfc8785": "0.1.4"
+  },
+  "schemaFiles": 5,
+  "fixtureCount": 60,
+  "oversizedFrameRejectedBeforeTypedParsing": true,
+  "allPassed": true,
+  "fingerprintChecks": [
+    "object order/whitespace invariant",
+    "request key excluded",
+    "changed expected revision differs",
+    "changed root differs",
+    "hold set normalized",
+    "large decimal counter preserved"
+  ],
+  "cases": [
+    {
+      "id": "start",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "pause",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "continue",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "reject-caller-actorId",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-caller-policyRevision",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-caller-approved",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-caller-resumeGrant",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-caller-scopeKey",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-body-authority",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-child-control-variant",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-zero-revision",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-numeric-revision",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-leading-zero",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-signed64-overflow",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": false
+    },
+    {
+      "id": "accept-signed64-max",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "reject-unknown-protocol",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-empty-covered-set",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-duplicate-hold-id",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": false
+    },
+    {
+      "id": "normalize-hold-set-order",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "reject-path-as-id",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-overlong-key",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-duplicate-json-member",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "accepted-does-not-mean-unblocked",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "receipt-replayed",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "already-active",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "continue-required",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "blocked",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "revision-conflict",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "archived",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "command-status-unknown",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "idempotency-conflict",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "reject-malformed-digest",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-unknown-reply-variant",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "advisory-child-eligibility",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "root-query",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "operation-query",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "receipt-query",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "event-query",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "reject-query-mutation",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-unbounded-page",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "reject-oversized-cursor",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "null-optional-normalizes",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "root-event",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "decision-event",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "activation-event",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "blocker-event",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "stale-observation-event",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "reject-mismatched-event-root",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": false
+    },
+    {
+      "id": "reject-mismatched-event-revision",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": false
+    },
+    {
+      "id": "reject-unknown-event-schema",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": false,
+      "typedValid": false
+    },
+    {
+      "id": "blocked-eligibility-result",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "reject-eligible-with-blocker",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": false
+    },
+    {
+      "id": "root-result",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "unknown-effect-result",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "reject-replay-unknown-effect",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": false
+    },
+    {
+      "id": "receipt-result",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "missing-receipt-result",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "event-page-result",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    },
+    {
+      "id": "reject-page-beyond-watermark",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": false
+    },
+    {
+      "id": "cursor-expired-result",
+      "schemaPassed": true,
+      "typedPassed": true,
+      "schemaValid": true,
+      "typedValid": true
+    }
+  ],
+  "nativeResultScope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof",
+  "inputSha256": {
+    "docs/architecture/contracts/fixtures.json": "c1d57d26dc0767eeb9ae180f03be7290bb9f8921ee4fc634e0406ac6b6fc936b",
+    "tools/contracts-eval/src/lib.rs": "7cc696108bd2fb75a3a0b2636785c5156858db3adeb29bb4023109bb440c06a9",
+    "tools/contracts-eval/Cargo.lock": "6bea011d529adaa06ee0f552465fc8a08abba39a9674e94b375f12cf9a912b1c",
+    "docs/architecture/contracts/command-reply.schema.json": "c718d37915e0029d7c98e1b33980e633f9d35923f98ab470be9fc9cd3ba84627",
+    "docs/architecture/contracts/command-request.schema.json": "4ae635d9f6ac948f68e8eafb156064e92f9e74ba7ed01239718b30592707f736",
+    "docs/architecture/contracts/event.schema.json": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc",
+    "docs/architecture/contracts/query-reply.schema.json": "5e62392bbd693563a8dc1de57fe40e9a3025ae9d5cde4b3fe87c438a05ec802f",
+    "docs/architecture/contracts/query-request.schema.json": "33e3ed9f91f1981b65c7102263bbe9a17e1f965142ff6389f2e0ce4119d46469"
+  }
+}

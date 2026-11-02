@@ -1,0 +1,35 @@
+sequenceDiagram
+    participant U as Update service
+    participant H as Package host
+    participant P as Candidate process
+    participant S as Repository unit of work
+    participant C as Calling services
+    U->>U: Verify signature trust scope and provenance
+    U->>H: Prepare immutable candidate version
+    H->>P: Initialize without effect grants
+    P-->>H: Negotiated protocol and registrations
+    H->>H: Validate complete candidate registry
+    H->>C: Gate new calls to affected instance
+    H->>H: Drain pinned turns and resolve operations
+    alt Barrier unavailable
+        H-->>C: Reopen old version admission
+        H-->>U: Keep update staged with backoff
+    else Safe boundary available
+        H->>S: Prepare unpublished state generation
+        H->>S: CAS trust registry state and activation intent
+        alt Revision or migration failure
+            S-->>H: No publication
+            H-->>C: Keep prior version active
+        else Atomic commit succeeds
+            S-->>H: Committed registry and state generation
+            H->>P: Idempotent host.activate
+            alt Ready
+                P-->>H: Ready for committed generation
+                H-->>C: Release calls on new version
+            else Startup failure before work admitted
+                H->>S: Guarded rollback to predecessor
+                H-->>C: Restore prior coherent generation
+            end
+        end
+    end
+    Note over H,S: After work admission rollback must preserve new state and effects

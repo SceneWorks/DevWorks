@@ -1,0 +1,8 @@
+{
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "database": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/grafeo-recovery_writer/database",
+  "output": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/grafeo-recovery_writer/result.json",
+  "limit": 1000,
+  "action": "recovery_writer",
+  "signal": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/recovery/20261101T174432529475Z/grafeo-recovery_writer/ack"
+}

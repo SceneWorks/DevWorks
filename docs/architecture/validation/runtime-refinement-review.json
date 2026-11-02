@@ -1,0 +1,75 @@
+{
+  "title": "Runtime and recovery refinement under delegated architectural discretion",
+  "date": "2026-11-01",
+  "status": "Technical design/document verification only; native application remains unimplemented",
+  "adoptedTechnicalDecisions": [
+    "AD 17 eligibility and resume authorization",
+    "AD 18 durable approval completion",
+    "AD 19 redirect and late observations",
+    "AD 20 shutdown and recovery classes"
+  ],
+  "authority": "User delegated routine architecture choices; no change to confirmed product authority or requirement status",
+  "requirements": 335,
+  "requirementsUnchanged": true,
+  "traceability": "All IDs, statements and statuses match source",
+  "diagrams": 20,
+  "allSvgXmlValid": true,
+  "visualReview": {
+    "standalone": [
+      "04-operation-state",
+      "19-control-and-wakeups",
+      "20-shutdown-recovery"
+    ],
+    "inlineWidth": 800,
+    "readerWidths": [
+      1440,
+      800
+    ]
+  },
+  "readerChecks": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 20
+      },
+      {
+        "width": 800,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 20
+      }
+    ],
+    "browser": "local headless Chromium; no user-facing tab opened",
+    "anchors": 5,
+    "localLinksValid": true,
+    "sectionSearch": true,
+    "requirementSearch": true,
+    "statusFilter": true,
+    "pageErrors": []
+  },
+  "acceptance": "Runtime scenarios are specifications, not executed product tests",
+  "remainingGates": [
+    "Physical schema and repository conformance",
+    "Provider endpoint event/continuation encoding",
+    "OS/process/container cancellation and target packaging"
+  ],
+  "next": "Concrete persistence contracts, transaction boundaries and initial schema/indexes",
+  "documentSha256": {
+    "docs/architecture/devworks-architecture.md": "17f387287cec48a1c3b376a321cff7e6d314d72aa42941729a67ef41114726c0",
+    "docs/architecture/devworks-architecture.html": "cc82aec3999cd759184347e94d8588bcfcbe60c909803a7eb42fe6413d7485ab",
+    "docs/architecture/architecture-contracts.json": "01267b57817258eec470101920eb67d0d9f8f17a041a5cf3f6a11d043ac5cd24",
+    "docs/architecture/architecture-validation.json": "8fa544100813698dcb519b92987b02d43c7d6d011b20d707430c4d4a7e182a02",
+    "docs/architecture/devworks-requirements-traceability.json": "5486eb995bb826e9854309c58475c806df44be996ac95d94928830882a3ad250",
+    "docs/planning/requirements-content.json": "6a566e3e7768f415fe7a1b1b6a1967d6b716581e88cee878a5e2214972bce83b",
+    "docs/planning/requirements-interview.json": "6433ea4b2b976cf4f2034b4a14a549be2140ad24a4f0255b2ed01bcaf4aba6c6",
+    "docs/architecture/architecture-diagrams/manifest.json": "63f93e0cd854b36e0e49922cd4e6e439c2a1d12448c3fc4708efd345b657f614",
+    "docs/architecture/architecture-diagrams/04-operation-state.mmd": "9120a35ea6027cd25d91b710a3b8a78565bfbc709dbfd7d0d7a5420467d5b912",
+    "docs/architecture/architecture-diagrams/04-operation-state.svg": "a7b3d2ff607c553c24f27359f4135858f3b274d355857e86f9cfba5b872abcb6",
+    "docs/architecture/architecture-diagrams/19-control-and-wakeups.mmd": "b519b8202c95279601b58877a58565abcd4e8ddf7cf14dd894801fe50ba5f709",
+    "docs/architecture/architecture-diagrams/19-control-and-wakeups.svg": "897aa0a7bebc13f5108bd50e094c680bfbf4b28d6e78ffa24cd5efa0743dd8ea",
+    "docs/architecture/architecture-diagrams/20-shutdown-recovery.mmd": "5094b2aa2879b0b41e67ca5e35470a9b8a03597300b3db00c62449ac545d69ec",
+    "docs/architecture/architecture-diagrams/20-shutdown-recovery.svg": "69b6f0ae3cdd3ef189cc1e767231d3a234aae5b344cebae258d1721ed61a986d"
+  }
+}

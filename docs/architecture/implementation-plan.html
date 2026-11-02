@@ -1,0 +1,1205 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><title>DevWorks local implementation plan</title><style>
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:95px}body{margin:0;color:#233044;background:#f5f6f8;font:calc(14px + 1pt)/1.8 "Avenir Next","Segoe UI",sans-serif}a{color:#285d9c;text-underline-offset:3px}button,input,select{font:inherit}button{cursor:pointer}.top{height:66px;position:sticky;top:0;z-index:5;background:#172536;color:#e7edf5;display:flex;align-items:center;gap:22px;padding:0 28px}.top strong{font-size:calc(14px + 1pt);letter-spacing:.2px}.top .version{font-size:calc(11px + 1pt);color:#b4c2d4;margin-right:auto}.top a{color:#c6d8ef;font-size:calc(11px + 1pt);text-decoration:none}.layout{display:grid;grid-template-columns:245px minmax(0,1fr);max-width:1560px;margin:auto}.contents{position:sticky;top:66px;height:calc(100vh - 66px);overflow:auto;padding:24px 19px;border-right:1px solid #dce2ea;background:#f0f3f7}.contents h2{font-size:calc(11px + 1pt);text-transform:uppercase;letter-spacing:1.2px;color:#64748a;margin:0 0 12px}.contents a{display:block;padding:6px 8px;font-size:calc(11px + 1pt);line-height:1.6;text-decoration:none;color:#44546b;border-radius:4px}.contents a:hover{background:#e2eaf4;color:#214e86}.contents input{width:100%;border:1px solid #bfccdc;background:#fff;border-radius:4px;font-size:calc(11px + 1pt);padding:8px;margin:8px 0 18px}.paper{padding:32px 42px 70px;min-width:0;background:#fff}.document>h1{font-size:calc(34px + 1pt);line-height:1.25;letter-spacing:-.8px;color:#172536;margin:12px 0 18px}.document h2,.trace h2{font-size:calc(23px + 1pt);line-height:1.4;font-weight:600;color:#172536;margin:54px 0 17px;padding-top:12px;border-top:1px solid #dae2ec}.document h3{font-size:calc(17px + 1pt);margin:29px 0 12px;color:#304764}.document p{margin:14px 0;max-width:1000px}.document li{margin:10px 0}.document table,.trace table{border-collapse:collapse;table-layout:auto;width:100%;font-size:calc(12px + 1pt);margin:23px 0}.document th,.trace th{background:#eaf0f6;text-align:left;font-weight:600;color:#293f5b;padding:12px;border:1px solid #d9e1eb}.document td,.trace td{padding:12px;vertical-align:top;border:1px solid #d9e1eb;line-height:1.8;overflow-wrap:anywhere}.document tr:nth-child(even) td{background:#f8fafc}.document code{font:calc(12px + 1pt)/1.7 ui-monospace,"SFMono-Regular",Consolas,monospace;background:#eef2f7;border-radius:3px;padding:2px 4px;overflow-wrap:anywhere}.document pre{overflow:auto;background:#152537;color:#d7e5f5;padding:20px;border-radius:5px}.document pre code{color:inherit;background:none;padding:0;white-space:pre}.document img{display:block;max-width:100%;height:auto;margin:28px auto;border:1px solid #d9e1eb;border-radius:5px;padding:16px;background:#fff}.document p:has(>img){max-width:100%}.figure-link{display:block;font-size:calc(11px + 1pt);text-align:right;margin-top:-20px;margin-bottom:28px}.facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid #d5dfeb;border-radius:5px;margin:0 0 26px}.facts>div{padding:14px 17px;border-right:1px solid #d5dfeb}.facts>div:last-child{border:0}.facts b{display:block;font-size:calc(22px + 1pt);color:#244e80}.facts span{display:block;font-size:calc(10px + 1pt);color:#617087}.gate{border:1px solid #d1b987;background:#fff9ec;padding:16px 18px;margin:0 0 26px;border-radius:5px;font-size:calc(12px + 1pt);line-height:1.9}.gate strong{color:#705117}.muted{font-size:calc(11px + 1pt);color:#68788e}.trace .filters{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.filters input,.filters select{background:white;border:1px solid #b9c7d8;border-radius:4px;padding:9px;font-size:calc(12px + 1pt)}.filters input{min-width:280px}.trace details summary{cursor:pointer;display:flex;align-items:center;gap:9px;font-size:calc(12px + 1pt);list-style-position:outside}.trace details p{font-size:calc(12px + 1pt);margin-bottom:8px}.tag{padding:1px 6px;border:1px solid #c2d0e0;border-radius:4px;font-size:calc(10px + 1pt);color:#60738d}.trace td:first-child{width:41%}.trace td:nth-child(2){width:28%}.trace td:nth-child(3){width:31%}.trace small{display:block;font-size:calc(10px + 1pt);color:#63758e;margin-top:6px}.doc-hidden,[hidden]{display:none!important}input:focus-visible,select:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid #3c74ba;outline-offset:3px}.footer{margin-top:45px;border-top:1px solid #d9e1eb;padding-top:17px;color:#63758e;font-size:calc(11px + 1pt)}@media(max-width:1050px){.layout{grid-template-columns:195px minmax(0,1fr)}.paper{padding:25px}.contents{padding:18px 10px}.top{padding:0 18px;gap:14px}.document h1{font-size:calc(29px + 1pt)}.facts{grid-template-columns:repeat(2,1fr)}.document table{font-size:calc(11px + 1pt)}}@media(max-width:750px){.layout{display:block}.contents{position:static;height:auto;border-right:0;border-bottom:1px solid #d9e1eb}.contents #toc{display:none}.paper{padding:20px}.top a:not(:first-of-type){display:none}.document table,.trace table{display:block;overflow:auto}.document img{padding:7px}.trace .filters input{min-width:0;width:100%}}@media print{.top,.contents,.filters,.gate{display:none}.layout{display:block}.paper{padding:0}.document h2{break-after:avoid}.document img{max-height:90vh;break-inside:avoid}.trace{break-before:page}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style></head><body><header class="top"><strong>DevWorks / Implementation</strong><span class="version">Baseline 1.1 · 2 November 2026</span><a href="devworks-architecture.html">Architecture</a><a href="implementation-plan.md">Markdown source</a></header><main class="paper document" style="max-width:1200px;margin:auto"><h1 id="local-implementation-plan">Local implementation plan</h1>
+<p>Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 209 Confirmed and 141 Proposed; a planned slice does not approve a Proposed requirement. No Shortcut records or production application have been created.</p>
+<h2 id="success-and-remaining-commitments">Success and remaining commitments</h2>
+<p>The register assigns all 350 requirements, 353 operations across 48 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 63 local slices and no unowned operations, requirements or retained entries.</p>
+<p>All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.</p>
+<p><a href="implementation-plan.json">Machine-readable register</a> preserves each requirement statement/status, every frozen source span/digest, resolved operation binding, acceptance text and workload specification. <a href="implementation-slices.json">Editable slice source</a> owns sequencing and concrete outcomes. <a href="architecture-handoff.md">Handoff gates</a> distinguish interface decisions from later production acceptance.</p>
+<h2 id="execution-and-dependency-rules">Execution and dependency rules</h2>
+<p>Complete concrete contracts before exposing their operations. Build vertical UI/service/tool behavior in its owning slice, using the shared shell and authority boundary. Foundation slices do not create a second UI-only data model. Language/semantic packs and all eight SDK contribution types remain retained scope. Release acceptance awaits every slice; optional dependencies must fail visibly and locally without making a server, VM or preinstalled general-purpose runtime a core requirement.</p>
+<p>The dependency order is a valid topological order, not a timeline or resource estimate. It allows independent work once prerequisites are satisfied. Integration qualification may hold a particular capability without falsely declaring the product ready. Routine engineering decisions remain delegated; no further product question arose from the native probes.</p>
+<p>Unit and integration suites use deterministic fixtures without inference compute. Real inference compatibility and end-to-end runs retain their separate, later authorized entry point. Workload IDs describe unexecuted production measurements.</p>
+<p>DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 63 active slices remain. No HelixDB source adapter or engine is an app dependency.</p>
+<p><img src="architecture-diagrams/41-implementation-coverage.svg" alt="Coverage and qualification gates"></p>
+<h2 id="dependency-order">Dependency order</h2>
+<p>DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-008 → DW-009 → DW-010 → DW-011 → DW-012 → DW-013 → DW-014 → DW-015 → DW-017 → DW-016 → DW-018 → DW-019 → DW-020 → DW-021 → DW-022 → DW-023 → DW-044 → DW-045 → DW-024 → DW-025 → DW-026 → DW-027 → DW-028 → DW-029 → DW-030 → DW-031 → DW-032 → DW-033 → DW-034 → DW-035 → DW-036 → DW-037 → DW-039 → DW-041 → DW-042 → DW-040 → DW-043 → DW-046 → DW-047 → DW-048 → DW-049 → DW-050 → DW-051 → DW-052 → DW-053 → DW-054 → DW-055 → DW-056 → DW-057 → DW-058 → DW-059 → DW-060 → DW-061 → DW-064 → DW-063 → DW-062</p>
+<h2 id="slice-register">Slice register</h2>
+<table>
+<thead>
+<tr>
+<th>Slice</th>
+<th>Outcome</th>
+<th>Prerequisites</th>
+<th>Gates</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="#dw-001">DW-001</a></td>
+<td>Freeze shared messages, errors and dispatch selection</td>
+<td>None</td>
+<td>G11</td>
+</tr>
+<tr>
+<td><a href="#dw-002">DW-002</a></td>
+<td>Implement the transaction owner and operational repositories</td>
+<td>DW-001</td>
+<td>G01</td>
+</tr>
+<tr>
+<td><a href="#dw-003">DW-003</a></td>
+<td>Deliver durable events with fenced claims and recovery</td>
+<td>DW-002</td>
+<td>G01, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-004">DW-004</a></td>
+<td>Save typed scoped configuration and explain effective values</td>
+<td>DW-002</td>
+<td>G11</td>
+</tr>
+<tr>
+<td><a href="#dw-005">DW-005</a></td>
+<td>Enforce invocation authority and verified native reads</td>
+<td>DW-001, DW-004</td>
+<td>G04</td>
+</tr>
+<tr>
+<td><a href="#dw-006">DW-006</a></td>
+<td>Own processes, cancellation and physical resource reservations</td>
+<td>DW-002, DW-005</td>
+<td>G04, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-007">DW-007</a></td>
+<td>Publish immutable artifacts and revision-bound references</td>
+<td>DW-002, DW-005</td>
+<td>G01, G06</td>
+</tr>
+<tr>
+<td><a href="#dw-008">DW-008</a></td>
+<td>Persist sessions, transcript batches and complete lineage</td>
+<td>DW-002, DW-007</td>
+<td>G01, G03</td>
+</tr>
+<tr>
+<td><a href="#dw-009">DW-009</a></td>
+<td>Run root Start Pause Continue and redirect recovery</td>
+<td>DW-003, DW-008, DW-006</td>
+<td>G01, G04</td>
+</tr>
+<tr>
+<td><a href="#dw-010">DW-010</a></td>
+<td>Build the native egui shell and reusable pane bindings</td>
+<td>DW-001, DW-004</td>
+<td>G02, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-011">DW-011</a></td>
+<td>Manage projects, memberships and repository registrations</td>
+<td>DW-002, DW-005, DW-010</td>
+<td>G01, G04, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-012">DW-012</a></td>
+<td>Plan features, standalone issues and task cards</td>
+<td>DW-011, DW-008, DW-007, DW-010</td>
+<td>G07, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-013">DW-013</a></td>
+<td>Configure statuses and atomically allocate eligible work</td>
+<td>DW-012, DW-009</td>
+<td>G01, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-014">DW-014</a></td>
+<td>Record exact human decisions and notifications</td>
+<td>DW-005, DW-012, DW-009</td>
+<td>G04, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-015">DW-015</a></td>
+<td>Coordinate child assignments and durable agent inboxes</td>
+<td>DW-009, DW-013, DW-014</td>
+<td>G03, G04</td>
+</tr>
+<tr>
+<td><a href="#dw-016">DW-016</a></td>
+<td>Deliver Home chat and its shared coordinator sidebar</td>
+<td>DW-010, DW-008, DW-015, DW-017</td>
+<td>G02, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-017">DW-017</a></td>
+<td>Resolve direct tiers, named models and availability</td>
+<td>DW-004, DW-009, DW-006</td>
+<td>G03</td>
+</tr>
+<tr>
+<td><a href="#dw-018">DW-018</a></td>
+<td>Integrate provider authentication and native secret storage</td>
+<td>DW-005, DW-004, DW-017</td>
+<td>G03, G04, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-019">DW-019</a></td>
+<td>Implement native provider transports and streaming codecs</td>
+<td>DW-017, DW-018, DW-008</td>
+<td>G03</td>
+</tr>
+<tr>
+<td><a href="#dw-020">DW-020</a></td>
+<td>Bridge provider tool turns and context epochs</td>
+<td>DW-019, DW-015, DW-005</td>
+<td>G03, G04</td>
+</tr>
+<tr>
+<td><a href="#dw-021">DW-021</a></td>
+<td>Attribute prices, budget reservations and cache metrics</td>
+<td>DW-017, DW-018, DW-002</td>
+<td>G03, G12</td>
+</tr>
+<tr>
+<td><a href="#dw-022">DW-022</a></td>
+<td>Retain native SystemOne model discovery and decisions</td>
+<td>DW-017, DW-018, DW-021, DW-005</td>
+<td>G03</td>
+</tr>
+<tr>
+<td><a href="#dw-023">DW-023</a></td>
+<td>Discover repositories and publish structural indexes</td>
+<td>DW-011, DW-003, DW-007</td>
+<td>G01, G06</td>
+</tr>
+<tr>
+<td><a href="#dw-024">DW-024</a></td>
+<td>Ship the managed .NET semantic pack</td>
+<td>DW-023, DW-045</td>
+<td>G05, G06</td>
+</tr>
+<tr>
+<td><a href="#dw-025">DW-025</a></td>
+<td>Ship the managed TypeScript semantic pack</td>
+<td>DW-023, DW-045</td>
+<td>G05, G06</td>
+</tr>
+<tr>
+<td><a href="#dw-026">DW-026</a></td>
+<td>Ship the managed Swift semantic pack</td>
+<td>DW-023, DW-045</td>
+<td>G05, G06</td>
+</tr>
+<tr>
+<td><a href="#dw-027">DW-027</a></td>
+<td>Ship the managed Rust semantic pack</td>
+<td>DW-023, DW-045</td>
+<td>G05, G06</td>
+</tr>
+<tr>
+<td><a href="#dw-028">DW-028</a></td>
+<td>Read exact graph views, source and impact</td>
+<td>DW-023, DW-005</td>
+<td>G06, G12</td>
+</tr>
+<tr>
+<td><a href="#dw-029">DW-029</a></td>
+<td>Run retained health, linking, security and metrics analysis</td>
+<td>DW-028, DW-017, DW-003</td>
+<td>G06, G11, G12</td>
+</tr>
+<tr>
+<td><a href="#dw-030">DW-030</a></td>
+<td>Manage unified claims, entities, evidence and lessons</td>
+<td>DW-002, DW-007, DW-005, DW-017</td>
+<td>G06, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-031">DW-031</a></td>
+<td>Read Knowledge bundles, graph frontiers and summaries</td>
+<td>DW-030, DW-028</td>
+<td>G06, G12</td>
+</tr>
+<tr>
+<td><a href="#dw-032">DW-032</a></td>
+<td>Consolidate Knowledge with checkpointed proposals and revert</td>
+<td>DW-030, DW-031, DW-014, DW-003</td>
+<td>G01, G03, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-033">DW-033</a></td>
+<td>Manage versioned conventions and retrieval resources</td>
+<td>DW-030, DW-007</td>
+<td>G06, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-034">DW-034</a></td>
+<td>Stage approved roles and file-backed skills</td>
+<td>DW-007, DW-014, DW-005</td>
+<td>G04, G05</td>
+</tr>
+<tr>
+<td><a href="#dw-035">DW-035</a></td>
+<td>Ingest and retrieve retained documents with exact citations</td>
+<td>DW-007, DW-017, DW-021, DW-028</td>
+<td>G06, G08, G12</td>
+</tr>
+<tr>
+<td><a href="#dw-036">DW-036</a></td>
+<td>Index SQL database structural metadata</td>
+<td>DW-023, DW-005</td>
+<td>G08</td>
+</tr>
+<tr>
+<td><a href="#dw-037">DW-037</a></td>
+<td>Execute separately permitted database operations</td>
+<td>DW-036, DW-014</td>
+<td>G04, G08</td>
+</tr>
+<tr>
+<td><a href="#dw-039">DW-039</a></td>
+<td>Manage owned worktrees, commits, pushes and task PRs</td>
+<td>DW-012, DW-006, DW-005, DW-007</td>
+<td>G07</td>
+</tr>
+<tr>
+<td><a href="#dw-040">DW-040</a></td>
+<td>Reconcile final delivery and clean up owned Git resources</td>
+<td>DW-039, DW-014, DW-003, DW-042</td>
+<td>G07</td>
+</tr>
+<tr>
+<td><a href="#dw-041">DW-041</a></td>
+<td>Synchronize GitHub accounts, issues and observed changes</td>
+<td>DW-018, DW-011, DW-012, DW-039</td>
+<td>G07, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-042">DW-042</a></td>
+<td>Resolve exact-head reviews and merge readiness</td>
+<td>DW-041, DW-039, DW-028, DW-014</td>
+<td>G04, G07</td>
+</tr>
+<tr>
+<td><a href="#dw-043">DW-043</a></td>
+<td>Prepare, publish and deploy revision-bound releases</td>
+<td>DW-040, DW-042, DW-014</td>
+<td>G07, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-044">DW-044</a></td>
+<td>Install and activate trusted executable packages</td>
+<td>DW-007, DW-005, DW-006, DW-003</td>
+<td>G05, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-045">DW-045</a></td>
+<td>Implement every SDK contribution and callback boundary</td>
+<td>DW-044, DW-020</td>
+<td>G04, G05</td>
+</tr>
+<tr>
+<td><a href="#dw-046">DW-046</a></td>
+<td>Connect external MCP servers and selected capabilities</td>
+<td>DW-005, DW-020, DW-006</td>
+<td>G04, G05</td>
+</tr>
+<tr>
+<td><a href="#dw-047">DW-047</a></td>
+<td>Control an owned browser through a native adapter</td>
+<td>DW-005, DW-006, DW-007</td>
+<td>G04, G09, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-048">DW-048</a></td>
+<td>Broker native desktop control and consent</td>
+<td>DW-005, DW-006, DW-014, DW-007</td>
+<td>G04, G09</td>
+</tr>
+<tr>
+<td><a href="#dw-049">DW-049</a></td>
+<td>Execute authorized processes and dependency operations</td>
+<td>DW-005, DW-006, DW-014</td>
+<td>G04, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-050">DW-050</a></td>
+<td>Manage supported engines and owned containers</td>
+<td>DW-049, DW-004</td>
+<td>G09, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-051">DW-051</a></td>
+<td>Run durable schedules and manual jobs</td>
+<td>DW-003, DW-009, DW-017, DW-006</td>
+<td>G01, G03</td>
+</tr>
+<tr>
+<td><a href="#dw-052">DW-052</a></td>
+<td>Search and retrieve web sources through shared tools</td>
+<td>DW-005, DW-017, DW-007</td>
+<td>G04</td>
+</tr>
+<tr>
+<td><a href="#dw-053">DW-053</a></td>
+<td>Ship version-matched offline Help and screen bindings</td>
+<td>DW-010, DW-044</td>
+<td>G02, G10, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-054">DW-054</a></td>
+<td>Generate repository documentation with retained behavior</td>
+<td>DW-028, DW-007, DW-017</td>
+<td>G06, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-055">DW-055</a></td>
+<td>Import only the selected legacy work and history</td>
+<td>DW-011, DW-012, DW-008, DW-039</td>
+<td>G01, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-056">DW-056</a></td>
+<td>Prune only explicitly eligible operational data</td>
+<td>DW-008, DW-007, DW-014</td>
+<td>G01, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-057">DW-057</a></td>
+<td>Expose bounded local diagnostics and recoverable logs</td>
+<td>DW-003, DW-004, DW-007</td>
+<td>G01, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-058">DW-058</a></td>
+<td>Migrate, manually back up and restore the app store</td>
+<td>DW-002, DW-007, DW-051, DW-044</td>
+<td>G01, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-059">DW-059</a></td>
+<td>Discover and install approved signed app updates</td>
+<td>DW-058, DW-044, DW-014</td>
+<td>G10</td>
+</tr>
+<tr>
+<td><a href="#dw-060">DW-060</a></td>
+<td>Qualify native target installers and optional assets</td>
+<td>DW-010, DW-018, DW-047, DW-048, DW-050, DW-058, DW-059</td>
+<td>G02, G04, G08, G09, G10</td>
+</tr>
+<tr>
+<td><a href="#dw-061">DW-061</a></td>
+<td>Measure all representative workloads without inference</td>
+<td>DW-060, DW-057</td>
+<td>G12</td>
+</tr>
+<tr>
+<td><a href="#dw-062">DW-062</a></td>
+<td>Reconcile full retained behavior and release readiness</td>
+<td>DW-001, DW-002, DW-003, DW-004, DW-005, DW-006, DW-007, DW-008, DW-009, DW-010, DW-011, DW-012, DW-013, DW-014, DW-015, DW-016, DW-017, DW-018, DW-019, DW-020, DW-021, DW-022, DW-023, DW-024, DW-025, DW-026, DW-027, DW-028, DW-029, DW-030, DW-031, DW-032, DW-033, DW-034, DW-035, DW-036, DW-037, DW-039, DW-040, DW-041, DW-042, DW-043, DW-044, DW-045, DW-046, DW-047, DW-048, DW-049, DW-050, DW-051, DW-052, DW-053, DW-054, DW-055, DW-056, DW-057, DW-058, DW-059, DW-060, DW-061, DW-063, DW-064</td>
+<td>G11</td>
+</tr>
+<tr>
+<td><a href="#dw-063">DW-063</a></td>
+<td>Expose indexed code, planned work and Knowledge to MCP clients</td>
+<td>DW-001, DW-028, DW-029, DW-012, DW-013, DW-030, DW-033, DW-035, DW-007, DW-008, DW-064</td>
+<td>G04, G06, G10, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-064">DW-064</a></td>
+<td>Authorize external MCP clients and selected work or Knowledge commands</td>
+<td>DW-005, DW-018, DW-004, DW-010, DW-009, DW-014</td>
+<td>G04, G10, G11</td>
+</tr>
+</tbody></table>
+<h2 id="concrete-outcomes-and-acceptance">Concrete outcomes and acceptance</h2>
+<h3 id="dw-001">DW-001</h3>
+<p><strong>Freeze shared messages, errors and dispatch selection</strong> · Chore · Planned; implementation not authorized or started.</p>
+<p>Adopt the recorded complete catalog input/result/fault/receipt candidates into actual domain modules and gateway validation. Qualify identity/scope/receipt/event rules, strict selected-operation/mode checks, descriptor schemas and version/replay behavior before admission. Unknown versions never grant authority.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> AT-ARCH-01, AT-ARCH-02, AT-ARCH-03, AT-ARCH-04, AT-ARCH-05, AT-ARCH-06, AT-OP-01, AT-OP-02, AT-OP-03, AT-ARCH-07, AT-ARCH-08</p>
+<p><strong>Supporting requirements:</strong> TEST-01, TEST-02, TEST-03, TEST-04</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-SERVER_REPLACEMENT. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-002">DW-002</h3>
+<p><strong>Implement the transaction owner and operational repositories</strong> · Chore · Planned; implementation not authorized or started.</p>
+<p>Core-owned repository traits compile without driver types. One bounded writer commits domain state, receipts, history and outbox atomically; scoped snapshots, WAL/FULL/FK, drop rollback and cancellation semantics pass real-adapter tests.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> AT-STORE-01, AT-STORE-02, AT-STORE-03, AT-STORE-04, AT-STORE-05, AT-STORE-06, AT-STORE-07, AT-STORE-08, AT-STORE-09, AT-STORE-10, AT-STORE-11, AT-STORE-12, AT-STORE-13</p>
+<p><strong>Supporting requirements:</strong> ARCH-01, ARCH-02, ARCH-03, ARCH-04, ARCH-05, ARCH-06, ARCH-07, ARCH-08</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-SERVER_REPLACEMENT, W10. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-003">DW-003</h3>
+<p><strong>Deliver durable events with fenced claims and recovery</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Atomic claims, leases/fences, consumer order, replay, retries, poison state, bounded wakeups and sleep/restart repair use SQLite plus Tokio. A missing wakeup cannot lose required work; uncertain external outcomes cannot be blindly retried. Package event handlers commit state CAS, typed effect intents, host receipt and event checkpoint in one transaction; inject crashes before/after commit and replay once without losing or duplicating logical state/effects.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>queue.inspect</code>, <code>queue.resolve</code>, <code>queue.retry</code>, <code>queue.consumer_status</code>, <code>queue.reconcile</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> STORE-01, STORE-02, STORE-03, STORE-04, STORE-05, STORE-06, STORE-07, STORE-08, STORE-09, STORE-10, STORE-11, STORE-12, STORE-13, POWER-01, POWER-02</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-QUEUE, CAP-SERVER_REPLACEMENT, W08. Frozen source entries bound: 2. Pending input schemas: 0.</p>
+<h3 id="dw-004">DW-004</h3>
+<p><strong>Save typed scoped configuration and explain effective values</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Validate complete revisions, inheritance and expected revisions, show source/effective value and adoption boundaries, reject reviewer writes and stale/unknown fields. No credential values in normal configuration.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>settings.read_effective</code>, <code>settings.validate</code>, <code>settings.save_revision</code>, <code>settings.explain_source</code></p>
+<p><strong>Primary requirement cases:</strong> AT-SET-01, AT-SET-02, AT-SET-03, AT-SET-04, AT-SET-05, AT-SET-06, AT-SET-07, AT-SET-08</p>
+<p><strong>Supporting requirements:</strong> ROUTE-19, UI-01, UI-02, UI-03, UI-04, UI-05, UI-06, UI-07, UI-08, UI-09, UI-10, UI-11, UI-12, UI-13</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-SETTINGS. Frozen source entries bound: 13. Pending input schemas: 0.</p>
+<h3 id="dw-005">DW-005</h3>
+<p><strong>Enforce invocation authority and verified native reads</strong> · Chore · Planned; implementation not authorized or started.</p>
+<p>Implement host-created authority/revocation, role/tool restrictions, scoped grants, bounded no-follow reads and stable-target destructive checks. Dedicated primary-repository deletion remains human-only. Prove races and deny unsupported profiles.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> AT-SEC-01, AT-SEC-02, AT-SEC-03, AT-SEC-04, AT-SEC-05</p>
+<p><strong>Supporting requirements:</strong> ADDON-01, ADDON-02, ADDON-03, ADDON-04, ART-01, ART-02, ART-03, ART-04, ART-05, CONTAINER-01, CONTAINER-02, CONTAINER-03, CONTAINER-04, MCP-01, MCP-02, MCP-03, MCP-04, MCP-05, MCP-06, MCP-07, MCP-08, MCP-09, MCP-10, MCP-11, SKILL-01, SKILL-02, SKILL-03, SKILL-04, SKILL-05, SKILL-06, SKILL-07, SKILL-08, SKILL-09, OP-01, OP-02, OP-03</p>
+<p><strong>Behavior/workload obligations:</strong> Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-006">DW-006</h3>
+<p><strong>Own processes, cancellation and physical resource reservations</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Canonical resources, fenced acquire/renew/release and waiters survive crash; slots do not release uncertain physical resources. Owned process trees quiesce/reap with bounded cancellation on each supported target.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>resources.list</code>, <code>resources.acquire</code>, <code>resources.renew</code>, <code>resources.release</code>, <code>resources.holders</code>, <code>resources.waiters</code></p>
+<p><strong>Primary requirement cases:</strong> AT-RES-01, AT-RES-02, AT-RES-03</p>
+<p><strong>Supporting requirements:</strong> GIT-01, GIT-02, GIT-03, GIT-04, GIT-05, GIT-06, GIT-07, GIT-08, GIT-09, GIT-10, GIT-11, GIT-12, GIT-13, GIT-14, GIT-15, GIT-16, GIT-17, SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, CONTAINER-01, CONTAINER-02, CONTAINER-03, CONTAINER-04, POWER-01, POWER-02</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-RESOURCES, W09. Frozen source entries bound: 7. Pending input schemas: 0.</p>
+<h3 id="dw-007">DW-007</h3>
+<p><strong>Publish immutable artifacts and revision-bound references</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Journal file staging/flush/digest/metadata; preserve retained authored/imported versions until explicit deletion, with separate collectible derivative rules. Authorize full reference sets, tombstone before unlink, preserve surviving shares/readers/backup pins and exact old citations. Export stream and destination write are separately authorized.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>artifacts.save</code>, <code>artifacts.list</code>, <code>artifacts.read</code>, <code>artifacts.preview</code>, <code>artifacts.export</code>, <code>artifacts.reference</code>, <code>artifacts.delete</code></p>
+<p><strong>Primary requirement cases:</strong> AT-ART-01, AT-ART-02, AT-ART-03, AT-ART-04, AT-ART-05</p>
+<p><strong>Supporting requirements:</strong> STORE-01, STORE-02, STORE-03, STORE-04, STORE-05, STORE-06, STORE-07, STORE-08, STORE-09, STORE-10, STORE-11, STORE-12, STORE-13, HISTORY-01, HISTORY-02, IMPORT-01, IMPORT-02, DOC-01, DOC-02</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-SOURCE, CAP-HISTORY. Frozen source entries bound: 1. Pending input schemas: 0.</p>
+<h3 id="dw-008">DW-008</h3>
+<p><strong>Persist sessions, transcript batches and complete lineage</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Append attributed ordered batches atomically with calls/results/checkpoints; immutable native references, compaction epochs, bounded scoped history and separate operation updates survive duplicate replay and crash.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>sessions.list</code>, <code>sessions.get</code>, <code>sessions.transcript</code>, <code>sessions.briefing</code>, <code>sessions.append_message</code>, <code>sessions.context_sources</code>, <code>sessions.start</code>, <code>sessions.end</code>, <code>history.events</code>, <code>history.work_lineage</code>, <code>history.git_links</code>, <code>history.evidence_links</code>, <code>history.operation_status</code>, <code>history.tool_usage</code>, <code>history.command_receipt</code></p>
+<p><strong>Primary requirement cases:</strong> AT-HISTORY-01, AT-HISTORY-02</p>
+<p><strong>Supporting requirements:</strong> CACHE-01, CACHE-02, CACHE-03, CACHE-04, CACHE-05, CACHE-06, CONTEXT-01, CONTEXT-02, CONTEXT-03, CONTEXT-04, CONTEXT-05, CONTEXT-06</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-SESSIONS, CAP-HISTORY, W02. Frozen source entries bound: 37. Pending input schemas: 0.</p>
+<h3 id="dw-009">DW-009</h3>
+<p><strong>Run root Start Pause Continue and redirect recovery</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>One coordinator owner per root and one continuation per session. Explicit Continue, renewed holds, accepted/unlaunched recovery, eligible descendants, parallel-tool isolation and received/acknowledged/incorporated redirect stages pass deterministic races. Eligibility uses the active approved plan while a revision is pending; pending changes cannot authorize dispatch. Approved replacement adopts at safe boundaries and fences only incompatible work.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>runs.start</code>, <code>runs.pause</code>, <code>runs.continue</code>, <code>runs.redirect</code>, <code>runs.inspect</code>, <code>runs.stop</code>, <code>runs.eligibility</code></p>
+<p><strong>Primary requirement cases:</strong> AT-CONTROL-01, AT-CONTROL-02, AT-CONTROL-03, AT-CONTROL-04, AT-CONTROL-05, AT-CONTROL-06, AT-CONTROL-07, AT-CONTROL-08, AT-CONTROL-09, AT-CONTROL-10, AT-CONTROL-11, AT-CONTROL-12, AT-CONTROL-13, AT-POWER-01, AT-POWER-02</p>
+<p><strong>Supporting requirements:</strong> AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, AGENT-07, AGENT-08, AGENT-09, AGENT-10, AGENT-11, AGENT-12, AGENT-13, AGENT-14, AGENT-15, AGENT-16, AGENT-17, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17, JOB-01, JOB-02, JOB-03, JOB-04, JOB-05, JOB-06, JOB-07, JOB-08, JOB-09, OP-01, OP-02, OP-03</p>
+<p><strong>Behavior/workload obligations:</strong> W09. Frozen source entries bound: 10. Pending input schemas: 0.</p>
+<h3 id="dw-010">DW-010</h3>
+<p><strong>Build the native egui shell and reusable pane bindings</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Pin matching egui/eframe and rendering stack. Native window, keyboard/focus/accessibility, incremental projections, row/variable-block virtualization, images/file handles, pane restoration and clean optional-runtime absence work. No WebView UI.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> AT-UI-01, AT-UI-02, AT-UI-03, AT-UI-04, AT-UI-05, AT-UI-06, AT-UI-07, AT-UI-08, AT-UI-09, AT-VIS-01, AT-VIS-02, AT-VIS-03, AT-UI-11, AT-UI-12, AT-UI-13</p>
+<p><strong>Supporting requirements:</strong> ARCH-01, ARCH-02, ARCH-03, ARCH-04, ARCH-05, ARCH-06, NOTIFY-01, NOTIFY-02, NOTIFY-03, NOTIFY-04, PLAT-01, PLAT-02, PLAT-03, SET-01, SET-02, SET-03, SET-04, SET-05, SET-06, SET-07, SET-08, ARCH-07, ARCH-08</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-NAVIGATION, CAP-SERVER_REPLACEMENT, W01, W03. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-011">DW-011</h3>
+<p><strong>Manage projects, memberships and repository registrations</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Create/edit/membership/archive/restore/delete preserve exact scope and shared references. Archive fences active work immediately. Project deletion never deletes source Git resources. Native screens and agent operations share commands.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>projects.list</code>, <code>projects.get</code>, <code>projects.create</code>, <code>projects.edit</code>, <code>projects.membership</code>, <code>projects.archive</code>, <code>projects.restore</code>, <code>projects.delete</code>, <code>repositories.list</code>, <code>repositories.get</code>, <code>repositories.remove_index</code>, <code>repositories.readme</code>, <code>repositories.summary</code>, <code>repositories.search</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> MODEL-01, MODEL-02, MODEL-03, SET-01, SET-02, SET-03, SET-04, SET-05, SET-06, SET-07, SET-08</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-REPOSITORIES. Frozen source entries bound: 35. Pending input schemas: 0.</p>
+<h3 id="dw-012">DW-012</h3>
+<p><strong>Plan features, standalone issues and task cards</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Multi-repository work, editable requirements/plans/acceptance, task dependencies/assignments and evidence links use revisions. Plan approval is scope-bound; clear standalone issues retain immediate implementation behavior. Native list/board/detail and tools share the same operations. Every task requires a project and accepts an optional feature relationship. Standalone tasks use the issue view of the same identity; task/issue entry points never duplicate work. Validate feature membership and existing standalone execution/accounting/delivery semantics. Plans belong to the feature: one active approved plan and one pending replacement. Draft edits, submission and rejection preserve active authority and eligible work; no plan-version management UI. Shared human/agent task and issue priority edits plus bulk task ordering commit revisioned history. Screens expose Blocked by/Blocks and editable same-project cross-feature/standalone links; reject invalid/self/duplicate/cyclic changes without partial writes. Human/agent tasks.set_feature and optional feature at issue creation share authoritative membership. Link authorizes delivery without revised-plan approval; clear pauses until manual resume. Preserve stable identity, active agent/workspace, history and holds; coordinator owns integration. Direct transfers retain holds without creating a pause.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>features.list</code>, <code>features.get</code>, <code>features.create</code>, <code>features.edit_plan</code>, <code>features.prioritize</code>, <code>features.dependencies</code>, <code>features.request_plan_approval</code>, <code>features.edit</code>, <code>issues.list</code>, <code>issues.get</code>, <code>issues.create</code>, <code>issues.edit</code>, <code>issues.prioritize</code>, <code>tasks.list</code>, <code>tasks.get</code>, <code>tasks.create</code>, <code>tasks.edit</code>, <code>tasks.prioritize</code>, <code>tasks.move</code>, <code>tasks.assign</code>, <code>tasks.dependency_links</code>, <code>tasks.acceptance_evidence</code>, <code>tasks.sync_plan</code>, <code>tasks.set_feature</code></p>
+<p><strong>Primary requirement cases:</strong> AT-MODEL-01, AT-MODEL-02, AT-MODEL-03, AT-WORK-01, AT-WORK-02, AT-WORK-03, AT-WORK-04, AT-WORK-05, AT-WORK-06, AT-WORK-07, AT-WORK-08, AT-WORK-09, AT-WORK-10, AT-WORK-11, AT-WORK-12, AT-WORK-13, AT-WORK-14, AT-WORK-15, AT-WORK-16, AT-WORK-17</p>
+<p><strong>Supporting requirements:</strong> UI-01, UI-02, UI-03, UI-04, UI-05, UI-06, UI-07, UI-08, UI-09, MCP-07, MCP-08, MCP-09, MCP-10, MCP-11, UI-11, UI-12, UI-13</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-WORK, W02. Frozen source entries bound: 15. Pending input schemas: 0.</p>
+<h3 id="dw-013">DW-013</h3>
+<p><strong>Configure statuses and atomically allocate eligible work</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Priority features/issues share a project queue; automatic feature claims require current implementation approval. Child-task claims stay within their feature. Status removal reassigns occupied records atomically; inspect/release claims obey ownership fences. Filter unsatisfied dependencies before priority and manual rank; use atomic queue revisions for edits/claims. Prove concurrent dependency edits cannot form a project-wide cycle and high-priority blocked tasks cannot bypass prerequisites. No automatic preemption on priority changes. Keep-working yields a fully dependency-blocked root only after quiescence, allowing prerequisite roots to run while preserving one active root, coordinator lineage and explicit holds; valid task-level interleaving across features must not deadlock. Membership changes update root/feature queue eligibility atomically and fence stale claims; an owned task never gains a second execution. Relinking cannot clear an unlink pause.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>workflows.list</code>, <code>workflows.create_status</code>, <code>workflows.rename_status</code>, <code>workflows.order</code>, <code>workflows.reassign_and_remove</code>, <code>next_work.claim_project_queue</code>, <code>next_work.claim_feature_task</code>, <code>next_work.inspect_claim</code>, <code>next_work.release_claim</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> COORD-01, COORD-02, COORD-03, COORD-04, COORD-05, COORD-06, COORD-07, COORD-08, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17, COORD-09, COORD-10</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-WORK. Frozen source entries bound: 2. Pending input schemas: 0.</p>
+<h3 id="dw-014">DW-014</h3>
+<p><strong>Record exact human decisions and notifications</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Approval proposals bind contents/target/revision, only host human interaction mints decisions, and approval wakeups re-admit saved operations without clearing pauses. Notifications and acknowledgment never resolve their linked decisions. Native OS denial retains in-app access. Feature-plan approval atomically promotes the exact pending draft with active scope/acceptance and history. Stale approval/edit races preserve the original plan; rejection leaves it approved. Approval never clears a pause.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>approvals.list</code>, <code>approvals.inspect</code>, <code>approvals.propose</code>, <code>approvals.record_human_decision</code>, <code>notifications.list</code>, <code>notifications.read</code>, <code>notifications.acknowledge</code>, <code>notifications.settings</code></p>
+<p><strong>Primary requirement cases:</strong> AT-NOTIFY-01, AT-NOTIFY-02, AT-NOTIFY-03, AT-NOTIFY-04</p>
+<p><strong>Supporting requirements:</strong> CONTROL-01, CONTROL-02, CONTROL-03, CONTROL-04, CONTROL-05, CONTROL-06, CONTROL-07, CONTROL-08, CONTROL-09, CONTROL-10, CONTROL-11, CONTROL-12, CONTROL-13, DREAM-01, DREAM-02, DREAM-03, DREAM-04, DREAM-05, REVIEW-01, REVIEW-02, REVIEW-03, SELF-01, SELF-02, SELF-03, SELF-04</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-DECISIONS. Frozen source entries bound: 6. Pending input schemas: 0.</p>
+<h3 id="dw-015">DW-015</h3>
+<p><strong>Coordinate child assignments and durable agent inboxes</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Root coordinators delegate within independent per-root caps, retain role/scope/lineage, durable messages/acks/checkpoints and waits. No manual child Pause or global cap. Independent work continues while affected dependencies wait. Prove delegation from an issue with no feature or feature cards, using a root-scoped brief and optional task references. Assignment parentage is independent of feature membership; retain issue ownership and independent concurrency. Adding a blocker fences affected future dispatch; safe interruption/reconciliation preserves in-flight effects. Completion/removal wakes eligible dependents without clearing independent controls. Link notifications and supervisor rebinding are durable; existing worker continues, coordinator tracks it and launches/resumes only eligible unowned work. Shared-repository project work coordinates overlap through the message board with scoped access.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>agents.inspect</code>, <code>agents.delegate</code>, <code>agents.messages</code>, <code>agents.inbox</code>, <code>agents.acknowledge</code>, <code>agents.checkpoint</code></p>
+<p><strong>Primary requirement cases:</strong> AT-COORD-01, AT-COORD-02, AT-COORD-03, AT-COORD-04, AT-COORD-05, AT-COORD-06, AT-COORD-07, AT-COORD-08, AT-AGENT-01, AT-AGENT-02, AT-AGENT-03, AT-AGENT-04, AT-AGENT-05, AT-AGENT-06, AT-AGENT-07, AT-AGENT-08, AT-AGENT-09, AT-AGENT-10, AT-AGENT-11, AT-AGENT-12, AT-AGENT-13, AT-AGENT-14, AT-AGENT-15, AT-AGENT-16, AT-AGENT-17, AT-COORD-09, AT-COORD-10</p>
+<p><strong>Supporting requirements:</strong> CONTROL-01, CONTROL-02, CONTROL-03, CONTROL-04, CONTROL-05, CONTROL-06, CONTROL-07, CONTROL-08, CONTROL-09, CONTROL-10, CONTROL-11, CONTROL-12, CONTROL-13, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-WORK. Frozen source entries bound: 8. Pending input schemas: 0.</p>
+<h3 id="dw-016">DW-016</h3>
+<p><strong>Deliver Home chat and its shared coordinator sidebar</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Every native composer uses persisted route/effort and attachments. Home/sidebar share one session, draft, transcript and pin. Navigation appends deduplicated bounded host notices and current Help/tool context without extra inference or authority.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>ui.current_screen</code></p>
+<p><strong>Primary requirement cases:</strong> AT-UI-10</p>
+<p><strong>Supporting requirements:</strong> ROUTE-19, ROUTE-20, UI-01, UI-02, UI-03, UI-04, UI-05, UI-06, UI-07, UI-08, UI-09, UI-11, UI-12, UI-13</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-SESSIONS, CAP-NAVIGATION, W03. Frozen source entries bound: 4. Pending input schemas: 0.</p>
+<h3 id="dw-017">DW-017</h3>
+<p><strong>Resolve direct tiers, named models and availability</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Max/High/Mid/Low use full eligible configured pools, custom members and persisted round-robin cursors/pins. Named intent is direct; Open Router Auto is a distinct upstream route. Explicit effort/capabilities are enforced, empty/cooling pools show truthful waits, and auxiliary calls do not repin chat.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>router.catalog</code>, <code>router.route</code>, <code>router.pin</code>, <code>router.availability</code>, <code>router.request_status</code></p>
+<p><strong>Primary requirement cases:</strong> AT-ROUTE-01, AT-ROUTE-02, AT-ROUTE-03, AT-ROUTE-04, AT-ROUTE-05, AT-ROUTE-06, AT-ROUTE-07, AT-ROUTE-08, AT-ROUTE-11, AT-ROUTE-12, AT-ROUTE-13, AT-ROUTE-14, AT-ROUTE-15, AT-ROUTE-09, AT-ROUTE-10, AT-ROUTE-19, AT-ROUTE-20</p>
+<p><strong>Supporting requirements:</strong> ROUTE-16, ROUTE-17, ROUTE-18, UI-10</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-ROUTER, W09. Frozen source entries bound: 9. Pending input schemas: 0.</p>
+<h3 id="dw-018">DW-018</h3>
+<p><strong>Integrate provider authentication and native secret storage</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Native subscription/API/compatible connections preserve sign-in, refresh, reauthentication, credential revisions, removal/discovery/health and safe redaction. Prove target SecretStore/signing flows; no external agent CLI or old router server. Deliver distinct ClaudeSubscriptionMessages and AnthropicMessages connections. Subscription is disabled until exact-notice human risk acceptance; retain direct simple-router PKCE/token refresh without a Claude CLI. API-key replacement/removal and pricing remain independent; revoke risk acceptance on notice/profile/account changes and restore. No automatic billing crossover.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>router.connections</code>, <code>router.configure</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, ROUTE-18, SEC-01, SEC-02, SEC-03, SEC-04, SEC-05</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-ROUTER. Frozen source entries bound: 11. Pending input schemas: 0.</p>
+<h3 id="dw-019">DW-019</h3>
+<p><strong>Implement native provider transports and streaming codecs</strong> · Chore · Planned; implementation not authorized or started.</p>
+<p>Qualify every retained access/profile: Messages, Responses, Chat Completions, OpenRouter and local/custom variants, generation and embedding. Script SSE fragmentation, terminal/partial/tool/image/cache/native continuation errors; never flatten calls or omit unsupported images. Preserve simple-router subscription bearer/beta/identity behavior in the opt-in adapter only; the Anthropic API adapter uses its documented versioned key-auth profile without subscription identity injection. Pin and qualify both; known external restrictions remain visible.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, CACHE-01, CACHE-02, CACHE-03, CACHE-04, CACHE-05, CACHE-06, ROUTE-20, RAG-01, RAG-02, RAG-03, RAG-09, RAG-10, RAG-04, RAG-05, RAG-06, RAG-07, RAG-08, RAG-11, RAG-12, RAG-13</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-ROUTER. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-020">DW-020</h3>
+<p><strong>Bridge provider tool turns and context epochs</strong> · Chore · Planned; implementation not authorized or started.</p>
+<p>Stable tool aliases, durable completed calls, out-of-order independent results and one initial response per call survive pause, approval and redirection. Later outcome events are separate; provider changes preserve known results and explicit context conversion. Effective instruction bundles bind exact source digests and applicable paths before new inference/tool dispatch; edits adopt at a safe boundary without rewriting completed/in-flight provenance.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> AT-CACHE-01, AT-CACHE-02, AT-CACHE-03, AT-CACHE-04, AT-CACHE-05, AT-CACHE-06, AT-CONTEXT-01, AT-CONTEXT-02, AT-CONTEXT-03, AT-CONTEXT-04, AT-CONTEXT-05, AT-CONTEXT-06, AT-TOOL-01, AT-TOOL-02, AT-TOOL-03, AT-TOOL-04, AT-TOOL-05, AT-TOOL-06, AT-TOOL-07, AT-TOOL-08, AT-TOOL-09</p>
+<p><strong>Supporting requirements:</strong> COORD-01, COORD-02, COORD-03, COORD-04, COORD-05, COORD-06, COORD-07, COORD-08, AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, AGENT-07, AGENT-08, AGENT-09, AGENT-10, AGENT-11, AGENT-12, AGENT-13, AGENT-14, AGENT-15, AGENT-16, AGENT-17, COORD-09, COORD-10</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-SESSIONS. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-021">DW-021</h3>
+<p><strong>Attribute prices, budget reservations and cache metrics</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Weekly/manual official price snapshots, OpenRouter reported costs, local free/custom untracked and subscription estimates preserve provenance. Feature budgets warn at 75%, reserve/admit atomically and require Continue after caps; issues/jobs have no caps. Include every attempt/auxiliary purpose and unknown tail.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>router.usage</code>, <code>router.price_status</code>, <code>router.price_refresh</code>, <code>router.price_override</code></p>
+<p><strong>Primary requirement cases:</strong> AT-ROUTE-16, AT-ROUTE-17</p>
+<p><strong>Supporting requirements:</strong> ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, CACHE-01, CACHE-02, CACHE-03, CACHE-04, CACHE-05, CACHE-06, ROUTE-18, JOB-01, JOB-02, JOB-03, JOB-04, JOB-05, JOB-06, JOB-07, JOB-08, JOB-09, LOG-01, LOG-02, LOG-03</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-USAGE. Frozen source entries bound: 9. Pending input schemas: 0.</p>
+<h3 id="dw-022">DW-022</h3>
+<p><strong>Retain native SystemOne model discovery and decisions</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>router.decision_models</code>, <code>router.decide</code></p>
+<p><strong>Primary requirement cases:</strong> AT-ROUTE-18</p>
+<p><strong>Supporting requirements:</strong> ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, UI-10</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-DECISIONS, CAP-ROUTER. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-023">DW-023</h3>
+<p><strong>Discover repositories and publish structural indexes</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Tree-sitter baseline, captures, exclusions, partial coverage, stage/cancel/resume, source revisions and immutable generation publication work without semantic runtimes. Discovery/index/reindex/overlay retirement/configuration and logs retain exact source identity.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>indexing.discover</code>, <code>indexing.index</code>, <code>indexing.reindex</code>, <code>indexing.refresh_overlay</code>, <code>indexing.retire_view</code>, <code>indexing.cancel</code>, <code>indexing.status</code>, <code>indexing.runs</code>, <code>indexing.configure_sources</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> CODE-01, CODE-02, CODE-03, CODE-04, CODE-05, CODE-06, CODE-07, CODE-08, CODE-09, CODE-10, CODE-11, GRAPH-01, GRAPH-02, GRAPH-03, GRAPH-04</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-INDEXING, CAP-LANGUAGES, CAP-LINKING, CAP-OVERLAY, W04, W06. Frozen source entries bound: 67. Pending input schemas: 0.</p>
+<h3 id="dw-024">DW-024</h3>
+<p><strong>Ship the managed .NET semantic pack</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Roslyn/native compiler or SCIP import retains all claimed C#/VB constructs and provenance. Explicit optional SDK discovery, bounded owned processes, cancellation, failures and target assets preserve baseline structural indexing.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-LANGUAGES, CAP-LINKING, W04. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-025">DW-025</h3>
+<p><strong>Ship the managed TypeScript semantic pack</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>TypeScript/JavaScript compiler relationships, module/package/export and React/Angular/backend links retain source fixtures. Optional Node/toolchain assets do not become core startup dependencies; cancellation and stale output are fenced.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-LANGUAGES, CAP-LINKING, W04. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-026">DW-026</h3>
+<p><strong>Ship the managed Swift semantic pack</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>SourceKit/IndexStore adaptation retains type/import/member/reference ownership and unresolved provenance. Prove actual platform/toolchain availability; unsupported targets are explicit and cannot count as full language qualification.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-LANGUAGES, CAP-LINKING, W04. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-027">DW-027</h3>
+<p><strong>Ship the managed Rust semantic pack</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>rust-analyzer/SCIP symbols, Cargo identities and semantic references retain bounded resource/cancellation behavior. Test OOM/failure and changed/deleted inputs without expensive retry loops or corrupt publication.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-LANGUAGES, CAP-LINKING, W04. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-028">DW-028</h3>
+<p><strong>Read exact graph views, source and impact</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Whole-unit replacement/deletion, visible endpoints, stable identities and cross-repo pinned snapshots apply consistently to every retained graph query/source/traversal/path/impact/lineage operation. Scope precedes expansion and snippets; bounded partials and missing views never fall back to main.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>code.search</code>, <code>code.architecture</code>, <code>code.dependency</code>, <code>code.impact</code>, <code>code.source</code>, <code>code.traverse</code>, <code>code.graph_scope_status</code>, <code>code.overview</code>, <code>code.nodes_by_file</code>, <code>code.node_detail</code>, <code>code.set_trust</code>, <code>code.file_impact</code>, <code>code.graph_schema</code>, <code>code.call_path</code>, <code>code.data_lineage</code>, <code>code.consumers</code>, <code>code.publishers</code>, <code>code.snippet</code>, <code>code.repository_dependencies</code>, <code>repositories.nodes</code></p>
+<p><strong>Primary requirement cases:</strong> AT-CODE-01, AT-CODE-02, AT-CODE-03, AT-CODE-04, AT-CODE-05, AT-CODE-06, AT-CODE-07, AT-CODE-08, AT-CODE-09, AT-CODE-10, AT-CODE-11, AT-GRAPH-01, AT-GRAPH-02, AT-GRAPH-03, AT-GRAPH-04</p>
+<p><strong>Supporting requirements:</strong> CONTEXT-01, CONTEXT-02, CONTEXT-03, CONTEXT-04, CONTEXT-05, CONTEXT-06, MCP-07, MCP-08, MCP-09, MCP-10, MCP-11, CODEREVIEW-01, CODEREVIEW-02, RAG-01, RAG-02, RAG-03, RAG-09, RAG-10, RAG-04, RAG-05, RAG-06, RAG-07, RAG-08, RAG-11, RAG-12, RAG-13, VIS-01, VIS-02, VIS-03</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-GRAPH, CAP-SOURCE, CAP-LINKING, CAP-OVERLAY, W05, W06. Frozen source entries bound: 43. Pending input schemas: 0.</p>
+<h3 id="dw-029">DW-029</h3>
+<p><strong>Run retained health, linking, security and metrics analysis</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Implement each retained metric/security/hotspot/community/linking/batch/synthesis/fleet/archive-candidate surface, with exact revisions, structural/semantic coverage, stage checkpoints, source quirks and explicit inferred/unresolved links. Model-assisted stages use the router.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>analysis.health</code>, <code>analysis.cross_repo_links</code>, <code>analysis.community_analysis</code>, <code>analysis.status</code>, <code>analysis.clusters</code>, <code>analysis.cluster_detail</code>, <code>analysis.link_and_detect</code>, <code>analysis.process_batch</code>, <code>analysis.security</code>, <code>analysis.metrics</code>, <code>analysis.hotspots</code>, <code>analysis.reanalyze</code>, <code>analysis.synthesize</code>, <code>analysis.fleet_health</code>, <code>analysis.archival_candidates</code>, <code>analysis.file_hotspot</code></p>
+<p><strong>Primary requirement cases:</strong> AT-HEALTH-01, AT-HEALTH-02</p>
+<p><strong>Supporting requirements:</strong> CODE-01, CODE-02, CODE-03, CODE-04, CODE-05, CODE-06, CODE-07, CODE-08, CODE-09, CODE-10, CODE-11</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-ANALYSIS. Frozen source entries bound: 63. Pending input schemas: 0.</p>
+<h3 id="dw-030">DW-030</h3>
+<p><strong>Manage unified claims, entities, evidence and lessons</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Authored claim/entity relations, versioned evidence, tags/scope, contradiction/verification/retraction and permissioned deletion preserve provenance and visibility. Retained source semantics have native tools and screens; user import is distinct from excluded legacy Knowledge migration.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>knowledge.search</code>, <code>knowledge.read</code>, <code>knowledge.record</code>, <code>knowledge.revise</code>, <code>knowledge.relate</code>, <code>knowledge.tag</code>, <code>knowledge.verify</code>, <code>knowledge.retract</code>, <code>knowledge.scope</code>, <code>knowledge.diagnostics</code>, <code>knowledge.delete_by_source</code>, <code>knowledge.delete_selected</code>, <code>knowledge.write_status</code>, <code>knowledge.import_user_data</code>, <code>knowledge.promote</code>, <code>knowledge.challenge</code>, <code>knowledge.tagged_lessons</code></p>
+<p><strong>Primary requirement cases:</strong> AT-KNOW-01, AT-KNOW-02, AT-KNOW-03, AT-KNOW-04, AT-KNOW-05, AT-KNOW-06, AT-KNOW-07, AT-KNOW-08</p>
+<p><strong>Supporting requirements:</strong> CONTEXT-01, CONTEXT-02, CONTEXT-03, CONTEXT-04, CONTEXT-05, CONTEXT-06, DREAM-01, DREAM-02, DREAM-03, DREAM-04, DREAM-05, MCP-07, MCP-08, MCP-09, MCP-10, MCP-11, CONV-01, CONV-02, RAG-01, RAG-02, RAG-03, RAG-09, RAG-10, RAG-04, RAG-05, RAG-06, RAG-07, RAG-08, RAG-11, RAG-12, RAG-13</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-KNOWLEDGE. Frozen source entries bound: 48. Pending input schemas: 0.</p>
+<h3 id="dw-031">DW-031</h3>
+<p><strong>Read Knowledge bundles, graph frontiers and summaries</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Preserve every retained bundle/frontier/filter/cursor and structural-query operation, scope before expansion, explicit partials and stable identities. No raw internal SQL or unbounded materialization leaks through query helpers.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>knowledge.subgraph</code>, <code>knowledge.entity_bundle</code>, <code>knowledge.entity_graph</code>, <code>knowledge.claim_bundle</code>, <code>knowledge.expand_frontier</code>, <code>knowledge.render_summary</code>, <code>knowledge.query</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> KNOW-01, KNOW-02, KNOW-03, KNOW-04, KNOW-05, KNOW-06, KNOW-07, KNOW-08, GRAPH-01, GRAPH-02, GRAPH-03, GRAPH-04</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-KNOWLEDGE. Frozen source entries bound: 25. Pending input schemas: 0.</p>
+<h3 id="dw-032">DW-032</h3>
+<p><strong>Consolidate Knowledge with checkpointed proposals and revert</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Durable cursors/checkpoints/read efficiency, schedule/settings/instructions, nonconflicting consolidation, conflict review and attributed proposals/revert preserve source evidence and intervening edits. No inference polling while blocked.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>dreaming.run</code>, <code>dreaming.runs</code>, <code>dreaming.report</code>, <code>dreaming.settings</code>, <code>dreaming.instructions</code>, <code>dreaming.propose</code>, <code>dreaming.revert</code>, <code>dreaming.review</code></p>
+<p><strong>Primary requirement cases:</strong> AT-DREAM-01, AT-DREAM-02, AT-DREAM-03, AT-DREAM-04, AT-DREAM-05</p>
+<p><strong>Supporting requirements:</strong> KNOW-01, KNOW-02, KNOW-03, KNOW-04, KNOW-05, KNOW-06, KNOW-07, KNOW-08</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-DREAMING. Frozen source entries bound: 22. Pending input schemas: 0.</p>
+<h3 id="dw-033">DW-033</h3>
+<p><strong>Manage versioned conventions and retrieval resources</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Applicability/version/edit/retire/index/import/delete/move and resource search/removal preserve exact revisions and current scope. No wiki dependency; inherited guidance cannot overrule policy or user instructions.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>conventions.list</code>, <code>conventions.read</code>, <code>conventions.edit</code>, <code>conventions.version</code>, <code>conventions.applicability</code>, <code>conventions.retire</code>, <code>conventions.index</code>, <code>conventions.import</code>, <code>conventions.delete</code>, <code>conventions.move</code>, <code>conventions.resources</code>, <code>conventions.delete_resource</code>, <code>conventions.search</code></p>
+<p><strong>Primary requirement cases:</strong> AT-CONV-01, AT-CONV-02</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-CONVENTIONS. Frozen source entries bound: 34. Pending input schemas: 0.</p>
+<h3 id="dw-034">DW-034</h3>
+<p><strong>Stage approved roles and file-backed skills</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Discover shared skills in place, resolve assets from owning roots, maintain approved local overrides/history/rollback, and adopt instruction changes at safe boundaries. Agent-authored edits require exact approval; shared originals remain untouched. Repository files override default roles below user directions/enforced permissions. Closest directory wins within its subtree; AGENTS.md beats CLAUDE.md at one level and keeps nonconflicting additions. Test sibling/multi-repository isolation, material conflict records, source digests and safe-boundary adoption.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>skills.discover</code>, <code>skills.read</code>, <code>skills.resources</code>, <code>skills.draft</code>, <code>skills.propose</code>, <code>skills.history</code>, <code>skills.rollback</code>, <code>roles.read</code>, <code>roles.draft</code>, <code>roles.propose</code>, <code>roles.history</code>, <code>roles.rollback</code></p>
+<p><strong>Primary requirement cases:</strong> AT-SKILL-01, AT-SKILL-02, AT-SKILL-03, AT-SKILL-04, AT-SKILL-05, AT-SKILL-06, AT-SKILL-07, AT-SKILL-08, AT-SKILL-09</p>
+<p><strong>Supporting requirements:</strong> EXT-01, EXT-02, EXT-03, EXT-04, EXT-05, EXT-06, EXT-07</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-ROLES. Frozen source entries bound: 3. Pending input schemas: 0.</p>
+<h3 id="dw-035">DW-035</h3>
+<p><strong>Ingest and retrieve retained documents with exact citations</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Native Markdown/text/PDF and modern DOCX extraction, bounded diagnostics/locators, scanned-page routed vision, exact versions and shared/moved scope work. Hybrid retrieval filters before ranking/materialization, preserves embedding space and supports explicit fallback. No external office/Python runtime.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>documents.import</code>, <code>documents.list</code>, <code>documents.read</code>, <code>documents.search</code>, <code>documents.share</code>, <code>documents.move</code>, <code>documents.index</code>, <code>documents.retry</code>, <code>documents.disable_retrieval</code>, <code>documents.remove_index</code></p>
+<p><strong>Primary requirement cases:</strong> AT-RAG-01, AT-RAG-02, AT-RAG-03, AT-RAG-09, AT-RAG-10, AT-RAG-04, AT-RAG-05, AT-RAG-06, AT-RAG-07, AT-RAG-08, AT-RAG-11, AT-RAG-12, AT-RAG-13, AT-DOC-01, AT-DOC-02</p>
+<p><strong>Supporting requirements:</strong> ART-01, ART-02, ART-03, ART-04, ART-05, CONTEXT-01, CONTEXT-02, CONTEXT-03, CONTEXT-04, CONTEXT-05, CONTEXT-06</p>
+<p><strong>Behavior/workload obligations:</strong> W07. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-036">DW-036</h3>
+<p><strong>Index SQL database structural metadata</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Native SQLite/MariaDB/MySQL/PostgreSQL/SQL Server metadata profiles declare versions/auth/read-only capability; objects/relationships/index/refresh/removal/configuration never persist source row values. Distinguish unavailable, partial and healthy-empty.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>schemas.connections</code>, <code>schemas.objects</code>, <code>schemas.relationships</code>, <code>schemas.index</code>, <code>schemas.refresh</code>, <code>schemas.remove_index</code>, <code>schemas.configure</code></p>
+<p><strong>Primary requirement cases:</strong> AT-DB-01, AT-DB-02, AT-DB-03, AT-DB-04, AT-DB-05, AT-DB-06, AT-DB-07, AT-DB-08, AT-DB-09, AT-SCHEMA-01, AT-SCHEMA-02</p>
+<p><strong>Supporting requirements:</strong> VIS-01, VIS-02, VIS-03</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-DATABASE. Frozen source entries bound: 22. Pending input schemas: 0.</p>
+<h3 id="dw-037">DW-037</h3>
+<p><strong>Execute separately permitted database operations</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Read defaults, per-connection write enablement, role/project access, bounded results/sensitive columns, transaction/errors and uncertain writes use exact target identity. Versioned migrations are preferred; applying one needs independent target authority.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>database.read</code>, <code>database.execute_write</code>, <code>database.apply_migration</code>, <code>database.direct_schema_change</code>, <code>database.configure_sensitive_columns</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> DB-01, DB-02, DB-03, DB-04, DB-05, DB-06, DB-07, DB-08, DB-09, SCHEMA-01, SCHEMA-02</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-DATABASE. Frozen source entries bound: 4. Pending input schemas: 0.</p>
+<h3 id="dw-039">DW-039</h3>
+<p><strong>Manage owned worktrees, commits, pushes and task PRs</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Task/group PRs integrate to feature branches; issue PRs target main. Persist all associations and expected heads. Force-with-lease is limited to owned task branches; feature force-push needs exact approval and main is always forbidden. Linked issues keep existing branches/worktrees; coordinator owns feature integration and reconciles PR targets. Unlink pauses work without deleting code or remote artifacts; historical costs stay fixed, later calls use current membership budget.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>git.worktree</code>, <code>git.inspect</code>, <code>git.diff</code>, <code>git.commit</code>, <code>git.push</code>, <code>git.pull_request</code></p>
+<p><strong>Primary requirement cases:</strong> AT-GIT-01, AT-GIT-02, AT-GIT-03, AT-GIT-04, AT-GIT-05, AT-GIT-06, AT-GIT-07, AT-GIT-08, AT-GIT-09, AT-GIT-10, AT-GIT-11, AT-GIT-12, AT-GIT-13, AT-GIT-14, AT-GIT-15, AT-GIT-16, AT-GIT-17</p>
+<p><strong>Supporting requirements:</strong> MODEL-01, MODEL-02, MODEL-03, GH-01, GH-02, GH-03, GH-04, GH-05, GH-06, GH-07, GH-08, GH-09, GH-10, GH-11, GH-12</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-GITHUB. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-040">DW-040</h3>
+<p><strong>Reconcile final delivery and clean up owned Git resources</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>All-repo exact-head readiness before first submission, acyclic order and revalidation preserve partial merges. Async accepted/queued/unknown states reconcile through authoritative PR/head/method evidence, including squash/rebase and expiry. Cleanup preserves dirty/unintegrated/new concurrent commits.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>git.integrate</code>, <code>git.cleanup</code></p>
+<p><strong>Primary requirement cases:</strong> AT-DELIVERY-01, AT-DELIVERY-02, AT-DELIVERY-03, AT-DELIVERY-04, AT-DELIVERY-05, AT-DELIVERY-06, AT-DELIVERY-07, AT-DELIVERY-08, AT-DELIVERY-09</p>
+<p><strong>Supporting requirements:</strong> COORD-01, COORD-02, COORD-03, COORD-04, COORD-05, COORD-06, COORD-07, COORD-08, GIT-01, GIT-02, GIT-03, GIT-04, GIT-05, GIT-06, GIT-07, GIT-08, GIT-09, GIT-10, GIT-11, GIT-12, GIT-13, GIT-14, GIT-15, GIT-16, GIT-17, COORD-09, COORD-10</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-GITHUB. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-041">DW-041</h3>
+<p><strong>Synchronize GitHub accounts, issues and observed changes</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>One GitHub.com account, personal/organization access and no public webhook server. Conditional paginated polling, issue import/link/publish/inbound updates/resolution reconciliation and distinct consumer cursors survive restarts without starting paused work or creating duplicates. Replace blanket two-way mirroring with inbound remote snapshots and verified-resolution summary/close. Import all reports, route shared-repository reports through triage, and apply one persisted app-wide queue with configurable Settings interval default1800seconds and no restart burst. Verify bugs before immediate work; notify feature requests/unverifiable bugs/new scope. Continue verified started fixes and approved feature work after remote closure; close unstarted unreproducible local bugs and retain feature requests. Prove deduplicated uncertain comment/close recovery and no repeated inference per poll.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>issues.publish</code>, <code>issues.link</code>, <code>github.account</code>, <code>github.repositories</code>, <code>github.poll_status</code>, <code>github.issue_sync</code>, <code>github.checks</code>, <code>github.reviews</code></p>
+<p><strong>Primary requirement cases:</strong> AT-GH-01, AT-GH-02, AT-GH-03, AT-GH-04, AT-GH-05, AT-GH-06, AT-GH-07, AT-GH-08, AT-GH-09, AT-GH-10, AT-GH-11, AT-GH-12</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-GITHUB. Frozen source entries bound: 1. Pending input schemas: 0.</p>
+<h3 id="dw-042">DW-042</h3>
+<p><strong>Resolve exact-head reviews and merge readiness</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Configured GitHub automation satisfies review; absent automation uses independent verified-read reviewers. Fix every actionable finding, persist adjudication, enforce configured cycles and scope-bound readiness across changed heads and policies. Failed/stalled automation automatically uses one independent in-app fallback. Normalize source/run/head/policy/cycle evidence, zero-finding completion, finite wait, changed-head invalidation and late external findings. Fallback does not bypass required checks/branch protection.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>reviews.list</code>, <code>reviews.inspect</code>, <code>reviews.request</code>, <code>reviews.findings</code>, <code>reviews.respond</code>, <code>reviews.adjudicate</code>, <code>reviews.readiness</code></p>
+<p><strong>Primary requirement cases:</strong> AT-REVIEW-01, AT-REVIEW-02, AT-REVIEW-03, AT-CODEREVIEW-01, AT-CODEREVIEW-02</p>
+<p><strong>Supporting requirements:</strong> UIQA-01, UIQA-02, UIQA-03, UIQA-04, UIQA-05, GH-01, GH-02, GH-03, GH-04, GH-05, GH-06, GH-07, GH-08, GH-09, GH-10, GH-11, GH-12, DELIVERY-01, DELIVERY-02, DELIVERY-03, DELIVERY-04, DELIVERY-05, DELIVERY-06, DELIVERY-07, DELIVERY-08, DELIVERY-09</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-REVIEWS. Frozen source entries bound: 8. Pending input schemas: 0.</p>
+<h3 id="dw-043">DW-043</h3>
+<p><strong>Prepare, publish and deploy revision-bound releases</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Independent Automatic/Ask-me/Disabled policies default Ask-me. Exact revision/version/artifact/destination approvals survive retries and uncertain outcomes. Release/deploy failures do not reopen a feature whose final PRs are merged.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>releases.inspect</code>, <code>releases.prepare</code>, <code>releases.publish</code>, <code>releases.deploy</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> DELIVERY-01, DELIVERY-02, DELIVERY-03, DELIVERY-04, DELIVERY-05, DELIVERY-06, DELIVERY-07, DELIVERY-08, DELIVERY-09</p>
+<p><strong>Behavior/workload obligations:</strong> Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-044">DW-044</h3>
+<p><strong>Install and activate trusted executable packages</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Signed manifests, inventory/dependency/runtime closure, exact agent-authored approval and publisher trust feed quiescent registry/state publication. Framing, limits, state migration, compatible updates and guarded rollback preserve active work and authored state. Event-handler mutations must use broker.commit_event with generation/revision-bound state and follow-up intents; broker.call/state CAS cannot bypass atomic handler commit.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>addons.catalog</code>, <code>addons.install</code>, <code>addons.configure</code>, <code>addons.enable</code>, <code>addons.disable</code>, <code>addons.update</code>, <code>addons.propose</code>, <code>addons.logs</code>, <code>addons.rollback</code>, <code>addons.uninstall</code></p>
+<p><strong>Primary requirement cases:</strong> AT-ADDON-01, AT-ADDON-02, AT-ADDON-03, AT-ADDON-04</p>
+<p><strong>Supporting requirements:</strong> EXT-01, EXT-02, EXT-03, EXT-04, EXT-05, EXT-06, EXT-07, SELF-01, SELF-02, SELF-03, SELF-04</p>
+<p><strong>Behavior/workload obligations:</strong> W11. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-045">DW-045</h3>
+<p><strong>Implement every SDK contribution and callback boundary</strong> · Chore · Planned; implementation not authorized or started.</p>
+<p>All eight contribution types, bidirectional RPC/credits/cancel/outcome, current host tokens, broker callbacks, durable event replay and native UI descriptors pass real host/SDK tests. A package cannot claim its own authority, verified-read status or publication receipt. Expose typed broker.commit_event and EventCommitAccepted with host-minted receipt. Test duplicate keys, generation/CAS conflicts, durable replay/crash outcomes and forged EventProcessed notifications; notification alone never commits or advances a checkpoint.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> AT-EXT-01, AT-EXT-02, AT-EXT-03, AT-EXT-04, AT-EXT-05, AT-EXT-06, AT-EXT-07</p>
+<p><strong>Supporting requirements:</strong> ARCH-01, ARCH-02, ARCH-03, ARCH-04, ARCH-05, ARCH-06, ADDON-01, ADDON-02, ADDON-03, ADDON-04, SKILL-01, SKILL-02, SKILL-03, SKILL-04, SKILL-05, SKILL-06, SKILL-07, SKILL-08, SKILL-09, SELF-01, SELF-02, SELF-03, SELF-04, ARCH-07, ARCH-08</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-LANGUAGES, W11. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-046">DW-046</h3>
+<p><strong>Connect external MCP servers and selected capabilities</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Native outgoing client HTTP/stdio lifecycle, credentials, discovery/tool selection/read-only defaults, resources/prompts/schema changes and router sampling preserve all retained capabilities. External runtimes are optional and declared. Incoming DevWorks server support is separately owned by DW-063/064; no unaudited cross-direction proxy.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>mcp.servers</code>, <code>mcp.configure</code>, <code>mcp.connect</code>, <code>mcp.discover</code>, <code>mcp.select_tools</code>, <code>mcp.resources</code>, <code>mcp.prompts</code>, <code>mcp.capabilities</code></p>
+<p><strong>Primary requirement cases:</strong> AT-MCP-01, AT-MCP-02, AT-MCP-03, AT-MCP-04, AT-MCP-05, AT-MCP-06</p>
+<p><strong>Supporting requirements:</strong> TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05, TOOL-06, TOOL-07, TOOL-08, TOOL-09</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-MCP, W11. Frozen source entries bound: 15. Pending input schemas: 0.</p>
+<h3 id="dw-047">DW-047</h3>
+<p><strong>Control an owned browser through a native adapter</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Full retained session/inspection/navigation/input/upload/screenshot/console/network surface uses owned sessions, frame/node revisions and explicit file grants. Downloads, popups, crashes, CDP permissions and per-target assets are qualified; no installed Node/Python service.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>browser.sessions</code>, <code>browser.inspect</code>, <code>browser.navigate</code>, <code>browser.input</code>, <code>browser.upload</code>, <code>browser.screenshot</code>, <code>browser.console</code>, <code>browser.network</code></p>
+<p><strong>Primary requirement cases:</strong> AT-UIQA-01, AT-UIQA-02, AT-UIQA-03, AT-UIQA-04, AT-UIQA-05</p>
+<p><strong>Supporting requirements:</strong> TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05, TOOL-06, TOOL-07, TOOL-08, TOOL-09</p>
+<p><strong>Behavior/workload obligations:</strong> W12. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-048">DW-048</h3>
+<p><strong>Broker native desktop control and consent</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Inspect/capture/request/input/release obey canonical desktop reservation, current OK/Wait and OS permissions; no input before consent. Qualify macOS/Windows/Linux X11/Wayland capabilities and show unsupported state without pretending parity.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>desktop.inspect</code>, <code>desktop.capture</code>, <code>desktop.request_control</code>, <code>desktop.input</code>, <code>desktop.release_control</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> PLAT-01, PLAT-02, PLAT-03, UIQA-01, UIQA-02, UIQA-03, UIQA-04, UIQA-05, TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05, TOOL-06, TOOL-07, TOOL-08, TOOL-09</p>
+<p><strong>Behavior/workload obligations:</strong> W12. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-049">DW-049</h3>
+<p><strong>Execute authorized processes and dependency operations</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Bound output, ownership/cancel/outcome, working roots/env/credentials and exact effective Full/restricted profile are enforced. Project dependencies follow scope; system installs need exact approval. Verified-read reviewers cannot invoke arbitrary mutation or unsupported confinement.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>process.execute</code>, <code>process.output</code>, <code>process.cancel</code>, <code>process.install_project_dependencies</code>, <code>process.request_system_install</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> RES-01, RES-02, RES-03, TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05, TOOL-06, TOOL-07, TOOL-08, TOOL-09</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-RESOURCES. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-050">DW-050</h3>
+<p><strong>Manage supported engines and owned containers</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Docker/Podman and supported Apple backend capability discovery preserves per-project overrides, ownership/ports/resources/build/pull/create/start/exec/inspect/logs/stop. Close stops only app-owned agent containers, not preexisting engines/resources.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>containers.capabilities</code>, <code>containers.build</code>, <code>containers.pull</code>, <code>containers.create</code>, <code>containers.start</code>, <code>containers.exec</code>, <code>containers.inspect</code>, <code>containers.logs</code>, <code>containers.stop</code></p>
+<p><strong>Primary requirement cases:</strong> AT-CONTAINER-01, AT-CONTAINER-02, AT-CONTAINER-03, AT-CONTAINER-04</p>
+<p><strong>Supporting requirements:</strong> RES-01, RES-02, RES-03</p>
+<p><strong>Behavior/workload obligations:</strong> W12. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-051">DW-051</h3>
+<p><strong>Run durable schedules and manual jobs</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Timezone/occurrence identities, skip missed/overlap, interrupted-run reconciliation and native/inference dispatch share ordinary authority. No job spending caps; linked feature budgets persist. Restore keeps schedules/keep-working stopped until explicitly reactivated.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>jobs.list</code>, <code>jobs.create</code>, <code>jobs.edit</code>, <code>jobs.enable</code>, <code>jobs.run_now</code>, <code>jobs.inspect</code>, <code>jobs.cancel</code>, <code>jobs.delete</code>, <code>jobs.disable</code></p>
+<p><strong>Primary requirement cases:</strong> AT-JOB-01, AT-JOB-02, AT-JOB-03, AT-JOB-04, AT-JOB-05, AT-JOB-06, AT-JOB-07, AT-JOB-08, AT-JOB-09</p>
+<p><strong>Supporting requirements:</strong> CONTROL-01, CONTROL-02, CONTROL-03, CONTROL-04, CONTROL-05, CONTROL-06, CONTROL-07, CONTROL-08, CONTROL-09, CONTROL-10, CONTROL-11, CONTROL-12, CONTROL-13</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-JOBS. Frozen source entries bound: 9. Pending input schemas: 0.</p>
+<h3 id="dw-052">DW-052</h3>
+<p><strong>Search and retrieve web sources through shared tools</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Native search/fetch profiles, content limits, redirects/source provenance, secret protection and untrusted output preserve first-class reviewer reads. External search capability settings and actual unknown effects remain explicit.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>web.search</code>, <code>web.fetch</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-053">DW-053</h3>
+<p><strong>Ship version-matched offline Help and screen bindings</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Every screen/operation/capability has searchable local Help for humans and agents, current version/permissions and examples. Offline search never requires embeddings/provider access; package guides remain bound to installed versions.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>help.search</code>, <code>help.read</code>, <code>help.topic_for_screen</code>, <code>help.package_guides</code>, <code>help.generate_capability_docs</code></p>
+<p><strong>Primary requirement cases:</strong> AT-HELP-01, AT-HELP-02, AT-HELP-03, AT-HELP-04, AT-HELP-05, AT-HELP-06</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-DOCS. Frozen source entries bound: 2. Pending input schemas: 0.</p>
+<h3 id="dw-054">DW-054</h3>
+<p><strong>Generate repository documentation with retained behavior</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Native source/revision-bound generation covers retained repository documentation operations, provenance and approval/file authority; complete required docs accompany work and affect completion gates. No generic search substitution for the source capability.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>repository_docs.generate</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> HELP-01, HELP-02, HELP-03, HELP-04, HELP-05, HELP-06</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-DOCS. Frozen source entries bound: 1. Pending input schemas: 0.</p>
+<h3 id="dw-055">DW-055</h3>
+<p><strong>Import only the selected legacy work and history</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Preview/configure/apply/runs/inspection bind source snapshots and identity maps; resume without duplicates, preserve historical evidence and report missing data. Exclude legacy Knowledge/conventions/index migration and never resume imported agents/effects.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>imports.preview</code>, <code>imports.configure</code>, <code>imports.apply</code>, <code>imports.runs</code>, <code>imports.inspect</code></p>
+<p><strong>Primary requirement cases:</strong> AT-IMPORT-01, AT-IMPORT-02</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-IMPORT. Frozen source entries bound: 6. Pending input schemas: 0.</p>
+<h3 id="dw-056">DW-056</h3>
+<p><strong>Prune only explicitly eligible operational data</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Diagnostics/index runs/messages/sessions have distinct eligibility, authored history and live-reference rules. Preview exact candidates/revisions, report holds, journal outcomes and never turn storage pressure into retained artifact/document deletion.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>maintenance.prune_diagnostics</code>, <code>maintenance.prune_index_runs</code>, <code>maintenance.prune_messages</code>, <code>maintenance.prune_sessions</code></p>
+<p><strong>Primary requirement cases:</strong> AT-OPS-01, AT-OPS-02</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-MAINTENANCE. Frozen source entries bound: 4. Pending input schemas: 0.</p>
+<h3 id="dw-057">DW-057</h3>
+<p><strong>Expose bounded local diagnostics and recoverable logs</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Redacted attributable diagnostics, operation/consumer/process/source health and exportable evidence stay distinct from model history. Unavailable metrics are not zeros; errors remain visible and no raw secrets/source rows reach logs.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>workspace.diagnostics</code>, <code>workspace.logs</code>, <code>workspace.record_diagnostic</code></p>
+<p><strong>Primary requirement cases:</strong> AT-LOG-01, AT-LOG-02, AT-LOG-03</p>
+<p><strong>Supporting requirements:</strong> OPS-01, OPS-02, HEALTH-01, HEALTH-02</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-DIAGNOSTICS. Frozen source entries bound: 16. Pending input schemas: 0.</p>
+<h3 id="dw-058">DW-058</h3>
+<p><strong>Migrate, manually back up and restore the app store</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Versioned migrations/manual consistent SQLite+file snapshots, integrity/compatibility and journaled restore preserve authored data and fences. No automatic backups; restored automation stays stopped, and external effects reconcile before selective Continue.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>workspace.backup</code>, <code>workspace.restore</code>, <code>workspace.migrate</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> STORE-01, STORE-02, STORE-03, STORE-04, STORE-05, STORE-06, STORE-07, STORE-08, STORE-09, STORE-10, STORE-11, STORE-12, STORE-13, OPS-01, OPS-02, UPDATE-01, UPDATE-02, UPDATE-03, UPDATE-04</p>
+<p><strong>Behavior/workload obligations:</strong> W10. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-059">DW-059</h3>
+<p><strong>Discover and install approved signed app updates</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Stable default/prerelease opt-in, due launch/hourly checks, immutable signed staging, exact install/restart approval and compatible binary rollback preserve user writes and manual-resume rules. No automatic data restore or installer loop.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>workspace.update_status</code>, <code>workspace.approve_install</code></p>
+<p><strong>Primary requirement cases:</strong> AT-UPDATE-01, AT-UPDATE-02, AT-UPDATE-03, AT-UPDATE-04, AT-SELF-01, AT-SELF-02, AT-SELF-03, AT-SELF-04</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-060">DW-060</h3>
+<p><strong>Qualify native target installers and optional assets</strong> · Chore · Planned; implementation not authorized or started.</p>
+<p>Build/sign/package and clean-install every adopted OS/CPU target; audit native dependencies, secret stores, path relocation, optional packs and offline Help. No server/daemon/preinstalled language runtime is needed for core. Unqualified capabilities cannot be advertised.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> AT-PLAT-01, AT-PLAT-02, AT-PLAT-03</p>
+<p><strong>Supporting requirements:</strong> PERF-01, PERF-02, SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, UPDATE-01, UPDATE-02, UPDATE-03, UPDATE-04</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-SERVER_REPLACEMENT, W01, W12. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-061">DW-061</h3>
+<p><strong>Measure all representative workloads without inference</strong> · Chore · Planned; implementation not authorized or started.</p>
+<p>Generate deterministic corpus manifests and run W01–W12 against production process trees on named hardware; record cold/warm/control data and calibrate provisional budgets. No inference compute in normal benchmarks/tests.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> AT-PERF-01, AT-PERF-02</p>
+<p><strong>Supporting requirements:</strong> TEST-01, TEST-02, TEST-03, TEST-04</p>
+<p><strong>Behavior/workload obligations:</strong> W01, W02, W03, W04, W05, W06, W07, W08, W09, W10, W11, W12. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-062">DW-062</h3>
+<p><strong>Reconcile full retained behavior and release readiness</strong> · Chore · Planned; implementation not authorized or started.</p>
+<p>Run every AT requirement and all 33 CAP groups through actual services, reconcile frozen-source drift and verify each retained operation plus import quirks. Separately dispatch authorized live inference E2E later; schema/probe counts cannot satisfy product acceptance.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> Cross-cutting implementation/qualification; no separate public operation.</p>
+<p><strong>Primary requirement cases:</strong> AT-TEST-01, AT-TEST-02, AT-TEST-03, AT-TEST-04</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-EXCLUDED. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-063">DW-063</h3>
+<p><strong>Expose indexed code, planned work and Knowledge to MCP clients</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Implement the native installed stdio bridge and opt-in loopback Streamable HTTP listener to the existing gateway, with explicit 2026-07-28 and 2025-11-25 profiles. Publish the complete reviewed eligible code/work/Knowledge query manifest, distinct operation/mode bindings, scoped resources/context prompts, bounded pages, citation/view/revision parity, cancellation and durable status/receipt recovery. Qualify two independent clients across transports/profiles; verify no context-only inference, second store writer, residual daemon or implicit outgoing-MCP proxy. Package bridge and setup documentation for all supported targets. See mcp-server-contracts.md.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>mcp_server.status</code></p>
+<p><strong>Primary requirement cases:</strong> AT-MCP-07, AT-MCP-08, AT-MCP-09, AT-MCP-10, AT-MCP-11</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-064">DW-064</h3>
+<p><strong>Authorize external MCP clients and selected work or Knowledge commands</strong> · Feature · Planned; implementation not authorized or started.</p>
+<p>Implement human-only registration, initially empty grants, OS-protected credentials, manually provisioned per-client HTTP bearer credentials bound to store/epoch and generation and stdio protected IPC authentication. Native Settings enables the server, exports secret-free setup, and manages exact project/repository/worktree/read/command scopes, credential generation and revocation. Apply current gateway policy at call/dispatch/publication; enforce reviewer/human-only holds and explicit work/Knowledge command grants with expected revisions, attributed idempotency receipts and uncertain-effect reconciliation. Test spoofing/Host/Origin/credential-store-generation failures, scope revocation during read/publication, denied and permitted writes, retry/lost-ack duplicates, app-close and restore reauthorization. The configuration operations are not public MCP tools. See mcp-server-contracts.md.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>mcp_server.configure</code>, <code>mcp_server.clients</code>, <code>mcp_server.set_client_access</code></p>
+<p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
+<p><strong>Supporting requirements:</strong> MCP-07, MCP-08, MCP-09, MCP-10, MCP-11</p>
+<p><strong>Behavior/workload obligations:</strong> Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h2 id="acceptance-group-ownership">Acceptance group ownership</h2>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Primary slice</th>
+<th>Supporting slices</th>
+<th>Evidence status</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>CAP-GRAPH · Search, traversal, architecture and impact</td>
+<td>DW-028</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-SOURCE · Revision-bound node and source inspection</td>
+<td>DW-028</td>
+<td>DW-007</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-REPOSITORIES · Repository catalog and metadata</td>
+<td>DW-011</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-INDEXING · Discovery and incremental publication</td>
+<td>DW-023</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-LANGUAGES · Structural and semantic coverage</td>
+<td>DW-023</td>
+<td>DW-024, DW-025, DW-026, DW-027, DW-045</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-LINKING · Cross-repository and frontend/backend links</td>
+<td>DW-028</td>
+<td>DW-023, DW-024, DW-025, DW-026, DW-027</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-OVERLAY · Branch and uncommitted views</td>
+<td>DW-023</td>
+<td>DW-028</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-ANALYSIS · Health, security, hotspots and synthesis</td>
+<td>DW-029</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-KNOWLEDGE · Unified entities, claims, evidence and lessons</td>
+<td>DW-030</td>
+<td>DW-031</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-CONVENTIONS · Versioned guidance and retrieval</td>
+<td>DW-033</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-DREAMING · Checkpointed consolidation and proposals</td>
+<td>DW-032</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-WORK · All work kinds and allocation</td>
+<td>DW-012</td>
+<td>DW-013, DW-015</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-SESSIONS · Conversations, briefings and messages</td>
+<td>DW-008</td>
+<td>DW-016, DW-020</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-HISTORY · Lineage and evidence</td>
+<td>DW-008</td>
+<td>DW-007</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-RESOURCES · Enforced canonical reservations</td>
+<td>DW-006</td>
+<td>DW-049</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-DECISIONS · Human and agent decisions</td>
+<td>DW-014</td>
+<td>DW-022</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-ROLES · Versioned prompts and roles</td>
+<td>DW-034</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-ROUTER · Native provider contracts</td>
+<td>DW-017</td>
+<td>DW-019, DW-022, DW-018</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-USAGE · Usage and activity attribution</td>
+<td>DW-021</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-DATABASE · Schema and separately permitted data tools</td>
+<td>DW-036</td>
+<td>DW-037</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-MCP · Outgoing MCP client and tool selection</td>
+<td>DW-046</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-GITHUB · Observed linked issues and delivery evidence</td>
+<td>DW-041</td>
+<td>DW-039, DW-040</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-REVIEWS · Repository/project review and delivery</td>
+<td>DW-042</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-JOBS · Manual and scheduled jobs</td>
+<td>DW-051</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-QUEUE · Local durable event delivery</td>
+<td>DW-003</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-DOCS · Capability Help and repository docs</td>
+<td>DW-053</td>
+<td>DW-054</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-IMPORT · Selected existing CodeGraph work/history</td>
+<td>DW-055</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-MAINTENANCE · Controlled bookkeeping retention</td>
+<td>DW-056</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-DIAGNOSTICS · Local errors, logs and health</td>
+<td>DW-057</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-NAVIGATION · Native workspaces</td>
+<td>DW-010</td>
+<td>DW-016</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-SETTINGS · Typed scoped settings</td>
+<td>DW-004</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-SERVER_REPLACEMENT · Native single-user replacement</td>
+<td>DW-001</td>
+<td>DW-002, DW-003, DW-010, DW-060</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+<tr>
+<td>CAP-EXCLUDED · Explicit source exclusions</td>
+<td>DW-062</td>
+<td>None</td>
+<td>Specification only; actual native assertions not implemented/run</td>
+</tr>
+</tbody></table>
+<h2 id="production-workload-ownership">Production workload ownership</h2>
+<table>
+<thead>
+<tr>
+<th>Workload</th>
+<th>Measurement</th>
+<th>Domain slices</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>W01 · Clean installation and idle</td>
+<td>DW-061</td>
+<td>DW-060, DW-010</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W02 · Planning and history</td>
+<td>DW-061</td>
+<td>DW-012, DW-008</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W03 · Transcript and UI streaming</td>
+<td>DW-061</td>
+<td>DW-016, DW-010</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W04 · Incremental extraction</td>
+<td>DW-061</td>
+<td>DW-023, DW-024, DW-025, DW-026, DW-027</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W05 · Graph queries</td>
+<td>DW-061</td>
+<td>DW-028</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W06 · Overlay publication</td>
+<td>DW-061</td>
+<td>DW-023, DW-028</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W07 · Document retrieval</td>
+<td>DW-061</td>
+<td>DW-035</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W08 · Queue saturation and recovery</td>
+<td>DW-061</td>
+<td>DW-003</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W09 · Concurrent application load</td>
+<td>DW-061</td>
+<td>DW-006, DW-017, DW-009</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W10 · Faults and resource pressure</td>
+<td>DW-061</td>
+<td>DW-002, DW-058</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W11 · Packages and external tools</td>
+<td>DW-061</td>
+<td>DW-045, DW-044, DW-046</td>
+<td>Not run</td>
+</tr>
+<tr>
+<td>W12 · Native platform capabilities</td>
+<td>DW-061</td>
+<td>DW-060, DW-047, DW-048, DW-050</td>
+<td>Not run</td>
+</tr>
+</tbody></table>
+<h2 id="reproduction-and-review">Reproduction and review</h2>
+<p>Run <code>python3 tools/planning/build_implementation_plan.py</code> after regenerating the architecture and family schema coverage. The builder rejects dependency cycles, missing or ambiguous operation ownership, unknown retained selectors and missing requirement/group/workload assignments. Source hashes detect planning input drift; they do not audit current CodeGraph revisions or prove behavioral parity. Review those source changes before execution and re-run native acceptance against the implemented services.</p>
+<footer class="footer">Complete ownership coverage and dependency plan; execution not started. Proposed requirements and all production acceptance gates remain explicit.</footer></main></body></html>

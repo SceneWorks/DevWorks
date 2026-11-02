@@ -1,0 +1,9 @@
+flowchart LR
+ UNIT["Unit tests"] --> CORE["Pure policies and invariants"]
+ INT["Integration tests"] --> REAL["Actual local services<br/>SQLite, sqlite-vec, Git and processes"]
+ INT --> FAKE["Deterministic provider streams<br/>controlled external fixtures"]
+ CORE --> ASSERT["Behavior, error, concurrency<br/>and recovery assertions"]
+ REAL --> ASSERT
+ FAKE --> ASSERT
+ LIVE["Separate live E2E suite<br/>to be set up later"] -. "Explicit configuration only" .-> ROUTER["Router and real inference endpoint"]
+ NOTE["Normal unit / integration path<br/>cannot execute real inference"] --- INT

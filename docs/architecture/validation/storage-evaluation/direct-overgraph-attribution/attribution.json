@@ -1,0 +1,31 @@
+{
+  "date": "2026-11-01",
+  "version": "0.18.0",
+  "source_commit": "bf834023508be5a9b28b349a6982a4735d59d918",
+  "raw_probe_binary_sha256": "83e8d95d4654725b68dd7b9e84352568679cbdd619fc151311254b5930266e22",
+  "interpretation": {
+    "graph_scope": "Adapter misuse: result label filter does not constrain traversal through intermediate nodes",
+    "deletion": "Reproduced with direct engine calls without adapter; stale vector ID after flushing a deletion of previously flushed node, before and after reopen; exact root cause not established"
+  },
+  "repetitions": [
+    {
+      "run": 2,
+      "raw_api_only": true,
+      "scope_is_result_filter_not_path_filter": true,
+      "flushed_deletion_stale_vector_reproduced": true
+    },
+    {
+      "run": 3,
+      "raw_api_only": true,
+      "scope_is_result_filter_not_path_filter": true,
+      "flushed_deletion_stale_vector_reproduced": true
+    },
+    {
+      "run": 4,
+      "raw_api_only": true,
+      "scope_is_result_filter_not_path_filter": true,
+      "flushed_deletion_stale_vector_reproduced": true
+    }
+  ],
+  "no_inference": true
+}

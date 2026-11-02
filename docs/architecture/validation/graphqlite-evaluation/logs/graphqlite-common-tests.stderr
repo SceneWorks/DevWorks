@@ -1,0 +1,13 @@
+   Compiling eval-common v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/common)
+warning: unused dependency `sha2`
+  --> common/Cargo.toml:11:1
+   |
+11 | sha2 = "0.10"
+   | ^^^^^^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `sha2`
+warning: `eval-common` (manifest) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running unittests src/lib.rs (tools/storage-eval/target/debug/build/eval-common/d7c49abb0e037aa2/out/eval_common-d7c49abb0e037aa2)
+   Doc-tests eval_common

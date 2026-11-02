@@ -1,0 +1,15 @@
+{
+  "date": "2026-11-02",
+  "scope": "Interactive prototype state only; not native approval, storage or dispatch enforcement",
+  "checks": [
+    "saving_revision_preserves_approved_plan_and_running_work",
+    "rejection_preserves_original_approval_and_execution",
+    "editing_pending_revision_rejects_stale_approval",
+    "unrelated_metadata_does_not_invalidate_reviewed_pending_content",
+    "approval_promotes_exact_draft_and_clears_pending_slot",
+    "approval_does_not_continue_paused_work"
+  ],
+  "passed": true,
+  "pageErrors": [],
+  "visibleTabsOpened": 0
+}

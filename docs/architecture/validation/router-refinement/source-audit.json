@@ -1,0 +1,45 @@
+{
+  "date": "2026-11-01",
+  "repository": "SceneWorks/simple-router",
+  "revision": "a556b3531b577173195bbc3876b556196447721d",
+  "evidence": "Targeted source inspection; no source tests or live provider requests executed",
+  "files": {
+    "src/SimpleRouter/Routing/ModelSelector.cs": "c46dfcaf8d30aaa2ba17288dc643c9bb7cf6f0e8f83a81ca16469c9b99149b8a",
+    "src/SimpleRouter/Routing/ModelCooldowns.cs": "83ac6114c17a3587d5b11dcef3ab9d14a823d0c4a8c1813bcdb011dd468c41bb",
+    "src/SimpleRouter/Routing/RequestNeeds.cs": "b344e1d8b78cdfa3ae479315c4ad5a0af53f8f64427b6b676ebf944dc2c10094",
+    "src/SimpleRouter/Codex/CodexOAuthClient.cs": "34ec3959c08e12bacc3020274d342ca5df2367d3724a012e86ff638eade5c26d",
+    "src/SimpleRouter/Codex/CodexTokenProvider.cs": "397e7196d7a09d705f581967ba77bc26e212c7a792aa7719934608f769242356",
+    "src/SimpleRouter/Codex/CodexUpstream.cs": "ffd106d6d5adbd47ecd822a7fa50ccb67272a31efc0994ae764e4136358c7dd3",
+    "src/SimpleRouter/Codex/ResponsesRequestTranslator.cs": "73b34db324b9b5ced9b65907a953fabdebbd0bb403af965aaea5e160013f3823",
+    "src/SimpleRouter/Claude/ClaudeOAuthClient.cs": "d76c5cfea8b3fa12eafc63f342f73e4b25b9f6199d4a915ae7c9b3e34b178ee0",
+    "src/SimpleRouter/Claude/ClaudeTokenProvider.cs": "8d0d08dfb7fbd8d4ab235a7349f01ca4b85925c5e99d80520ecd988346f12429",
+    "src/SimpleRouter/Claude/ClaudeUpstream.cs": "0eb7d4629d5a5e5d01c2a4fdbc0d8bc87b727754345e4ef71a79b62128328921",
+    "src/SimpleRouter/OpenRouter/OpenRouterUpstream.cs": "d8b2971625096c8410884201a71a85072f7e396ced3aa539273154f32fabe708",
+    "src/SimpleRouter/OpenRouter/OpenRouterRequest.cs": "8177052256fbe54a780d0605f1cdb978dea98a918b22ee2f7cbd3bbd0b7c77cc",
+    "src/SimpleRouter/OpenRouter/OpenRouterReasoning.cs": "45d956fe96884180b31e71cc1d6295de98389131f7bf36bfa3cd0041eb868a6e",
+    "src/SimpleRouter/Local/LocalUpstream.cs": "5c253fc78541222f6286a53e8787fc0af8bdf93ceeb8b20404a058d3c0d7cbd2",
+    "src/SimpleRouter/Local/ChatRequestTranslator.cs": "21e433558f195b3f46d9ed4459f41b31ed1be39698fe79743e776f7022577d6c",
+    "src/SimpleRouter/Usage/TokenUsage.cs": "dc610eacb82f98db597fee0ed108fb0b1aaab6bcef63806b403012e2fe463376",
+    "src/SimpleRouter/Usage/UpstreamUsageMetadata.cs": "8de6cab385222f29f9c375030c837e3c9d5302f613f68bb3c804967654639c8d",
+    "src/SimpleRouter/Usage/UsageRecorder.cs": "15a693d4715fa5c3c2baa16801c4c5ec7158c2131817965f92f4144e2272cc49"
+  },
+  "retained": [
+    "Persistent model pins, route ordering/cursor and eligible sibling affinity",
+    "Model/purpose constraints, configured tiers and local preferences",
+    "Scoped cooldowns and provider reset observations",
+    "Device/PKCE auth, shared refresh and reauthentication",
+    "Native tool IDs, content order, opaque continuation and reasoning details",
+    "OpenRouter provider key, routing constraints, resolved model/generation and reported cost",
+    "Custom compatible endpoint URL/key/template configuration",
+    "Reported/estimated/unknown usage attribution and partial-stream outcome classification"
+  ],
+  "intentionalDifferences": [
+    "Native in-process Rust ports replace a separately deployed HTTP/.NET gateway",
+    "Reject or reroute missing required image/tool capability instead of image omission or flattening pending calls",
+    "Preserve all attempts/effect receipts and classify unknown cost as null; local zero is explicit",
+    "Hard provider capacity waits rather than force-entering a saturated local preference",
+    "Current context/output needs and validated capabilities replace permissive unknown limits",
+    "Credential/account and endpoint profiles scope auth failures; no global provider-name revocation",
+    "Weekly official price revisions, historical rate snapshots and user-approved unknown-cost coverage"
+  ]
+}

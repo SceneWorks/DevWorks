@@ -1,0 +1,476 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "Activate": {
+      "additionalProperties": false,
+      "properties": {
+        "configurationRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "registryRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "stateGeneration": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "registryRevision",
+        "stateGeneration",
+        "configurationRevision"
+      ],
+      "type": "object"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "Cancel": {
+      "additionalProperties": false,
+      "properties": {
+        "cancellationRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "invocationId",
+        "cancellationRevision"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Initialize": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedManifestDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "maxFrameBytes": {
+          "format": "uint32",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offeredMax": {
+          "$ref": "#/$defs/WireVersion"
+        },
+        "offeredMin": {
+          "$ref": "#/$defs/WireVersion"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "requiredFeatures": {
+          "items": {
+            "$ref": "#/$defs/Id"
+          },
+          "maxItems": 64,
+          "type": "array"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "offeredMin",
+        "offeredMax",
+        "expectedManifestDigest",
+        "requiredFeatures",
+        "maxFrameBytes"
+      ],
+      "type": "object"
+    },
+    "InvocationScope": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Workspace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Project",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Root",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId",
+            "rootId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assignmentId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Assignment",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId",
+            "rootId",
+            "assignmentId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Invoke": {
+      "additionalProperties": false,
+      "properties": {
+        "allowedOperations": {
+          "items": {
+            "$ref": "#/$defs/QualifiedId"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "authorityRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "contributionId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "controlGeneration": {
+          "$ref": "#/$defs/Revision"
+        },
+        "deadlineMs": {
+          "format": "uint32",
+          "maximum": 86400000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "input": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "invocationToken": {
+          "$ref": "#/$defs/Id"
+        },
+        "operationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "registryRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "scope": {
+          "$ref": "#/$defs/InvocationScope"
+        },
+        "stateGeneration": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "invocationId",
+        "invocationToken",
+        "contributionId",
+        "scope",
+        "allowedOperations",
+        "registryRevision",
+        "stateGeneration",
+        "authorityRevision",
+        "controlGeneration",
+        "operationId",
+        "deadlineMs",
+        "input"
+      ],
+      "type": "object"
+    },
+    "QualifiedId": {
+      "pattern": "^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$",
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RpcVersion": {
+      "enum": [
+        "2.0"
+      ],
+      "type": "string"
+    },
+    "Shutdown": {
+      "additionalProperties": false,
+      "properties": {
+        "deadlineMs": {
+          "format": "uint32",
+          "maximum": 60000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "deadlineMs"
+      ],
+      "type": "object"
+    },
+    "WireVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:package-host-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "host.initialize",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Initialize"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "id",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "host.activate",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Activate"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "id",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "host.invoke",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Invoke"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "id",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "host.cancel",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Cancel"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "id",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "host.shutdown",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Shutdown"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "id",
+        "params"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "HostRequest"
+}

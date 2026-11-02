@@ -1,0 +1,619 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "CompleteToolCall": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "call": {
+          "$ref": "#/$defs/ToolCallKey"
+        },
+        "capabilityId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "inputSchema": {
+          "$ref": "#/$defs/SchemaRef"
+        },
+        "nativeItem": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "call",
+        "capabilityId",
+        "inputSchema",
+        "arguments",
+        "nativeItem"
+      ],
+      "type": "object"
+    },
+    "ContextChangeReason": {
+      "enum": [
+        "Compaction",
+        "ProviderChange",
+        "InstructionAdoption"
+      ],
+      "type": "string"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "EndpointProfile": {
+      "enum": [
+        "OpenAiResponses",
+        "CodexSubscriptionResponses",
+        "AnthropicMessages",
+        "ClaudeSubscriptionMessages",
+        "OpenRouterChat",
+        "CompatibleChat",
+        "Embedding"
+      ],
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "NativeBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "accountRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "contextEpoch": {
+          "$ref": "#/$defs/Counter"
+        },
+        "endpointProfile": {
+          "$ref": "#/$defs/EndpointProfile"
+        },
+        "modelId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "connectionId",
+        "accountRevision",
+        "endpointProfile",
+        "modelId",
+        "contextEpoch"
+      ],
+      "type": "object"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "QualifiedId": {
+      "pattern": "^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$",
+      "type": "string"
+    },
+    "ReadStamp": {
+      "additionalProperties": false,
+      "properties": {
+        "policyRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "restoreEpoch": {
+          "$ref": "#/$defs/Counter"
+        },
+        "scopeRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Counter"
+        },
+        "storeId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "storeId",
+        "restoreEpoch",
+        "sequence",
+        "policyRevision",
+        "scopeRevision"
+      ],
+      "type": "object"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "SchemaRef": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "schemaId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "schemaId",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ToolCallKey": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "$ref": "#/$defs/Id"
+        },
+        "nativeCallId": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        "ordinal": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "attemptId",
+        "nativeCallId",
+        "ordinal"
+      ],
+      "type": "object"
+    },
+    "ToolOutcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifacts": {
+              "items": {
+                "$ref": "#/$defs/ArtifactRef"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "kind": {
+              "const": "Completed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "artifacts"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "approvalId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "ApprovalRequired",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "approvalId",
+            "operationId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blockerIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array"
+            },
+            "kind": {
+              "const": "DependencyBlocked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "blockerIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "CancelledBeforeDispatch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "OutcomeUnknown",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TranscriptBody": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "items": {
+                "$ref": "#/$defs/UserContent"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            },
+            "kind": {
+              "const": "UserMessage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "content"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attemptId": {
+              "$ref": "#/$defs/Id"
+            },
+            "interrupted": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "AssistantAttempt",
+              "type": "string"
+            },
+            "requestId": {
+              "$ref": "#/$defs/Id"
+            },
+            "visibleText": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "requestId",
+            "attemptId",
+            "visibleText",
+            "interrupted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ToolCallRecorded",
+              "type": "string"
+            },
+            "toolCall": {
+              "$ref": "#/$defs/CompleteToolCall"
+            }
+          },
+          "required": [
+            "kind",
+            "toolCall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "call": {
+              "$ref": "#/$defs/ToolCallKey"
+            },
+            "kind": {
+              "const": "ToolResponseRecorded",
+              "type": "string"
+            },
+            "outcome": {
+              "$ref": "#/$defs/ToolOutcome"
+            }
+          },
+          "required": [
+            "kind",
+            "call",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "HostNotice",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "artifact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "binding": {
+              "$ref": "#/$defs/NativeBinding"
+            },
+            "kind": {
+              "const": "NativeItem",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "binding",
+            "artifact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "ContextEpochChanged",
+              "type": "string"
+            },
+            "nextEpoch": {
+              "$ref": "#/$defs/Counter"
+            },
+            "previousEpoch": {
+              "$ref": "#/$defs/Counter"
+            },
+            "reason": {
+              "$ref": "#/$defs/ContextChangeReason"
+            }
+          },
+          "required": [
+            "kind",
+            "previousEpoch",
+            "nextEpoch",
+            "reason",
+            "context"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "OperationUpdate",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            },
+            "revision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId",
+            "revision",
+            "artifact"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TranscriptEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/TranscriptBody"
+        },
+        "entryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "entryId",
+        "sequence",
+        "body"
+      ],
+      "type": "object"
+    },
+    "UserContent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Text",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "Attachment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "artifact"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:transcript-page",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/TranscriptEntry"
+      },
+      "maxItems": 500,
+      "type": "array"
+    },
+    "hasMore": {
+      "type": "boolean"
+    },
+    "nextCursor": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "queryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "sessionId": {
+      "$ref": "#/$defs/Id"
+    },
+    "stamp": {
+      "$ref": "#/$defs/ReadStamp"
+    }
+  },
+  "required": [
+    "protocol",
+    "queryId",
+    "stamp",
+    "sessionId",
+    "entries",
+    "nextCursor",
+    "hasMore"
+  ],
+  "title": "TranscriptPage",
+  "type": "object"
+}

@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-02",
+  "scope": "Actual SQLite with scripted queue/link/acceptance policy; not production scheduler, authority or verified evidence qualification",
+  "checks": [
+    "cross-feature and standalone links share one project DAG",
+    "blocked high-priority work waits while independent work stays eligible",
+    "cycle refused with prior edge set intact",
+    "self-link refused",
+    "duplicate link refused atomically",
+    "cross-project link refused atomically",
+    "stale dependency edit refused",
+    "second concurrent-intent link cannot close a cycle",
+    "bulk priority and manual order are fenced by one queue-owner revision",
+    "priority changes preserve execution controls",
+    "manual Done does not satisfy verified-acceptance dependency",
+    "accepted prerequisite makes only its eligible dependents ready",
+    "removing a blocker does not clear manual pause"
+  ],
+  "passed": true,
+  "noInference": true,
+  "schemaSha256": "64c7ca5bcbdd3c31d3572f8622cbf00357aa580305641efd1a9b8e700c049683"
+}

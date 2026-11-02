@@ -1,0 +1,4 @@
+   Compiling eval-common v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/common)
+   Compiling eval-sqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/sqlite)
+   Compiling eval-graphqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/graphqlite)
+    Finished `release` profile [optimized] target(s) in 1.71s

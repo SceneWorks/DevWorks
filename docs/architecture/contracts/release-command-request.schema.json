@@ -1,0 +1,141 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "GitOid": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/ObjectFormat"
+        },
+        "hex": {
+          "pattern": "^[a-f0-9]{40}([a-f0-9]{24})?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "hex"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "ObjectFormat": {
+      "enum": [
+        "Sha1",
+        "Sha256"
+      ],
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "PublicationAction": {
+      "enum": [
+        "Prepare",
+        "Publish",
+        "Deploy"
+      ],
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:release-command-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/PublicationAction"
+    },
+    "artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "destinationId": {
+      "$ref": "#/$defs/Id"
+    },
+    "expectedPolicyRevision": {
+      "$ref": "#/$defs/Revision"
+    },
+    "expectedRevision": {
+      "$ref": "#/$defs/GitOid"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "repositoryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "requestKey": {
+      "$ref": "#/$defs/Id"
+    },
+    "version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "protocol",
+    "requestKey",
+    "action",
+    "repositoryId",
+    "expectedRevision",
+    "version",
+    "destinationId",
+    "artifact",
+    "expectedPolicyRevision"
+  ],
+  "title": "ReleaseCommandRequest",
+  "type": "object"
+}

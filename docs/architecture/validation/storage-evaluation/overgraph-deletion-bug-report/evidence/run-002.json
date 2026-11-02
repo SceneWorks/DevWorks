@@ -1,0 +1,179 @@
+{
+  "deletion_cases": [
+    {
+      "flush_before_delete": false,
+      "kept": 2,
+      "phases": [
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "before_delete",
+          "point_exists": true,
+          "vector_ids": [
+            1,
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_before_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_and_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_reopen",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        }
+      ],
+      "rename_before_delete": false,
+      "victim": 1
+    },
+    {
+      "flush_before_delete": false,
+      "kept": 2,
+      "phases": [
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "before_delete",
+          "point_exists": true,
+          "vector_ids": [
+            1,
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_before_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_and_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_reopen",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        }
+      ],
+      "rename_before_delete": true,
+      "victim": 1
+    },
+    {
+      "flush_before_delete": true,
+      "kept": 2,
+      "phases": [
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "before_delete",
+          "point_exists": true,
+          "vector_ids": [
+            1,
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_before_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "after_delete_and_flush",
+          "point_exists": false,
+          "vector_ids": [
+            1,
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "after_reopen",
+          "point_exists": false,
+          "vector_ids": [
+            1,
+            2
+          ]
+        }
+      ],
+      "rename_before_delete": false,
+      "victim": 1
+    },
+    {
+      "flush_before_delete": true,
+      "kept": 2,
+      "phases": [
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "before_delete",
+          "point_exists": true,
+          "vector_ids": [
+            1,
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": false,
+          "phase": "after_delete_before_flush",
+          "point_exists": false,
+          "vector_ids": [
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "after_delete_and_flush",
+          "point_exists": false,
+          "vector_ids": [
+            1,
+            2
+          ]
+        },
+        {
+          "deleted_id_in_vectors": true,
+          "phase": "after_reopen",
+          "point_exists": false,
+          "vector_ids": [
+            1,
+            2
+          ]
+        }
+      ],
+      "rename_before_delete": true,
+      "victim": 1
+    }
+  ],
+  "direct_api_only": true,
+  "engine": "overgraph",
+  "inference": false,
+  "mode": "run",
+  "observed_stale_vector": true,
+  "root": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/standalone-overgraph-002",
+  "version": "0.18.0"
+}

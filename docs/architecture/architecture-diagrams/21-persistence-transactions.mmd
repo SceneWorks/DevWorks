@@ -1,0 +1,17 @@
+flowchart TB
+ CMD["Host-bound command and expected revisions"] --> WRITER["Single write owner: BEGIN IMMEDIATE"]
+ WRITER --> CHECK["Check receipt, current controls, authority and ownership"]
+ CHECK --> RECORDS["Apply domain / assignment / operation changes"]
+ RECORDS --> EVENT["Append history event and command receipt"]
+ EVENT --> QUEUE["Insert deduplicated consumer intent / wakeup"]
+ QUEUE --> COMMIT["One durable commit"]
+ CHECK --> CONFLICT["Conflict or error: roll back all changes"]
+ RECORDS --> CONFLICT
+ EVENT --> CONFLICT
+ QUEUE --> CONFLICT
+ COMMIT --> ACK["Return committed receipt"]
+ COMMIT --> CLAIM["Supervisor / consumer claims ready work<br/>conditional generation and lease update"]
+ CLAIM --> IO["External effect outside transaction"]
+ IO --> RESULT["New transaction: observed result, checkpoint and wakeups"]
+ IO --> UNKNOWN["Uncertain effect: reconcile before retry"]
+ UNKNOWN --> RESULT

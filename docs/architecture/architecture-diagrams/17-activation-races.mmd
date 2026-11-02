@@ -1,0 +1,42 @@
+sequenceDiagram
+ actor Caller
+ participant App as Application service
+ participant Store as SQLite write owner
+ participant Sup as Agent supervisor
+ participant Target as Provider or tool
+
+ Note over Caller,Store: Case 1 - concurrent Start requests for one work root
+ Caller->>App: Start command A
+ Caller->>App: Start command B
+ App->>Store: Validate and commit activation X, history, receipt, intent
+ Store-->>App: Accepted X
+ App->>Store: Validate second command against current activation
+ Store-->>App: Existing activation X
+ App-->>Caller: Same activation reference
+
+ Note over App,Target: Case 2 - Pause ordered against dispatch admission
+ alt Pause commits first
+  App->>Store: Persist pause and advance control revision
+  Sup->>Store: Claim or admit dispatch using old revision
+  Store-->>Sup: Held or superseded
+  Note over Sup,Target: No new provider request or tool effect
+ else Dispatch admission commits first
+  Sup->>Store: Record fenced effect attempt as admitted
+  Sup->>Target: Begin owned request
+  App->>Store: Persist pause and advance control revision
+  Store-->>Sup: Block further admissions
+  Sup->>Target: Request cancellation where supported
+  Note over Store,Target: Observe outcome or retain uncertainty before retry
+ end
+
+ Note over App,Sup: Case 3 - app crash after activation commit, before launch
+ App->>Store: Commit activation Y, history, receipt, intent
+ Note over App,Sup: App process exits before supervisor launch
+ App->>Store: Reopen and inspect interrupted activations
+ Store-->>App: Y retained with manual-resume hold
+ App-->>Caller: Await explicit Continue
+ Caller->>App: Authorized Continue
+ App->>Store: Revalidate, fence old intent and commit new attempt
+ Store-->>Sup: Claimable committed activation
+ Sup->>Store: Claim lease and recheck current eligibility
+ Note over Sup,Target: Execution only under current ownership and controls

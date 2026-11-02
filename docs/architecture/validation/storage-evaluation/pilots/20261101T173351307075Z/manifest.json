@@ -1,0 +1,88 @@
+{
+  "phase": "pilot",
+  "created_utc": "20261101T173351307075Z",
+  "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+  "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+  "workspace_lock_sha256": "898797663205c848e262b3e6b229490d3eb041e5100005b69dd99e9db8ff14fc",
+  "hardware": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "logical_cpus": 18
+  },
+  "inference": false,
+  "runs": [
+    {
+      "engine": "overgraph",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-overgraph",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T173351307075Z/pilot-1-overgraph/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T173351307075Z/pilot-1-overgraph",
+      "binary_bytes": 10121360,
+      "binary_sha256": "c38e851bf7f903d502946a8539eb4f567652023a34a915664f6bd3c2aadc3b1f",
+      "exit_code": 1,
+      "wall_seconds": 25.126062457915395,
+      "error_tail": "Error: invalid operation: candidate directory admission: Busy\n"
+    },
+    {
+      "engine": "grafeo",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-grafeo",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T173351307075Z/pilot-1-grafeo/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T173351307075Z/pilot-1-grafeo",
+      "binary_bytes": 12450288,
+      "binary_sha256": "29dc6e98eef979d24490fc8116bfbdaff52bd56fdb846055f5d3f405ec900c07",
+      "exit_code": 0,
+      "wall_seconds": 25.232722833985463,
+      "nodes": 1000,
+      "edges": 1001,
+      "correctness_checks": 3596,
+      "case_errors": []
+    },
+    {
+      "engine": "sqlite",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-sqlite",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T173351307075Z/pilot-1-sqlite/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T173351307075Z/pilot-1-sqlite",
+      "binary_bytes": 2998592,
+      "binary_sha256": "2e578f2eb90faa2232a20cf81ed1e3932572b412af360fac07c2a8aee236faa4",
+      "exit_code": 0,
+      "wall_seconds": 24.973085624864325,
+      "nodes": 1000,
+      "edges": 1001,
+      "correctness_checks": 3596,
+      "case_errors": []
+    },
+    {
+      "engine": "helix",
+      "profile": "pilot",
+      "iteration": 1,
+      "command": [
+        "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-helix",
+        "--workload",
+        "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T173351307075Z/pilot-1-helix/config.json"
+      ],
+      "case": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-runs/pilots/20261101T173351307075Z/pilot-1-helix",
+      "binary_bytes": 52513680,
+      "binary_sha256": "826e6556369032c18a91e595224d58e0d9bddf5caef5df192dd6f4b1167eb774",
+      "exit_code": 0,
+      "wall_seconds": 28.11259595793672,
+      "nodes": 1000,
+      "edges": 1001,
+      "correctness_checks": 3596,
+      "case_errors": []
+    }
+  ]
+}

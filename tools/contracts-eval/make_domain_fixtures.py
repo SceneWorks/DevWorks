@@ -1,0 +1,230 @@
+"""Structural coverage fixtures plus independent adversarial contract cases; no effects."""
+from pathlib import Path
+import copy,json,re
+from domain_spec import TYPES,OPS,LEGACY_RESULTS
+ROOT=Path(__file__).resolve().parents[2];D=ROOT/'docs/architecture/contracts'
+ALL=[c for n in ['fixtures','provider-package-fixtures','data-delivery-fixtures'] for c in json.loads((D/(n+'.json')).read_text())]
+def valid(entry):return json.loads(next(c['raw'] for c in ALL if c['entry']==entry and c['typedValid']))
+ART={'artifactId':'artifact-a','versionId':'version-a','sha256':'a'*64,'byteLength':'8','mediaType':'text/plain'}
+STAMP={'storeId':'store-a','restoreEpoch':'0','sequence':'1','policyRevision':'1','scopeRevision':'1'}
+BASE={'Id':'id-a','Revision':'1','Counter':'0','ProjectId':'project-a','RootId':'root-a','ActorId':'actor-a','AssignmentId':'assignment-a','OperationId':'operation-a','QueryId':'query-a','RequestKey':'request-a','CommandId':'command-a','EventId':'event-a','StoreId':'store-a','ResourceId':'resource-a','CorrelationId':'correlation-a',
+ 'Label':'fixture','Text':'fixture','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'DynamicJson':{'input':'fixture'},
+ 'DataScope':{'kind':'Workspace'},'ViewSelection':{'kind':'Published','repositoryIds':['repo-a']},'Coverage':{'state':'Complete','gaps':[],'moreGaps':False},'Digest':'a'*64,'ArtifactRef':ART,'SchemaRef':{'schemaId':'fixture/object','revision':'1','sha256':'a'*64},'Attribution':{'kind':'Workspace','sessionId':'session-a'},'GitOid':{'format':'Sha1','hex':'a'*40},'ReadStamp':STAMP,'OperationState':'ObservedComplete',
+ 'RootControl':{'rootId':'root-a','revision':'1','desiredState':'Enabled'},'Blockers':{'items':[],'hasMore':False},'EligibilityTarget':{'kind':'root','id':'root-a'},'Purpose':'Planning',
+ 'DeliveryBarrier':valid('delivery-barrier'),'DeliverySnapshot':valid('delivery-snapshot'),'GraphPage':valid('graph-page'),'RetrievalPage':valid('retrieval-page'),'TranscriptPage':valid('transcript-page'),'Event':valid('event')}
+def camel(s):return re.sub(r'_([a-z])',lambda m:m[1].upper(),s)
+def sample(t):
+ if t.startswith('?'):return None
+ if t in BASE:return copy.deepcopy(BASE[t])
+ if '<' in t:
+  outer,inner=t.split('<',1);inner=inner[:-1]
+  if outer=='Page':return {'items':[],'hasMore':False}
+  return [sample(inner)] if outer in ['NonEmpty','PlanFeatures'] else []
+ d=TYPES[t]
+ if d['kind']=='enum':return d['values'][0]
+ if d['kind']=='union':
+  k,fs=next(iter(d['variants'].items()));v={'kind':k,**{camel(n):sample(f) for n,f in fs.items() if not f.startswith('?')}}
+ else:v={camel(n):sample(f) for n,f in d['fields'].items() if not f.startswith('?')}
+ if t in ['ClaimDraft','KnowledgeClaim']:v['value']='A retained fact'
+ if t=='KnowledgeBatch':v['claims']=[sample('ClaimDraft')]
+ if t=='EnvironmentEntry':v['value']='fixture'
+ if t=='DecisionQuestion':v['criteria']=[{'name':'yes'},{'name':'no'}]
+ if t=='UsageItem':v['amountUsd']='0'
+ if t=='ArtifactReadContent':v.update(content='fixture',nextByte='7',truncated=True)
+ if t=='ProcessOutput':v['nextByte']=str(len(v['content'].encode()))
+ return v
+
+def request(name,mode):
+ d=OPS[name];fs=d[mode.lower()+'Fields'] if d['mode']=='Hybrid' else d['fields']
+ body={'kind':name,**{camel(n):sample(t) for n,t in fs.items() if not t.startswith('?')}}
+ if name=='git.diff':body['paths']=['src/name:part\\literal.rs']
+ if name=='tasks.create':body['parentId']='feature-a'
+ if name=='tasks.assign':body['clearAssignment']=True
+ if name=='tasks.set_feature':body['clearFeature']=True
+ if name=='workflows.reassign_and_remove':body['destinationStatusId']='status-other'
+ if name in ['knowledge.entity_bundle','knowledge.entity_graph','knowledge.expand_frontier']:body['query']['entityIds']=['entity-a']
+ if name=='knowledge.claim_bundle':body['query']['claimIds']=['claim-a']
+ if name=='queue.reconcile':body['resolution']='Reconcile'
+ if name.startswith('maintenance.'):body['previewOnly']=True
+ return {'mode':mode,'protocol':'1.0-draft.1',('queryId' if mode=='Query' else 'requestKey'):'request-a','body':body}
+
+def result(name,t):
+ value=sample(t)
+ if t=='GraphPage':
+  if name in ['code.source','code.snippet']:value['result']={'kind':'Source','citation':copy.deepcopy(BASE['GraphPage']['result']['nodes'][0]['citation']),'text':'fixture source'}
+  elif name=='code.graph_schema':value['result']={'kind':'Schema','schema':copy.deepcopy(ART)}
+  elif name=='code.graph_scope_status':value['result']={'kind':'ScopeStatus','coverage':sample('Coverage')}
+  else:value['result']={'kind':'Nodes','nodes':[]}
+ if t=='WorkRecord':
+  value['kind']={'tasks':'Task','issues':'Issue'}.get(name.split('.')[0],'Feature')
+  if value['kind']=='Task':value['parentId']='feature-a'
+ return {'kind':name,'value':value}
+
+CASES=[]; POS={}
+def case(id,entry,value,typed=True,schema=True):
+ CASES.append({'id':id,'entry':entry,'raw':json.dumps(value,separators=(',',':')),'typedValid':typed,'schemaValid':schema})
+ if typed:POS[id]=copy.deepcopy(value)
+for name,d in OPS.items():
+ for mode in ([d['mode']] if d['mode']!='Hybrid' else ['Query','Command']):case('input-'+name+'-'+mode,'domain-request',request(name,mode))
+for name,t in ({n:d['result'] for n,d in OPS.items()}|LEGACY_RESULTS).items():
+ case('result-'+name,'operation-result',result(name,t))
+# Stable handwritten assertions cover wrong mode, authority/provenance injection,
+# dangerous ambiguity, partial/unknown effects and cross-operation substitution.
+def mutate(id,base,path,value,typed=False,schema=False,entry=None):
+ obj=copy.deepcopy(POS[base]);cur=obj
+ for k in path[:-1]:cur=cur[k]
+ if value is DELETE:cur.pop(path[-1],None)
+ else:cur[path[-1]]=value
+ case(id,entry or next(c['entry'] for c in CASES if c['id']==base),obj,typed,schema)
+DELETE=object()
+mutate('reject-self-human','input-approvals.record_human_decision-Command',['body','human'],True)
+mutate('reject-policy-grant','input-process.execute-Command',['body','grant'],{'allowAll':True})
+mutate('reject-raw-credential','input-router.configure-Command',['body','apiKey'],'not-a-real-key')
+mutate('reject-forged-attribution','input-router.decide-Command',['body','attribution'],{'kind':'Workspace','sessionId':'fake'})
+mutate('reject-forged-price-origin','input-router.price_override-Command',['body','price','origin'],'ProviderReported')
+mutate('reject-forged-setting-source','input-settings.save_revision-Command',['body','entries',0,'sourceScope'],{'kind':'Workspace'})
+mutate('reject-job-cap','input-jobs.create-Command',['body','spendingLimitUsd'],'1')
+mutate('reject-child-pause','input-runs.stop-Command',['body','kind'],'agents.pause')
+mutate('reject-global-cap','input-agents.delegate-Command',['body','globalCap'],10)
+mutate('reject-unknown-op','input-projects.get-Query',['body','kind'],'workspace.erase_drive')
+mutate('reject-command-with-query-mode','input-projects.create-Command',['mode'],'Query')
+mutate('reject-query-with-command-mode','input-projects.get-Query',['mode'],'Command')
+mutate('reject-browser-create-query','input-browser.sessions-Command',['mode'],'Query')
+mutate('reject-negative-limit','input-projects.list-Query',['body','page','limit'],-1)
+mutate('reject-oversize-page','input-projects.list-Query',['body','page','limit'],501)
+mutate('reject-invalid-counter','input-projects.edit-Command',['body','expectedRevision'],'01')
+mutate('reject-counter-range','input-projects.edit-Command',['body','expectedRevision'],'9223372036854775808',schema=True)
+mutate('reject-parent-path','input-git.diff-Query',['body','paths'],['../secret'])
+mutate('reject-absolute-root','input-process.execute-Command',['body','spec','workingDirectory','relative'],'/tmp')
+# A task belongs to its project; feature association and assignment parentage are separate.
+mutate('accept-task-without-feature','input-tasks.create-Command',['body','parentId'],DELETE,typed=True,schema=True)
+mutate('accept-task-null-feature','input-tasks.create-Command',['body','parentId'],None,typed=True,schema=True)
+mutate('reject-task-without-project','input-tasks.create-Command',['body','projectId'],DELETE)
+mutate('accept-issue-delegation-without-cards','input-agents.delegate-Command',['body','taskIds'],[],typed=True,schema=True)
+mutate('accept-standalone-task-record','result-tasks.get',['value','parentId'],DELETE,typed=True,schema=True)
+obj=copy.deepcopy(POS['result-tasks.get']);obj['value']['kind']='Issue';obj['value'].pop('parentId',None)
+case('accept-issue-through-task-operation','operation-result',obj)
+mutate('reject-delegation-without-root','input-agents.delegate-Command',['body','rootId'],DELETE)
+mutate('reject-feature-task-only-patch','input-features.edit-Command',['body','changes','inheritsRequirementIds'],['requirement-a'])
+mutate('reject-double-assignment','input-tasks.assign-Command',['body','assignmentId'],'assignment-a',schema=True)
+mutate('reject-same-status-delete','input-workflows.reassign_and_remove-Command',['body','destinationStatusId'],'id-a',schema=True)
+mutate('reject-replacement-without-revision','input-documents.import-Command',['body','replaceDocumentId'],'document-a',schema=True)
+mutate('reject-empty-knowledge','input-knowledge.record-Command',['body','batch','claims'],[],schema=True)
+mutate('reject-empty-frontier','input-knowledge.expand_frontier-Query',['body','query','entityIds'],[],schema=True)
+mutate('reject-duplicate-tier-members','input-router.configure-Command',['body','action'],{'kind':'Tier','tier':'Max','expectedRevision':'1','memberIds':['a','a']},schema=True)
+mutate('reject-SystemOne-in-chat','input-router.configure-Command',['body','action'],{'kind':'Model','model':{**sample('RouteModel'),'endpointProfile':'SystemOne'}},schema=True)
+mutate('reject-unrecognized-question','input-router.decide-Command',['body','questions',0,'question'],{'kind':'Execute','command':'rm'})
+mutate('reject-single-choice','input-router.decide-Command',['body','questions',0,'question','criteria'],[{'name':'one'}],schema=True)
+mutate('reject-duplicate-choice-name','input-router.decide-Command',['body','questions',0,'question','criteria'],[{'name':'same'},{'name':'same','description':'different'}],schema=True)
+mutate('reject-queue-action-substitution','input-queue.retry-Command',['body','resolution'],'Reconcile',schema=True)
+mutate('reject-prune-without-preview','input-maintenance.prune_messages-Command',['body','previewOnly'],False,schema=True)
+mutate('reject-page-missing-cursor','result-projects.list',['value','hasMore'],True,schema=True)
+mutate('reject-work-result-kind','result-tasks.get',['value','kind'],'Feature',schema=True)
+mutate('reject-graph-result-kind','result-code.search',['value','result'],{'kind':'Source','citation':copy.deepcopy(BASE['GraphPage']['result']['nodes'][0]['citation']),'text':'fixture source'},schema=True)
+mutate('reject-effort-downgrade','result-router.route',['value','requestedEffort'],'High',schema=True)
+# Shared task priority and directed blocking-link candidates.
+mutate('accept-task-priority-edit','input-tasks.edit-Command',['body','changes'],{'priority':7},typed=True,schema=True)
+mutate('accept-issue-priority-edit','input-issues.edit-Command',['body','changes'],{'priority':7},typed=True,schema=True)
+mutate('reject-duplicate-task-order','input-tasks.prioritize-Command',['body','orderedTaskIds'],['task-a','task-a'],schema=True)
+mutate('accept-feature-task-order','input-tasks.prioritize-Command',['body','featureId'],'feature-a',typed=True,schema=True)
+mutate('reject-empty-task-order','input-tasks.prioritize-Command',['body','orderedTaskIds'],[])
+obj=copy.deepcopy(POS['input-tasks.dependency_links-Command']);target=obj['body']['taskId'];obj['body']['replacement']['edges']=[{'predecessor':'blocking-task','successor':target}]
+case('accept-one-task-blocks-another','domain-request',obj)
+mutate('reject-self-task-dependency','accept-one-task-blocks-another',['body','replacement','edges'],[{'predecessor':target,'successor':target}],schema=True)
+mutate('reject-unrelated-target-dependency','accept-one-task-blocks-another',['body','replacement','edges',0,'successor'],'other-task',schema=True)
+mutate('reject-duplicate-task-dependency','accept-one-task-blocks-another',['body','replacement','edges'],obj['body']['replacement']['edges']*2,schema=True)
+mutate('accept-remove-task-blockers','accept-one-task-blocks-another',['body','replacement','edges'],[],typed=True,schema=True)
+# Feature owns one active approved plan and one pending replacement.
+obj=copy.deepcopy(POS['result-features.get']);obj['value']['plan']=copy.deepcopy(ART)
+obj['value']['approval']={'proposalId':'approved-a','planRevision':'1','planDigest':'a'*64,'state':'Approved'}
+obj['value']['pendingPlan']={'revision':'2','draft':sample('PlanDraft'),'approval':{'proposalId':'pending-b','planRevision':'2','planDigest':'b'*64,'state':'Pending'}}
+case('active-plan-with-pending-revision','operation-result',obj)
+mutate('active-plan-with-rejected-revision','active-plan-with-pending-revision',['value','pendingPlan','approval','state'],'Rejected',typed=True,schema=True)
+mutate('reject-approved-draft-left-pending','active-plan-with-pending-revision',['value','pendingPlan','approval','state'],'Approved',schema=True)
+mutate('reject-stale-draft-approval','active-plan-with-pending-revision',['value','pendingPlan','approval','planRevision'],'1',schema=True)
+mutate('reject-pending-plan-on-issue','active-plan-with-pending-revision',['value','kind'],'Issue',schema=True)
+mutate('reject-pending-active-approval','active-plan-with-pending-revision',['value','approval','state'],'Pending',schema=True)
+obj=copy.deepcopy(POS['result-features.get']);obj['value']['pendingPlan']={'revision':'1','draft':sample('PlanDraft')}
+case('initial-plan-awaiting-first-approval','operation-result',obj)
+# Four SystemOne forms and a descriptor-bound extension, plus entity/evidence-only writes.
+for kind in ['Choice','Noul','Score','Box','Extension']:
+ obj=copy.deepcopy(POS['input-router.decide-Command']);fs=TYPES['DecisionQuestion']['variants'][kind]
+ question={'kind':kind,**{camel(n):sample(t) for n,t in fs.items() if not t.startswith('?')}}
+ if kind=='Choice':question['criteria']=[{'name':'yes'},{'name':'no'}]
+ if kind=='Score':question['criteria']=['low','high']
+ obj['body']['questions']=[{'name':'fixture','question':question}];case('decision-'+kind,'domain-request',obj)
+for key,t in [('entities','KnowledgeEntityDraft'),('evidence','SourceEvidence')]:
+ obj=copy.deepcopy(POS['input-knowledge.record-Command']);obj['body']['batch']['claims']=[];obj['body']['batch'][key]=[sample(t)];case('knowledge-'+key+'-only','domain-request',obj)
+# Explicit price semantics: reported zero is distinct from local free and untracked.
+for kind,origin,amount in [('Reported','ProviderReported','0'),('Free','LocalFree','0'),('Untracked','Untracked',None),('Estimated','OfficialSnapshot','0.12')]:
+ obj=copy.deepcopy(POS['result-router.usage']);item=sample('UsageItem');item.update(priceKind=kind,priceOrigin=origin)
+ if amount is None:item.pop('amountUsd',None)
+ else:item['amountUsd']=amount
+ obj['value']['items']=[item];case('usage-'+kind,'operation-result',obj)
+mutate('reject-untracked-as-priced','usage-Untracked',['value','items',0,'amountUsd'],'0',schema=True)
+mutate('reject-remote-as-local-free','usage-Free',['value','items',0,'priceOrigin'],'ProviderReported',schema=True)
+# Reply/receipt/completion paths retain absence-of-ack and outcome uncertainty.
+FAULT={'code':'PermissionDenied','retry':'Never','correlationId':'correlation-a','blockerIds':[]}
+case('query-typed-result','domain-query-reply',{'kind':'Result','protocol':'1.0-draft.1','queryId':'query-a','stamp':STAMP,'result':result('projects.get','ProjectRecord')})
+case('query-permission-denied','domain-query-reply',{'kind':'Rejected','protocol':'1.0-draft.1','queryId':'query-a','fault':FAULT})
+RECEIPT={'commandId':'command-a','committedSequence':'1','acceptedAtMs':'1','requestDigest':'a'*64,'operationId':'operation-a','decision':{'kind':'Accepted','operationId':'operation-a'}}
+case('command-recorded-accepted','domain-command-reply',{'kind':'Recorded','protocol':'1.0-draft.1','receipt':RECEIPT,'replayed':False})
+case('command-status-unknown','domain-command-reply',{'kind':'CommandStatusUnknown','protocol':'1.0-draft.1','requestKey':'request-a','correlationId':'correlation-a'})
+case('command-pre-admission-rejection','domain-command-reply',{'kind':'Rejected','protocol':'1.0-draft.1','requestKey':'request-a','code':'PermissionDenied','retry':'Never','correlationId':'correlation-a'})
+mutate('reject-accepted-operation-mismatch','command-recorded-accepted',['receipt','operationId'],'another',schema=True)
+mutate('reject-permission-blind-retry','query-permission-denied',['fault','retry'],'SameCommand',schema=True)
+conflict=copy.deepcopy(POS['query-permission-denied']);conflict['fault'].update(code='RevisionConflict',retry='RefreshAndNewRequest',targetId='project-a',targetKind='project',revisionDimension='work',expectedRevision='1',currentRevision='2')
+case('conflict-identifies-revision-dimension','domain-query-reply',conflict)
+mutate('reject-conflict-without-dimension','conflict-identifies-revision-dimension',['fault','revisionDimension'],DELETE,schema=True)
+mutate('reject-conflict-without-target-kind','conflict-identifies-revision-dimension',['fault','targetKind'],DELETE,schema=True)
+
+case('completion-succeeded','operation-completion',{'kind':'Succeeded','protocol':'1.0-draft.1','operationId':'operation-a','revision':'1','result':result('projects.create','ProjectRecord')})
+case('completion-outcome-unknown','operation-completion',{'kind':'OutcomeUnknown','protocol':'1.0-draft.1','operationId':'operation-a','revision':'1','correlationId':'correlation-a'})
+case('completion-failed','operation-completion',{'kind':'Failed','protocol':'1.0-draft.1','operationId':'operation-a','revision':'1','fault':{**FAULT,'code':'OutcomeUnknown','retry':'ReconcileOperation'}})
+mutate('reject-unknown-as-retry','completion-failed',['fault','retry'],'SameCommand',schema=True)
+# Dynamic payloads have explicit secondary byte/depth/node/schema checks.
+obj=copy.deepcopy(POS['input-router.decide-Command']);obj['body']['state']={'body':'x'*524289};case('reject-large-dynamic-state','domain-request',obj,False,True)
+obj=copy.deepcopy(POS['input-router.decide-Command']);raw=json.dumps(obj,separators=(',',':')).replace('"input":"fixture"','"input":"one","input":"two"')
+CASES.append({'id':'reject-nested-duplicate-member','entry':'domain-request','raw':raw,'typedValid':False,'schemaValid':False})
+# Current user decisions: separate Anthropic profiles, human risk intent and removed engine.
+for profile in ['AnthropicMessages','ClaudeSubscriptionMessages']:
+ obj=copy.deepcopy(POS['input-router.configure-Command']);obj['body']['action']={'kind':'Connection','name':'fixture','profile':profile,'endpoint':'https://api.anthropic.com','credentialRef':'fixture-secret-ref'};case('anthropic-profile-'+profile,'domain-request',obj)
+for accepted in [True,False]:
+ obj=copy.deepcopy(POS['input-router.configure-Command']);obj['body']['action']={'kind':'SubscriptionRisk','connectionId':'connection-a','expectedRevision':'1','noticeSha256':'a'*64,'accepted':accepted};case('subscription-risk-'+str(accepted),'domain-request',obj)
+mutate('reject-risk-without-notice','subscription-risk-True',['body','action','noticeSha256'],DELETE)
+mutate('reject-risk-forged-actor','subscription-risk-True',['body','action','actorId'],'human-a')
+obj=copy.deepcopy(POS['input-schemas.configure-Command']);obj['body']['config']['engine']='Helix';case('reject-removed-helix-reader','domain-request',obj,False,False)
+
+# Incoming MCP administration cannot embed raw credentials or assert human authority.
+mutate('reject-mcp-server-raw-token','input-mcp_server.configure-Command',['body','token'],'synthetic-not-a-token')
+mutate('reject-mcp-client-self-human','input-mcp_server.set_client_access-Command',['body','human'],True)
+mutate('reject-mcp-client-role-injection','input-mcp_server.set_client_access-Command',['body','action','role'],'Human')
+mutate('reject-mcp-server-public-bind','input-mcp_server.configure-Command',['body','bindAddress'],'0.0.0.0')
+mutate('reject-mcp-admin-query-command','input-mcp_server.configure-Command',['mode'],'Query')
+# Interview refinements: explicit association, app-wide pacing and exact-head review completion.
+mutate('issue-create-with-feature','input-issues.create-Command',['body','featureId'],'feature-a',True,True)
+obj=copy.deepcopy(POS['input-tasks.set_feature-Command']);obj['body'].update(featureId='feature-a',clearFeature=False)
+case('set-task-feature','domain-request',obj)
+mutate('reject-membership-set-and-clear','set-task-feature',['body','clearFeature'],True,schema=True)
+mutate('reject-membership-neither','input-tasks.set_feature-Command',['body','clearFeature'],False,schema=True)
+obj=copy.deepcopy(POS['input-settings.save_revision-Command'])
+obj['body']['scope']={'kind':'Workspace'}
+obj['body']['entries'][0].update(key='github.issueTriageIntervalSeconds')
+obj['body']['entries'][0]['value']['value']=1800
+case('app-wide-issue-triage-interval','domain-request',obj)
+mutate('reject-project-triage-override','app-wide-issue-triage-interval',['body','scope'],{'kind':'Project','projectId':'project-a'},schema=True)
+for bad in [0,-1,1.5,'1800']:
+ mutate('reject-invalid-triage-interval-'+str(bad),'app-wide-issue-triage-interval',['body','entries',0,'value','value'],bad,schema=True)
+review=copy.deepcopy(POS['result-reviews.inspect'])
+source=sample('ReviewSourceEvidence')
+source.update(state='Completed',completedAt='1',findingCount='0',zeroFindingsConfirmed=True,
+              findingsCoverage={'state':'Complete','gaps':[],'moreGaps':False},headDigest=review['value']['headDigest'])
+review['value'].update(state='Ready',sources=[source])
+case('review-ready-explicit-zero-findings','operation-result',review)
+mutate('reject-review-ready-no-source','review-ready-explicit-zero-findings',['value','sources'],[],schema=True,entry='operation-result')
+mutate('reject-review-silence-as-zero-findings','review-ready-explicit-zero-findings',['value','sources',0,'zeroFindingsConfirmed'],False,schema=True,entry='operation-result')
+mutate('reject-review-wrong-head','review-ready-explicit-zero-findings',['value','sources',0,'headDigest'],'b'*64,schema=True,entry='operation-result')
+mutate('reject-review-partial-findings','review-ready-explicit-zero-findings',['value','sources',0,'findingsCoverage','state'],'Partial',schema=True,entry='operation-result')
+mutate('review-in-app-fallback-evidence','review-ready-explicit-zero-findings',['value','sources',0,'sourceKind'],'InAppFallback',True,True,entry='operation-result')
+(D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
+print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

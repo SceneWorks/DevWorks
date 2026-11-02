@@ -1,0 +1,1553 @@
+{
+  "date": "2026-10-31",
+  "decisions": [
+    {
+      "id": "delivery_configurable",
+      "source": "User interview answer",
+      "decision": "Configurable Auto-Merge on/off; target can commit, push, fix reviews and merge autonomously."
+    },
+    {
+      "id": "mandatory_reviews",
+      "source": "User interview answer",
+      "decision": "Configurable mandatory separate-agent code reviews before merge and fix cycle; aware of GitHub automated reviews; in-app reviews for repositories without automation.",
+      "superseded_in_part_by": "github_review_unavailable_independent_fallback_20261102",
+      "current_interpretation": "Configured GitHub review remains the normal source. If it fails or never completes, use an independent in-app reviewer automatically; retain all review findings and other delivery gates."
+    },
+    {
+      "id": "policy_scope",
+      "source": "User interview answer",
+      "decision": "Per repository with inherited defaults."
+    },
+    {
+      "id": "review_gate",
+      "source": "User interview answer",
+      "decision": "Resolve every actionable finding."
+    },
+    {
+      "id": "review_adjudication",
+      "source": "User interview answer",
+      "decision": "The feature coordinator arbitrates disputed review findings with a recorded rationale."
+    },
+    {
+      "id": "planning_storage",
+      "source": "User correction",
+      "decision": "Plan in local files for now; material will eventually go into CodeGraph. Do not use Shortcut for this project.",
+      "superseded_in_part_by": "codegraph_operational_tracking_and_related_features_20261102"
+    },
+    {
+      "id": "fix_cycle_limit",
+      "source": "User interview answer",
+      "decision": "Fix-cycle count is configurable, with a default of 3."
+    },
+    {
+      "id": "coordinator_escalation",
+      "source": "User interview answer",
+      "decision": "When the coordinator cannot reach a decision, raise it to the user and publish a notification."
+    },
+    {
+      "id": "escalation_scope",
+      "source": "User clarification",
+      "decision": "Pause only the task needing user input and work dependent on its merge. Continue unblocked feature tasks; feature-wide waiting only if that merge blocks the rest of the feature."
+    },
+    {
+      "id": "feature_subagent_concurrency",
+      "source": "User requirement",
+      "decision": "Configurable maximum concurrent subagents per feature, default 10. Use maximum useful concurrency to work on multiple tasks at once rather than sequentially."
+    },
+    {
+      "id": "window_close_behavior",
+      "source": "User interview answer",
+      "decision": "Closing the main window should pause agents and scheduled jobs and exit, without background tray/menu-bar continuation."
+    },
+    {
+      "id": "feature_limit_independence",
+      "source": "User interview answer",
+      "decision": "Concurrency cap is per feature, not global. Each feature has an independent allowance; do not add a workspace-wide subagent-count cap."
+    },
+    {
+      "id": "manual_selective_feature_resume",
+      "source": "User interview answer",
+      "decision": "On reopening, require manual resume and let the user select which features to resume. Unselected features stay paused."
+    },
+    {
+      "id": "maintenance_schedule_reactivation",
+      "source": "User interview answer",
+      "decision": "Enabled maintenance schedules reactivate automatically on reopening. Missed runs stay missed; no catch-up replay, immediate coalesced catch-up, or burst of all jobs."
+    },
+    {
+      "id": "interrupted_maintenance_resume",
+      "source": "User interview clarification",
+      "decision": "Maintenance jobs already running when the app closed resume automatically on reopening. Continuing interrupted runs is separate from catching up on missed scheduled occurrences, which remain skipped."
+    },
+    {
+      "id": "sleep_wake_continuation",
+      "source": "User interview answer",
+      "decision": "Feature agents continue automatically after waking from sleep while the app remains open. Manual feature resume is required after closing and reopening the app; existing manual pauses and blockers remain effective."
+    },
+    {
+      "id": "keep_computer_awake",
+      "source": "User requirement",
+      "decision": "Provide a configuration option to keep the computer awake while the app is open."
+    },
+    {
+      "id": "repository_home_and_navigation",
+      "source": "User direction, checked against CodeGraph source",
+      "decision": "Use the existing CodeGraph repository home and navigation as the baseline for native repository exploration: Overview, Nodes, Health, Reviews; internal code-project/node-type drill-down; node details, relationship traversal, cross-repository links and source. Keep workspace chat as app home."
+    },
+    {
+      "id": "shared_and_harness_skill_directories",
+      "source": "User interview answer",
+      "decision": "Use shared skills from ~/.agents/skills. Also support a dedicated harness-specific directory and creating harness-specific skills there. Exact harness directory path and duplicate precedence are not yet selected."
+    },
+    {
+      "id": "harness_skill_precedence",
+      "source": "User interview answer",
+      "decision": "When harness-specific and shared skills have the same name, the harness-specific skill takes precedence."
+    },
+    {
+      "id": "skill_edits_next_safe_step",
+      "source": "User interview answer",
+      "decision": "Running agents adopt edits to skills they use at their next safe step, without requiring a new session."
+    },
+    {
+      "id": "mcp_readonly_default_and_tool_selection",
+      "source": "User interview answer",
+      "decision": "Enable read-only MCP tools by default. Users can choose available tools through individual toggles and an easy Select all control; tools outside the read-only default can be enabled by selection."
+    },
+    {
+      "id": "shared_agent_tool_selection",
+      "source": "User interview answer",
+      "decision": "The selected tools apply to every agent. Code-review agents have the same read tools as all other agents."
+    },
+    {
+      "id": "provider_families_and_auth_reference",
+      "source": "User direction, verified against simple-router commit a556b3531b577173195bbc3876b556196447721d",
+      "decision": "Support Codex, Claude, OpenRouter and generic OpenAI-compatible connections including Ollama and LM Studio. Use simple-router as the connection/authentication reference: Codex/Claude subscription sign-ins, OpenRouter API key, optional keys for compatible endpoints, and credential/model lifecycle."
+    },
+    {
+      "id": "all_inference_through_router_reaffirmed",
+      "source": "User explicit requirement",
+      "decision": "All application inference calls go through the internal router, across all coordinators, workers, reviews, maintenance and context generation; no direct provider bypass by app subsystems."
+    },
+    {
+      "id": "mandatory_task_worktrees",
+      "source": "User interview answer to separate task worktrees versus a shared feature worktree",
+      "decision": "Always use Git worktrees for agent coding. Each concurrent coding task has its own worktree for each affected repository; the feature coordinator integrates task changes in a worktree. No shared writable task worktree or primary-checkout edits."
+    },
+    {
+      "id": "feature_completion_git_cleanup",
+      "source": "User additional requirement",
+      "decision": "On feature completion, automatically clean up all worktrees and local branches created for that feature across its repositories; preserve linked work history."
+    },
+    {
+      "id": "feature_branch_and_grouped_task_prs",
+      "source": "User clarified PR strategy",
+      "decision": "Always use feature branches for feature work. Task PRs target the feature branch; related tasks may share a PR, with grouping decided by the feature coordinator. Only open PRs to main when the feature implementation is complete."
+    },
+    {
+      "id": "start_reviews_feature_planning_readiness",
+      "source": "User interview answer",
+      "decision": "A feature should ideally be fully planned already. If not, its coordinator reviews the feature, plans what it can and asks for plan approval or more input rather than immediately executing incomplete/unapproved work."
+    },
+    {
+      "id": "continuous_plan_refinement",
+      "source": "User explicit requirement",
+      "decision": "There must always be an opportunity to refine a feature plan, including before and during execution."
+    },
+    {
+      "id": "approved_plan_coordination_autonomy",
+      "source": "User interview answer",
+      "decision": "Once a plan is approved, the feature coordinator may coordinate execution as it sees fit, aiming to complete the feature as quickly, efficiently and correctly as possible. Task breakdown, delegation, sequencing and grouping do not require routine reapproval; approved requirements and configured policies remain applicable."
+    },
+    {
+      "id": "cross_project_lesson_and_knowledge_scope",
+      "source": "User interview answer",
+      "decision": "General lessons are available across projects automatically. Project-specific knowledge and conventions stay scoped to their project."
+    },
+    {
+      "id": "automatic_nonconflicting_dreaming",
+      "source": "User interview answer",
+      "decision": "Dreaming applies consolidations automatically when there is no conflict; unresolved conflicts continue through the approval queue and notifications."
+    },
+    {
+      "id": "unified_tagged_knowledge_workspace",
+      "source": "User explicit requirement",
+      "decision": "Consolidate memory, knowledge and lessons into one system and workspace, differentiated by tags. Project/shared scope remains distinct from category tags; preserve needed evidence, revisions, relationships and lesson lifecycle metadata."
+    },
+    {
+      "id": "mandatory_readonly_reviewers",
+      "source": "User interview answer: Always readonly",
+      "decision": "Code-review agents are always read-only, enforced by the harness for built-in and MCP tools and indirect mutation paths. Shared tool selection cannot grant reviewer writes; the harness retains findings and implementation agents perform fixes."
+    },
+    {
+      "id": "github_single_account_organizations",
+      "source": "User interview answer",
+      "decision": "One GitHub.com account is sufficient, but organizations must be supported, including accessible organization-owned repositories alongside personal repositories."
+    },
+    {
+      "id": "editable_agent_role_instructions",
+      "source": "User interview answer: Yes",
+      "decision": "Instructions for workspace coordinators, feature coordinators, workers, reviewers and dreaming agents must be editable in Settings. Harness-enforced policies remain effective."
+    },
+    {
+      "id": "role_instruction_edits_next_safe_step",
+      "source": "User interview answer",
+      "decision": "Running agents adopt edits to their role instructions at their next safe step, as with skills."
+    },
+    {
+      "id": "agent_ui_testing",
+      "source": "User explicit browser-tool requirement and desktop-testing design discussion",
+      "decision": "The harness needs first-class browser control for website UI testing and native computer control for desktop UI testing. Playwright is a candidate, not a settled backend; maintain the Rust core and runtime constraints."
+    },
+    {
+      "id": "resource_reservations_codegraph_reference",
+      "source": "User explicit requirement; CodeGraph index e00bab10260e0fe00d40e1b3b1ff60f4561cb973 source inspected",
+      "decision": "Use a resource reservation tool/system similar to CodeGraph named finite resources and holds, with acquire/renew/release, inspection, linked ownership and visible queues. Apply to UI testing and other constrained resources without introducing a global agent-count cap."
+    },
+    {
+      "id": "project_artifact_store",
+      "source": "User explicit requirement",
+      "decision": "Provide an artifact store for each project so screenshots and files can be saved and shared between agents and humans."
+    },
+    {
+      "id": "active_desktop_takeover_consent",
+      "source": "User explicit requirement",
+      "decision": "If the desktop UI is not idle, ask before automation takes control. Answers are OK or Wait. Wait is not approval; independent work continues."
+    },
+    {
+      "id": "artifact_retention_until_deleted",
+      "source": "User interview answer: Yes, keep them until deleted",
+      "decision": "Keep project artifacts until explicitly deleted; automatic expiration/cleanup is disabled by default. Age, feature completion, worktree cleanup and storage pressure do not implicitly delete retained artifacts."
+    },
+    {
+      "id": "artifact_origin_work_links",
+      "source": "User explicit clarification",
+      "decision": "Artifacts must link to the project, feature and task they were created with, wherever applicable. Preserve original work links when artifacts are reused and allow navigation from work to artifacts and back."
+    },
+    {
+      "id": "automatic_context_compaction_80_percent",
+      "source": "User interview answer: Yes, at 80% of the max context",
+      "decision": "Automatically compact working context at 80% of the active model maximum context and continue without user intervention, preserving the complete original transcript, logical agent identity and work relationships. Compaction inference uses the router."
+    },
+    {
+      "id": "provider_prompt_cache_efficiency",
+      "source": "User explicit requirement",
+      "decision": "Provider prompt-cache efficiency is critical. Avoid unnecessary cache misses caused by harness prompt construction, transcript/tool formatting and routing; preserve eligible reuse and make effectiveness visible."
+    },
+    {
+      "id": "automatic_repository_instruction_loading",
+      "source": "User explicit interview answer",
+      "decision": "Automatically load repository instruction files such as AGENTS.md and CLAUDE.md, including applicable subdirectory instructions. They supplement role instructions and never override user directions or configured tool permissions."
+    },
+    {
+      "id": "fresh_index_import_project_work_history",
+      "source": "User interview answer and explicit scope clarification",
+      "decision": "Start fresh on repository indexing. Import CodeGraph projects, features, tasks and their histories only; exclude existing memory, knowledge, lessons and conventions. This migration exclusion does not remove the new harness Knowledge or convention capabilities."
+    },
+    {
+      "id": "approval_for_scope_acceptance_changes",
+      "source": "User interview answer: Yes",
+      "decision": "Changes to approved feature scope or acceptance criteria require explicit user approval before executing the change. Continue unblocked work that remains valid under the approved plan; routine execution coordination within that plan stays autonomous."
+    },
+    {
+      "id": "optional_feature_spending_limit",
+      "source": "User interview answer",
+      "decision": "Each feature supports a configured spending limit or Off. A reached configured limit pauses further inference; Off tracks spending without imposing a feature spending limit."
+    },
+    {
+      "id": "feature_budget_warning_75_percent",
+      "source": "User additional requirement",
+      "decision": "If a feature budget is configured, begin warning its coordinator at 75% of that budget so it can try to wrap up within the remaining allowance. Existing acceptance, review and verification requirements remain in force."
+    },
+    {
+      "id": "budget_pause_requires_manual_continue",
+      "source": "User explicit interview answer",
+      "decision": "Raising a feature spending limit or switching it Off does not automatically resume work paused at that limit. Require explicit manual Continue; other pauses, blockers and current limits still apply."
+    },
+    {
+      "id": "git_inspection_without_manual_client",
+      "source": "User explicit interview answer",
+      "decision": "Manual source-control operations are not required in the harness; use an external Git client or GitHub. Keep source-control inspection and configured autonomous Git delivery."
+    },
+    {
+      "id": "task_worktree_branch_pr_locations",
+      "source": "User explicit requirement",
+      "decision": "Document current associated worktrees, branches and PRs on each task so the user can readily find where its work lives, with repository identities, paths and links. Preserve historical associations after cleanup."
+    },
+    {
+      "id": "github_resource_references_are_links",
+      "source": "User explicit requirement",
+      "decision": "Always display GitHub resource references as clickable links, including references in agent/coordinator chat and all relevant task, history, review, notification and source-control surfaces."
+    },
+    {
+      "id": "schema_only_indexing_separate_data_tools",
+      "source": "User explicit interview answer",
+      "decision": "Database indexing covers schemas only. Also provide tools for reading and manipulating data with configurable read/write permission, preserving shared tool controls and always-read-only reviewers."
+    },
+    {
+      "id": "scheduled_inference_tasks_app_and_project",
+      "source": "User new requirement",
+      "decision": "Support scheduled inference tasks at project and app scope, including a GitHub repository issue monitor that discovers new reported issues and performs a configured automated action. Inference goes through the router and actions use permitted harness tools."
+    },
+    {
+      "id": "scheduled_inference_maintenance_restart_policy",
+      "source": "User interview answer: Yes",
+      "decision": "App/project scheduled inference tasks follow maintenance lifecycle rules: automatically reactivate enabled schedules on reopening, skip missed occurrences with no catch-up and resume interrupted active runs with existing history. Preserve independent holds. Feature agents still require manual Continue after app closure."
+    },
+    {
+      "id": "next_work_project_or_feature_scope",
+      "source": "User explicit tool contract and subsequent mixed project queue answer",
+      "decision": "Provide next_work(project, feature = null). With omitted/null feature select the highest-priority eligible feature or standalone issue from one project queue. Tasks linked to a feature are selected within that feature, not as standalone project candidates. With a feature select the highest-priority eligible task within it. This supersedes the earlier feature-only project queue choice."
+    },
+    {
+      "id": "scheduled_agents_full_configured_tool_access",
+      "source": "User clarification of scheduled-agent capability",
+      "decision": "Agents launched by scheduled inference tasks have full configured tool access, including next_work and tools to start features/tasks. They are not restricted to read-only monitoring. Existing selected permissions, plan approval/readiness and explicit pause policies still apply."
+    },
+    {
+      "id": "standalone_project_issues",
+      "source": "User standalone-task requirement and terminology correction",
+      "decision": "Call standalone project tasks issues, aligning terminology with GitHub. They may be worked directly without a feature; retain task/agent/transcript/Git history and optional feature association."
+    },
+    {
+      "id": "standalone_issue_main_delivery",
+      "source": "User explicit correction",
+      "decision": "Standalone issues open PRs directly to main; do not route them through a feature branch or a configurable alternative delivery target. Existing review/fix/check and Auto-Merge policies apply. Automatic cleanup after verified merge was subsequently confirmed separately."
+    },
+    {
+      "id": "selective_manual_issue_resume",
+      "source": "User interview answer",
+      "decision": "Issues active at app closure remain paused on reopening until manually resumed. Users select which issues to Continue, as with features. Existing sleep/wake automatic continuation while the app remains open applies; separate pauses and blockers remain."
+    },
+    {
+      "id": "automatic_issue_git_cleanup",
+      "source": "User interview answer: Yes",
+      "decision": "After verified merge of an issue to main, automatically clean up its harness-owned worktrees and local branches. Retain transcripts, artifacts, GitHub links and complete work history. Preserve unintegrated work and report cleanup failure with a retry path."
+    },
+    {
+      "id": "custom_project_kanban_workflows",
+      "source": "User interview answer",
+      "decision": "Support custom Kanban columns and status names per project rather than one fixed global workflow. Shared UI/agent operations apply. Exact semantic mappings and transition mechanics remain proposed."
+    },
+    {
+      "id": "standalone_issue_spending_without_caps",
+      "source": "User interview answer: No to feature-style issue budgets",
+      "decision": "Standalone issues do not support spending limits. Track inference usage and costs without a per-issue cap, 75% budget warning or budget-triggered pause. Feature budgets remain feature-scoped; other pause, approval, provider-availability and restart-resumption rules remain effective."
+    },
+    {
+      "id": "standalone_issue_delegation",
+      "source": "User interview answer: It can delegate",
+      "decision": "The agent responsible for a standalone issue may delegate scoped work to subagents without creating a feature. Preserve parent/child agent lineage, assignments, transcripts and work/evidence links on the issue; existing routing, permissions, isolation and visibility/control requirements apply. The independent configurable per-issue concurrency limit was subsequently confirmed with a default of 10."
+    },
+    {
+      "id": "independent_issue_subagent_limit",
+      "source": "User interview answer: Yes\u2014default 10 per issue",
+      "decision": "Standalone issues have their own configurable concurrent subagent limit, defaulting to 10 independently per issue, matching feature limit behavior. Maximize useful parallelism within that allowance. There is no global/workspace agent-count cap; actual resource constraints still apply."
+    },
+    {
+      "id": "immediate_action_on_clear_issues",
+      "source": "User interview answer: It can act immediately",
+      "decision": "A clear, actionable standalone issue may proceed immediately to implementation without separate plan approval. Its agent may plan and delegate within scope, asking for input where requirements are unclear or an unresolved decision needs it. Tool permissions, explicit pauses, verification, reviews and Auto-Merge policies remain effective. Feature plan approval remains unchanged."
+    },
+    {
+      "id": "automatic_bidirectional_linked_github_issues",
+      "source": "User interview answer: Sync automatically",
+      "decision": "Automatically synchronize edits and status changes in both directions for local issues linked to GitHub issues. No explicit per-edit user/agent sync action is required. New local issues were subsequently confirmed to stay local until explicitly published/linked. Exact field coverage and workflow/GitHub state mapping remain open. Conflict reconciliation by an agent with user escalation was subsequently confirmed separately.",
+      "superseded_in_part_by": "github_issue_intake_and_resolution_20261102",
+      "current_interpretation": "Retain historical answer as evidence. Apply the later asymmetric GitHub intake/resolution and automatic verified-bug triage/start decisions; retain explicit publication/linking for locally created issues and initial open-issue import."
+    },
+    {
+      "id": "agent_reconciles_issue_sync_conflicts",
+      "source": "User interview answer: Agent reconciles; escalate unresolved conflicts",
+      "decision": "An agent automatically reconciles conflicting local/GitHub issue changes, recording the resolution/rationale in issue history. If unresolved, preserve both versions and raise a user decision in the approval queue with an in-app notification; only the conflicting change waits while independent sync/work continues."
+    },
+    {
+      "id": "issues_local_until_explicit_publication",
+      "source": "User interview answer: Stay local",
+      "decision": "Issues created locally stay local until explicitly published to GitHub or linked to an existing GitHub issue. Creating/editing a local issue does not automatically create/link a remote issue. Automatic two-way synchronization begins after explicit publication/linking, preserving local issue identity/history and existing permissions.",
+      "superseded_in_part_by": "github_issue_intake_and_resolution_20261102",
+      "current_interpretation": "Retain historical answer as evidence. Apply the later asymmetric GitHub intake/resolution and automatic verified-bug triage/start decisions; retain explicit publication/linking for locally created issues and initial open-issue import."
+    },
+    {
+      "id": "automatic_new_github_issue_import",
+      "source": "User interview answer: Automatically",
+      "decision": "Automatically import newly reported GitHub issues from project-associated repositories into the project issue list, without explicit import actions or a separately configured scheduled inference task. Preserve source owner/repository, remote identity and clickable link and continue automatic two-way sync. Import makes issues available for prioritization/work selection; implementation still uses existing Start/configured automation. The user subsequently confirmed that existing open issues are also imported when connecting a repository.",
+      "superseded_in_part_by": "github_issue_intake_and_resolution_20261102",
+      "current_interpretation": "Retain historical answer as evidence. Apply the later asymmetric GitHub intake/resolution and automatic verified-bug triage/start decisions; retain explicit publication/linking for locally created issues and initial open-issue import."
+    },
+    {
+      "id": "github_direct_api_polling",
+      "source": "User explicit selection: use recommended polling",
+      "decision": "Use direct authenticated GitHub API polling from the Rust app, with conditional requests where supported and rate-limit/poll-interval compliance. No required webhook receiver, public endpoint, tunnel or relay. Poll while open and reconcile remote state after reopen/wake/connectivity recovery, preserving manual work pauses and no replay of missed scheduled inference runs."
+    },
+    {
+      "id": "github_events_notify_agents_and_index_repositories",
+      "source": "User clarification of event consumers",
+      "decision": "GitHub changes discovered by polling feed application events used for agent/coordinator notification and repository indexing. Retain repository/work/PR context and visible source-revision/freshness. Code-affecting pushes/merges refresh affected indexes; issue/review-only changes do not require code reindexing. Exact event delivery/index scope mechanics remain proposed."
+    },
+    {
+      "id": "import_existing_open_github_issues",
+      "source": "User interview answer: Import the existing open issues as well.",
+      "decision": "When connecting a repository to a project, automatically import its existing open GitHub issues as well as subsequently reported issues. Preserve remote identity, source repository and clickable links, continue automatic two-way synchronization and reuse existing mappings to avoid duplicates. Import alone does not start implementation; Start and configured automation remain the execution triggers.",
+      "superseded_in_part_by": "github_issue_intake_and_resolution_20261102",
+      "current_interpretation": "Retain historical answer as evidence. Apply the later asymmetric GitHub intake/resolution and automatic verified-bug triage/start decisions; retain explicit publication/linking for locally created issues and initial open-issue import."
+    },
+    {
+      "id": "auto_merge_enabled_by_default",
+      "source": "User interview answer: On by default, with project and repository overrides.",
+      "decision": "Auto-Merge is enabled by default. Project settings can override the inherited default, and repository overrides take precedence for that repository. Effective values and their sources remain visible. Auto-Merge does not bypass required reviews, checks, unresolved actionable findings, approval requirements or other existing merge gates."
+    },
+    {
+      "id": "mandatory_review_enabled_by_default",
+      "source": "User interview answer: Yes, on by default, with project and repository overrides.",
+      "decision": "Mandatory independent code review is enabled by default. Project settings may override the inherited default, and explicit repository settings take precedence for that repository, independently of Auto-Merge. Effective values and sources remain visible. Separate-agent review, GitHub review awareness, resolution of every actionable finding and the configured fix cycle remain part of the review workflow. The user subsequently selected configured GitHub automated reviews as sufficient, with an in-app reviewer only for repositories without automated reviews configured.",
+      "superseded_in_part_by": "github_review_unavailable_independent_fallback_20261102",
+      "current_interpretation": "Configured GitHub review remains the normal source. If it fails or never completes, use an independent in-app reviewer automatically; retain all review findings and other delivery gates."
+    },
+    {
+      "id": "github_automated_reviews_satisfy_review_gate",
+      "source": "User interview answer: GitHub automated reviews should satisfy it. Only run an in-app reviewer when the repository does not already have automated reviews configured.",
+      "decision": "Configured GitHub automated reviews satisfy mandatory independent review. Do not launch an additional in-app reviewer for such repositories. When mandatory review is enabled and no automated reviews are configured, run a separate in-app reviewer. Both sources feed the existing fix cycle and must complete with every actionable finding resolved before merge. Exact configuration discovery, review completion signals and missing/failed-review handling remain open.",
+      "superseded_in_part_by": "github_review_unavailable_independent_fallback_20261102",
+      "current_interpretation": "Configured GitHub review remains the normal source. If it fails or never completes, use an independent in-app reviewer automatically; retain all review findings and other delivery gates."
+    },
+    {
+      "id": "keep_awake_default_off",
+      "source": "User interview answer: Off",
+      "decision": "The keep-computer-awake setting is off by default. Users may enable it while the app is open; closing the app or disabling the option releases its keep-awake request. The user subsequently confirmed display sleep remains allowed when keep-awake is enabled."
+    },
+    {
+      "id": "keep_awake_allows_display_sleep",
+      "source": "User interview answer: yes, allow display to turn off while the computer continues working.",
+      "decision": "When keep-awake is enabled, prevent idle system sleep while allowing the display to turn off. Keep-awake remains off by default, applies while the app is open and releases on disable/exit. Platform power-management mechanics and effective availability remain to validate."
+    },
+    {
+      "id": "native_os_required_input_notifications",
+      "source": "User interview answer: Sure, if that is possible",
+      "decision": "Provide native operating-system notifications for items needing user input when the app is not focused, where supported and permitted. Respect OS authorization and suppression; retain the in-app notification and approval queue if OS alerts are denied, unavailable or suppressed. Notification acknowledgment/dismissal does not resolve an approval or resume work. Cross-platform feasibility is supported by native/Rust documentation; exact backend and packaging/activation behavior remain to validate."
+    },
+    {
+      "id": "manual_backups_only",
+      "source": "User interview answer: Manual, that is a lot of data to be backing up.",
+      "decision": "Application backups are manual only; do not run automatic backups. The discussed data includes SQLite and HelixDB application state and associated artifact files. Scope-selection UI, consistent checkpoints, format/destination and restore mechanics remain proposed details to refine."
+    },
+    {
+      "id": "implementation_shell_process_tools_enabled",
+      "source": "User interview answer: Yes, enable shell/process tools by default for implementation agents while keeping reviewers read-only.",
+      "decision": "Built-in shell/process tools are enabled by default for implementation agents, subject to configured tool permissions and project scope. Users can disable them through Settings, with enforcement at invocation. Review agents remain read-only; default enablement does not permit direct or indirect mutations by reviewers."
+    },
+    {
+      "id": "mcp_client_only",
+      "source": "User interview answer: No, only connect to external MCP servers",
+      "decision": "MCP support is client-only. The app connects to external MCP servers and manages their configurations and selected tools; it does not expose its own MCP server for other clients. First-class built-in tools remain directly available to the harness. External-client transport/authentication/capability details remain to define.",
+      "status": "Superseded",
+      "supersededBy": "mcp_server_for_other_harnesses",
+      "supersessionDate": "2026-11-02"
+    },
+    {
+      "id": "dependency_installation_authority",
+      "source": "User interview answer: yes, install project dependencies automatically and ask before system-wide tool/package installations.",
+      "decision": "Implementation agents may automatically install project dependencies within authorized project/worktree scope. System-wide tool or package installations require user approval before execution. Existing configured tool permissions and reviewer read-only restrictions apply, and installation/approval outcomes remain linked to work history. Exact classification and enforcement mechanics remain to define."
+    },
+    {
+      "id": "built_in_web_research_enabled",
+      "source": "User interview answer: yes and enabled by default",
+      "decision": "Provide built-in web search and fetching of web/documentation pages, with both enabled by default. They follow the shared configurable tool selection and are available to read-only reviewers as read tools. Tool activity, source URLs and results remain linked to agent/work history. Search backend, credentials, result extraction/limits and any usage charges remain implementation decisions."
+    },
+    {
+      "id": "direct_agent_image_inspection",
+      "source": "User interview answer: Yes, agents inspect screenshots/images with vision-aware routing.",
+      "decision": "Agents must directly inspect screenshots and other images, including attachments and artifacts. Route image-dependent inference through the internal router to a model/endpoint supporting vision. Unavailable capability must be visible; do not silently omit images or claim they were inspected."
+    },
+    {
+      "id": "all_chat_inputs_accept_attachments",
+      "source": "User addition: all chat inputs need to accept images or files via a selection dialog, drag and drop or paste.",
+      "decision": "Every chat input accepts images and files using all three mechanisms: selection dialog, drag-and-drop and paste. This includes workspace, feature, issue and other interactive agent chat composers. Attachments stay associated with the correct message and accessible through conversation history. Detailed staging, durable copies, artifact provenance for scoped/unscoped chats, formats/limits and extraction remain proposed under UI-09."
+    },
+    {
+      "id": "model_selector_every_chat_input",
+      "source": "User requirement: model selector in each chat input, selecting available models in the router.",
+      "decision": "Every chat input includes a model selector populated with models available in the router. Users may choose a model; inference still passes through the router and respects permissions and required capabilities. The subsequent session_model_pinning decision confirms selection persistence, Auto and initial automatic session pinning; automatic replacement on rate limits/unavailability is confirmed by pinned_model_automatic_failover."
+    },
+    {
+      "id": "session_model_pinning",
+      "source": "User confirmation: selection stays until changed with Auto; when a session starts and routes to a specific model, it must be pinned. Reference verified in simple-router commit a556b3531b577173195bbc3876b556196447721d, Routing/ModelSelector.cs.",
+      "decision": "Manual chat model selection persists until changed. Auto returns model selection to the router, whose initial assignment pins the session rather than rerouting each request. Preserve the logical session/pin through turns, tool continuations and compaction. Existing router persists pins by session and tier and reuses eligible pins; failure, unavailability, capability-related re-pinning and target restart-persistence mechanics still require review. Do not infer unconditional automatic failover or a permanent ban on switching. Subsequent pinned_model_automatic_failover decision confirms automatic switching and re-pinning on rate limits/unavailability; it supersedes the earlier open failover question. Subsequent session_pin_survives_app_restart decision confirms retention of the current pin across closing/reopening, including failover replacements; target restart persistence is no longer an open policy question."
+    },
+    {
+      "id": "pinned_model_automatic_failover",
+      "source": "User: Automatically switch to an available model and pin the session to the replacement, just like simple-router does.",
+      "decision": "When a pinned model is rate-limited or unavailable, automatically choose an available eligible replacement and pin the same session to it. Subsequent requests keep the replacement pin, including after the original model recovers; do not reroute every request or automatically bounce back. This applies to session pinning, including a previously manual selection. Existing capability, permission and configured routing constraints still apply. Pin persistence/recovery, capability-change handling and no-eligible-replacement recovery mechanics remain open. Subsequent session_pin_survives_app_restart decision confirms retention of the current pin across closing/reopening, including failover replacements; target restart persistence is no longer an open policy question."
+    },
+    {
+      "id": "session_pin_survives_app_restart",
+      "source": "User Yes to whether the pinned model should survive closing and reopening the app.",
+      "decision": "Persist and restore the current model pin for the same logical session across app closure/reopening, including a replacement selected during automatic failover. Reopening must not reroute the session merely because the app restarted. Existing model eligibility and automatic failover still apply if the restored model is unavailable. Restoring routing state does not override selective manual Continue for paused feature/issue execution."
+    },
+    {
+      "id": "router_cooldown_automatic_reconnect",
+      "source": "User: router generally reports when each model becomes available; wait until the end of the cool-off period and reconnect automatically.",
+      "decision": "When no eligible model is available and cooldown expiry times are reported, wait until the earliest eligible model cooldown ends, recheck availability and reconnect automatically through the router. No manual Continue is required solely for a cooldown wait. Honor updated cooldown times and re-pin any replacement under the confirmed session policy. Existing user pauses, approval waits, budget holds and selective manual resume after app closure remain effective. Missing/indefinite availability timing and other recovery mechanics remain open."
+    },
+    {
+      "id": "branch_and_uncommitted_worktree_overlays",
+      "source": "User Yes to automatic graph search of isolated uncommitted worktree changes, directing us to preserve CodeGraph branch overlays. Reference indexed commit afe73560215bbe7593fc59451de5cc3237e3eeca, verified against local Git objects.",
+      "decision": "Bring CodeGraph branch-overlay functionality into the Rust harness. Automatically give agents graph views reflecting their own branch/worktree and uncommitted changes, isolated from main and other agents. Preserve baseline-plus-changes composition, additions/edits/deletions/renames, consistent scoped query/source/context behavior, provenance, freshness, lifecycle and errors. Verified source is commit-based and deliberately does not read dirty worktrees; uncommitted views are a confirmed harness extension, not claimed existing parity. Snapshot identities, atomic publication, staged/unstaged/untracked handling, active retention/expiry and cleanup are proposed mechanics under CODE-10\u201311."
+    },
+    {
+      "id": "skill_documents_scripts_assets",
+      "source": "User Yes to support referenced documents, scripts and assets, with scripts governed by normal tool permissions and dependency rules.",
+      "decision": "Support skill instruction packages with referenced documents, executable scripts and assets, from shared and harness-specific directories. Agents can access package resources and invoke permitted scripts through ordinary harness controls. Skills do not grant extra authority or bypass disabled tools, project scope, reviewer read-only restrictions or system-wide installation approval. Optional script runtimes/dependencies are explicit and do not become core app prerequisites. Format/reference resolution and helper/dependency mechanics remain to be refined."
+    },
+    {
+      "id": "automatic_skill_self_improvement",
+      "source": "User Yes to agents automatically creating/updating harness-specific skills with history; harness self-improvement is a goal.",
+      "decision": "Historical policy, superseded by skill_and_role_edits_require_approval. Harness self-improvement is an explicit product goal. Authorized agents may automatically create and update harness-specific skills without approval for each edit, with visible responsible-agent/work/session attribution, rationale and revisions. Existing tool permissions, user directions, dependency rules and next-safe-step adoption apply. Proposed version inspection, validation/evidence recording and revision-aware rollback support this behavior. Automatic mutation authority for shared skills, role instructions and harness implementation has not yet been decided; do not infer it from the skill-edit decision.",
+      "status": "Superseded",
+      "superseded_by": "skill_and_role_edits_require_approval"
+    },
+    {
+      "id": "skill_and_role_edits_require_approval",
+      "source": "User: role-instruction edits with approval; backtracks on skills, agents should write/edit their own skills but those changes also require approval.",
+      "decision": "Harness self-improvement remains a goal. Agents may draft new harness-specific skills, edits to their own skills and role-instruction revisions, but explicit user approval is required before creating/updating active skill files or applying/activating instruction revisions. Pending/rejected proposals leave the existing active versions in effect. Preserve attributable history, rationale, revisions and approval outcomes; approved changes adopt at the next safe step. Role-instruction version history and rollback are confirmed. Proposed common queue, diffs, revision-bound approval and concurrent-edit reconciliation remain implementation details. This replaces automatic_skill_self_improvement\u2019s no-per-edit-approval policy. Shared-skill mutation scope and harness-code self-modification remain open. Subsequent harness_code_self_improvement_workflow confirms the normal feature/PR/review workflow for harness-code improvements; candidate installation/restart remains open."
+    },
+    {
+      "id": "harness_code_self_improvement_workflow",
+      "source": "User: Yeah, that would be great, confirming harness proposals for its own Rust-code improvements through the normal feature, PR and review workflow.",
+      "decision": "The harness can propose improvements to its own Rust code and manage approved work as ordinary project features through isolated worktrees, implementation, verification, PRs, independent review/fix cycles and configured delivery. Existing plan approval, tool permissions, review and merge rules remain effective; retain complete linked work/agent/transcript/Git/review/evidence history. This does not decide automatic installation, replacement of the running app, restart timing or rollback. Running/source/candidate version tracking and safe update lifecycle are proposed under SELF-02. Documentation is subsequently mandatory under self_improvements_require_documentation; completion/delivery requires accurate corresponding documentation."
+    },
+    {
+      "id": "self_improvement_install_restart_approval",
+      "source": "User Yes to requiring explicit approval for installing a self-improvement build and restarting the app.",
+      "decision": "Explicit user approval is required before installing a self-improvement build and restarting the application to activate it. Source merge and passing tests/reviews do not imply installation/restart consent. Pending or denied approval leaves the installed version in use and permits unrelated authorized work to continue. Preserve existing pause/persist/exit and selective manual feature/issue Continue after reopening; record approval and update outcomes. Candidate version tracking, safe update preparation, compatibility and rollback mechanisms remain proposed details."
+    },
+    {
+      "id": "shared_skill_improvements_use_harness_overrides",
+      "source": "User Yes to harness-specific override proposals for shared skills in ~/.agents/skills, leaving the shared original untouched.",
+      "decision": "Agent-proposed improvements to shared skills must become harness-specific override proposals, preserving the shared original and its files. Require user approval before writing/updating the active override. Pending/rejected proposals do not change effective skills. Approved same-name harness overrides take precedence and active agents adopt them at the next safe step. Preserve source/override provenance and version history. This resolves the previously open agent authority for editing shared skills: do not mutate shared originals as part of harness self-improvement."
+    },
+    {
+      "id": "database_target_engines",
+      "source": "User: Yes, support SQLite, MariaDB/MySQL, PostgreSQL, SQL Server, and HydraDB if indexable.",
+      "decision": "Require SQLite, MariaDB/MySQL, PostgreSQL and SQL Server for schema indexing and separately permissioned data tools, verifying both MariaDB and MySQL. HydraDB is conditional on indexability within the agreed scope and permissions. It does not replace HelixDB/SQLite app storage. Official HydraDB graph MCP documentation lacks a schema-discovery tool and uses unrestricted Cypher; read-only structural inference and enforcement require validation. Subsequent hydradb_readonly_structure_inspection approves read-only record inspection for schema inference with metadata-only retention; feasibility and read-only enforcement remain unvalidated. Versions, authentication and per-engine metadata coverage remain open.",
+      "superseded_by": "database_target_helix_correction"
+    },
+    {
+      "id": "hydradb_readonly_structure_inspection",
+      "source": "User: Yes, read-only inspection to infer the structure is fine, as long as only schema metadata is retained, not actual data.",
+      "decision": "Authorize read-only HydraDB graph-record inspection for structural inference. Retain only schema metadata, such as labels, property names/types and relationship types; no source records or property values may persist through the indexing path, including query results, diagnostics, logs, transcripts, artifacts, caches or embeddings. Report inferred versus declared metadata, coverage and freshness. Inspection must not mutate the source or confer write permission. Actual HydraDB discovery and enforceable read-only access remain unvalidated, so support stays conditional. This settles the discovery-scope question in database_target_engines; separately permissioned data tools retain their distinct scope.",
+      "superseded_by": "database_target_helix_correction"
+    },
+    {
+      "id": "database_connections_readonly_default",
+      "source": "User Yes to read-only database connections by default, with data writes requiring explicit enablement for each connection.",
+      "decision": "Every configured target database connection defaults to read-only. The user must explicitly enable data writes for each connection; enabling one must not enable others. Connection write enablement remains subject to selected tool permissions and project scope and cannot grant code-review agents write access. Schema indexing and HelixDB structural inspection remain read-only regardless of data-tool write settings. This settles connection permission defaults and write-enable scope; schema-changing DDL authority is settled by database_schema_changes_prefer_committed_migrations. Enforcement details, transactions, limits and result retention remain to be resolved."
+    },
+    {
+      "id": "database_schema_changes_prefer_committed_migrations",
+      "source": "User: Preferably through committed migrations, but if that is not possible, yes, confirming schema changes on write-enabled connections.",
+      "decision": "Allow schema-changing operations, preferring migration files committed to the appropriate project repository through normal worktree/review/delivery workflow. If committed migrations are not possible, direct schema changes are allowed. Applying either route requires explicit write enablement on the target connection plus agent tool permission and project scope; committing a migration does not itself authorize application. Indexing and reviewers remain read-only. Keep associated work/agent/action history. Recording the migration commit or fallback reason/outcome is proposed under DB-05; migration execution, transactions, retries and result retention remain implementation decisions."
+    },
+    {
+      "id": "database_connections_shareable_across_projects",
+      "source": "User Shareable to connections being shared across projects with access controlled per project.",
+      "decision": "Database connections may be shared by multiple projects, with access controlled per project. Sharing does not automatically grant access to other projects or their agents. At invocation, enforce requesting-project access together with connection policy and agent tool permissions. Project access cannot override a read-only connection; indexing and reviewers remain read-only. Keep project/agent action attribution. Reusing one connection definition across associations and showing effective access is proposed under DB-02; detailed permission configuration and enforcement remain to be specified."
+    },
+    {
+      "id": "scheduled_inference_overlap_skipped",
+      "source": "User Skipped to the next occurrence of a scheduled inference task arriving while its previous run is still running.",
+      "decision": "Skip overlapping scheduled inference occurrences. Do not start a duplicate run or queue catch-up for that occurrence. Preserve the active run and show the skipped outcome in history. Existing resume, explicit-pause and missed-occurrence policies remain effective."
+    },
+    {
+      "id": "deployment_release_policies_default_ask",
+      "source": "User Yes, and default to ask me, confirming separate per-repository Automatic / Ask me / Disabled settings for agent-initiated deployments and release publishing, independent of Auto-Merge and with inherited defaults.",
+      "decision": "Deployments and release publishing each have their own policy: Automatic, Ask me or Disabled. Both default to Ask me. Inherit workspace defaults through projects, with independent repository overrides and visible effective values/sources. Neither setting is implied by Auto-Merge or by the other setting. Ask me requires explicit approval before the action; Disabled prevents it; Automatic remains subject to tool permissions and execution rules. Harness self-install/restart retains its explicit approval requirement. Deployment target configuration, execution and approval-binding mechanics remain to be specified."
+    },
+    {
+      "id": "managed_executable_language_packs",
+      "source": "User selected managed executable language packs and explicitly requested optional .NET, TypeScript, Swift and Rust semantic indexers and an add-ons management screen.",
+      "decision": "Downloadable prebuilt managed executable language packs extend the native Rust app without recompiling it. The app owns helper lifecycle and a versioned protocol; no separate administered server or VM is required. Provide optional semantic packs for .NET, TypeScript, Swift and Rust and a dedicated Settings Add-ons screen for installation, updates, enablement, removal, configuration, prerequisites, compatibility and diagnostics. Tree-sitter baseline remains independent. Accept SCIP and native-format adapters, including Swift index stores. Rust SDK, manifest/transport, distribution/trust, supported versions/platforms and active-run/update/rollback mechanics are proposed details, not yet validated integrations."
+    },
+    {
+      "id": "general_harness_packages",
+      "source": "User requested capture of the Pi/Oh My Pi discussion and the proposed Rust harness package architecture in the requirements.",
+      "decision": "General harness packages use managed executables and a Rust SDK, sharing the language-pack host and Add-ons management screen. Packages contribute tools, commands, workflows/gates, events, context/compaction, approved skills/prompts/role instructions, provider registrations through the router and host-rendered egui UI. Agents can build and test package projects, but agent-authored executable versions require user approval before activation. Reload approved versions at safe boundaries, preserve prior versions for guarded rollback and record package/version/work provenance. All brokered actions follow existing router, permissions, reviewer restrictions and work/review policies; process separation is not an OS security sandbox. Pi and Oh My Pi are design references. Oh My Pi has TypeScript/Bun agent and extension code plus Rust native tooling; direct compatibility with their existing packages is not selected. Exact SDK/protocol/UI contribution schemas, executable trust, distribution, hook failure/replay and state migration remain proposed details."
+    },
+    {
+      "id": "force_push_authority",
+      "source": "User: Yes, that is fine, just never force push to main, answering automatic own task branches versus approval for feature/main branches.",
+      "decision": "Agents may automatically force-push their own task branches, such as after rebasing. Feature branches require explicit user approval. Main must never be force-pushed. Branches outside the agent-owned task scope do not gain automatic authority. Existing branch protections still apply. Expected-revision force-with-lease, concrete-target approval binding, ownership checks, equivalent refspec/tool enforcement and reconciliation are proposed implementation details."
+    },
+    {
+      "id": "cross_repository_final_pr_readiness",
+      "source": "User: Yes, all final PRs should pass checks and reviews before any are merged, then merge them in dependency order.",
+      "decision": "For multi-repository features, every final feature PR must pass its required checks and reviews before any final PR is merged. Once all are ready, merge in dependency order, preserving effective per-repository merge authority and review policies. Partial-delivery failure/recovery remains open."
+    },
+    {
+      "id": "autonomous_merge_conflict_resolution",
+      "source": "User: Do not notify me; resolve conflicts and continue. Concurrent agents in the same repository will often conflict. Pause and inform me if a merge fails in a completely unusual way.",
+      "decision": "Routine merge conflicts, including conflicts caused by concurrent agents in the same repository or during multi-repository delivery, are resolved autonomously without user notification or routine approval. Continue under existing required checks, reviews and merge authority; never force-push main. Unusual merge failures the coordinator cannot resolve pause affected delivery and dependent work and notify the user, while independent work continues. Exact unusual-failure classification and recovery mechanics remain to specify; this is not approval for automatic reversal of successful merges."
+    },
+    {
+      "id": "feature_complete_on_final_pr_merges",
+      "source": "User: Once all final PRs are merged. Releases and deployments should be tracked separately.",
+      "decision": "A feature is complete when all final feature PRs are verified merged to main across its affected repositories. Release and deployment records have separate linked statuses and retain their independent configured policies; pending, approval-waiting or failed release/deployment work does not keep the feature open. Apply existing feature-completion cleanup with visible cleanup outcomes and retained history/artifacts."
+    },
+    {
+      "id": "project_keep_working_mode",
+      "source": "User: Yes, that would be a nice addition, answering optional per-project keep-working mode that starts the next eligible feature or issue.",
+      "decision": "Provide an optional per-project keep-working mode using project next_work priority/eligibility and normal Start policies. Expose mode state, controls and activity. Existing approvals, pauses, budgets, permissions, ownership and resource rules remain effective. Work-item concurrency is subsequently confirmed as one feature or standalone issue per project under keep_working_one_item_per_project. Manual restart after app closure is subsequently confirmed under keep_working_manual_restart. Stop when no eligible work remains is subsequently confirmed under keep_working_stop_without_eligible_work. Default off for new projects is subsequently confirmed under keep_working_default_off; do not infer a global subagent cap."
+    },
+    {
+      "id": "new_work_fresh_session_context",
+      "source": "User: However, new work should always start in a new session with a clear context.",
+      "decision": "Every newly started feature, standalone issue or task assignment gets a distinct session and context assembled specifically for that work, regardless of manual, scheduled or keep-working origin. Include relevant instructions, brief, project knowledge and scoped evidence without inheriting the prior work conversation as the new transcript. Preserve work/origin/history links. Continue of existing work retains its established history and continuity."
+    },
+    {
+      "id": "keep_working_one_item_per_project",
+      "source": "User: Just one feature at a time, answering one feature or issue per project versus configurable concurrent work items in keep-working mode.",
+      "decision": "Keep-working mode runs one feature or standalone issue at a time per project. It does not introduce a configurable multi-item concurrency setting. The current item may still use its independent configured subagent allowance and useful task parallelism; other projects may work independently. Fresh-session rules apply to each next item. Manual restart after closure is subsequently confirmed under keep_working_manual_restart. Stop when no eligible work remains is subsequently confirmed under keep_working_stop_without_eligible_work. Default off for new projects is subsequently confirmed under keep_working_default_off."
+    },
+    {
+      "id": "keep_working_manual_restart",
+      "source": "User: yes, answering whether keep-working also requires manual restart after closing and reopening, matching manual Continue.",
+      "decision": "After the application is closed and reopened, per-project keep-working remains stopped until the user manually restarts it. Do not automatically start new queued features or issues solely because the mode was active before closure. Existing work still requires selective manual Continue; restarting mode does not clear those holds. Maintenance/scheduled-job restart policies remain separate."
+    },
+    {
+      "id": "keep_working_stop_without_eligible_work",
+      "source": "User: Stop, answering whether keep-working stays enabled and waits for eligible work or stops until enabled again.",
+      "decision": "When keep-working seeks the next item and no eligible work remains, stop the mode rather than remain enabled watching the queue. Later work additions or eligibility changes must not reactivate it; require explicit manual enablement. Preserve existing work, pauses, approvals and history. This answer concerns the queue policy, not a request to stop the requirements interview."
+    },
+    {
+      "id": "keep_working_default_off",
+      "source": "User: Yes, answering whether keep-working is off by default for each new project.",
+      "decision": "Keep-working is off by default for every newly created project and starts only after explicit user enablement. Retain one feature or standalone issue at a time per project, fresh sessions for new work, manual restart after app closure/reopening, and stopping when no eligible work remains until manually enabled again."
+    },
+    {
+      "id": "project_removal_archives_by_default",
+      "source": "User: Yes, answering whether project removal archives records/history by default, with permanent deletion available as a separate explicit action.",
+      "decision": "Default project removal archives its records and linked work/history rather than permanently deleting them. Make archived records accessible and provide permanent deletion as a distinct explicit action. UI and permitted agent tools share this behavior. Active-agent confirmation and immediate project-work stop are subsequently confirmed under archive_active_agents_confirm_immediate_stop. Manual reactivation after restoration is subsequently confirmed under restored_project_manual_reactivation. Stop verification, restoration controls, shared references and permanent-deletion mechanics remain to specify. The harness-only deletion boundary is subsequently confirmed under permanent_project_deletion_harness_only."
+    },
+    {
+      "id": "archive_active_agents_confirm_immediate_stop",
+      "source": "User: If active agents are working on a project being archived, warn the user and ask if they are sure. If yes, all work stops immediately; there is no point waiting for a safe stopping point.",
+      "decision": "Before archiving a project with active agents, warn and require user confirmation. Declining leaves project/work unchanged. Confirmation immediately stops all project work and blocks new dispatch; do not wait for safe-step boundaries, completed tools/tasks or cooperative checkpoints. Apply to coordinators, subagents, inference/tools, owned processes and background work, preserving history and interrupted state. Archived projects cannot restart through schedules, keep-working or other dispatch paths; unrelated projects continue. Cancellation/stop verification and uncertain external-effect reconciliation require implementation detail; restoration leaves execution stopped until explicit manual reactivation, subsequently confirmed under restored_project_manual_reactivation."
+    },
+    {
+      "id": "restored_project_manual_reactivation",
+      "source": "User: Yes, answering whether restoring an archived project leaves its work and schedules stopped until manually reactivated.",
+      "decision": "Restoring an archived project leaves work and agents, keep-working mode and project schedules stopped. Require explicit manual reactivation; restoration alone never resumes execution or bypasses existing pauses, approvals or budgets."
+    },
+    {
+      "id": "permanent_project_deletion_harness_only",
+      "source": "User: Yes, only delete the harness data and artifacts. Leave local repositories and GitHub resources untouched.",
+      "decision": "Permanent project deletion removes only harness data and artifacts. Leave local repository files, worktrees and branches and all GitHub resources untouched; do not invoke Git cleanup or remote mutations as a side effect. Preservation of shared artifacts referenced by other projects is subsequently confirmed under preserve_artifacts_referenced_by_other_projects. Shared-data ownership and deletion mechanics remain open."
+    },
+    {
+      "id": "preferred_local_repository_base_directory",
+      "source": "User: Many people have a preferred base directory for local repos; we should have that as a configuration setting.",
+      "decision": "Provide a preferred base directory for local repositories in Settings. Directory chooser/path validation, default clone destinations, preserving existing paths and distinguishing worktree/artifact locations are proposed behavior; app-wide inheritance with optional project overrides is subsequently confirmed under repository_base_directory_project_overrides. Default path and naming remain open."
+    },
+    {
+      "id": "preserve_artifacts_referenced_by_other_projects",
+      "source": "User: Yes, answering whether deleting one project preserves an artifact still referenced by another project.",
+      "decision": "Permanent deletion of a project must preserve shared artifact contents and remaining-project references/access while another project still references the artifact. Do not treat a project deletion as authority to delete artifacts retained by another project. Shared-data ownership and exact deletion mechanics remain open."
+    },
+    {
+      "id": "repository_base_directory_project_overrides",
+      "source": "User: Yes, and project overrides are a good idea.",
+      "decision": "Preferred repository base directory is an app-wide default with optional per-project overrides. Projects without an override inherit the app-wide value; clearing an override restores inheritance."
+    },
+    {
+      "id": "preferred_container_backends",
+      "source": "User: Support choosing a preferred container system, Docker, Podman, and if possible Apple built-in container support on Macs.",
+      "decision": "Add preferred container backend configuration with Docker and Podman support plus Apple first-party container tooling where feasible on supported Macs. Treat runtimes as optional project dependencies, retain Rust host implementation and detect/report prerequisites, unsupported capabilities and availability. Apple container is separately installed, not assumed preinstalled; official README currently requires Apple silicon and supports macOS 26. App-wide backend inheritance with optional project overrides is subsequently confirmed under container_backend_project_overrides. Initial default, Compose compatibility, operation coverage and lifecycle remain to refine."
+    },
+    {
+      "id": "container_backend_project_overrides",
+      "source": "User: Yes, answering whether the container backend uses an app-wide default with optional project overrides.",
+      "decision": "Provide an app-wide preferred container backend with optional per-project overrides. Projects without an override inherit the app-wide backend; clearing an override restores inheritance. Preserve explicit backend selection, availability reporting and existing tool permissions."
+    },
+    {
+      "id": "stop_agent_work_containers_on_app_close",
+      "source": "User: Yes, answering whether app closure stops containers launched for agent work while leaving pre-existing or manually managed containers running.",
+      "decision": "On app closure, stop containers launched for agent work; leave pre-existing and manually managed containers running. Target attributed agent-work containers, not the whole engine. Stopping does not authorize deletion of containers/images/volumes/data. Exact ownership detection, stop recovery and restart behavior remain open."
+    },
+    {
+      "id": "first_class_searchable_human_agent_help",
+      "source": "User: Help near Settings; every aspect of the working system must be documented, searchable and accessible by agents, including all UI and extensibility/plugin/add-in authoring.",
+      "decision": "Provide a first-class Help menu/navigation destination near Settings. Maintain complete searchable documentation for the working system, every UI screen/action/setting and behavior, workflows, configuration, permissions and recovery. Document all supported extensibility points and how to create/test/package/install/manage harness packages, language packs, plugins and add-ins, with practical examples. Agents access the same maintained content through first-class read/search tools under existing permissions. Subsequently confirmed under help_local_offline_only_versioned: Help lives entirely offline/local, bundled and versioned with the installed app/add-ons. Every screen and Settings section now requires a contextual Help link under context_help_every_screen_settings. Error links and bounded retrieval remain proposed."
+    },
+    {
+      "id": "self_improvements_require_documentation",
+      "source": "User: If agents are writing self-improvements to the harness, part of their work MUST require documentation.",
+      "decision": "Every agent-authored harness self-improvement must include appropriate documentation with the work: affected Help/UI/tool behavior and developer/extension guides/examples. Include documentation in planning, acceptance, verification and review; missing, stale or incomplete required documentation blocks completion/delivery rather than becoming optional follow-up. Existing code/skill/role/package approval and activation rules remain effective."
+    },
+    {
+      "id": "help_local_offline_only_versioned",
+      "source": "User: Yes to bundling Help offline and versioning with the app/add-ons; Help will only live offline and local.",
+      "decision": "Help lives entirely locally and offline, bundled and matched to installed app and add-on versions. Human Help browsing/search and agent search/read operate on the same local documentation without a hosted service, network requirement or remote search fallback. Exact local format/search/packaging mechanics remain open."
+    },
+    {
+      "id": "github_release_hourly_app_updates",
+      "source": "User: Auto update from GitHub Releases on the eventual hosting repo; poll every hour; show new version available for download in lower-left sidebar and always show current version there.",
+      "decision": "Provide application updates from GitHub Releases on the SceneWorks/DevWorks repository, with automatic hourly polling while the app is open. Always display the installed version in the lower-left sidebar and indicate a newer release available for download in that same area with access to the update/download action. Downloaded or merely available releases do not replace the displayed installed version. The repository identity is not yet chosen. Automatic background downloads with explicit approval before installation/restart are subsequently confirmed under automatic_update_download_approved_install_restart. Release channels, first-check/recovery, artifact validation, platform installation and rollback mechanics remain open; existing self-improvement activation approval and shutdown/resume rules still apply."
+    },
+    {
+      "id": "context_help_every_screen_settings",
+      "source": "User: Yes please, answering whether every screen and Settings section links to its relevant local Help topic.",
+      "decision": "Every screen and Settings section must provide a contextual Help link opening the relevant local documentation topic. This is confirmed under HELP-01; contextual error links and exact topic identity/navigation mechanics remain proposed under HELP-06."
+    },
+    {
+      "id": "automatic_update_download_approved_install_restart",
+      "source": "User: Yes, answering whether updates download automatically in the background with approval required before installation and restart.",
+      "decision": "Automatically download new application updates in the background. Explicit user approval is required before installation/restart; discovery/download do not count as approval. Pending or declined approval leaves the running installed version in use and authorized work may continue. Approved updates preserve existing work/shutdown/selective-resume rules and version-matched local Help."
+    },
+    {
+      "id": "user_document_rag",
+      "source": "User: built-in RAG for vectorizing and searching knowledge from documents; users must be able to add their own knowledge documents for indexing.",
+      "decision": "Built-in document ingestion, embedding/vector indexing and passage retrieval are required, including user-added knowledge documents. RAG-01 is confirmed. RAG-02\u201308 propose visible corpus management, format handling, hybrid search, provenance/citations, scoping, model/version-aware indexing, diagnostics and existing router/storage integration. Current-project default, explicit sharing and moving documents are subsequently confirmed under RAG-11. OxiRS is an evaluated reuse candidate, not selected infrastructure; preserve HelixDB/SQLite and router decisions pending evidence."
+    },
+    {
+      "id": "document_rag_initial_formats",
+      "source": "User: Yes, support Markdown, plain text, PDF and Word documents.",
+      "decision": "Markdown, plain text, PDF and Word are required initial formats for user-added knowledge document ingestion, indexing and retrieval under RAG-09. Routed vision fallback for scanned/image-only pages is subsequently confirmed under RAG-10; vision extraction is subsequently confirmed on by default; modern .docx only is subsequently confirmed on 1 November 2026; extraction failures must be visible."
+    },
+    {
+      "id": "routed_vision_document_extraction",
+      "source": "User: Yes, answering whether routed vision should be the configurable fallback for scanned pages.",
+      "decision": "Extract existing text directly; use a configured vision-capable model via the internal router for scanned/image-only pages, configurable in Settings. Save and reuse source/page-linked extraction with model provenance until source change or explicit re-extraction, then chunk/embed separately through the router. No dedicated bundled OCR model/runtime is required for this pathway. Enabled by default, with a Settings control to disable it. Detailed rendering/quality mechanics remain open. Confirmed under RAG-10."
+    },
+    {
+      "id": "vision_extraction_default_on",
+      "source": "User: On by default, answering the default for routed vision extraction.",
+      "decision": "Routed vision extraction fallback for scanned/image-only document pages is enabled by default, with a Settings control to disable it and configure its route/model. Existing router permissions, provider availability, usage attribution and visible partial/failure status remain effective. Confirmed under RAG-10."
+    },
+    {
+      "id": "document_project_scope_sharing_and_moves",
+      "source": "User: Yes to current-project default and explicit sharing, plus moving documents to another project to correct accidental placement.",
+      "decision": "Knowledge documents default to the current project. Provide explicit cross-project sharing and Move to project controls, including correction of misplaced uploads. Preserve identity, provenance and move history; future retrieval follows the new association and explicit sharing. UI and configured agent tools expose the same operations. Detailed sharing controls and adding without a current project remain open. Confirmed under RAG-11."
+    },
+    {
+      "id": "product_name_devworks",
+      "source": "User: name has been settled. DevWorks.",
+      "decision": "The confirmed product name is DevWorks. Replace provisional Superharness branding in current requirements and the mock UI. Legacy local requirement URLs remain compatible; canonical deliverables use devworks-requirements."
+    },
+    {
+      "id": "devworks_repository",
+      "source": "User: the repository is at ~/repos/devworks. Local Git verified the canonical path and origin.",
+      "decision": "Use /Users/michael/Repos/DevWorks, origin https://github.com/SceneWorks/DevWorks, as the project repository and canonical home for local planning. Store planning artifacts in docs/planning and authoring sources in tools/planning. The future app updater reads GitHub Releases from SceneWorks/DevWorks; this planning change does not configure or run an updater."
+    },
+    {
+      "id": "imported_documents_managed_project_artifacts",
+      "source": "User: Yes to keeping a managed copy; imported documents should be considered project artifacts.",
+      "decision": "Every imported knowledge document is a DevWorks-managed project artifact. Index/retrieve its managed copy independently of the original external path, retaining source provenance and applicable project/feature/task links. Existing artifact retention, sharing, identity and deletion rules apply; index removal alone does not delete the artifact. Confirmed under RAG-12."
+    },
+    {
+      "id": "minimum_platform_targets",
+      "source": "User: macOS 26.2, Windows 10; Linux whatever can be supported.",
+      "decision": "Minimum OS targets are macOS 26.2 and Windows 10. Linux remains required, with distribution/version coverage to be proposed and validated during architecture work. CPU architectures and packaging remain open. Record actual compatibility rather than promising all Linux distributions. PLAT-01."
+    },
+    {
+      "id": "configurable_agent_trust_and_deletion_guards",
+      "source": "User generally grants agents full access; other users may want restrictions, so make access configurable. Add basic checks preventing accidental deletion of drives or repositories.",
+      "decision": "Support configurable broad/full and restricted agent access. The user\u2019s personal full-access preference does not choose a universal initial default. Basic destructive-tool-call guards remain active in full-access mode, protecting whole drives and repositories; existing reviewer read-only and approval/main protection rules remain effective. Scope/defaults, deliberate exception policy and practical enforcement including arbitrary native executables remain architecture decisions. SEC-03\u201304 confirmed; SEC-05 proposed mechanics."
+    },
+    {
+      "id": "reconcile_uncertain_outcomes_before_retry",
+      "source": "User: Agreed on recovery, accepting reconciliation before retry and escalation of unresolved uncertainty while unrelated work continues.",
+      "decision": "Reconcile interrupted pushes, merges, database writes and other state-changing tool outcomes before retrying. Do not repeat confirmed completed effects or blindly replay uncertain mutations. Escalate unresolved outcomes, holding affected/dependent work only; unrelated work continues. Existing lifecycle/manual-resume policy remains effective. STORE-04 confirmed."
+    },
+    {
+      "id": "purposeful_reusable_testable_architecture",
+      "source": "User: clean purposeful architecture, avoid redundant code, focus on reuse and testability throughout.",
+      "decision": "Make component responsibilities, dependency directions and ownership explicit; reuse established shared behavior while avoiding duplicated logic/state, speculative frameworks and unnecessary abstractions. Important logic must be testable through explicit boundaries independently of UI and real inference. ARCH-07\u201308 confirmed."
+    },
+    {
+      "id": "code_documentation_and_architecture_visuals",
+      "source": "User: well documented code so agents understand every piece; visual documents for objects, interfaces, inheritance and major/difficult workflows such as plugins.",
+      "decision": "Require useful source/module/type/trait/API documentation, maintained guides and versioned editable/rendered visual design documents. Show actual Rust structures, interfaces/trait implementations, ownership/composition and applicable inheritance/supertrait relationships. Major workflows and plugin lifecycle/protocol/capabilities/approval/failure/updates need visual explanations. Keep proposed and implemented designs distinct. DOC-01\u201302 and VIS-01\u201303 confirmed."
+    },
+    {
+      "id": "unit_integration_and_later_live_e2e",
+      "source": "User explicitly corrected the initial wording: integration tests must NOT use real inference; later separate end-to-end tests will. Unit tests are integral, all important code testable, with no coverage percentage.",
+      "decision": "Require meaningful unit tests and full deterministic integration tests of component interactions, without live-provider calls or local model inference. Use controlled provider/stream/tool fixtures and exercise real local components where relevant. No numerical coverage threshold. Real inference is reserved for a distinct end-to-end suite to be set up later, with separate entry points/configuration; do not treat skipped/unavailable runs as passed live validation. TEST-01\u201304 confirmed. This correction supersedes the earlier request wording about integration tests invoking real inference."
+    },
+    {
+      "id": "workspace_coordinator_sidebar_and_live_screen_context",
+      "source": "User requested an app-level toolbar chat sidebar on all screens, reusing the current Home session and posting navigation notices with Help/tool discovery; keep open until explicitly closed or Home is opened.",
+      "decision": "UI-11\u201313 and COORD-09\u201310 confirmed. Use the same conversation, model pin, attachments and draft as Home; keep distinct feature/issue chats. Persist the sidebar across navigation and close on Home. Append host-attributed screen notices to the current Home transcript, with local Help references and enabled-tool discovery, preserving permission/approval boundaries and session history. Bounded payload and responsive layout/delivery mechanics remain design details."
+    },
+    {
+      "id": "database_target_helix_correction",
+      "source": "User correction during architecture planning, 1 November 2026",
+      "decision": "The intended conditional graph-database indexing target is HelixDB, not HydraDB. Apply the prior read-only inspection and metadata-only retention requirements to HelixDB. SQLite, MariaDB/MySQL, PostgreSQL and SQL Server remain target engines. Validate HelixDB metadata discovery, source permissions and actual adapter coverage; do not carry over HydraDB-specific MCP/Cypher feasibility claims. Historical answers are retained above as superseded.",
+      "superseded_by": "remove_helix_schema_reader_20261102"
+    },
+    {
+      "id": "sqlite_only_storage_fallback",
+      "source": "User architecture discussion, 1 November 2026",
+      "decision": "If HelixDB cannot be embedded suitably, the user may prefer all-SQLite storage using graph/vector capabilities. This is a candidate fallback and reopens dependency selection; it is not a decision to replace HelixDB. Distinguish database-engine embedding from storing/searching model embeddings. HelixDB vector support is documented; its upstream embedded feature still needs dependency/platform validation."
+    },
+    {
+      "id": "exclude_kuzu_storage_candidate",
+      "source": "User: Let us exclude Kuzu, it is a dead project.",
+      "decision": "Exclude KuzuDB from active storage evaluation and implementation choices. Evaluate OverGraph, Grafeo, HelixDB and SQLite graph/vector storage; OverGraph is a promising candidate to test, not an approved winner."
+    },
+    {
+      "id": "sqlite_selected_app_storage",
+      "source": "User, 1 November 2026: use SQLite with add-ons for graph and vector storage after the local comparison.",
+      "decision": "Select SQLite as the DevWorks app storage engine, replacing the initial HelixDB plus SQLite direction. Preserve graph/vector/analysis requirements. No correctness failures were detected in the tested SQLite configuration; this is not a claim that SQLite or extensions are bug-free. Specific graph extension selection remains open while GraphQLite is assessed; sqlite-vec is the measured vector-extension baseline. External HelixDB schema indexing remains a separate conditional target capability."
+    },
+    {
+      "id": "plain_sqlite_vec_repository_traits",
+      "source": "User, 1 November 2026: stick with plain SQLite and sqlite-vec; isolate storage behind repository interfaces.",
+      "decision": "Select plain SQLite application-owned graph tables and sqlite-vec; exclude GraphQLite as an app dependency. Use domain-focused Rust traits and an explicit transaction contract so consumers do not directly call SQLite. Alternate backend requires adapter and validated migration/conformance, not consumer rewrites. Concrete trait names, worker handoff and physical partitioning remain architecture proposals."
+    },
+    {
+      "id": "paused_work_requires_explicit_continue",
+      "source": "User, 1 November 2026: Yes, paused work should require explicit Continue, including from agents and schedules.",
+      "decision": "Paused work requires an explicit, authorized Continue. Start through the UI, an agent or a schedule must leave the pause effective and explain that Continue is required. Existing manual-resume requirements, permissions and other holds remain effective. This does not grant agents or schedules new authority to resume human-held work. Default parent Continue scope subsequently confirmed under continue_root_and_eligible_descendants; the later no_manual_child_pauses clarification removes the premise of separately paused children. Confirmed under CONTROL-12."
+    },
+    {
+      "id": "continue_root_and_eligible_descendants",
+      "source": "User, 1 November 2026: Yes, Continue should resume the coordinator and all eligible descendants while preserving separate child pauses and other blockers.",
+      "decision": "Continue on a feature or standalone issue resumes its coordinator and all eligible descendant assignments, including nested assignments, preserving child-specific blockers and rechecking eligibility. The subsequent no_manual_child_pauses clarification supersedes the prior manual-child-pause interpretation. Confirmed under CONTROL-13; concrete hold storage remains open."
+    },
+    {
+      "id": "no_manual_child_pauses",
+      "source": "User, 1 November 2026: There won't be any manual child pauses though.",
+      "decision": "Child assignments have no manual pause control. This corrects the previous discussion of separately imposed manual child pauses. Continue feature/issue still resumes its coordinator and eligible descendants, preserving child-specific blockers such as approval waits, dependencies and uncertain outcomes. CONTROL-13 clarified. The later feature_issue_manual_control_scope decision confirms removal of the independent manual child-Continue workflow."
+    },
+    {
+      "id": "feature_issue_manual_control_scope",
+      "source": "User, 1 November 2026: Sounds good, what is next, accepting the preceding feature/issue control recommendation after clarifying no manual child pauses.",
+      "decision": "Manual Pause/Continue operates at feature/standalone-issue scope and covers the coordinator and descendants. No independent manual child Continue control or deferred child resume workflow is required. Children wait on their own blockers; after a blocker clears, recheck eligibility and continue if the parent permits execution and other conditions allow. A paused parent keeps its children stopped. Resume authority and concrete hold mechanics remain open."
+    },
+    {
+      "id": "explicit_authorization_for_automated_continue",
+      "source": "User, 1 November 2026: Only when explicitly authorized, answering whether agents and schedules may Continue human-paused work autonomously or only with explicit user authorization.",
+      "decision": "Agents and schedules may Continue human-paused feature/issue work only with explicit user authorization. An agent can carry out an explicit user resume instruction; tool access, broad role authority or permission to start eligible new work alone does not authorize clearing a human pause. Existing app-reopen and budget manual-resume requirements and other blockers remain effective. CONTROL-12 clarified. Concrete authorization binding/lifetime and hold-clearance transactions remain architectural work."
+    },
+    {
+      "id": "automatic_feature_allocation_requires_implementation_approval",
+      "source": "User, 1 November 2026: Only approved for implementation, answering whether next_work may select incompletely planned features or only implementation-approved features.",
+      "decision": "Automatic feature allocation, including next_work, keep-working and scheduled work selection, selects only features approved for implementation. Skip incomplete or unapproved feature plans. Explicit Start retains its planning-readiness path. Clear actionable standalone issues retain their no-separate-plan-approval policy. Current approval, pauses, dependencies, budgets and other eligibility conditions must still hold at dispatch. Confirmed under WORK-09."
+    },
+    {
+      "id": "atomic_activation_and_fenced_ownership",
+      "source": "User, 1 November 2026: ok, accepting the preceding five-step atomic activation/ownership contract and proceeding to its boundary-case review.",
+      "decision": "Start/Continue checks current eligibility and authorization. One transaction records the execution attempt, ownership and durable activation intent. After commit the supervisor claims the intent before execution. Duplicate requests return the existing activation. Every dispatch checks the current ownership generation. Concrete state/record shapes and concurrent Start, Pause/admission and crash boundary protocols remain proposed for review; no implementation is authorized by this architecture discussion."
+    },
+    {
+      "id": "unlaunched_activations_require_manual_continue_after_restart",
+      "source": "User, 1 November 2026: yes, answering whether accepted but never-launched activations also require manual Continue after app restart.",
+      "decision": "After app restart, including a crash, accepted feature/issue activations that never launched also remain paused until explicit Continue. Recovery may inspect/reconcile durable state but must not start feature/issue execution merely because a queued intent exists. Selective user resumption and other blockers remain effective. CONTROL-10 clarified. Concrete activation supersession, generation transfer and authorization binding remain proposed implementation mechanics."
+    },
+    {
+      "id": "independent_tool_calls_continue_on_sibling_failure_or_approval_wait",
+      "source": "User, 1 November 2026: Yes, answering whether independent tool calls keep running when another fails or needs approval, unless that failure makes execution unsafe or invalid.",
+      "decision": "Independent tool calls keep running when a sibling fails or requires approval, unless that failure makes them unsafe or invalid. Scope holds/cancellation to affected calls and actual dependents; preserve completed results and reconcile uncertain effects before retry. Existing parent pauses and permissions remain effective. TOOL-09 confirmed. Durable envelopes, deterministic provider result assembly, structured waits and later approval resumption are detailed architecture proposals for review."
+    },
+    {
+      "id": "delegated_routine_architecture_decisions",
+      "source": "User direction, 1 November 2026",
+      "decision": "Codex should decide routine architecture details, guided by uninterrupted automation and a clean, extensible design. Escalate material product behavior, authority or risk changes; preserve all previously confirmed controls. This delegates design work, not implementation or blanket promotion of Proposed requirements."
+    },
+    {
+      "id": "retain_all_imported_document_versions",
+      "source": "User answer during persistence refinement, 1 November 2026",
+      "decision": "Retain every imported document version until explicitly deleted; historical citations bind to the exact version originally used. Confirmed as RAG-13."
+    },
+    {
+      "id": "restored_automation_requires_reactivation",
+      "source": "User answer during persistence refinement, 1 November 2026",
+      "decision": "After backup restore, schedules and keep-working stay stopped until explicitly reactivated. Feature/issue Continue and external-effect reconciliation remain required. Confirmed as STORE-13; distinct from normal reopen scheduled recovery."
+    },
+    {
+      "id": "regular_official_provider_price_refresh",
+      "source": "User direction during router refinement, 1 November 2026",
+      "decision": "Regularly refresh OpenAI and Anthropic prices from official sources; preserve accuracy and visibility. Weekly while open plus manual refresh is the adopted technical default. Recorded ROUTE-16."
+    },
+    {
+      "id": "provider_cost_sources_and_untracked_usage",
+      "source": "User correction during router refinement, 1 November 2026",
+      "decision": "OpenRouter reported costs are the primary source; local usage is free. Custom providers without reported or user-configured prices remain allowed, clearly marked price not tracked and excluded from priced totals. Recorded ROUTE-17; unknown-priced requests are not denied merely for missing prices."
+    },
+    {
+      "id": "subscription_api_equivalent_budget_estimates",
+      "source": "Explicit user answer during router refinement, 1 November 2026",
+      "decision": "Count OpenAI/Anthropic subscription usage toward feature budgets at published API-equivalent estimates, labeled as estimates rather than actual charges. Recorded ROUTE-17."
+    },
+    {
+      "id": "trusted_signed_package_updates",
+      "source": "Explicit user answer during executable package refinement, 1 November 2026",
+      "decision": "Compatible signed package updates may activate automatically at a safe boundary after explicit publisher trust, without expanded access. Agent-authored new/changed executables still require exact-version/content approval. Recorded EXT-07."
+    },
+    {
+      "id": "full_access_default_new_projects",
+      "source": "Explicit user answer during security refinement, 1 November 2026",
+      "decision": "Full access is the initial default for new projects; tighter access remains selectable. Reviewer, approval, destructive and main protections remain. SEC-03 amended."
+    },
+    {
+      "id": "dedicated_primary_repository_deletion",
+      "source": "Explicit user answer during security refinement, 1 November 2026",
+      "decision": "Deliberate deletion of a registered primary repository requires a dedicated user-confirmed action. Approved agent operations cannot bypass this. Entire drive/filesystem roots remain blocked. SEC-04 amended."
+    },
+    {
+      "id": "exclude_legacy_shortcut_rabbitmq_integrations",
+      "source": "Explicit user answer during retained capability refinement, 1 November 2026",
+      "decision": "Exclude CodeGraph legacy Shortcut and RabbitMQ integrations from DevWorks. OP-03 added. General external MCP support and historical imported provenance remain; RabbitMQ is not an app transport dependency."
+    },
+    {
+      "id": "initial_word_docx_only",
+      "source": "Explicit user answer, 1 November 2026",
+      "decision": "Modern .docx only for initial Word ingestion; legacy binary .doc excluded. RAG-09 amended; native parsing/rendering qualification remains."
+    },
+    {
+      "id": "scheduled_usage_no_job_spending_limits",
+      "source": "Explicit user answer, 1 November 2026",
+      "decision": "Scheduled inference reports usage only, with no job spending limits. JOB-09 added and JOB-02/06 aligned. Feature work started by a schedule retains its feature budget and all normal authority controls."
+    },
+    {
+      "id": "router_systemone_tiers_independent_effort",
+      "source": "User correction: retain SystemOne models such as Jev; add separate effort and direct tier selection with Max Fable/Astra, High Opus/Sol, Mid Sonnet/Terra and Low Haiku/Luna, plus configured custom members and separate Open Router Auto.",
+      "decision": "Confirmed ROUTE-18\u201320 and revised UI-10. Preserve SystemOne as structured decision inference by explicit model ID. Conversational tiers directly select configured eligible round-robin pools, with independent effort and existing durable session pins; no model-name-to-tier translation. Max/High/Mid/Low defaults are editable; Open Router Auto is its own upstream route. Native adapter/decision DTO qualification remains pending."
+    },
+    {
+      "date": "2026-11-02",
+      "source": "User explicit decision during final architecture review",
+      "decision": "Retain the direct simple-router Claude subscription integration as an optional user-risk path; also provide a separate Anthropic API-key option. This supersedes the briefly considered claude -p route. No external Claude harness dependency is adopted."
+    },
+    {
+      "id": "remove_helix_schema_reader_20261102",
+      "date": "2026-11-02",
+      "source": "User explicit scope removal during final architecture review",
+      "decision": "Remove the conditional external HelixDB schema reader; it is not needed. Internal code/Knowledge/graph/vector storage remains SQLite/FTS5/sqlite-vec. Historical Helix storage evaluations remain evidence only. Retire DW-038; do not replace or renumber other slices."
+    },
+    {
+      "id": "mcp_server_for_other_harnesses",
+      "source": "User correction, 2 November 2026: support an MCP server because indexed code, planned work and Knowledge are valuable to any harness.",
+      "decision": "Supersedes mcp_client_only. Support both outgoing MCP connections and a DevWorks server for other harnesses. MCP-01 and MCP-07 capture confirmed scope; MCP-08\u201311 propose transport, access, write-grant and recovery details. Architecture AD76\u201378 binds both directions to shared application services. Local planning remains authoritative.",
+      "status": "Current"
+    },
+    {
+      "id": "tasks_optional_feature_20261102",
+      "source": "User correction during architecture review, 2 November 2026",
+      "decision": "Tasks must not require a feature. Every task belongs to a project and its feature relationship is optional; otherwise standalone issues and their delegation are broken. An issue is the standalone project-task view, retaining one work identity. Issue-scoped delegation does not require a feature or feature-owned cards. Assignment hierarchy and optional feature relationship are separate. Existing issue/feature execution, controls, usage and delivery policies remain effective."
+    },
+    {
+      "id": "feature_plan_active_until_revision_approved_20261102",
+      "source": "User clarification during AR-02 architectural review, 2 November 2026",
+      "decision": "Plans belong to their feature, rather than independently managed work. Keep the original plan open, active and approved until the revised plan is explicitly approved. One active plan and one pending revision suffice; do not introduce a user-facing plan-version system. Editing/requesting approval/rejecting the pending revision must not invalidate the original approval or stop eligible work under it. Approval atomically replaces the active plan; ordinary pause, authority and safety controls remain effective."
+    },
+    {
+      "id": "task_priority_and_blocking_dependencies_20261102",
+      "source": "User confirmation of task priority/blocking links; project scope and dispatch mechanics adopted under existing architectural discretion",
+      "decision": "Humans and agents must be able to reprioritize tasks and manage task-blocking dependencies (one task blocks another). Task feature membership remains optional. Adopt project-scoped blocking links across feature boundaries and standalone issues, shared UI/tool commands, cycle prevention, priority among eligible work and visible blocked-by/blocks state. Routine priority/dependency coordination does not require another feature-plan approval; it cannot change approved scope or waive existing controls.",
+      "technical_scope": "Project-wide links include different features and standalone issues. Cross-project dependency policy is not silently introduced by this refinement."
+    },
+    {
+      "id": "issue_feature_delivery_membership_20261102",
+      "date": "2026-11-02",
+      "source": "User answers in the AR-04 Socratic interview",
+      "status": "Product decision aligned in requirements/architecture/candidate contracts and implementation acceptance; native behavior remains unimplemented",
+      "decision": "Linking an issue makes its resolution part of feature delivery. Both humans and agents may link or unlink issues, including issues discovered during implementation. Linking itself authorizes adding the issue to delivery without revised-plan approval. An existing working agent messages the feature coordinator and continues; the coordinator tracks the task and owns integration. With no active agent, the coordinator launches unstarted work or resumes started work when eligible. Linking preserves existing pauses and blockers. Unlinking pauses work until manually resumed. Spending after linking counts against the feature budget; earlier spending stays attributed where it was. Preserve existing branches and workspaces. A direct transfer between features continues under the new coordinator and budget while retaining existing pauses and blockers.",
+      "emphasis": "The user explicitly prioritized adding and removing issues. Active transfers are expected to be rare; keep their rule simple rather than expanding a transfer-management feature.",
+      "implementation_status": "Design/candidate evidence only. Native services and UI acceptance remain in the implementation slices; this refinement does not implement or extend the interactive workbench.",
+      "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json"
+    },
+    {
+      "id": "github_issue_intake_and_resolution_20261102",
+      "date": "2026-11-02",
+      "source": "User answers in the AR-05 Socratic interview",
+      "status": "Product decision aligned in requirements/architecture/candidate contracts and implementation acceptance; native behavior remains unimplemented",
+      "decision": "GitHub integration supports local tracking: automatically create a linked local issue for every new GitHub issue, promptly have an agent triage bug reports versus feature requests, verify reported bugs, and immediately start work on verifiable bugs. Feature requests and unverifiable bugs produce an in-app notification. Keep GitHub updates reflected locally; intermediate execution details stay local. Completed and verified work automatically posts a resolution summary and closes the linked GitHub issue. If GitHub closes a bug after verification and work has started, continue fixing it. Approved and planned feature work also continues despite remote closure. On remote closure, close the local copy of an unstarted unreproducible bug; retain feature requests for manual decision. For later GitHub updates, verify and use clarification or further information about the same bug. Genuinely new scope or feature requests require a user decision.",
+      "supersedes": "Broad automatic publication of all local edits/statuses to GitHub and the rule that imported verifiable bugs always need a separate Start/configured schedule. Existing open-issue import on repository connection and local-only creation until explicit publication/linking remain as previously decided.",
+      "remaining_refinement": "Engineering alignment must define inbound remote versus local execution fields, durable identity and shared-repository project ownership, notifications/decisions, and replay-safe import/triage/resolution publication. Do not interpret remote close as a blanket stop, local status edits as resolution publication, or new remote scope as work authorization.",
+      "implementation_status": "Design/candidate evidence only. Native services and UI acceptance remain in the implementation slices; this refinement does not implement or extend the interactive workbench.",
+      "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json"
+    },
+    {
+      "id": "github_issue_triage_rate_limit_20261102",
+      "date": "2026-11-02",
+      "source": "User requested spam protection and subsequently confirmed app-wide admission, one issue every 30 minutes, with a configurable Settings interval.",
+      "status": "Product decision aligned in requirements/architecture/candidate contracts and implementation acceptance; native behavior remains unimplemented",
+      "decision": "Apply one application-wide admission queue for automatic GitHub issue triage/verification across all connected projects and repositories. Admit at most one new issue every 30 minutes by default. Make the interval configurable in Settings. Import issues locally immediately; queued issues wait without launching agents. This refines the earlier promptly-triage requirement. After verification, verifiable bugs may immediately proceed to implementation under existing eligibility and concurrency controls.",
+      "technical_refinement": "Persist queued work and the admission timing across restarts, spread admissions without catch-up bursts, and retain existing active-agent limits. Launch pacing and agent concurrency are separate constraints. Changing projects or repositories must not bypass the app-wide queue. Local synchronization/import remains separate from inference admission.",
+      "implementation_status": "Design/candidate evidence only. Native services and UI acceptance remain in the implementation slices; this refinement does not implement or extend the interactive workbench.",
+      "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json"
+    },
+    {
+      "id": "github_review_unavailable_independent_fallback_20261102",
+      "date": "2026-11-02",
+      "source": "User AR-06 interview answer: use an independent in-app reviewer as fallback; delivery should not stop because the GitHub reviewer is not working.",
+      "status": "Product decision aligned in requirements/architecture/candidate contracts and implementation acceptance; native behavior remains unimplemented",
+      "decision": "If the configured GitHub automated reviewer fails or never completes, automatically use an independent in-app reviewer as fallback. A working GitHub reviewer remains the normal review source. Fallback is an explicit exception to the earlier rule that an in-app reviewer only runs when no GitHub review automation is configured.",
+      "retained_controls": "The fallback must independently review the current head, participate in the existing fix/review cycle, and resolve all actionable findings before merge. It satisfies the DevWorks review-source requirement; it does not waive required checks, branch protection, effective merge authority, or other delivery gates.",
+      "remaining_refinement": "Define source discovery/identity, explicit completion including zero findings, exact-head evidence, a bounded wait/failure detection policy, durable one-fallback admission and late GitHub-result reconciliation without duplicate fallback launches or ignoring actionable findings.",
+      "implementation_status": "Design/candidate evidence only. Native services and UI acceptance remain in the implementation slices; this refinement does not implement or extend the interactive workbench.",
+      "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json"
+    },
+    {
+      "id": "repository_instructions_override_default_roles_20261102",
+      "date": "2026-11-02",
+      "source": "User AR-08 interview answer: repository instructions take precedence over default role instructions without overriding user directions or enforced permissions.",
+      "status": "Product decision aligned in requirements/architecture/candidate contracts and implementation acceptance; native behavior remains unimplemented",
+      "decision": "Applicable repository instructions take precedence over an agent\u2019s default role instructions. Explicit user directions and harness-enforced permissions remain above both. Repository instructions cannot grant additional tool authority or waive enforced restrictions, including reviewer read-only enforcement. Preserve directory/repository applicability.",
+      "implementation_status": "Design/candidate evidence only. Native services and UI acceptance remain in the implementation slices; this refinement does not implement or extend the interactive workbench.",
+      "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json"
+    },
+    {
+      "id": "agents_md_precedes_claude_md_20261102",
+      "date": "2026-11-02",
+      "source": "User AR-08 interview answer: AGENTS.md takes precedence; CLAUDE.md can add instructions where they do not conflict.",
+      "status": "Product decision aligned in requirements/architecture/candidate contracts and implementation acceptance; native behavior remains unimplemented",
+      "decision": "When applicable AGENTS.md and CLAUDE.md files in the same directory conflict, AGENTS.md takes precedence. Load nonconflicting additional instructions from CLAUDE.md. Preserve user directions and enforced permissions above repository instructions, and repository instructions above default role instructions. This answer does not by itself decide precedence between different directory depths.",
+      "implementation_status": "Design/candidate evidence only. Native services and UI acceptance remain in the implementation slices; this refinement does not implement or extend the interactive workbench.",
+      "clarified_by": "nearest_directory_instruction_precedence_20261102",
+      "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json"
+    },
+    {
+      "id": "nearest_directory_instruction_precedence_20261102",
+      "date": "2026-11-02",
+      "source": "User AR-08 interview confirmation: closer instructions take precedence within their subtree; same-directory AGENTS.md beats CLAUDE.md; user directions and enforced permissions stay above both.",
+      "status": "Product decision aligned in requirements/architecture/candidate contracts and implementation acceptance; native behavior remains unimplemented",
+      "decision": "Resolve applicable repository instruction conflicts by directory specificity first: instructions closer to the target files override conflicting ancestor instructions only within their subtree. Within each directory, AGENTS.md overrides conflicting CLAUDE.md instructions and CLAUDE.md adds nonconflicting instructions. Thus deeper-directory instructions may override ancestor instructions regardless of ancestor filename. User directions and enforced permissions remain above all repository instructions; applicable repository instructions remain above default role instructions. Preserve nonconflicting ancestor instructions and prevent sibling/repository scope leakage.",
+      "implementation_status": "Design/candidate evidence only. Native services and UI acceptance remain in the implementation slices; this refinement does not implement or extend the interactive workbench.",
+      "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json"
+    },
+    {
+      "id": "shared_repositories_independent_project_work_20261102",
+      "date": "2026-11-02",
+      "source": "User rejected a single designated issue-owning project per repository, citing inference shared by SceneWorks, LensWorks, ChatWorks and SoundWorks.",
+      "status": "Product decision aligned in requirements/architecture/candidate contracts and implementation acceptance; native behavior remains unimplemented",
+      "decision": "Do not designate one project as the owner of all issues imported from a shared repository. Multiple projects may use the same repository and each maintain their own issues and features. Feature coordinators and the message board must expose overlapping work and enable agents to coordinate duplicate or conflicting tasks, including work touching the same code.",
+      "example": "The inference repository serves SceneWorks, LensWorks, ChatWorks and SoundWorks; each product can have its own work involving inference.",
+      "remaining_question": "How a newly reported GitHub issue on a shared repository is routed among project-local issue lists is not yet decided. Do not infer either automatic copies in every project or a single project-local identity from the rejection of one repository-wide owner.",
+      "implementation_status": "Design/candidate evidence only. Native services and UI acceptance remain in the implementation slices; this refinement does not implement or extend the interactive workbench.",
+      "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json",
+      "answered_by": "shared_repository_github_issue_triage_routing_20261102"
+    },
+    {
+      "id": "shared_repository_github_issue_triage_routing_20261102",
+      "date": "2026-11-02",
+      "source": "User AR-05 answer: issues normally arrive on product repositories such as SceneWorks; if one arrives on inference, the triage agent should route it.",
+      "status": "Product decision aligned in requirements/architecture/candidate contracts and implementation acceptance; native behavior remains unimplemented",
+      "decision": "Use the triage agent to route an incoming GitHub issue from a shared repository to the relevant project context. Do not require a single repository-wide issue-owning project or automatically create competing project copies merely because several projects use the repository. Existing product-repository intake remains automatic. Routing is part of the same app-wide paced issue intake, not a separate per-project source of agent starts.",
+      "context": "Inference has not received user-reported issues so far; reports currently arrive on product repositories, with SceneWorks the product that has gained users.",
+      "implementation_status": "Design/candidate evidence only. Native services and UI acceptance remain in the implementation slices; this refinement does not implement or extend the interactive workbench.",
+      "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json"
+    },
+    {
+      "id": "codegraph_operational_tracking_and_related_features_20261102",
+      "date": "2026-11-02",
+      "source": "User replaced the repository workflow with CodeGraph, approved creation of DevWorks project DW, requested commit/push, and explicitly approved the proposed eleven-feature split.",
+      "decision": "Use CodeGraph project DW as the operational tracker. Retain DW-F1 for architecture/publication and DW-F2 through DW-F12 for related native delivery areas. Preserve all63 native item identities/acceptance criteria and250 dependency edges. All350 source requirements retain their identifiers/statuses and are individually structured across the delivery features. Native implementation remains in backlog. Local architecture, requirement sources and evidence remain versioned in this repository; use codegraph-work-map.json to distinguish local zero-padded slice IDs from actual tracker keys.",
+      "status": "Applied and verified; publication tracked by DW-64"
+    }
+  ],
+  "open_next": "Execute native work from CodeGraph items after revalidation; all native items remain backlog. DW-64 tracks the current commit/push closeout.",
+  "pending_questions": [],
+  "proposals": [
+    {
+      "id": "implementation_delivery_cleanup_sequence",
+      "source": "Reconciliation of confirmed feature PR and cleanup requirements",
+      "proposal": "Distinguish implementation completion (opens final feature PR to main) from final delivery (verified merge across affected repositories), then clean up local branches/worktrees. Keep needed resources during pending final PR review/merge."
+    },
+    {
+      "id": "enforced_shared_physical_resource_reservations",
+      "source": "Adaptation of CodeGraph advisory project-scoped holds for local desktop automation",
+      "proposal": "Give a physically shared resource one canonical identity across projects and enforce ownership at harness dispatch; reconcile old processes before reassignment after expiry. Keep project-private resources scoped. A resource grant does not replace the required OK/Wait consent for non-idle desktop takeover."
+    },
+    {
+      "id": "stable_provider_request_prefixes",
+      "source": "Design informed by official OpenAI and Anthropic prompt-caching guidance, consulted 31 October 2026",
+      "proposal": "Version stable instruction/tool prefixes; append conversation and native tool exchanges without rebuilding prior blocks; preserve required provider continuation data. Use only supported model/endpoint cache controls and eligible route affinity. Show cache usage and total cost, diagnose changes where observable, and retain required safe-step updates and 80% compaction. Provider hits cannot be guaranteed."
+    },
+    {
+      "id": "next_work_atomic_allocation_and_start",
+      "source": "Adaptation of inspected CodeGraph next_work source at afe73560215bbe7593fc59451de5cc3237e3eeca",
+      "proposal": "Preserve atomic durable ownership and retry idempotency when extending allocation from tasks to features. Validate project/feature scope; expose work kind, assignment and empty reasons; honor holds/approvals/dependencies; distinguish assignment from start and transfer ownership with history to the coordinator/worker."
+    },
+    {
+      "id": "standalone_task_ui_execution_delivery",
+      "source": "Adaptation of shared task/harness rules to the new standalone bug requirement",
+      "proposal": "Provide New issue and equivalent chat/tools, optional feature association, direct task-scoped execution, isolated branch/worktree and configured reviews with task-owned history. PRs directly to main and selective manual restart resumption are confirmed. Automatic cleanup after verified merge is confirmed; issue spending has no cap and delegation is allowed with an independent configurable concurrency cap defaulting to 10. Clear actionable issues may implement immediately without separate plan approval; remaining recovery mechanics need refinement. Project allocation uses the confirmed mixed feature/issue queue."
+    },
+    {
+      "id": "project_status_semantics",
+      "source": "Adaptation needed for custom project workflows",
+      "proposal": "Stable status identities with explicit readiness/review/completion mappings; create/rename/order through UI and tools; explicit reassignment before occupied status removal; preserve history and independent execution holds and approval/review gates."
+    },
+    {
+      "id": "durable_linked_issue_sync",
+      "source": "Implementation implications of automatic two-way synchronization",
+      "proposal": "Durable issue identity/version mappings, import checkpoints and sync journal, echo suppression, idempotent retries and offline/restart reconciliation; visible sync status/errors/conflicts, explicit workflow-to-GitHub state mapping and retained provenance. Keep execution pauses/Start separate and preserve configured automation boundaries. Agent reconciliation and user escalation for unresolved conflicts are confirmed under GH-07; exact mechanics remain proposed."
+    },
+    {
+      "id": "github_desktop_event_transport_options",
+      "source": "User feasibility question; official GitHub documentation consulted 31 October 2026",
+      "proposal": "Historical transport comparison: public webhook tunnels/relays were considered, but the user subsequently selected direct API polling. Webhook support is not required by the selected scope. Retain these references as research only; current polling and event-consumer requirements are GH-10\u201312.",
+      "references": [
+        "https://docs.github.com/en/webhooks/using-webhooks/delivering-webhooks-to-private-systems",
+        "https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks",
+        "https://docs.github.com/en/webhooks/using-webhooks/handling-webhook-deliveries",
+        "https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks",
+        "https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api"
+      ],
+      "status": "superseded_by_confirmed_polling"
+    },
+    {
+      "id": "durable_github_application_events",
+      "source": "Architecture implications of selected polling and dual agent/indexing consumers",
+      "proposal": "Persist observed remote state and deduplicated events in SQLite, with independent notification/indexing consumer progress. Reconcile correct configured refs before indexing; coalesce redundant refreshes and expose failure/staleness/logs. Agent updates preserve directions and pauses. Initial baselines, event order, poll cadence and indexed-ref scope remain to refine."
+    },
+    {
+      "id": "storage_three_way_evaluation",
+      "source": "User requested considering KuzuDB and a performance comparison during architecture planning",
+      "proposal": "Evaluate HelixDB+SQLite, KuzuDB+SQLite and SQLite graph/vector storage with equal datasets, scope/durability semantics, query correctness, vector recall, index/update/concurrency workloads, footprint, recovery, target packaging and maintenance. Kuzu archival is a material selection consideration. No timing results or engine replacement have been approved/claimed.",
+      "status": "Architecture evaluation protocol prepared; actual benchmarks not yet run.",
+      "local_document": "docs/architecture/devworks-storage-evaluation.md"
+    }
+  ],
+  "interview_status": "AR-01 through AR-08 design refinements are recorded and aligned with current requirements, architecture, candidate contracts and local implementation acceptance. Native services/UI, authority and production acceptance remain unimplemented/unqualified.",
+  "current_request": "Publish the completed architecture/planning baseline and the approved CodeGraph related-feature organization.",
+  "updated_at": "2026-11-02",
+  "source_findings": [
+    {
+      "topic": "document_rag_and_oxirs",
+      "date": "2026-11-01",
+      "finding": "CodeGraph f602de72 and afe735 have convention-specific Markdown/BM25/dense RAG; TC.CodeGraphApi 1f95d38 has a broader Markdown corpus ingestion and RRF search service. OxiRS 8a322740 exposes graph-RAG adapters but uses RDF/SPARQL; main keyword_search is regex/count scoring rather than BM25. Source inspection only; no builds, benchmarks or runtime validation."
+    },
+    {
+      "topic": "helix_direct_engine_and_kuzu_evaluation",
+      "date": "2026-11-01",
+      "finding": "Direct Helix engine db at 6f2a69653772b60ea099d8d36a02a1d4408147ec resolves and passes cargo check on macOS 27.0.1 arm64 using local alias helix-core. No runtime/benchmark result. User added KuzuDB as a performance comparison candidate; upstream kuzudb/kuzu is archived (2025-10-10), with Rust binding 0.11.3 and bundled native extensions inspected. Three-way comparison protocol records HelixDB+SQLite, KuzuDB+SQLite and SQLite-only; no replacement selected.",
+      "evidence": "docs/architecture/helix-embedding-validation.json; docs/architecture/devworks-storage-evaluation.md",
+      "status": "Historical; superseded by four-candidate native evaluation and user Kuzu exclusion"
+    },
+    {
+      "topic": "four_candidate_local_native_storage_evaluation",
+      "date": "2026-11-01",
+      "finding": "Kuzu excluded by user. OverGraph/Grafeo/HelixDB/SQLite all link and run locally. 36 measured cases across three profiles/repetitions; nine OverGraph cases report stale vector results, with graph-path scope failures also in full-source/overlay. Other 27 cases have no checked failures. Four acknowledged-write process-kill probes and four interrupted-import reopen probes pass. Recall, lifecycle and footprint differ; no production choice or full G01 acceptance.",
+      "evidence": "docs/architecture/devworks-storage-evaluation.md; storage-evaluation-results.json; validation/storage-evaluation"
+    },
+    {
+      "topic": "graphqlite_graph_extension_candidate",
+      "date": "2026-11-01",
+      "finding": "Historical source/package inspection, now superseded by the completed runtime evaluation recorded below.",
+      "sources": [
+        "https://github.com/colliery-io/graphqlite",
+        "https://colliery-io.github.io/graphqlite/how-to/other-extensions/",
+        "https://colliery-io.github.io/graphqlite/reference/sql-interface/"
+      ],
+      "publishedCrate": "0.12.0",
+      "publishedVcsInfo": {
+        "sha1": "995a8b9bc25cdd86d4c2b50ff7ff87f0eb236629",
+        "dirty": true
+      },
+      "inspectedMainRevision": "27adf893ea208edca79d6d4ce9d98c36d0f8829b"
+    },
+    {
+      "topic": "graphqlite_sqlite_vec_runtime_evaluation",
+      "date": "2026-11-01",
+      "finding": "Original and indexed GraphQLite/SQLite matrices both passed all 18 common cases. Indexed Cypher is faster than our original native-ID predicate but slower than plain SQL graph access in this workload. Exact vector recall is 1.0. Whole-database cached BFS was stale after cross-connection writes, public bulk helpers and rollback; explicit refresh and strengthened guarded protocol passed three final repetitions, including numeric generation reuse. Cached algorithms are not project/view permission boundaries. SQLite remains selected, GraphQLite not selected. No inference or app implementation.",
+      "evidence": "docs/architecture/devworks-graphqlite-evaluation.md; graphqlite-evaluation-results.json; validation/graphqlite-evaluation"
+    }
+  ],
+  "product_name": "DevWorks",
+  "repository": {
+    "path": "/Users/michael/Repos/DevWorks",
+    "url": "https://github.com/SceneWorks/DevWorks",
+    "planning_directory": "docs/planning",
+    "authoring_directory": "tools/planning"
+  },
+  "architecture_readiness": {
+    "requirements": 350,
+    "confirmed": 209,
+    "proposed": 141,
+    "operations": 353,
+    "schemas": 44,
+    "nativeApplicationImplemented": false,
+    "status": "Current design/candidate coverage; all production service, authority, provider, platform and performance acceptance remains in local implementation slices."
+  },
+  "deferred_by_user": [
+    {
+      "id": "live_inference_e2e",
+      "scope": "Set up a separate end-to-end suite using real inference later.",
+      "reason": "Explicit user correction; integration tests must not use real inference.",
+      "status": "Planned separately; not implemented or executed during requirements capture."
+    }
+  ],
+  "ui_revision_6": {
+    "status": "Completed local UI design refresh; user review pending. No application implementation started.",
+    "date": "2026-11-01",
+    "gallery_previews": 41,
+    "settings_topics": 21,
+    "coverage_file": "design-coverage.json",
+    "summary": [
+      "Managed document RAG",
+      "Managed executable add-ons",
+      "Offline local Help",
+      "Release update visibility",
+      "Trust and recovery",
+      "Purposeful architecture and test guidance",
+      "Project lifecycle, paths and containers",
+      "Delivery and inherited GitHub policies"
+    ],
+    "validation": "83 browser interaction assertions passed; all gallery assets resolve, no page JavaScript errors or horizontal overflow observed at the checked desktop sizes. Real inference not used."
+  },
+  "ui_revision_7": {
+    "date": "2026-11-01",
+    "status": "Local UI update complete; user review pending.",
+    "behavior": "Persistent current-Home-session workspace coordinator sidebar, navigation context notices and local Help/tool discovery.",
+    "verification": "39 interaction assertions and 61 sidebar coexistence/layout checks passed. 43 gallery previews. No page errors observed. No inference invoked.",
+    "requirements": [
+      "UI-11",
+      "UI-12",
+      "UI-13",
+      "COORD-09",
+      "COORD-10"
+    ]
+  },
+  "architecture_design_decisions": [
+    {
+      "id": "AD-17",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Cause-specific blockers, host-bound revision-specific Continue authority, durable event-driven wakeups and independent eligibility."
+    },
+    {
+      "id": "AD-18",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Close provider turns with durable typed responses; resume the saved approval-bound operation through current admission and append later outcomes as new events."
+    },
+    {
+      "id": "AD-19",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Durable received/acknowledged/incorporated redirect stages, immediate incompatible-dispatch fence, safe-boundary instruction adoption and retained late observations."
+    },
+    {
+      "id": "AD-20",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Bounded application shutdown, boot-epoch fencing, same-process automatic recovery and distinct manual feature/issue versus scheduled-run restart classes."
+    },
+    {
+      "id": "AD-21",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Single database/write owner, bounded read snapshots and verified WAL/FULL/FK durability."
+    },
+    {
+      "id": "AD-22",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Initial relational core/indexes and atomic conditional generation-fenced queue claims."
+    },
+    {
+      "id": "AD-23",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Whole-unit immutable overlay masking, checked publication, leased pins and scope-first exact vector ranking."
+    },
+    {
+      "id": "AD-24",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Journaled immutable content-addressed blob publication and explicit shared-reference-aware deletion."
+    },
+    {
+      "id": "AD-25",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Checksummed transactional migrations and compatibility gates; destructive migration requires explicit action and verified manually initiated backup."
+    },
+    {
+      "id": "AD-26",
+      "status": "Adopted technical design under delegated discretion; unimplemented",
+      "decision": "Manual full-workspace recovery image, manifest validation, staged journaled restore and distinct logical project export."
+    },
+    {
+      "id": "AD-27",
+      "status": "Adopted under delegated technical discretion; actual provider/Rust implementation pending",
+      "decision": "Typed logical requests, native attempts, purpose attribution and revisioned per-connection auth/capabilities."
+    },
+    {
+      "id": "AD-28",
+      "status": "Adopted under delegated technical discretion; actual provider/Rust implementation pending",
+      "decision": "Atomic durable pins/cursors with auxiliary purpose lanes, scoped cooldowns and hard-capacity waits."
+    },
+    {
+      "id": "AD-29",
+      "status": "Adopted under delegated technical discretion; actual provider/Rust implementation pending",
+      "decision": "Native-profile terminal/tool continuation contracts and effect-aware partial-stream recovery."
+    },
+    {
+      "id": "AD-30",
+      "status": "Adopted under delegated technical discretion; actual provider/Rust implementation pending",
+      "decision": "Stable native prefixes and capability-specific cache controls; guarded compaction/context epochs."
+    },
+    {
+      "id": "AD-31",
+      "status": "Adopted under delegated technical discretion; actual provider/Rust implementation pending",
+      "decision": "Observed/estimated/free/untracked attempt accounting, priced reservations and honest partial budget coverage."
+    },
+    {
+      "id": "AD-32",
+      "status": "Adopted under delegated technical discretion; actual provider/Rust implementation pending",
+      "decision": "Weekly native official price refresh, manual refresh, immutable prospective snapshots and preserved overrides."
+    },
+    {
+      "id": "AD-33",
+      "status": "Adopted under delegated technical discretion; native host/SDK and target qualification pending",
+      "decision": "Private bounded framed protocol, version/feature negotiation and scoped invocation tokens."
+    },
+    {
+      "id": "AD-34",
+      "status": "Adopted under delegated technical discretion; native host/SDK and target qualification pending",
+      "decision": "Explicit signer/package/stream trust, no authority expansion and preserved exact agent-version approval."
+    },
+    {
+      "id": "AD-35",
+      "status": "Adopted under delegated technical discretion; native host/SDK and target qualification pending",
+      "decision": "Staged complete registry, pinned turn barrier, atomic state generation and guarded rollback."
+    },
+    {
+      "id": "AD-36",
+      "status": "Adopted under delegated technical discretion; native host/SDK and target qualification pending",
+      "decision": "Complete contribution categories, durable event replay and operation-aware cancellation through shared authority."
+    },
+    {
+      "id": "AD-37",
+      "status": "Adopted semantic/engineering design; native enforcement and full platform acceptance pending",
+      "decision": "Workspace/project full-access default, explicit restricted/native guarantees and revision-bound authority transitions."
+    },
+    {
+      "id": "AD-38",
+      "status": "Adopted semantic/engineering design; native enforcement and full platform acceptance pending",
+      "decision": "Target-identity destructive preflight and dedicated user-confirmed primary-repository deletion."
+    },
+    {
+      "id": "AD-39",
+      "status": "Adopted semantic/engineering design; native enforcement and full platform acceptance pending",
+      "decision": "Native SecretStore adapters, scoped broker credentials, outbound provenance and bounded redacted diagnostics."
+    },
+    {
+      "id": "AD-40",
+      "status": "Adopted semantic/engineering design; native enforcement and full platform acceptance pending",
+      "decision": "Six native architecture targets, explicit OS/Linux/display matrix and separate optional-capability qualification."
+    },
+    {
+      "id": "AD-41",
+      "status": "Adopted engineering design; actual native conformance/performance pending",
+      "decision": "Reuse Tokio live channels with a same-transaction SQLite event/delivery outbox; source comparison records channel/broker alternatives and no unchanged job-framework adoption."
+    },
+    {
+      "id": "AD-42",
+      "status": "Adopted engineering design; actual native conformance/performance pending",
+      "decision": "Frozen reference source entry inventory with native destinations, explicit exclusions and named behavioral acceptance groups; no semantic/runtime parity claim."
+    },
+    {
+      "id": "AD-43",
+      "status": "Adopted engineering design; actual native conformance/performance pending",
+      "decision": "Twelve reproducible no-inference workloads and provisional engineering budgets, with actual native measurements still pending."
+    },
+    {
+      "id": "AD-44",
+      "status": "Adopted under delegated technical discretion; native product qualification pending",
+      "decision": "Initial .docx-only Word extraction: bounded native ZIP/XML, provenance and explicit partial content; narrow main-body probe is not full qualification."
+    },
+    {
+      "id": "AD-45",
+      "status": "Adopted under delegated technical discretion; native product qualification pending",
+      "decision": "Usage-only scheduled inference without job monetary limits; feature-owned work retains feature budgets."
+    },
+    {
+      "id": "AD-46",
+      "status": "Adopted under delegated technical discretion; native product qualification pending",
+      "decision": "Separate configurable clone/worktree and native OS data/cache roots; explicit journaled relocation, no implicit move."
+    },
+    {
+      "id": "AD-47",
+      "status": "Adopted under delegated technical discretion; native product qualification pending",
+      "decision": "Stable app updates by default with explicit prerelease opt-in; signed version/target/schema staging and explicit install/restart approval, guarded rollback."
+    },
+    {
+      "id": "AD-48",
+      "status": "Adopted technical architecture candidate; production gateway and target qualification pending",
+      "decision": "Host-created invocation authority and strict typed versioned command/query/event candidates; JSON arguments cannot supply trusted actor, policy or grant context."
+    },
+    {
+      "id": "AD-49",
+      "status": "Adopted technical architecture candidate; production gateway and target qualification pending",
+      "decision": "Host-scoped request retry keys, normalized RFC8785 fingerprints, immutable decision receipts and separate local-admission versus external-effect uncertainty."
+    },
+    {
+      "id": "AD-50",
+      "status": "Adopted technical architecture candidate; production gateway and target qualification pending",
+      "decision": "Concrete root-only Start/Pause/Continue with explicit work/control revision conflicts, renewed Pause latches and accepted-versus-runnable responses."
+    },
+    {
+      "id": "AD-51",
+      "status": "Adopted technical architecture candidate; production gateway and target qualification pending",
+      "decision": "Bounded stamped queries, visibility-bound cursors and required durable events; unknown event schemas hold delivery instead of skipping or granting authority."
+    },
+    {
+      "id": "AD-52",
+      "status": "Adopted architecture candidate; production adapter/SDK/authority/platform qualification pending",
+      "decision": "Separate untrusted inference specs and codec observations from host purpose/attribution/pricing; codecs cannot mark usage free or relabel feature work."
+    },
+    {
+      "id": "AD-53",
+      "status": "Adopted architecture candidate; production adapter/SDK/authority/platform qualification pending",
+      "decision": "Bound native continuation artifacts, atomic ordered transcript batches, explicit context epochs and one initial native response per call; later outcomes append new events."
+    },
+    {
+      "id": "AD-54",
+      "status": "Adopted architecture candidate; production adapter/SDK/authority/platform qualification pending",
+      "decision": "Concrete manifests/all eight contribution descriptors and typed bidirectional little-endian framed JSON-RPC schemas; owned helper experiment is not full SDK qualification."
+    },
+    {
+      "id": "AD-55",
+      "status": "Adopted architecture candidate; production adapter/SDK/authority/platform qualification pending",
+      "decision": "Current invocation/token/registry/state/control scope, state CAS and per-invocation stream credits; cancellation acknowledgment remains separate from outcome; quiescent update barrier."
+    },
+    {
+      "id": "AD-56",
+      "status": "Adopted architecture candidate; production adapter/SDK/authority/platform qualification pending",
+      "decision": "Selected operation and schema discriminator must agree before normal authority/admission; shared union schemas cannot hide another mutation."
+    },
+    {
+      "id": "AD-57",
+      "status": "Adopted technical architecture candidate; narrow native experiments passed, complete services/authority/platform acceptance pending",
+      "decision": "Exact repository/schema view identity, immutable overlay chain, bounded pins and revision-checked publication without fallback."
+    },
+    {
+      "id": "AD-58",
+      "status": "Adopted technical architecture candidate; narrow native experiments passed, complete services/authority/platform acceptance pending",
+      "decision": "Current scope and whole-unit masking before ranking/traversal, recheck before snippets and source-discriminated immutable citations."
+    },
+    {
+      "id": "AD-59",
+      "status": "Adopted technical architecture candidate; narrow native experiments passed, complete services/authority/platform acceptance pending",
+      "decision": "Host-resolved artifact sources, immutable versions and revision-bound references/deletion; logical unavailability precedes physical unlink without older-version reactivation."
+    },
+    {
+      "id": "AD-60",
+      "status": "Adopted technical architecture candidate; narrow native experiments passed, complete services/authority/platform acceptance pending",
+      "decision": "Exact-head delivery barriers and distinct accepted/queued/merged/uncertain outcomes; observation-first reconciliation preserves partial delivery."
+    },
+    {
+      "id": "AD-61",
+      "status": "Adopted technical architecture candidate; narrow native experiments passed, complete services/authority/platform acceptance pending",
+      "decision": "Registered owned clean worktree cleanup with expected-ref deletion and separate release/deployment authority."
+    },
+    {
+      "id": "AD-62",
+      "status": "User-confirmed product correction; native decision adapter and complete DTO/transport qualification pending",
+      "decision": "Direct four-tier or named-model selection with separate persistent effort. Editable Max Fable/Astra, High Opus/Sol, Mid Sonnet/Terra and Low Haiku/Luna defaults. Eligible round-robin allocations preserve existing session pins; Open Router Auto is a distinct upstream route. No local-first subset or model-alias-to-tier translation."
+    },
+    {
+      "id": "AD-63",
+      "status": "User-confirmed product correction; native decision adapter and complete DTO/transport qualification pending",
+      "decision": "Retain SystemOne as structured decision inference (e.g. Jev), with native capability/model discovery, exact upstream/credential configuration, question/media validation, structured responses and shared authority/usage. Dedicated decision model IDs do not enter chat tiers."
+    },
+    {
+      "id": "AD-64",
+      "status": "Adopted technical candidate/planning rule; narrow evidence only, actual production/platform acceptance pending",
+      "decision": "Measured egui 0.37 candidate, shared service-owned projections and bounded native rendering; matching eframe/window/OS accessibility remains unqualified."
+    },
+    {
+      "id": "AD-65",
+      "status": "Adopted technical candidate/planning rule; narrow evidence only, actual production/platform acceptance pending",
+      "decision": "Explicit ABI-matched PDFium native text/page rendering candidate with bounded owned extraction and version-bound evidence; supply chain, worker enforcement and full targets remain gates."
+    },
+    {
+      "id": "AD-66",
+      "status": "Adopted technical candidate/planning rule; narrow evidence only, actual production/platform acceptance pending",
+      "decision": "Native CDP owned-browser adapter candidate with managed Chromium, revisioned handles and host file grants; full surface, private transport and tree enforcement remain gates."
+    },
+    {
+      "id": "AD-67",
+      "status": "Adopted technical candidate/planning rule; narrow evidence only, actual production/platform acceptance pending",
+      "decision": "Registered-root no-follow bounded regular-file reads behind host authority/publication revalidation; macOS API subset passed, production and other targets remain gates."
+    },
+    {
+      "id": "AD-68",
+      "status": "Adopted technical candidate/planning rule; narrow evidence only, actual production/platform acceptance pending",
+      "decision": "Complete local implementation ownership/dependency accounting and full retained acceptance obligations; coverage is not approval, contract completeness or production readiness."
+    },
+    {
+      "id": "AD-69",
+      "status": "Adopted architecture candidate; DTO/schema/pure invariant checks passed, actual service/authority/platform qualification pending",
+      "decision": "All347 operation inputs are concrete candidates. Strict exact selected operation and Query/Command action checks;five names have separate mode variants. Payload IDs/profiles cannot mint authority."
+    },
+    {
+      "id": "AD-70",
+      "status": "Adopted architecture candidate; DTO/schema/pure invariant checks passed, actual service/authority/platform qualification pending",
+      "decision": "All347 qualified typed results, revision-dimension faults and generic domain query/receipt/completion candidates. Absence of ack and uncertain external effects remain distinct; uncertain refusal retains durable operation identity and reconciliation."
+    },
+    {
+      "id": "AD-71",
+      "status": "Adopted architecture candidate; DTO/schema/pure invariant checks passed, actual service/authority/platform qualification pending",
+      "decision": "Descriptor-bound extension/settings/job/MCP/decision data with explicit limits and current registry validation; concrete native SystemOne question/media/result candidates and host-owned attribution/pricing provenance. No inference or production behavior proof."
+    }
+  ],
+  "historical_pending_questions_pre_architecture_closure": [
+    "Parallel tool turns: review complete/durable envelopes, verified independence and conflicting writes, ordered provider result assembly, structured ApprovalRequired/OutcomeUnknown responses and later-operation resumption without rewriting prior results. TOOL-09 failure-isolation policy is confirmed; concrete turn/wait protocol remains proposed.",
+    "Concrete activation/ownership mechanisms and remaining race cases: current approved revisions, control/ownership fencing, idempotent receipts and resume authorization binding. Pending activations require explicit Continue after app restart under clarified CONTROL-10; no automatic launch from recovered queued intent.",
+    "Concrete hold-clearance and resume-authorization contracts: bind user authorization to work and applicable pauses, define lifetime/revocation and atomic revisions/fencing. Agents/schedules cannot independently Continue human-paused work (CONTROL-12); manual controls are at feature/issue scope (CONTROL-13).",
+    "Shutdown timeout and detailed recovery mechanics; reconcile interrupted operation outcomes before retry, escalate unresolved uncertainty and continue unrelated work under confirmed STORE-04.",
+    "Database schema navigation and additional graph controls.",
+    "Skills/self-improvement: directory path, format/reference compatibility, override resource/version handling, helper/runtime dependencies, safe-step mechanics and validation/rollback. Agent-authored skill/role changes require approval before application. Refine proposal queue/diffs, revision-bound approval and concurrent-edit reconciliation. Shared-skill improvements use approved harness-specific overrides and leave originals untouched. Harness-code improvements use the normal feature/PR/review workflow; installation/restart require explicit approval. Refine update preparation, compatibility, checkpoint/resume and rollback mechanics.",
+    "Read-only tool classification, remaining built-in defaults, later discovery and active-run updates; implementation shell/process tools default to enabled, and reviewers are always read-only.",
+    "Worktree cleanup failure/recovery, unusual cross-repository failure recovery mechanics and exact cleanup execution states. GIT-17 confirms feature completion after all final PRs merge, with releases/deployments tracked separately. Routine conflicts resolve autonomously without notification; unusual failures the coordinator cannot resolve escalate under GIT-16. All final feature PRs must pass required checks and reviews before any merge, then merge in dependency order under GIT-15.",
+    "Role-instruction precedence and precise safe-step mechanics; edits are adopted at the next safe step.",
+    "UI automation backends, runtime provisioning, platform support, idle detection and consent lifetime/retry mechanics; non-idle takeover requires OK or Wait.",
+    "Project artifact storage location, quotas, versioning, explicit deletion mechanics and any optional cleanup policies; artifacts are retained until explicitly deleted by default.",
+    "Context token accounting, model-limit changes, oversized inputs and compaction failure recovery; automatic compaction at 80% is confirmed.",
+    "Validate cache capabilities and usage for actual subscription/API/compatible endpoints; settle provider-specific controls, retention and diagnostics without weakening routing policy or correctness.",
+    "Remaining instruction precedence and conflict policy between repository files, plus file-update adoption and precise directory applicability mechanics; automatic loading and user/tool-policy precedence are confirmed.",
+    "Complete source record mappings, history/evidence links, extraction and repeatable import for projects, features, tasks and histories only; existing memory, knowledge, lessons and conventions are excluded.",
+    "Feature budget default, inherited values if any, concurrent/in-flight accounting, unknown-price routes, warning cadence. Configured or Off, coordinator warnings starting at 75% and manual Continue after a budget pause are confirmed.",
+    "Scheduled agents have full configured tool access to allocate/start work under existing permissions and approval rules. Overlapping scheduled inference occurrences are skipped. Repeat-scan action deduplication follows the durable operation contract; JOB-09 confirms usage-only jobs without spending limits. Maintenance and feature lifecycle policies are already settled.",
+    "Database targets confirmed: SQLite, MariaDB/MySQL, PostgreSQL and SQL Server; HelixDB conditional on indexability. Read-only HelixDB record inspection for structural inference is approved, retaining schema metadata only and no actual data. Validate discovery coverage, metadata-only retention and enforceable read-only access. Connections default read-only, with explicit user write enablement per connection. Schema changes prefer committed migrations, with direct changes allowed when migrations are not possible under the same connection and agent permissions. Set engine versions, authentication, adapter metadata coverage, shared-connection project access configuration and remaining permission mechanics, migration execution and execution/transaction/retry limits. Separately configurable read/write data tools remain confirmed.",
+    "next_work feature/task eligibility, priority tie-breaking, allocation/recovery and ownership transfer mechanics; required project/null-feature selection behavior is confirmed.",
+    "Remaining issue execution/recovery mechanics; immediate implementation for clear actionable issues, delegation with independent configurable cap defaulting to 10, usage tracking without spending caps, direct PRs to main, automatic cleanup and selective manual resume after reopening are confirmed.",
+    "Project workflow semantic mapping, transition rules and handling occupied status removal; custom columns and names per project are confirmed.",
+    "Linked GitHub issue sync: exact fields/status mapping, publication/linking controls, polling cadence/endpoint coverage and reconciliation/retry mechanics; direct polling is selected, and automatic two-way edits/status sync and agent reconciliation with user escalation for unresolved conflicts are confirmed.",
+    "GitHub application events: initial baselines/order, independent delivery/recovery, agent update handling and indexed-ref scope; polling feeds agent notification and repository indexing as confirmed.",
+    "Built-in web search/page-fetching backend, configuration/credentials, result extraction/limits and usage accounting; both tools are confirmed and enabled by default.",
+    "Chat attachment formats/size limits, clipboard/native drop support, extraction and durable attachment/artifact handling, including workspace chats without project context. All chat inputs and all three attachment methods are confirmed, as is vision-aware routing for image inspection.",
+    "Chat model routing: initial defaults, catalog refresh, capability-change handling and recovery without reported availability times. Every chat has a router selector; Auto assigns a persistent session pin. Rate limits/unavailability trigger eligible replacement and re-pinning. If all eligible models are cooling, wait until the earliest reported expiry and reconnect automatically, honoring updated cooldowns and existing holds. Current pins survive reopening; paused feature/issue execution still requires manual Continue.",
+    "Branch/worktree overlays: refine snapshot and atomic-publication mechanics, baseline movement, local-change detection, query coverage, semantic freshness, retention/expiry and retirement. CodeGraph branch overlays and automatically isolated uncommitted worktree views are confirmed; source overlays are commit-based.",
+    "Deployment/release target configuration, execution, approval scope and binding to concrete revision/version/destination. Separate inherited per-repository policies defaulting to Ask me are confirmed; other destructive Git authority and remaining protected-branch behavior remain open; force-push authority is settled under GIT-13.",
+    "Language packs: supported toolchain/OS/CPU versions and measured semantic coverage remain to qualify. SDK/process semantics, registration, cancellation, active-run update/disable/uninstall and rollback are adopted in the architecture draft under AD33\u201336; actual Rust schemas, binaries, distribution/signature and conformance evidence remain G04/G05 work. Publisher-trusted compatible signed updates follow confirmed EXT-07.",
+    "Harness packages: compile/qualify the adopted Rust SDK/protocol and every contribution contract, native UI schema, event replay, authority, atomic registry/state transitions and guarded rollback under G04/G05. Product update trust is resolved by EXT-07; initial execution restrictions/platform guarantees remain open. Exact agent-version approval remains effective; direct Pi/Oh My Pi package compatibility is not selected.",
+    "Cross-repository final delivery: readiness barrier before first merge and dependency order are confirmed under GIT-15. Routine merge conflicts resolve autonomously without user notification under GIT-16; unusual failures the coordinator cannot resolve pause affected delivery/dependent work and notify the user. Exact recovery mechanics, successful-merge reversal authority remain open. Feature completion after all final PRs merge and separate release/deployment tracking are confirmed under GIT-17. Force-push authority is confirmed; guarded execution and remaining destructive Git policies still require detail.",
+    "Project archival: immediate-stop/cancellation verification and reconciliation of in-flight external effects, restoration controls, shared-data ownership and permanent-deletion mechanics. Shared artifacts must survive while another project references them. With active agents, archival requires warning/confirmation; confirmation immediately stops all project work without waiting for a safe step, and archived projects cannot dispatch work under WORK-16. Restoration requires explicit manual reactivation of work and schedules. Permanent deletion removes only harness data/artifacts, leaving local repositories and GitHub untouched. Default project removal archives records/history, with permanent deletion available as a separate explicit action under WORK-15.",
+    "Repository/worktree defaults and explicit relocation are adopted in AD-46; actual filesystem/target conformance remains a qualification task.",
+    "Container integration: app-wide inheritance with optional project overrides is confirmed. Refine the initial backend default, supported backend/OS/CPU/version matrix, Docker/Podman/Apple operation coverage and Compose/multi-service compatibility, connections/runtime provisioning, shared resources and container ownership/recovery and lifecycle across pause, archival and permanent deletion. On app closure, stop agent-work containers and preserve pre-existing/manually managed containers; exact restart policy remains open. Optional runtimes must not become core harness prerequisites.",
+    "Help: local authoring format, packaging/update mechanics, local search/indexing, contextual error links, topic identity/navigation mechanics, bounded agent retrieval and coverage/freshness checks. Entirely offline/local content bundled and matched to installed app/add-on versions is confirmed. Self-improvement documentation is mandatory in planning, acceptance, verification and review; missing required documentation blocks completion/delivery. First-class Help near Settings, complete system/UI/extensibility documentation and shared human/agent access are confirmed.",
+    "Stable default and explicit prerelease opt-in, signed staging, hourly/open checks and approved platform installation/rollback are adopted in AD-47. UPDATE-04 installation/restart approval remains mandatory; actual native installer acceptance is pending.",
+    "Document RAG: Markdown, plain text, PDF and Word are confirmed under RAG-09; current-project default, explicit sharing and moving are confirmed under RAG-11; Initial Word scope is .docx only; qualify native extraction and precise sharing controls and adding without a current project, managed-document versioning/replacement, vision fallback quality, folder/URL ingestion, embedding models, indexing lifecycle, ranking/graph expansion, retrieval quality and whether any OxiRS components should be adopted after validation. RAG-01 and RAG-09\u201312 are confirmed; RAG-02\u201308 are proposed.",
+    "Security/platform semantics adopted under AD37\u201340: full access default (SEC-03), dedicated user-confirmed primary-repository deletion (SEC-04), workspace/project authority, native enforcement guarantees, SecretStore and OS/CPU/display matrix. Actual native adapter/build/escape and optional-capability acceptance remains G02/G04/G05/G08/G09/G10 work; failed retained targets need surfaced resolution.",
+    "Engineering planning: define concrete module/interface contracts, shared abstractions and test seams, unit/integration fixture strategy and CI suite entry points; choose editable diagram notation and delivery layout. Unit/integration suites must not execute real inference. A distinct real-inference end-to-end suite is explicitly later work. No coverage percentage is required."
+  ],
+  "alignment_evidence": "docs/architecture/validation/interview-refinements/refinement-review.json",
+  "tracking": {
+    "system": "CodeGraph",
+    "project": "DW",
+    "architectureFeature": "DW-F1",
+    "deliveryFeatures": [
+      "DW-F2",
+      "DW-F3",
+      "DW-F4",
+      "DW-F5",
+      "DW-F6",
+      "DW-F7",
+      "DW-F8",
+      "DW-F9",
+      "DW-F10",
+      "DW-F11",
+      "DW-F12"
+    ],
+    "publicationItem": "DW-64",
+    "map": "docs/architecture/codegraph-work-map.json"
+  }
+}

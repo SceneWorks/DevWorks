@@ -1,0 +1,743 @@
+{
+  "status": "Architecture baseline 1.1 catalog; serialized protocol candidates and actual service acceptance remain explicit",
+  "date": "2026-11-02",
+  "families": [
+    {
+      "family": "projects",
+      "owner": "WorkService",
+      "operations": [
+        "list",
+        "get",
+        "create",
+        "edit",
+        "membership",
+        "archive",
+        "restore",
+        "delete"
+      ],
+      "effectAndAuthority": "Read queries; mutations revisioned; active archive and purge require concrete confirmation",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "features",
+      "owner": "WorkService",
+      "operations": [
+        "list",
+        "get",
+        "create",
+        "edit_plan",
+        "prioritize",
+        "dependencies",
+        "request_plan_approval",
+        "edit"
+      ],
+      "effectAndAuthority": "Read and revisioned write; agents request approval, never impersonate a human approver",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "issues",
+      "owner": "WorkService",
+      "operations": [
+        "list",
+        "get",
+        "create",
+        "edit",
+        "prioritize",
+        "publish",
+        "link"
+      ],
+      "effectAndAuthority": "Read and revisioned write; local stays local until explicit publication/link",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "tasks",
+      "owner": "WorkService",
+      "operations": [
+        "list",
+        "get",
+        "create",
+        "edit",
+        "prioritize",
+        "move",
+        "assign",
+        "dependency_links",
+        "acceptance_evidence",
+        "sync_plan",
+        "set_feature"
+      ],
+      "effectAndAuthority": "Shared UI/agent revisioned membership, priority/order and project-wide task blocking links; clear membership pauses, linking preserves holds and makes resolution part of feature delivery.",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "workflows",
+      "owner": "ConfigurationService",
+      "operations": [
+        "list",
+        "create_status",
+        "rename_status",
+        "order",
+        "reassign_and_remove"
+      ],
+      "effectAndAuthority": "Read and revisioned write with stable semantic status IDs",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "next_work",
+      "owner": "WorkService",
+      "operations": [
+        "claim_project_queue",
+        "claim_feature_task",
+        "inspect_claim",
+        "release_claim"
+      ],
+      "effectAndAuthority": "Atomic scoped write; claim/start distinct, idempotency and pauses respected",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "runs",
+      "owner": "ControlService",
+      "operations": [
+        "start",
+        "pause",
+        "continue",
+        "redirect",
+        "inspect",
+        "stop",
+        "eligibility"
+      ],
+      "effectAndAuthority": "Mutating control; plan/readiness/holds and root ownership enforced",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "agents",
+      "owner": "AgentSupervisor",
+      "operations": [
+        "inspect",
+        "delegate",
+        "messages",
+        "inbox",
+        "acknowledge",
+        "checkpoint"
+      ],
+      "effectAndAuthority": "Read and scoped control; parent ownership and root subagent allowance",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "sessions",
+      "owner": "ConversationService",
+      "operations": [
+        "list",
+        "get",
+        "transcript",
+        "briefing",
+        "append_message",
+        "context_sources",
+        "start",
+        "end"
+      ],
+      "effectAndAuthority": "Read and host-attributed append; conversation and provider state distinct",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "ui",
+      "owner": "NavigationContextService",
+      "operations": [
+        "current_screen"
+      ],
+      "effectAndAuthority": "Read only; stable screen/selection/Help references, no form secrets",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "history",
+      "owner": "HistoryService",
+      "operations": [
+        "events",
+        "work_lineage",
+        "git_links",
+        "evidence_links",
+        "operation_status",
+        "tool_usage",
+        "command_receipt"
+      ],
+      "effectAndAuthority": "Scoped read with cursor, observed facts and original provenance",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "code",
+      "owner": "GraphService",
+      "operations": [
+        "search",
+        "architecture",
+        "dependency",
+        "impact",
+        "source",
+        "traverse",
+        "graph_scope_status",
+        "overview",
+        "nodes_by_file",
+        "node_detail",
+        "set_trust",
+        "file_impact",
+        "graph_schema",
+        "call_path",
+        "data_lineage",
+        "consumers",
+        "publishers",
+        "snippet",
+        "repository_dependencies"
+      ],
+      "effectAndAuthority": "Scoped read; correct snapshot set and confidence/coverage",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "indexing",
+      "owner": "IndexCoordinator",
+      "operations": [
+        "discover",
+        "index",
+        "reindex",
+        "refresh_overlay",
+        "retire_view",
+        "cancel",
+        "status",
+        "runs",
+        "configure_sources"
+      ],
+      "effectAndAuthority": "Read status and explicit derived-state writes; bounded owned processes",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "analysis",
+      "owner": "AnalysisService",
+      "operations": [
+        "health",
+        "cross_repo_links",
+        "community_analysis",
+        "status",
+        "clusters",
+        "cluster_detail",
+        "link_and_detect",
+        "process_batch",
+        "security",
+        "metrics",
+        "hotspots",
+        "reanalyze",
+        "synthesize",
+        "fleet_health",
+        "archival_candidates",
+        "file_hotspot"
+      ],
+      "effectAndAuthority": "Read results and controlled analysis jobs; retained algorithms freeze under G11",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "schemas",
+      "owner": "SchemaService",
+      "operations": [
+        "connections",
+        "objects",
+        "relationships",
+        "index",
+        "refresh",
+        "remove_index",
+        "configure"
+      ],
+      "effectAndAuthority": "Metadata-only read against source; derived-state writes, never row retention",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "database",
+      "owner": "DataExecutor",
+      "operations": [
+        "read",
+        "execute_write",
+        "apply_migration",
+        "direct_schema_change",
+        "configure_sensitive_columns"
+      ],
+      "effectAndAuthority": "Read-only connection and project defaults; explicit write enablement and migration provenance",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "knowledge",
+      "owner": "KnowledgeService",
+      "operations": [
+        "search",
+        "read",
+        "record",
+        "revise",
+        "relate",
+        "tag",
+        "verify",
+        "retract",
+        "scope",
+        "diagnostics",
+        "delete_by_source",
+        "delete_selected",
+        "write_status",
+        "subgraph",
+        "entity_bundle",
+        "entity_graph",
+        "claim_bundle",
+        "expand_frontier",
+        "render_summary",
+        "query",
+        "import_user_data",
+        "promote",
+        "challenge",
+        "tagged_lessons"
+      ],
+      "effectAndAuthority": "One identity for tagged memory/facts/lessons; project/shared policy separate",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "dreaming",
+      "owner": "DreamingWorkflow",
+      "operations": [
+        "run",
+        "runs",
+        "report",
+        "settings",
+        "instructions",
+        "propose",
+        "revert",
+        "review"
+      ],
+      "effectAndAuthority": "Read and journaled consolidation; unresolved conflicts enter decisions",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "documents",
+      "owner": "DocumentService",
+      "operations": [
+        "import",
+        "list",
+        "read",
+        "search",
+        "share",
+        "move",
+        "index",
+        "retry",
+        "disable_retrieval",
+        "remove_index"
+      ],
+      "effectAndAuthority": "Managed artifact ownership/sharing, revision-bound citations and no implicit file deletion",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "artifacts",
+      "owner": "ArtifactService",
+      "operations": [
+        "save",
+        "list",
+        "read",
+        "preview",
+        "export",
+        "reference",
+        "delete"
+      ],
+      "effectAndAuthority": "Scoped file reads/writes; explicit deletion and surviving-reference checks",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "conventions",
+      "owner": "ConventionService",
+      "operations": [
+        "list",
+        "read",
+        "edit",
+        "version",
+        "applicability",
+        "retire",
+        "index",
+        "import",
+        "delete",
+        "move",
+        "resources",
+        "delete_resource",
+        "search"
+      ],
+      "effectAndAuthority": "Project-scoped versioned guidance, no wiki dependency",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "skills",
+      "owner": "SkillService",
+      "operations": [
+        "discover",
+        "read",
+        "resources",
+        "draft",
+        "propose",
+        "history",
+        "rollback"
+      ],
+      "effectAndAuthority": "Harness precedence; agent changes need exact-version human approval",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "roles",
+      "owner": "InstructionService",
+      "operations": [
+        "read",
+        "draft",
+        "propose",
+        "history",
+        "rollback"
+      ],
+      "effectAndAuthority": "Approved or human-saved revisions adopt next safe step; no permission grant",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "approvals",
+      "owner": "ApprovalService",
+      "operations": [
+        "list",
+        "inspect",
+        "propose",
+        "record_human_decision"
+      ],
+      "effectAndAuthority": "Agent read/propose; human decision actor is host-bound and not agent-callable authority",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "notifications",
+      "owner": "NotificationService",
+      "operations": [
+        "list",
+        "read",
+        "acknowledge",
+        "settings"
+      ],
+      "effectAndAuthority": "Read/acknowledge separate from linked decision resolution",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "git",
+      "owner": "GitService",
+      "operations": [
+        "worktree",
+        "inspect",
+        "diff",
+        "commit",
+        "push",
+        "pull_request",
+        "integrate",
+        "cleanup"
+      ],
+      "effectAndAuthority": "Owned isolated worktrees; exact ref/head authority; no main force-push",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "reviews",
+      "owner": "ReviewService",
+      "operations": [
+        "list",
+        "inspect",
+        "request",
+        "findings",
+        "respond",
+        "adjudicate",
+        "readiness"
+      ],
+      "effectAndAuthority": "Exact-head evidence; selected external/in-app source and all actionable findings",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "releases",
+      "owner": "DeliveryService",
+      "operations": [
+        "inspect",
+        "prepare",
+        "publish",
+        "deploy"
+      ],
+      "effectAndAuthority": "Separate inherited Automatic/Ask me/Disabled policies; concrete-target approval",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "github",
+      "owner": "GitHubService",
+      "operations": [
+        "account",
+        "repositories",
+        "poll_status",
+        "issue_sync",
+        "checks",
+        "reviews"
+      ],
+      "effectAndAuthority": "One GitHub.com account plus organizations; typed observed events and preserved links",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "resources",
+      "owner": "ResourceService",
+      "operations": [
+        "list",
+        "acquire",
+        "renew",
+        "release",
+        "holders",
+        "waiters"
+      ],
+      "effectAndAuthority": "Atomic capacities/fencing and ownership, distinct from active-user consent",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "browser",
+      "owner": "BrowserBackend",
+      "operations": [
+        "sessions",
+        "inspect",
+        "navigate",
+        "input",
+        "upload",
+        "screenshot",
+        "console",
+        "network"
+      ],
+      "effectAndAuthority": "Isolated targets, resource ownership and attributable test evidence; writes denied to reviewers",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "desktop",
+      "owner": "DesktopBackend",
+      "operations": [
+        "inspect",
+        "capture",
+        "request_control",
+        "input",
+        "release_control"
+      ],
+      "effectAndAuthority": "Read capture under OS permissions; mutation needs lease and OK when non-idle",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "process",
+      "owner": "ProcessHost",
+      "operations": [
+        "execute",
+        "output",
+        "cancel",
+        "install_project_dependencies",
+        "request_system_install"
+      ],
+      "effectAndAuthority": "Implementation shell default on; process trees, scopes and system-install approval",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "web",
+      "owner": "WebAdapter",
+      "operations": [
+        "search",
+        "fetch"
+      ],
+      "effectAndAuthority": "Selected read tools default on; provider-backed search inference still uses router",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "containers",
+      "owner": "ContainerBackend",
+      "operations": [
+        "capabilities",
+        "build",
+        "pull",
+        "create",
+        "start",
+        "exec",
+        "inspect",
+        "logs",
+        "stop"
+      ],
+      "effectAndAuthority": "Honor selected backend; tracked owned resources, no unapproved volume/image deletion",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "jobs",
+      "owner": "Scheduler",
+      "operations": [
+        "list",
+        "create",
+        "edit",
+        "enable",
+        "run_now",
+        "inspect",
+        "cancel",
+        "delete",
+        "disable"
+      ],
+      "effectAndAuthority": "App/project scope; same operations/router and skip/resume policies",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "settings",
+      "owner": "ConfigurationService",
+      "operations": [
+        "read_effective",
+        "validate",
+        "save_revision",
+        "explain_source"
+      ],
+      "effectAndAuthority": "Typed values/scopes, expected revisions; policy cannot grant forbidden reviewer/main actions",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "router",
+      "owner": "InferenceRouter",
+      "operations": [
+        "catalog",
+        "connections",
+        "route",
+        "pin",
+        "availability",
+        "usage",
+        "request_status",
+        "price_status",
+        "price_refresh",
+        "price_override",
+        "configure",
+        "decision_models",
+        "decide"
+      ],
+      "effectAndAuthority": "All inference through host-bound router; inspect routes/cost coverage, permissioned native connection and price controls; no secret disclosure or reviewer config writes; SystemOne discovery/structured decisions share host inference authority, attribution and capability checks and never join chat tiers",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "mcp",
+      "owner": "McpClient",
+      "operations": [
+        "servers",
+        "configure",
+        "connect",
+        "discover",
+        "select_tools",
+        "resources",
+        "prompts",
+        "capabilities"
+      ],
+      "effectAndAuthority": "Outgoing client; scoped namespaced contributions and authorized routed sampling. Distinct from incoming mcp_server administration.",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "addons",
+      "owner": "PackageHost",
+      "operations": [
+        "catalog",
+        "install",
+        "configure",
+        "enable",
+        "disable",
+        "update",
+        "propose",
+        "logs",
+        "rollback",
+        "uninstall"
+      ],
+      "effectAndAuthority": "Version/digest-bound activation approval for agent-authored packages; declared effect classification",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "help",
+      "owner": "HelpService",
+      "operations": [
+        "search",
+        "read",
+        "topic_for_screen",
+        "package_guides",
+        "generate_capability_docs"
+      ],
+      "effectAndAuthority": "Entirely local, version-matched read; same content for humans/agents",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "workspace",
+      "owner": "WorkspaceLifecycle",
+      "operations": [
+        "diagnostics",
+        "backup",
+        "restore",
+        "migrate",
+        "update_status",
+        "approve_install",
+        "logs",
+        "record_diagnostic"
+      ],
+      "effectAndAuthority": "Backup manual; installer approval and local data/compatibility preflight",
+      "status": "Proposed; exact command/tool schemas require review"
+    },
+    {
+      "family": "repositories",
+      "owner": "RepositoryService",
+      "operations": [
+        "list",
+        "get",
+        "nodes",
+        "remove_index",
+        "readme",
+        "summary",
+        "search"
+      ],
+      "effectAndAuthority": "Indexed repository metadata, scope, source/index distinction and dedicated local-deletion authority",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "queue",
+      "owner": "QueueDispatcher",
+      "operations": [
+        "inspect",
+        "resolve",
+        "retry",
+        "consumer_status",
+        "reconcile"
+      ],
+      "effectAndAuthority": "Durable inspection/retry/reconciliation under current control and operation safety",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "imports",
+      "owner": "ImportService",
+      "operations": [
+        "preview",
+        "configure",
+        "apply",
+        "runs",
+        "inspect"
+      ],
+      "effectAndAuthority": "Read-only source snapshot and explicit selected work/history import; no legacy live connector",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "maintenance",
+      "owner": "MaintenanceService",
+      "operations": [
+        "prune_diagnostics",
+        "prune_index_runs",
+        "prune_messages",
+        "prune_sessions"
+      ],
+      "effectAndAuthority": "Explicit eligible retention/pruning with history, artifact and active-pin protection",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "repository_docs",
+      "owner": "DocumentationService",
+      "operations": [
+        "generate"
+      ],
+      "effectAndAuthority": "Exact evidence and owned-worktree Git/review authority",
+      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+    },
+    {
+      "family": "mcp_server",
+      "owner": "McpServerAdapter and ConfigurationService",
+      "operations": [
+        "status",
+        "configure",
+        "clients",
+        "set_client_access"
+      ],
+      "effectAndAuthority": "Incoming server status plus human-only listener/client administration; protected credential flow, no self-grants, exact revision and scoped publication",
+      "status": "Architecture candidate; actual protocol/authentication and gateway acceptance required"
+    }
+  ]
+}

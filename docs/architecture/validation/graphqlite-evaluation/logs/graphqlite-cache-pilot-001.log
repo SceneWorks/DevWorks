@@ -1,0 +1,2 @@
+{"profile": "pilot", "iteration": 1, "command": ["/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite", "--cache-profile", "work/graphqlite-eval-runs/pilots/20261101T192631305393Z/cache-profiles/pilot-1-graphqlite/config.json"], "case": "work/graphqlite-eval-runs/pilots/20261101T192631305393Z/cache-profiles/pilot-1-graphqlite", "exit_code": 0, "case_errors": [], "checks": 1073}
+{"manifest": "work/graphqlite-eval-runs/pilots/20261101T192631305393Z/cache-profiles/manifest.json"}

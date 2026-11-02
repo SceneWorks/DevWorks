@@ -1,0 +1,903 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "CancelContract": {
+      "enum": [
+        "Cooperative",
+        "Checkpoint",
+        "ReconcileOnly"
+      ],
+      "type": "string"
+    },
+    "ContentKind": {
+      "enum": [
+        "Skill",
+        "Role",
+        "Prompt"
+      ],
+      "type": "string"
+    },
+    "Contribution": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "$ref": "#/$defs/IndexFormat"
+            },
+            "kind": {
+              "const": "Semantic",
+              "type": "string"
+            },
+            "languages": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "meta": {
+              "$ref": "#/$defs/ContributionMeta"
+            }
+          },
+          "required": [
+            "kind",
+            "meta",
+            "languages",
+            "format"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Tool",
+              "type": "string"
+            },
+            "meta": {
+              "$ref": "#/$defs/ContributionMeta"
+            },
+            "reconciler": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/QualifiedId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requestedEffect": {
+              "$ref": "#/$defs/EffectRequest"
+            }
+          },
+          "required": [
+            "kind",
+            "meta",
+            "requestedEffect"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidenceSchema": {
+              "$ref": "#/$defs/SchemaRef"
+            },
+            "kind": {
+              "const": "Workflow",
+              "type": "string"
+            },
+            "meta": {
+              "$ref": "#/$defs/ContributionMeta"
+            },
+            "role": {
+              "$ref": "#/$defs/WorkflowRole"
+            }
+          },
+          "required": [
+            "kind",
+            "meta",
+            "role",
+            "evidenceSchema"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "eventSchemas": {
+              "items": {
+                "$ref": "#/$defs/SchemaRef"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "kind": {
+              "const": "EventHandler",
+              "type": "string"
+            },
+            "meta": {
+              "$ref": "#/$defs/ContributionMeta"
+            }
+          },
+          "required": [
+            "kind",
+            "meta",
+            "eventSchemas"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ContextHook",
+              "type": "string"
+            },
+            "meta": {
+              "$ref": "#/$defs/ContributionMeta"
+            },
+            "phase": {
+              "$ref": "#/$defs/HookPhase"
+            },
+            "priority": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "meta",
+            "phase",
+            "priority"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "contentKind": {
+              "$ref": "#/$defs/ContentKind"
+            },
+            "kind": {
+              "const": "Content",
+              "type": "string"
+            },
+            "meta": {
+              "$ref": "#/$defs/ContributionMeta"
+            }
+          },
+          "required": [
+            "kind",
+            "meta",
+            "contentKind",
+            "artifact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "endpointIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "kind": {
+              "const": "Provider",
+              "type": "string"
+            },
+            "meta": {
+              "$ref": "#/$defs/ContributionMeta"
+            },
+            "profiles": {
+              "items": {
+                "$ref": "#/$defs/EndpointProfile"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "meta",
+            "profiles",
+            "endpointIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "NativeUi",
+              "type": "string"
+            },
+            "meta": {
+              "$ref": "#/$defs/ContributionMeta"
+            },
+            "view": {
+              "$ref": "#/$defs/UiNode"
+            }
+          },
+          "required": [
+            "kind",
+            "meta",
+            "view"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ContributionMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "cancellation": {
+          "$ref": "#/$defs/CancelContract"
+        },
+        "helpTopic": {
+          "$ref": "#/$defs/Id"
+        },
+        "id": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "inputSchema": {
+          "$ref": "#/$defs/SchemaRef"
+        },
+        "outputSchema": {
+          "$ref": "#/$defs/SchemaRef"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "inputSchema",
+        "outputSchema",
+        "helpTopic",
+        "required",
+        "cancellation"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "EffectRequest": {
+      "enum": [
+        "ReadCandidate",
+        "Mutation",
+        "Opaque"
+      ],
+      "type": "string"
+    },
+    "EndpointProfile": {
+      "enum": [
+        "OpenAiResponses",
+        "CodexSubscriptionResponses",
+        "AnthropicMessages",
+        "ClaudeSubscriptionMessages",
+        "OpenRouterChat",
+        "CompatibleChat",
+        "Embedding"
+      ],
+      "type": "string"
+    },
+    "FieldKind": {
+      "enum": [
+        "Text",
+        "Toggle",
+        "Select"
+      ],
+      "type": "string"
+    },
+    "HookPhase": {
+      "enum": [
+        "Assemble",
+        "Compact",
+        "Decision"
+      ],
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "IndexFormat": {
+      "enum": [
+        "Scip",
+        "Native"
+      ],
+      "type": "string"
+    },
+    "PackageDependency": {
+      "additionalProperties": false,
+      "properties": {
+        "manifestDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "packageId": {
+          "$ref": "#/$defs/Id"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "versionRequirement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "packageId",
+        "versionRequirement",
+        "manifestDigest",
+        "required"
+      ],
+      "type": "object"
+    },
+    "PackageFile": {
+      "additionalProperties": false,
+      "properties": {
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "path": {
+          "maxLength": 240,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "byteLength"
+      ],
+      "type": "object"
+    },
+    "PermissionRequest": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "WorktreeRead",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "WorktreeWrite",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "endpointId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Network",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "endpointId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Process",
+              "type": "string"
+            },
+            "runtimeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "runtimeId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Inference",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "StateWrite",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "UiContribution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "QualifiedId": {
+      "pattern": "^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$",
+      "type": "string"
+    },
+    "RequestedLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "maxConcurrent": {
+          "format": "uint16",
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxMemoryBytes": {
+          "$ref": "#/$defs/Revision"
+        },
+        "queueCapacity": {
+          "format": "uint16",
+          "maximum": 1024,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "streamCreditBytes": {
+          "format": "uint32",
+          "maximum": 262144,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxConcurrent",
+        "queueCapacity",
+        "maxMemoryBytes",
+        "streamCreditBytes"
+      ],
+      "type": "object"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RuntimeRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "runtimeId": {
+          "$ref": "#/$defs/Id"
+        },
+        "versionRequirement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runtimeId",
+        "versionRequirement",
+        "required"
+      ],
+      "type": "object"
+    },
+    "SchemaAsset": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "reference": {
+          "$ref": "#/$defs/SchemaRef"
+        }
+      },
+      "required": [
+        "reference",
+        "path"
+      ],
+      "type": "object"
+    },
+    "SchemaRef": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "schemaId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "schemaId",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "TargetBinary": {
+      "additionalProperties": false,
+      "properties": {
+        "entrypoint": {
+          "maxLength": 240,
+          "minLength": 1,
+          "type": "string"
+        },
+        "targetTriple": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "targetTriple",
+        "entrypoint"
+      ],
+      "type": "object"
+    },
+    "UiNode": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Text",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "children": {
+              "items": {
+                "$ref": "#/$defs/UiNode"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "kind": {
+              "const": "Group",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "children"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "$ref": "#/$defs/Id"
+            },
+            "fieldKind": {
+              "$ref": "#/$defs/FieldKind"
+            },
+            "kind": {
+              "const": "Field",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "readOnly": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "label",
+            "fieldKind",
+            "readOnly"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actionId": {
+              "$ref": "#/$defs/QualifiedId"
+            },
+            "kind": {
+              "const": "Action",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "actionId",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "columns": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            },
+            "dataSchema": {
+              "$ref": "#/$defs/SchemaRef"
+            },
+            "kind": {
+              "const": "Table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "columns",
+            "dataSchema"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "Image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "artifact"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WireVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "WorkflowRole": {
+      "enum": [
+        "Step",
+        "VerificationGate"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:package-manifest",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "configurationSchema": {
+      "$ref": "#/$defs/SchemaRef"
+    },
+    "contributions": {
+      "items": {
+        "$ref": "#/$defs/Contribution"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "dependencies": {
+      "items": {
+        "$ref": "#/$defs/PackageDependency"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/PackageFile"
+      },
+      "maxItems": 2048,
+      "minItems": 1,
+      "type": "array"
+    },
+    "helpFile": {
+      "type": "string"
+    },
+    "minimumHostVersion": {
+      "type": "string"
+    },
+    "packageId": {
+      "$ref": "#/$defs/Id"
+    },
+    "protocolMax": {
+      "$ref": "#/$defs/WireVersion"
+    },
+    "protocolMin": {
+      "$ref": "#/$defs/WireVersion"
+    },
+    "publisherId": {
+      "$ref": "#/$defs/Id"
+    },
+    "requestedLimits": {
+      "$ref": "#/$defs/RequestedLimits"
+    },
+    "requestedPermissions": {
+      "items": {
+        "$ref": "#/$defs/PermissionRequest"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "runtimes": {
+      "items": {
+        "$ref": "#/$defs/RuntimeRequirement"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "schemaAssets": {
+      "items": {
+        "$ref": "#/$defs/SchemaAsset"
+      },
+      "maxItems": 512,
+      "type": "array"
+    },
+    "stateSchema": {
+      "$ref": "#/$defs/SchemaRef"
+    },
+    "targets": {
+      "items": {
+        "$ref": "#/$defs/TargetBinary"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "packageId",
+    "version",
+    "publisherId",
+    "protocolMin",
+    "protocolMax",
+    "minimumHostVersion",
+    "dependencies",
+    "runtimes",
+    "schemaAssets",
+    "requestedLimits",
+    "targets",
+    "files",
+    "stateSchema",
+    "configurationSchema",
+    "helpFile",
+    "requestedPermissions",
+    "contributions"
+  ],
+  "title": "PackageManifest",
+  "type": "object"
+}

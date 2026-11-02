@@ -1,0 +1,24 @@
+    Updating crates.io index
+     Locking 3 packages to highest Rust 1.101.0-nightly compatible versions
+      Adding graphqlite v0.12.0
+      Adding rsqlite-vfs v0.2.0
+      Adding sqlite-wasm-rs v0.6.2
+ Downloading crates ...
+  Downloaded graphqlite v0.12.0
+    Checking foldhash v0.2.0
+    Checking libc v0.2.191
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+    Checking hashbrown v0.17.1
+    Checking cpufeatures v0.2.17
+    Checking sha2 v0.10.9
+    Checking hashlink v0.12.2
+    Checking rusqlite v0.41.1
+   Compiling serde_derive v1.0.229
+   Compiling thiserror-impl v1.0.69
+    Checking thiserror v1.0.69
+    Checking serde v1.0.229
+    Checking eval-common v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/common)
+    Checking graphqlite v0.12.0
+    Checking eval-graphqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/graphqlite)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.56s

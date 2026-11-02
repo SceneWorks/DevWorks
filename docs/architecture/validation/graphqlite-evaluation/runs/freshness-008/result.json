@@ -1,0 +1,641 @@
+{
+  "after_reopen": [
+    "a",
+    "bulk",
+    "r",
+    "y"
+  ],
+  "baseline_bfs": [
+    "a",
+    "b"
+  ],
+  "capabilities": {
+    "cypher_dialect": "openCypher 9",
+    "features": {
+      "backtick_identifiers": true,
+      "bracket_property_access": true,
+      "call_procedures": true,
+      "call_subquery": true,
+      "case_expressions": true,
+      "create_constraint": true,
+      "create_index": true,
+      "cypher_rows_vtab": true,
+      "existential_subquery_full": true,
+      "existential_subquery_pattern": true,
+      "explain": true,
+      "foreach": true,
+      "graph_algorithms": true,
+      "json_path_access": true,
+      "label_disjunction": true,
+      "list_comprehension": true,
+      "list_literals": true,
+      "list_properties": true,
+      "load_csv": true,
+      "map_literals": true,
+      "map_projection_all_properties": true,
+      "map_properties": true,
+      "merge_on_create_on_match": true,
+      "multi_graph": true,
+      "named_paths": true,
+      "named_timezones": true,
+      "optional_match": true,
+      "parameters": true,
+      "pattern_comprehension": true,
+      "profile": true,
+      "quantifiers": true,
+      "reduce": true,
+      "shortest_path": true,
+      "temporal_types": true,
+      "timezone_historical_dst": true,
+      "union": true,
+      "unwind": true,
+      "validate": true,
+      "variable_length_paths": true,
+      "with_where": true,
+      "write_stats": true
+    },
+    "graphqlite_version": "0.12.0",
+    "neo4j_compat": false,
+    "schema_version": 1,
+    "sqlite": {
+      "json1": true,
+      "version": "3.54.1"
+    }
+  },
+  "case_errors": [],
+  "engine": "graphqlite",
+  "guard_contract": "All managed graph mutations update a transactional generation; PRAGMA data_version detects other-connection commits; total_changes detects own bulk writes. Write-transaction cache reads are rejected and invalidate the stamp; numeric generation reuse alone is insufficient. Guard must own the cache; scope is whole test database, not a permission boundary.",
+  "initial_load": {
+    "edge_count": 1,
+    "node_count": 3,
+    "status": "loaded"
+  },
+  "observations": [
+    {
+      "after_explicit_reload": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expected_bfs": [
+        "a",
+        "b",
+        "c"
+      ],
+      "guard_detected_changed_generation": true,
+      "managed_result": [
+        "a",
+        "b",
+        "c"
+      ],
+      "managed_total_ns": 116375,
+      "native_before_reload": [
+        "a",
+        "b",
+        "c"
+      ],
+      "native_query_ns": 132042,
+      "native_was_current": true,
+      "phase": "same_connection_node_and_edge_insert",
+      "reload_ns": 89208,
+      "reload_status": {
+        "edge_count": 2,
+        "node_count": 4,
+        "status": "reloaded"
+      },
+      "stamp": [
+        2,
+        2,
+        44
+      ]
+    },
+    {
+      "after_explicit_reload": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "expected_bfs": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "guard_detected_changed_generation": true,
+      "managed_result": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "managed_total_ns": 218584,
+      "native_before_reload": [
+        "a",
+        "b",
+        "c"
+      ],
+      "native_query_ns": 104208,
+      "native_was_current": false,
+      "phase": "other_connection_committed_edge",
+      "reload_ns": 129083,
+      "reload_status": {
+        "edge_count": 3,
+        "node_count": 4,
+        "status": "reloaded"
+      },
+      "stamp": [
+        3,
+        3,
+        44
+      ]
+    },
+    {
+      "after_guard": {
+        "distance": 16.0,
+        "found": true,
+        "path": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      },
+      "after_reload": {
+        "distance": 16.0,
+        "found": true,
+        "path": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      },
+      "before": {
+        "distance": 9.0,
+        "found": true,
+        "path": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      },
+      "expected_distance": 16,
+      "guard_reloaded": true,
+      "phase": "edge_weight_update",
+      "without_reload": {
+        "distance": 16.0,
+        "found": true,
+        "path": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      }
+    },
+    {
+      "after_explicit_reload": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "expected_bfs": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "guard_detected_changed_generation": false,
+      "managed_result": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "managed_total_ns": 16875,
+      "native_before_reload": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "native_query_ns": 24000,
+      "native_was_current": true,
+      "phase": "edge_weight_generation",
+      "reload_ns": 89458,
+      "reload_status": {
+        "edge_count": 3,
+        "node_count": 4,
+        "status": "reloaded"
+      },
+      "stamp": [
+        4,
+        4,
+        44
+      ]
+    },
+    {
+      "after_explicit_reload": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "expected_bfs": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "guard_detected_changed_generation": true,
+      "managed_result": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "managed_total_ns": 116291,
+      "native_before_reload": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "native_query_ns": 127375,
+      "native_was_current": true,
+      "phase": "node_property_rename",
+      "reload_ns": 85916,
+      "reload_status": {
+        "edge_count": 3,
+        "node_count": 4,
+        "status": "reloaded"
+      },
+      "stamp": [
+        5,
+        4,
+        47
+      ]
+    },
+    {
+      "after_explicit_reload": [
+        "a",
+        "b"
+      ],
+      "expected_bfs": [
+        "a",
+        "b"
+      ],
+      "guard_detected_changed_generation": true,
+      "managed_result": [
+        "a",
+        "b"
+      ],
+      "managed_total_ns": 102625,
+      "native_before_reload": [
+        "a",
+        "b"
+      ],
+      "native_query_ns": 109125,
+      "native_was_current": true,
+      "phase": "same_connection_edge_delete",
+      "reload_ns": 82792,
+      "reload_status": {
+        "edge_count": 2,
+        "node_count": 4,
+        "status": "reloaded"
+      },
+      "stamp": [
+        6,
+        4,
+        50
+      ]
+    },
+    {
+      "after_explicit_reload": [
+        "a"
+      ],
+      "expected_bfs": [
+        "a"
+      ],
+      "guard_detected_changed_generation": true,
+      "managed_result": [
+        "a"
+      ],
+      "managed_total_ns": 122417,
+      "native_before_reload": [
+        "a",
+        "b"
+      ],
+      "native_query_ns": 23542,
+      "native_was_current": false,
+      "phase": "other_connection_node_delete",
+      "reload_ns": 88208,
+      "reload_status": {
+        "edge_count": 1,
+        "node_count": 3,
+        "status": "reloaded"
+      },
+      "stamp": [
+        7,
+        5,
+        50
+      ]
+    },
+    {
+      "managed_write_transaction_rejected": true,
+      "native_result": [
+        "a",
+        "x"
+      ],
+      "phase": "uncommitted_native_cache_control"
+    },
+    {
+      "after_explicit_reload": [
+        "a"
+      ],
+      "expected_bfs": [
+        "a"
+      ],
+      "guard_detected_changed_generation": true,
+      "managed_result": [
+        "a"
+      ],
+      "managed_total_ns": 108167,
+      "native_before_reload": [
+        "a",
+        "x"
+      ],
+      "native_query_ns": 14375,
+      "native_was_current": false,
+      "phase": "rollback_after_caching_uncommitted_rows",
+      "reload_ns": 85334,
+      "reload_status": {
+        "edge_count": 1,
+        "node_count": 3,
+        "status": "reloaded"
+      },
+      "stamp": [
+        7,
+        5,
+        60
+      ]
+    },
+    {
+      "after_explicit_reload": [
+        "a"
+      ],
+      "expected_bfs": [
+        "a"
+      ],
+      "guard_detected_changed_generation": false,
+      "managed_result": [
+        "a"
+      ],
+      "managed_total_ns": 11375,
+      "native_before_reload": [
+        "a"
+      ],
+      "native_query_ns": 13125,
+      "native_was_current": true,
+      "phase": "other_writer_uncommitted_not_visible",
+      "reload_ns": 82958,
+      "reload_status": {
+        "edge_count": 1,
+        "node_count": 3,
+        "status": "reloaded"
+      },
+      "stamp": [
+        7,
+        5,
+        60
+      ]
+    },
+    {
+      "after_explicit_reload": [
+        "a"
+      ],
+      "expected_bfs": [
+        "a"
+      ],
+      "guard_detected_changed_generation": false,
+      "managed_result": [
+        "a"
+      ],
+      "managed_total_ns": 10833,
+      "native_before_reload": [
+        "a"
+      ],
+      "native_query_ns": 11500,
+      "native_was_current": true,
+      "phase": "other_writer_rollback",
+      "reload_ns": 85708,
+      "reload_status": {
+        "edge_count": 1,
+        "node_count": 3,
+        "status": "reloaded"
+      },
+      "stamp": [
+        7,
+        5,
+        60
+      ]
+    },
+    {
+      "after_explicit_reload": [
+        "a",
+        "y"
+      ],
+      "expected_bfs": [
+        "a",
+        "y"
+      ],
+      "guard_detected_changed_generation": true,
+      "managed_result": [
+        "a",
+        "y"
+      ],
+      "managed_total_ns": 110125,
+      "native_before_reload": [
+        "a",
+        "y"
+      ],
+      "native_query_ns": 115583,
+      "native_was_current": true,
+      "phase": "committed_graph_and_vector_transaction",
+      "reload_ns": 85750,
+      "reload_status": {
+        "edge_count": 2,
+        "node_count": 4,
+        "status": "reloaded"
+      },
+      "stamp": [
+        8,
+        5,
+        70
+      ]
+    },
+    {
+      "after_explicit_reload": [
+        "a",
+        "r",
+        "y"
+      ],
+      "expected_bfs": [
+        "a",
+        "r",
+        "y"
+      ],
+      "guard_detected_changed_generation": true,
+      "managed_result": [
+        "a",
+        "r",
+        "y"
+      ],
+      "managed_total_ns": 155583,
+      "native_before_reload": [
+        "a",
+        "y"
+      ],
+      "native_query_ns": 13125,
+      "native_was_current": false,
+      "phase": "read_snapshot_ends_after_other_writer_commit",
+      "reload_ns": 151875,
+      "reload_status": {
+        "edge_count": 3,
+        "node_count": 5,
+        "status": "reloaded"
+      },
+      "stamp": [
+        9,
+        6,
+        70
+      ]
+    },
+    {
+      "expected_bfs": [
+        "a",
+        "bulk",
+        "r",
+        "y"
+      ],
+      "guard_reloaded": true,
+      "managed_result": [
+        "a",
+        "bulk",
+        "r",
+        "y"
+      ],
+      "native_before_generation_bump": [
+        "a",
+        "r",
+        "y"
+      ],
+      "phase": "same_connection_public_bulk_helpers"
+    },
+    {
+      "after_explicit_reload": [
+        "a",
+        "bulk",
+        "r",
+        "y"
+      ],
+      "expected_bfs": [
+        "a",
+        "bulk",
+        "r",
+        "y"
+      ],
+      "guard_detected_changed_generation": true,
+      "managed_result": [
+        "a",
+        "bulk",
+        "r",
+        "y"
+      ],
+      "managed_total_ns": 157792,
+      "native_before_reload": [
+        "a",
+        "r",
+        "y"
+      ],
+      "native_query_ns": 16209,
+      "native_was_current": false,
+      "phase": "other_connection_public_bulk_helpers",
+      "reload_ns": 85875,
+      "reload_status": {
+        "edge_count": 4,
+        "node_count": 6,
+        "status": "reloaded"
+      },
+      "stamp": [
+        10,
+        7,
+        70
+      ]
+    },
+    {
+      "before_stamp": [
+        10,
+        7,
+        70
+      ],
+      "committed_stamp": [
+        11,
+        7,
+        89
+      ],
+      "dirty_stamp": [
+        11,
+        7,
+        80
+      ],
+      "generation_reused": true,
+      "guard_reloaded": true,
+      "managed_result": [
+        "a",
+        "bulk",
+        "r",
+        "y"
+      ],
+      "native_after_new_commit": [
+        "a",
+        "bulk",
+        "ghost",
+        "r",
+        "y"
+      ],
+      "native_uncommitted": [
+        "a",
+        "bulk",
+        "ghost",
+        "r",
+        "y"
+      ],
+      "phase": "rollback_then_new_commit_generation_reuse"
+    }
+  ],
+  "real_inference": false,
+  "sqlite_vec": "0.1.7",
+  "vector_ids_after_reopen": [
+    1,
+    3,
+    4,
+    51,
+    53,
+    77,
+    89
+  ],
+  "version": "0.12.0",
+  "warm_guard": {
+    "query_ns": 13792,
+    "reloaded": false,
+    "stamp": [
+      11,
+      7,
+      89
+    ]
+  }
+}

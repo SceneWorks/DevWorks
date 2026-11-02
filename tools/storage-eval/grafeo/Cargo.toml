@@ -1,0 +1,11 @@
+[package]
+name = "eval-grafeo"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+eval-common.workspace = true
+grafeo = { version = "=0.6.0", default-features = false, features = ["gql", "cypher", "vector-index", "text-index", "hybrid-search", "wal", "grafeo-file", "parallel", "algos", "mmap", "spill"] }

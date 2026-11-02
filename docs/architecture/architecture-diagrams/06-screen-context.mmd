@@ -1,0 +1,21 @@
+sequenceDiagram
+ actor User
+ participant Nav as Native navigation
+ participant Chat as Shared ConversationId
+ participant Help as Local Help and tool registry
+ participant View as Home or sidebar view
+ participant Agent as Workspace coordinator
+ User->>Nav: Open Dreaming or another screen
+ Nav->>Chat: Append deduplicated host screen notice
+ Chat-->>View: Same transcript and selected session
+ Nav->>Help: Resolve screen topic and capability references
+ User->>View: Open toolbar sidebar
+ View->>Chat: Reuse draft, attachments and model selection
+ Note over Nav,Agent: Navigation does not itself request inference
+ User->>View: Send message
+ View->>Chat: Append user event
+ Chat->>Agent: Routed turn with current screen context
+ Agent->>Help: Read local topic and effective tool metadata
+ Agent-->>Chat: Linked answer or permitted operation
+ User->>Nav: Return Home
+ Nav->>View: Close sidebar and show same Home conversation

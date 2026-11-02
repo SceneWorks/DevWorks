@@ -1,0 +1,139 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "HoldRef": {
+      "additionalProperties": false,
+      "properties": {
+        "holdId": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "holdId",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RootCommand": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedControlRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "expectedWorkRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "runs.start",
+              "type": "string"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "rootId",
+            "expectedWorkRevision",
+            "expectedControlRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedControlRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "runs.pause",
+              "type": "string"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "rootId",
+            "expectedControlRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "coveredHolds": {
+              "items": {
+                "$ref": "#/$defs/HoldRef"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            },
+            "expectedControlRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "runs.continue",
+              "type": "string"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "rootId",
+            "expectedControlRevision",
+            "coveredHolds"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:command-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/RootCommand"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "requestKey": {
+      "$ref": "#/$defs/Id"
+    }
+  },
+  "required": [
+    "protocol",
+    "requestKey",
+    "command"
+  ],
+  "title": "CommandRequest",
+  "type": "object"
+}

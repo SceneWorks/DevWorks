@@ -1,0 +1,106 @@
+{
+  "date": "2026-11-02",
+  "status": "All top-level architecture/planning HTML documents; static local links/images and page errors only",
+  "passed": true,
+  "documents": [
+    {
+      "path": "docs/architecture/architecture-feasibility-review.html",
+      "localLinks": 15,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/architecture-handoff.html",
+      "localLinks": 5,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/capability-review.html",
+      "localLinks": 37,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/data-retrieval-delivery-contracts.html",
+      "localLinks": 10,
+      "images": 3,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/devworks-architecture.html",
+      "localLinks": 167,
+      "images": 43,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/devworks-graphqlite-evaluation.html",
+      "localLinks": 9,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/devworks-storage-evaluation.html",
+      "localLinks": 14,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/domain-operation-contracts.html",
+      "localLinks": 10,
+      "images": 2,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/domain-operation-reference.html",
+      "localLinks": 21,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/implementation-plan.html",
+      "localLinks": 66,
+      "images": 1,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/native-backend-feasibility.html",
+      "localLinks": 15,
+      "images": 1,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/provider-session-package-contracts.html",
+      "localLinks": 14,
+      "images": 2,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/architecture/shared-operation-contracts.html",
+      "localLinks": 14,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/planning/devworks-requirements.html",
+      "localLinks": 49,
+      "images": 3,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/planning/harness-workbench.html",
+      "localLinks": 2,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/planning/mockup-gallery.html",
+      "localLinks": 49,
+      "images": 43,
+      "pageErrors": []
+    }
+  ],
+  "localTargetsChecked": 397,
+  "images": 98,
+  "visibleTabsOpened": 0
+}

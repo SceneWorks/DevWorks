@@ -1,0 +1,18 @@
+flowchart TB
+  UI["Native egui panes<br/>shared session and projections"]
+  API["Shared application operations<br/>host authority and durable receipts"]
+  UI --> API
+  API --> PDF["PDF extraction owner<br/>immutable source version"]
+  API --> BROWSER["Browser session owner<br/>revisioned targets and file grants"]
+  API --> READ["Verified read adapter<br/>registered root handle"]
+  PDF --> PW["Owned native PDF worker<br/>explicit PDFium ABI and bounds"]
+  BROWSER --> CDP["Native CDP transport<br/>owned Chromium profile and process"]
+  READ --> FD["No-follow file read<br/>bounded bytes and digest"]
+  PW --> RESULT["Untrusted bounded evidence<br/>revalidate scope before publication"]
+  CDP --> RESULT
+  FD --> RESULT
+  RESULT --> STORE["SQLite and artifact journal<br/>versions, outcomes and recovery"]
+  GATE["Evidence gate<br/>39 narrow checks on macOS arm64<br/>production and target qualification pending"]
+  STORE -.-> GATE
+  classDef gate fill:#fff5df,stroke:#b3843f,color:#4f3a1a;
+  class GATE gate;

@@ -1,0 +1,2190 @@
+{
+  "date": "2026-11-01",
+  "classification": "Local native evaluation, not production selection or platform acceptance",
+  "manifest": "work/graphqlite-eval-runs/measured/20261101T192949196362Z/manifest.json",
+  "input": {
+    "phase": "measured",
+    "created_utc": "20261101T192949196362Z",
+    "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+    "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+    "workspace_lock_sha256": "54f37e01c554f6fba047ba9d66f1104c3d723cf7df7cce781247eba5090164aa",
+    "hardware": {
+      "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "logical_cpus": 18
+    },
+    "inference": false,
+    "order_seed": 67321,
+    "rayon_threads": 4,
+    "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: aarch64-apple-darwin\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3",
+    "cache_policy": "Fresh process/database each case; OS filesystem cache not flushed; queries include first-access and warm samples",
+    "release_profile": {
+      "opt_level": 3,
+      "lto": false,
+      "codegen_units": 16
+    }
+  },
+  "profiles": {
+    "small": {
+      "graphqlite": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 1000,
+            "min": 1000,
+            "max": 1000,
+            "runs": 3
+          },
+          "edges": {
+            "median": 1002,
+            "min": 1002,
+            "max": 1002,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 92303666,
+            "min": 83905333,
+            "max": 92467750,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 47056750,
+            "min": 29531625,
+            "max": 74767250,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 126875,
+            "min": 81833,
+            "max": 131083,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 18889875,
+            "min": 17892625,
+            "max": 19113667,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 43696,
+            "min": 43248,
+            "max": 43888,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 52224,
+            "min": 51616,
+            "max": 52464,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 61584,
+            "min": 61568,
+            "max": 62608,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 4004138,
+            "min": 4004138,
+            "max": 4004138,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 11138,
+            "min": 11138,
+            "max": 11138,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 4622320,
+            "min": 4622320,
+            "max": 4622320,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 64438272,
+            "min": 63373312,
+            "max": 64946176,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 37791,
+            "min": 33292,
+            "max": 38625,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 81625,
+            "min": 66208,
+            "max": 93833,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 132500,
+            "min": 108125,
+            "max": 154750,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 17583542,
+            "min": 16294375,
+            "max": 18977208,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 17583542,
+            "min": 16294375,
+            "max": 18977208,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 38750,
+            "min": 37834,
+            "max": 41125,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 86250,
+            "min": 85792,
+            "max": 124209,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 191083,
+            "min": 150375,
+            "max": 208834,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 27774000,
+            "min": 26860792,
+            "max": 37549292,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 27774000,
+            "min": 26860792,
+            "max": 37549292,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 38257666,
+            "min": 36713041,
+            "max": 40738000,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 38257666,
+            "min": 36713041,
+            "max": 40738000,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 321333,
+            "min": 287875,
+            "max": 332125,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 378334,
+            "min": 350500,
+            "max": 459833,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 1142500,
+            "min": 1138792,
+            "max": 1188250,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 1600042,
+            "min": 1468959,
+            "max": 1716458,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 296625,
+            "min": 270875,
+            "max": 300292,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 370541,
+            "min": 365166,
+            "max": 453458,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 295917,
+            "min": 273958,
+            "max": 315916,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 402500,
+            "min": 345750,
+            "max": 451333,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 28959,
+            "min": 28375,
+            "max": 29584,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 42208,
+            "min": 35542,
+            "max": 71250,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 77250,
+            "min": 65291,
+            "max": 112375,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 32167,
+            "min": 31709,
+            "max": 32417,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 63375,
+            "min": 52041,
+            "max": 76791,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 32000,
+            "min": 31584,
+            "max": 32375,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 298708,
+            "min": 257667,
+            "max": 326750,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 44209,
+            "min": 43750,
+            "max": 48209,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 128834,
+            "min": 101458,
+            "max": 141792,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 276291,
+            "min": 189084,
+            "max": 296458,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 142875,
+            "min": 134375,
+            "max": 153583,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 313917,
+            "min": 280625,
+            "max": 319334,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 36543166,
+            "min": 35367167,
+            "max": 38881542,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 36543166,
+            "min": 35367167,
+            "max": 38881542,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 48083,
+            "min": 44833,
+            "max": 49917,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 187667,
+            "min": 184500,
+            "max": 190334,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 345166,
+            "min": 344875,
+            "max": 374500,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 150875,
+            "min": 136500,
+            "max": 163125,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 447042,
+            "min": 410500,
+            "max": 519167,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 57908292,
+            "min": 45221167,
+            "max": 72981125,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 57908292,
+            "min": 45221167,
+            "max": 72981125,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 34625,
+            "min": 34334,
+            "max": 35708,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 53584,
+            "min": 42083,
+            "max": 80500,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      },
+      "sqlite": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 1000,
+            "min": 1000,
+            "max": 1000,
+            "runs": 3
+          },
+          "edges": {
+            "median": 1002,
+            "min": 1002,
+            "max": 1002,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 17028709,
+            "min": 16814125,
+            "max": 19569292,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 1733417,
+            "min": 1698917,
+            "max": 1760000,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 19334,
+            "min": 17333,
+            "max": 26875,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 303292,
+            "min": 299083,
+            "max": 379000,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 43584,
+            "min": 43568,
+            "max": 43792,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 49296,
+            "min": 49184,
+            "max": 49408,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 54816,
+            "min": 54528,
+            "max": 55632,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 3428352,
+            "min": 3428352,
+            "max": 3428352,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 11138,
+            "min": 11138,
+            "max": 11138,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 3160256,
+            "min": 3160256,
+            "max": 3160256,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 56426496,
+            "min": 56115200,
+            "max": 57262080,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 542,
+            "min": 459,
+            "max": 708,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 12250,
+            "min": 7875,
+            "max": 20375,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 47000,
+            "min": 44375,
+            "max": 65125,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 2200042,
+            "min": 2128584,
+            "max": 2278333,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 2200042,
+            "min": 2128584,
+            "max": 2278333,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 958,
+            "min": 833,
+            "max": 1000,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 53084,
+            "min": 43667,
+            "max": 56500,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 126167,
+            "min": 119000,
+            "max": 129667,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 3784750,
+            "min": 3734209,
+            "max": 3960334,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 3784750,
+            "min": 3734209,
+            "max": 3960334,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 8719542,
+            "min": 8169125,
+            "max": 9230625,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 8719542,
+            "min": 8169125,
+            "max": 9230625,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 316042,
+            "min": 294958,
+            "max": 333917,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 388333,
+            "min": 366833,
+            "max": 620583,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 141083,
+            "min": 125542,
+            "max": 197167,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 164917,
+            "min": 154041,
+            "max": 335875,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 278584,
+            "min": 271708,
+            "max": 286292,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 443542,
+            "min": 367959,
+            "max": 464791,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 286083,
+            "min": 269375,
+            "max": 298375,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 401084,
+            "min": 351208,
+            "max": 421416,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 916,
+            "min": 875,
+            "max": 1000,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 1250,
+            "min": 1209,
+            "max": 1708,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 3041,
+            "min": 1917,
+            "max": 12791,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 7625,
+            "min": 7584,
+            "max": 7792,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 12875,
+            "min": 11625,
+            "max": 21291,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 7625,
+            "min": 7625,
+            "max": 7833,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 89125,
+            "min": 72292,
+            "max": 90833,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 2166,
+            "min": 1584,
+            "max": 2333,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 84250,
+            "min": 75375,
+            "max": 102834,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 167750,
+            "min": 163125,
+            "max": 197250,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 47417,
+            "min": 40250,
+            "max": 52292,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 175500,
+            "min": 147084,
+            "max": 220708,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 7648500,
+            "min": 6973375,
+            "max": 7982500,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 7648500,
+            "min": 6973375,
+            "max": 7982500,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 2458,
+            "min": 1333,
+            "max": 4125,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 134708,
+            "min": 76375,
+            "max": 150750,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 281458,
+            "min": 234500,
+            "max": 292833,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 40916,
+            "min": 40667,
+            "max": 50500,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 247375,
+            "min": 113292,
+            "max": 250916,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 9443667,
+            "min": 9109875,
+            "max": 9851417,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 9443667,
+            "min": 9109875,
+            "max": 9851417,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 8167,
+            "min": 8042,
+            "max": 8250,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 12333,
+            "min": 11208,
+            "max": 25959,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      }
+    },
+    "source": {
+      "graphqlite": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 15587,
+            "min": 15587,
+            "max": 15587,
+            "runs": 3
+          },
+          "edges": {
+            "median": 24861,
+            "min": 24861,
+            "max": 24861,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 1359909583,
+            "min": 1270820417,
+            "max": 1458898959,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 39325583,
+            "min": 36788000,
+            "max": 41897292,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 403625,
+            "min": 202667,
+            "max": 421833,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 294437708,
+            "min": 280324667,
+            "max": 300170375,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 74240,
+            "min": 74192,
+            "max": 74320,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 124816,
+            "min": 124752,
+            "max": 124928,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 181584,
+            "min": 179024,
+            "max": 185856,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 35712907,
+            "min": 35712907,
+            "max": 35712907,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 25716,
+            "min": 25716,
+            "max": 25716,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 4622320,
+            "min": 4622320,
+            "max": 4622320,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 186187776,
+            "min": 183648256,
+            "max": 190562304,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 478709,
+            "min": 475791,
+            "max": 535584,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 666500,
+            "min": 561917,
+            "max": 746709,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 867958,
+            "min": 768625,
+            "max": 908291,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 67767209,
+            "min": 64423250,
+            "max": 71939750,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 67767209,
+            "min": 64423250,
+            "max": 71939750,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 480333,
+            "min": 478000,
+            "max": 481250,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 866083,
+            "min": 764875,
+            "max": 935875,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 2225458,
+            "min": 1969792,
+            "max": 3105500,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 86911750,
+            "min": 80525041,
+            "max": 119700500,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 86911750,
+            "min": 80525041,
+            "max": 119700500,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 9296190291,
+            "min": 8941851667,
+            "max": 10150011417,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 9296190291,
+            "min": 8941851667,
+            "max": 10150011417,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 5477041,
+            "min": 5401042,
+            "max": 5743917,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 6267292,
+            "min": 5996875,
+            "max": 6766250,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 1229417,
+            "min": 1108250,
+            "max": 1495292,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 3055542,
+            "min": 2956750,
+            "max": 4922375,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 3127042,
+            "min": 3046458,
+            "max": 3396500,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 6045458,
+            "min": 5691834,
+            "max": 6122750,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 5382333,
+            "min": 5277000,
+            "max": 5641667,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 6234750,
+            "min": 5712333,
+            "max": 6244042,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 436709,
+            "min": 422125,
+            "max": 438291,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 542084,
+            "min": 529333,
+            "max": 584167,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 619584,
+            "min": 607000,
+            "max": 731667,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 573459,
+            "min": 550125,
+            "max": 615208,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 773875,
+            "min": 733792,
+            "max": 814125,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 561166,
+            "min": 534792,
+            "max": 592458,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 7940167,
+            "min": 7653208,
+            "max": 8109084,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 568625,
+            "min": 564833,
+            "max": 614625,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 798917,
+            "min": 689375,
+            "max": 801875,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 1061625,
+            "min": 1027750,
+            "max": 1312917,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 627375,
+            "min": 608792,
+            "max": 711750,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 931833,
+            "min": 900875,
+            "max": 1005042,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 85770458,
+            "min": 83712791,
+            "max": 101889542,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 85770458,
+            "min": 83712791,
+            "max": 101889542,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 585208,
+            "min": 518125,
+            "max": 621875,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 1172875,
+            "min": 1020542,
+            "max": 2547458,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 2144541,
+            "min": 1777166,
+            "max": 4704333,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 642500,
+            "min": 625583,
+            "max": 690667,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 2422125,
+            "min": 1238667,
+            "max": 3080959,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 114850333,
+            "min": 109293375,
+            "max": 144473375,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 114850333,
+            "min": 109293375,
+            "max": 144473375,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 677375,
+            "min": 652209,
+            "max": 690709,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 806000,
+            "min": 774833,
+            "max": 889292,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      },
+      "sqlite": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 15587,
+            "min": 15587,
+            "max": 15587,
+            "runs": 3
+          },
+          "edges": {
+            "median": 24861,
+            "min": 24861,
+            "max": 24861,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 221570791,
+            "min": 219496292,
+            "max": 223878959,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 1899625,
+            "min": 1836459,
+            "max": 2172708,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 34833,
+            "min": 26875,
+            "max": 65709,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 399917,
+            "min": 356542,
+            "max": 419459,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 74064,
+            "min": 73936,
+            "max": 74880,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 109888,
+            "min": 109792,
+            "max": 110656,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 157184,
+            "min": 156160,
+            "max": 158048,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 28446720,
+            "min": 28446720,
+            "max": 28446720,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 25716,
+            "min": 25716,
+            "max": 25716,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 3160256,
+            "min": 3160256,
+            "max": 3160256,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 161251328,
+            "min": 160235520,
+            "max": 162168832,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 7708,
+            "min": 5959,
+            "max": 8958,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 53583,
+            "min": 48250,
+            "max": 53917,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 99958,
+            "min": 86750,
+            "max": 107166,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 3585459,
+            "min": 3537167,
+            "max": 3648458,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 3585459,
+            "min": 3537167,
+            "max": 3648458,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 14916,
+            "min": 13333,
+            "max": 15125,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 96166,
+            "min": 89500,
+            "max": 100375,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 180916,
+            "min": 165541,
+            "max": 191833,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 6045375,
+            "min": 5884083,
+            "max": 6348708,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 6045375,
+            "min": 5884083,
+            "max": 6348708,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 138763416,
+            "min": 136120209,
+            "max": 146907166,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 138763416,
+            "min": 136120209,
+            "max": 146907166,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 5378042,
+            "min": 5067333,
+            "max": 5433292,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 5805958,
+            "min": 5690917,
+            "max": 6876583,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 125625,
+            "min": 98667,
+            "max": 126833,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 156416,
+            "min": 117583,
+            "max": 164750,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 3034166,
+            "min": 2823875,
+            "max": 3795458,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 5939000,
+            "min": 5386792,
+            "max": 7016292,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 5454541,
+            "min": 5145667,
+            "max": 5472750,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 6560792,
+            "min": 5741416,
+            "max": 7247292,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 1000,
+            "min": 1000,
+            "max": 1042,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 2083,
+            "min": 1833,
+            "max": 2167,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 2875,
+            "min": 2375,
+            "max": 3416,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 8167,
+            "min": 8125,
+            "max": 8625,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 13500,
+            "min": 12083,
+            "max": 16542,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 8375,
+            "min": 8291,
+            "max": 8875,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 133916,
+            "min": 122750,
+            "max": 151334,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 7584,
+            "min": 5916,
+            "max": 9459,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 74209,
+            "min": 74209,
+            "max": 81500,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 154125,
+            "min": 139125,
+            "max": 175916,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 42750,
+            "min": 36041,
+            "max": 45708,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 176000,
+            "min": 144958,
+            "max": 193875,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 7500166,
+            "min": 6476125,
+            "max": 7601625,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 7500166,
+            "min": 6476125,
+            "max": 7601625,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 13208,
+            "min": 12667,
+            "max": 14583,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 133250,
+            "min": 115708,
+            "max": 136292,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 239875,
+            "min": 208125,
+            "max": 253834,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 35625,
+            "min": 28584,
+            "max": 45458,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 205625,
+            "min": 138125,
+            "max": 220958,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 8710333,
+            "min": 7826958,
+            "max": 9321042,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 8710333,
+            "min": 7826958,
+            "max": 9321042,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 8375,
+            "min": 8334,
+            "max": 8875,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 12209,
+            "min": 12167,
+            "max": 22500,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      }
+    },
+    "overlay": {
+      "graphqlite": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 28540,
+            "min": 28540,
+            "max": 28540,
+            "runs": 3
+          },
+          "edges": {
+            "median": 46182,
+            "min": 46182,
+            "max": 46182,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 2503417042,
+            "min": 2390470041,
+            "max": 2526937916,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 37150334,
+            "min": 36851750,
+            "max": 68867167,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 382875,
+            "min": 233417,
+            "max": 12670458,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 719575208,
+            "min": 657974417,
+            "max": 785561667,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 126688,
+            "min": 126688,
+            "max": 126880,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 208720,
+            "min": 208496,
+            "max": 209072,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 295584,
+            "min": 294912,
+            "max": 297552,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 65722150,
+            "min": 65722150,
+            "max": 65722150,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 38669,
+            "min": 38669,
+            "max": 38669,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 4622320,
+            "min": 4622320,
+            "max": 4622320,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 303579136,
+            "min": 302858240,
+            "max": 305102848,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 937416,
+            "min": 889959,
+            "max": 984875,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 1219000,
+            "min": 1147375,
+            "max": 1551292,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 1403250,
+            "min": 1335041,
+            "max": 2018000,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 119669291,
+            "min": 106083000,
+            "max": 155247708,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 119669291,
+            "min": 106083000,
+            "max": 155247708,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 936500,
+            "min": 874667,
+            "max": 943666,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 2534625,
+            "min": 1846084,
+            "max": 3313500,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 5212917,
+            "min": 3339792,
+            "max": 7412041,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 152655500,
+            "min": 124527666,
+            "max": 166504875,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 152655500,
+            "min": 124527666,
+            "max": 166504875,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 30539821459,
+            "min": 30291662083,
+            "max": 31642709166,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 30539821459,
+            "min": 30291662083,
+            "max": 31642709166,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 5555042,
+            "min": 5498875,
+            "max": 5575875,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 7500333,
+            "min": 6166042,
+            "max": 8229209,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 1146083,
+            "min": 1084625,
+            "max": 43138792,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 3136500,
+            "min": 3015042,
+            "max": 62988667,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 3201500,
+            "min": 3093375,
+            "max": 4766375,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 5917000,
+            "min": 5575500,
+            "max": 7268333,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 5448375,
+            "min": 5282458,
+            "max": 5700458,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 6224500,
+            "min": 5918208,
+            "max": 7799208,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 797958,
+            "min": 776584,
+            "max": 947958,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 969500,
+            "min": 896709,
+            "max": 1186583,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 1102250,
+            "min": 973458,
+            "max": 1315542,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 1027583,
+            "min": 991416,
+            "max": 1220125,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 1408291,
+            "min": 1321916,
+            "max": 1677333,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 1039708,
+            "min": 989709,
+            "max": 1263459,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 15885708,
+            "min": 15868667,
+            "max": 18811333,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 1178875,
+            "min": 1013916,
+            "max": 1216833,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 1475166,
+            "min": 1446042,
+            "max": 1716250,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 1781459,
+            "min": 1764541,
+            "max": 3233792,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 1149291,
+            "min": 1146458,
+            "max": 8112708,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 1393625,
+            "min": 1359375,
+            "max": 13701041,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 143876417,
+            "min": 140014041,
+            "max": 1144961875,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 143876417,
+            "min": 140014041,
+            "max": 1144961875,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 1413333,
+            "min": 893834,
+            "max": 1422042,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 2250792,
+            "min": 1978875,
+            "max": 2522958,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 2902250,
+            "min": 2792750,
+            "max": 7159958,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 1344833,
+            "min": 1331000,
+            "max": 8185292,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 1924833,
+            "min": 1859375,
+            "max": 19773875,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 184829625,
+            "min": 184319250,
+            "max": 1500597958,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 184829625,
+            "min": 184319250,
+            "max": 1500597958,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 1246375,
+            "min": 1204334,
+            "max": 1392084,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 1466792,
+            "min": 1362875,
+            "max": 1782541,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      },
+      "sqlite": {
+        "runs_attempted": 3,
+        "runs_with_results": 3,
+        "process_failures": 0,
+        "correctness_failures": 0,
+        "metrics": {
+          "nodes": {
+            "median": 28540,
+            "min": 28540,
+            "max": 28540,
+            "runs": 3
+          },
+          "edges": {
+            "median": 46182,
+            "min": 46182,
+            "max": 46182,
+            "runs": 3
+          },
+          "import_and_index_ready_ns": {
+            "median": 461700958,
+            "min": 442855334,
+            "max": 5133829417,
+            "runs": 3
+          },
+          "open_ns": {
+            "median": 1642000,
+            "min": 1598542,
+            "max": 22330042,
+            "runs": 3
+          },
+          "close_ns": {
+            "median": 37209,
+            "min": 28666,
+            "max": 2474709,
+            "runs": 3
+          },
+          "reopen_ns": {
+            "median": 429750,
+            "min": 374833,
+            "max": 2503625,
+            "runs": 3
+          },
+          "baseline_rss_kib": {
+            "median": 126640,
+            "min": 126624,
+            "max": 126848,
+            "runs": 3
+          },
+          "imported_rss_kib": {
+            "median": 190976,
+            "min": 190944,
+            "max": 191472,
+            "runs": 3
+          },
+          "post_query_rss_kib": {
+            "median": 258048,
+            "min": 257776,
+            "max": 261760,
+            "runs": 3
+          },
+          "database_logical_bytes": {
+            "median": 52097024,
+            "min": 52097024,
+            "max": 52097024,
+            "runs": 3
+          },
+          "correctness_checks": {
+            "median": 38669,
+            "min": 38669,
+            "max": 38669,
+            "runs": 3
+          },
+          "binary_bytes": {
+            "median": 3160256,
+            "min": 3160256,
+            "max": 3160256,
+            "runs": 3
+          },
+          "process_peak_rss_bytes": {
+            "median": 264519680,
+            "min": 264241152,
+            "max": 268337152,
+            "runs": 3
+          },
+          "concurrent_10_lookup__median_ns": {
+            "median": 8458,
+            "min": 3833,
+            "max": 8959,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p95_ns": {
+            "median": 45125,
+            "min": 32666,
+            "max": 45625,
+            "runs": 3
+          },
+          "concurrent_10_lookup__p99_ns": {
+            "median": 96834,
+            "min": 80250,
+            "max": 120875,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__median_ns": {
+            "median": 3359750,
+            "min": 3122959,
+            "max": 3585416,
+            "runs": 3
+          },
+          "concurrent_10_wall_ns__p95_ns": {
+            "median": 3359750,
+            "min": 3122959,
+            "max": 3585416,
+            "runs": 3
+          },
+          "concurrent_20_lookup__median_ns": {
+            "median": 13792,
+            "min": 2833,
+            "max": 14208,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p95_ns": {
+            "median": 89417,
+            "min": 52167,
+            "max": 93791,
+            "runs": 3
+          },
+          "concurrent_20_lookup__p99_ns": {
+            "median": 155500,
+            "min": 143917,
+            "max": 172833,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__median_ns": {
+            "median": 5722000,
+            "min": 4842417,
+            "max": 6133917,
+            "runs": 3
+          },
+          "concurrent_20_wall_ns__p95_ns": {
+            "median": 5722000,
+            "min": 4842417,
+            "max": 6133917,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__median_ns": {
+            "median": 281080417,
+            "min": 253067750,
+            "max": 299764292,
+            "runs": 3
+          },
+          "health_degree_histogram_wall_ns__p95_ns": {
+            "median": 281080417,
+            "min": 253067750,
+            "max": 299764292,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__median_ns": {
+            "median": 5772209,
+            "min": 5492375,
+            "max": 5911208,
+            "runs": 3
+          },
+          "hybrid_fts_vector_rrf__p95_ns": {
+            "median": 6808791,
+            "min": 6060250,
+            "max": 7852416,
+            "runs": 3
+          },
+          "incremental_delete__median_ns": {
+            "median": 213167,
+            "min": 129833,
+            "max": 6799292,
+            "runs": 3
+          },
+          "incremental_delete__p95_ns": {
+            "median": 272833,
+            "min": 198125,
+            "max": 13324000,
+            "runs": 3
+          },
+          "knn_graph_scope__median_ns": {
+            "median": 4003083,
+            "min": 3086041,
+            "max": 4059583,
+            "runs": 3
+          },
+          "knn_graph_scope__p95_ns": {
+            "median": 6249167,
+            "min": 5669083,
+            "max": 6302708,
+            "runs": 3
+          },
+          "knn_project_view_scope__median_ns": {
+            "median": 5651917,
+            "min": 5374541,
+            "max": 5962833,
+            "runs": 3
+          },
+          "knn_project_view_scope__p95_ns": {
+            "median": 6626083,
+            "min": 5964250,
+            "max": 6838417,
+            "runs": 3
+          },
+          "lookup__median_ns": {
+            "median": 1125,
+            "min": 1125,
+            "max": 1583,
+            "runs": 3
+          },
+          "lookup__p95_ns": {
+            "median": 2583,
+            "min": 2209,
+            "max": 3292,
+            "runs": 3
+          },
+          "lookup__p99_ns": {
+            "median": 12542,
+            "min": 3666,
+            "max": 15167,
+            "runs": 3
+          },
+          "neighbors__median_ns": {
+            "median": 9333,
+            "min": 8875,
+            "max": 11875,
+            "runs": 3
+          },
+          "neighbors__p95_ns": {
+            "median": 23166,
+            "min": 18500,
+            "max": 25833,
+            "runs": 3
+          },
+          "reach_depth_3__median_ns": {
+            "median": 12209,
+            "min": 8916,
+            "max": 16708,
+            "runs": 3
+          },
+          "reach_depth_3__p95_ns": {
+            "median": 138292,
+            "min": 135583,
+            "max": 168291,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__median_ns": {
+            "median": 9834,
+            "min": 8167,
+            "max": 10708,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p95_ns": {
+            "median": 69708,
+            "min": 48375,
+            "max": 95166,
+            "runs": 3
+          },
+          "reader_writer_10_lookup__p99_ns": {
+            "median": 144917,
+            "min": 109541,
+            "max": 174250,
+            "runs": 3
+          },
+          "reader_writer_10_rename__median_ns": {
+            "median": 48291,
+            "min": 39791,
+            "max": 15001208,
+            "runs": 3
+          },
+          "reader_writer_10_rename__p95_ns": {
+            "median": 181625,
+            "min": 156958,
+            "max": 24225041,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__median_ns": {
+            "median": 8120083,
+            "min": 7918125,
+            "max": 1606027583,
+            "runs": 3
+          },
+          "reader_writer_10_wall_ns__p95_ns": {
+            "median": 8120083,
+            "min": 7918125,
+            "max": 1606027583,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__median_ns": {
+            "median": 11375,
+            "min": 3667,
+            "max": 12750,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p95_ns": {
+            "median": 158625,
+            "min": 35375,
+            "max": 165833,
+            "runs": 3
+          },
+          "reader_writer_20_lookup__p99_ns": {
+            "median": 282541,
+            "min": 280209,
+            "max": 5387750,
+            "runs": 3
+          },
+          "reader_writer_20_rename__median_ns": {
+            "median": 74709,
+            "min": 45916,
+            "max": 6928792,
+            "runs": 3
+          },
+          "reader_writer_20_rename__p95_ns": {
+            "median": 245583,
+            "min": 239041,
+            "max": 20065458,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__median_ns": {
+            "median": 11631292,
+            "min": 10035333,
+            "max": 792164542,
+            "runs": 3
+          },
+          "reader_writer_20_wall_ns__p95_ns": {
+            "median": 11631292,
+            "min": 10035333,
+            "max": 792164542,
+            "runs": 3
+          },
+          "reverse_neighbors__median_ns": {
+            "median": 9584,
+            "min": 9208,
+            "max": 12375,
+            "runs": 3
+          },
+          "reverse_neighbors__p95_ns": {
+            "median": 23791,
+            "min": 18792,
+            "max": 33667,
+            "runs": 3
+          }
+        },
+        "vector_recall": {
+          "knn_project_view_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          },
+          "knn_graph_scope": {
+            "mean": 1.0,
+            "minimum": 1.0,
+            "queries": 240,
+            "underfilled_queries": 0
+          }
+        },
+        "case_errors": []
+      }
+    }
+  },
+  "failures": []
+}

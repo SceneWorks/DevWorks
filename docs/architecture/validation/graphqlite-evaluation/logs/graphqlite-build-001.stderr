@@ -1,0 +1,13 @@
+   Compiling sqlite-vec v0.1.7
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+   Compiling rusqlite v0.41.1
+   Compiling thiserror-impl v1.0.69
+   Compiling serde_derive v1.0.229
+   Compiling thiserror v1.0.69
+   Compiling serde v1.0.229
+   Compiling eval-common v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/common)
+   Compiling graphqlite v0.12.0
+   Compiling eval-sqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/sqlite)
+   Compiling eval-graphqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/graphqlite)
+    Finished `release` profile [optimized] target(s) in 3.57s

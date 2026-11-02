@@ -1,0 +1,4 @@
+   Compiling eval-fixture v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/fixture)
+    Finished `release` profile [optimized] target(s) in 0.49s
+     Running `/Users/michael/Repos/DevWorks/tools/storage-eval/fixture/target/release/eval-fixture /Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json CodeGraph=/Users/michael/Repos/CodeGraph simple-router=/Users/michael/Repos/simple-router dark-factory=/Users/michael/Repos/dark-factory`
+{"edges":24859,"files":1077,"nodes":15587,"output":"/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json"}

@@ -1,0 +1,272 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "GitCommand": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedHead": {
+              "$ref": "#/$defs/GitOid"
+            },
+            "kind": {
+              "const": "Commit",
+              "type": "string"
+            },
+            "message": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "worktreeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "worktreeId",
+            "expectedHead",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedHead": {
+              "$ref": "#/$defs/GitOid"
+            },
+            "expectedRemote": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GitOid"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "Push",
+              "type": "string"
+            },
+            "mode": {
+              "$ref": "#/$defs/PushMode"
+            },
+            "remoteId": {
+              "$ref": "#/$defs/Id"
+            },
+            "targetRef": {
+              "type": "string"
+            },
+            "worktreeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "worktreeId",
+            "remoteId",
+            "targetRef",
+            "expectedHead",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "baseRef": {
+              "type": "string"
+            },
+            "description": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "expectedHead": {
+              "$ref": "#/$defs/GitOid"
+            },
+            "headRef": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "OpenPullRequest",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId",
+            "headRef",
+            "baseRef",
+            "expectedHead",
+            "description"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "deliveryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedBarrierRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "expectedHead": {
+              "$ref": "#/$defs/GitOid"
+            },
+            "kind": {
+              "const": "Integrate",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "deliveryId",
+            "expectedBarrierRevision",
+            "repositoryId",
+            "expectedHead"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedHead": {
+              "$ref": "#/$defs/GitOid"
+            },
+            "expectedOwnershipRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "Cleanup",
+              "type": "string"
+            },
+            "worktreeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "worktreeId",
+            "expectedOwnershipRevision",
+            "expectedHead"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GitOid": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/ObjectFormat"
+        },
+        "hex": {
+          "pattern": "^[a-f0-9]{40}([a-f0-9]{24})?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "hex"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "ObjectFormat": {
+      "enum": [
+        "Sha1",
+        "Sha256"
+      ],
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "PushMode": {
+      "enum": [
+        "Normal",
+        "ForceWithLease"
+      ],
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:git-command-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/GitCommand"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "requestKey": {
+      "$ref": "#/$defs/Id"
+    }
+  },
+  "required": [
+    "protocol",
+    "requestKey",
+    "command"
+  ],
+  "title": "GitCommandRequest",
+  "type": "object"
+}

@@ -1,0 +1,19 @@
+{
+  "checks": [
+    "read_relative_regular_file_through_registered_root_handle",
+    "absolute_and_parent_paths_rejected",
+    "final_and_parent_symlink_escape_rejected_by_native_openat",
+    "opened_descriptor_keeps_original_bytes_after_path_substitution",
+    "changed_scope_revision_denies_materialization",
+    "read_byte_bound_enforced"
+  ],
+  "host": "macOS arm64",
+  "limits": [
+    "Known native read adapter subset; policy/revision arguments are fixture values, not a production authority service.",
+    "No arbitrary executable confinement, destructive deletion, hard-link/mount policy, Windows/Linux semantics or native secret store is qualified.",
+    "Real publication needs a defined authority linearization point and current scope validation, not this fixture function alone."
+  ],
+  "noInference": true,
+  "ownedFixturesOnly": true,
+  "passed": 6
+}

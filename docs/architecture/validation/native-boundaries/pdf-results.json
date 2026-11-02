@@ -1,0 +1,23 @@
+{
+  "checks": [
+    "native_pdf_page_count",
+    "page_bound_text_extraction",
+    "image_only_page_reports_no_extracted_text",
+    "native_scan_page_raster_for_routed_vision",
+    "encrypted_pdf_requires_password",
+    "explicit_password_opens_owned_fixture",
+    "malformed_pdf_returns_error",
+    "explicit_missing_library_does_not_fall_back_to_system"
+  ],
+  "host": "macOS arm64",
+  "limits": [
+    "Narrow synthetic PDF fixtures; no hostile corpus, parser confinement, target packaging, full reading order/fonts/forms or vision-model execution.",
+    "The downloaded unsigned experiment asset is not approved shipping provenance."
+  ],
+  "noInference": true,
+  "passed": 8,
+  "pdfiumBuild": "7881",
+  "pdfiumRender": "0.9.5",
+  "renderHeight": 1131,
+  "renderWidth": 800
+}

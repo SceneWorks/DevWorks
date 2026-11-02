@@ -1,0 +1,40 @@
+{
+  "title": "Explicit Continue for paused work decision recording",
+  "date": "2026-11-01",
+  "status": "Confirmed decision recorded; child Continue propagation remains proposed and under review",
+  "requirement": "CONTROL-12",
+  "requirements": 333,
+  "requirementStatus": "Confirmed",
+  "traceability": "All 333 IDs, statements and statuses match; no requirement removals",
+  "word": {
+    "pages": 65,
+    "unchangedPages": 63,
+    "changedPagesVisuallyReviewedBeforeAndAfter": [
+      14,
+      48
+    ],
+    "allRequirementIdsPresent": true,
+    "decisionTextPresent": true,
+    "layout": "No clipping, overlapping text or broken table observed on changed pages"
+  },
+  "readers": {
+    "widths": [
+      1440,
+      800
+    ],
+    "decisionPresent": true,
+    "horizontalOverflow": false,
+    "brokenImages": 0
+  },
+  "nativeRuntime": "No product implementation or inference executed",
+  "documentSha256": {
+    "tools/planning/requirements_content.py": "7bb604cde281c8b3e77d788bbfc8e9027441aef7ceefe73dff7dd8c5ba8b41ae",
+    "docs/planning/requirements-interview.json": "15f94c832fd6f2a00ee79a6927b22e71db06d7d624587e9c36d5e6fde56ef22e",
+    "docs/planning/requirements-content.json": "29a269b5449e6ccc35beecd5a9a2614e8bafe59d17c23bd2332de8c87d1db859",
+    "docs/planning/devworks-requirements.html": "e5fa032516a8a8e33745106750be0f9e608c551bd42c0ca2795460eb7f5cdd8d",
+    "docs/planning/devworks-requirements.docx": "31d64d93550f61403dbc3cff9ac550a31f5f79d64c4918dcd3519e05777ce15e",
+    "docs/architecture/devworks-architecture.md": "e6badde2fe94fc7f965338f0d47b9e8e4cc1a4c7e3d78bb29c64dc786a1853eb",
+    "docs/architecture/devworks-architecture.html": "c142b13bd7ea2768b02759839f2a92f225396078d79e1c40893a3bbb2f77f865",
+    "docs/architecture/devworks-requirements-traceability.json": "89c04d045d5edac76b269e444a5e2c3077a9fcbd9fa8271842b0d66d840fbde3"
+  }
+}

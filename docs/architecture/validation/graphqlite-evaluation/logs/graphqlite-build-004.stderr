@@ -1,0 +1,38 @@
+   Compiling eval-graphqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/graphqlite)
+error[E0609]: no field `nodes` on type `CacheStatus`
+  --> graphqlite/src/cache_profile.rs:98:16
+   |
+98 |         loaded.nodes == data.nodes.len() as i64 && loaded.edges == data.edges.len() as i64,
+   |                ^^^^^ unknown field
+   |
+   = note: available fields are: `status`, `node_count`, `edge_count`
+
+error[E0609]: no field `edges` on type `CacheStatus`
+  --> graphqlite/src/cache_profile.rs:98:59
+   |
+98 |         loaded.nodes == data.nodes.len() as i64 && loaded.edges == data.edges.len() as i64,
+   |                                                           ^^^^^ unknown field
+   |
+   = note: available fields are: `status`, `node_count`, `edge_count`
+
+error[E0599]: no method named `strip_prefix` found for enum `Option<T>` in the current scope
+    --> graphqlite/src/cache_profile.rs:127:14
+     |
+ 125 |         let id: u64 = row
+ 126 |             .user_id
+ 127 |             .strip_prefix('n')
+     |              ^^^^^^^^^^^^ method not found in `Option<std::string::String>`
+     |
+note: the method `strip_prefix` exists on the type `std::string::String`
+    --> /Users/michael/.rustup/toolchains/nightly-2026-10-06-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/str/mod.rs:2457:5
+     |
+2457 |     pub fn strip_prefix<P: Pattern>(&self, prefix: P) -> Option<&str> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `std::string::String` value, panicking if the value is an `Option::None`
+     |
+ 126 |             .user_id.expect("REASON")
+     |                     +++++++++++++++++
+
+Some errors have detailed explanations: E0599, E0609.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `eval-graphqlite` (bin "eval-graphqlite") due to 3 previous errors

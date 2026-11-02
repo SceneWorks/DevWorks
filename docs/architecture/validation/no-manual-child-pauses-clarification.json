@@ -1,0 +1,37 @@
+{
+  "title": "No manual child pauses clarification",
+  "date": "2026-11-01",
+  "status": "CONTROL-13 corrected; independent manual child Continue removal remains proposed",
+  "requirements": 334,
+  "traceability": "All requirement IDs, statements and statuses match",
+  "word": {
+    "pages": 65,
+    "unchangedPageBodies": 63,
+    "changedPages": [
+      14,
+      48
+    ],
+    "allRequirementIdsPresent": true,
+    "clarificationPresent": true
+  },
+  "readers": {
+    "widths": [
+      1440,
+      800
+    ],
+    "clarificationPresent": true,
+    "horizontalOverflow": false,
+    "brokenImages": 0
+  },
+  "nativeRuntime": "No product implementation or inference executed",
+  "documentSha256": {
+    "tools/planning/requirements_content.py": "674d722250d299b646755364f37513c9a8240b60ca162fd28cc50f2262570dfb",
+    "docs/planning/requirements-interview.json": "6220adc3b5c2c532f060aae0373f55574cfb7bdefb2e54d6f97c7c8c33c00db0",
+    "docs/planning/requirements-content.json": "f6d3e74b4ba97d1497533178b22915740ea4041e2a10836e280a7c763256ed8c",
+    "docs/planning/devworks-requirements.html": "f4b0e9b37d1b77f1067e66c201bb775200e4d9d184ce224cdcf11f75ddd0983d",
+    "docs/planning/devworks-requirements.docx": "2261d5270ec5d2fefff60479ff7672f56a47211d749692c4ba7c3366f55f06cf",
+    "docs/architecture/devworks-architecture.md": "287e1c53a37a8d7bc2c05912b7b3818f5e1589b4af6d6405d6e7c524d1d73336",
+    "docs/architecture/devworks-architecture.html": "2d8928eb9b5de00b60d054bfbf9bcf3b901255941f24413d35ef892f1a61dc95",
+    "docs/architecture/devworks-requirements-traceability.json": "58eb250ed974f0e805de10dddb8c4a53db26f4fcaed30370531a7ffaac14d702"
+  }
+}

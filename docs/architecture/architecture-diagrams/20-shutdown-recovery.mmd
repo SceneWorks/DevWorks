@@ -1,0 +1,18 @@
+flowchart TB
+ OPEN["Open: eligible work"] --> CLOSE["Window close: fence ordinary admission"]
+ CLOSE --> SAVE["Persist controls and cancellation intent"]
+ SAVE --> STOP["Cancel streams and tools; stop owned helpers/containers<br/>checkpoint in parallel within shutdown budget"]
+ STOP --> KNOWN["Persist known results; retain uncertain effects<br/>terminate owned killable trees at deadline"]
+ KNOWN --> EXIT["Finish or roll back critical commits; exit"]
+ OPEN --> CRASH["Crash: final checkpoint may be absent"]
+ EXIT --> BOOT["Next launch: exclusive data-root ownership<br/>new AppBootId; old activations cannot dispatch"]
+ CRASH --> BOOT
+ BOOT --> REC["Reconcile saved intents, external effects and resources<br/>no network waits inside a database transaction"]
+ REC --> WORK["Feature / issue: manual selective Continue<br/>includes accepted but never launched"]
+ REC --> JOB["Enabled interrupted scheduled run<br/>same identity; resume only when eligible"]
+ REC --> NEXT["Schedules: next future occurrence<br/>missed stays missed; inference overlap skipped"]
+ REC --> BLOCK["Unresolved effects hold actual dependents<br/>unrelated eligible work remains available"]
+ WORK --> CONT["Authorized Continue rechecks all blockers"]
+ CONT --> OPEN
+ OPEN --> WAKE["Sleep / wake or supervisor-only failure<br/>same app boot: reconcile and continue eligible work"]
+ WAKE --> OPEN

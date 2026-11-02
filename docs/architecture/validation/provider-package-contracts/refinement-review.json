@@ -1,0 +1,139 @@
+{
+  "title": "Provider/session/package architecture refinement verification",
+  "date": "2026-11-01",
+  "status": "Candidate schemas/native models/owned-helper/document verification passed; actual transports, production services, SDK authority and target qualification remain pending",
+  "adoptedDecisions": [
+    "AD-52",
+    "AD-53",
+    "AD-54",
+    "AD-55",
+    "AD-56"
+  ],
+  "requirements": {
+    "count": 342,
+    "confirmed": 205,
+    "proposed": 137,
+    "inputSha256": "d12aafc3f4ac5a4dc5b765dd82a85aefcbdb3ee271b966ea4b8f0c779aaa9096",
+    "unchanged": true,
+    "wordUnchanged": true
+  },
+  "contracts": {
+    "schemaFiles": 24,
+    "messageFixtures": 228,
+    "coreFixtures": 60,
+    "newFixtures": 113,
+    "actualHelperFrames": 55,
+    "scenarios": 12,
+    "scenarioSteps": 26,
+    "selectedOperationBindingsChecked": 16,
+    "crossOperationPayloadRejected": true,
+    "allPassed": true
+  },
+  "nativeHelper": {
+    "checks": 40,
+    "actualFrames": 55,
+    "allOwnedProcessesStopped": true,
+    "productionAuthorityProved": false
+  },
+  "coverage": {
+    "familyCount": 47,
+    "operationCount": 345,
+    "concreteInputCandidates": 16,
+    "domainInputsPending": 329
+  },
+  "readers": {
+    "reader-checks.json": {
+      "checks": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": [],
+          "diagramCount": 36
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": [],
+          "diagramCount": 36
+        }
+      ],
+      "browser": "local headless Chromium; no user-facing tab opened",
+      "decisionRows": 56,
+      "anchors": 3,
+      "localLinksValid": true,
+      "sectionSearch": true,
+      "requirementSearch": true,
+      "statusFilter": true,
+      "pageErrors": []
+    },
+    "contract-reader-checks.json": {
+      "checks": [
+        {
+          "width": 1440,
+          "overflow": false
+        },
+        {
+          "width": 800,
+          "overflow": false
+        }
+      ],
+      "visibleTabsOpened": 0,
+      "localLinksValid": true,
+      "pageErrors": []
+    },
+    "capability-reader-checks.json": {
+      "status": "Passed documentation interaction checks only",
+      "entries": 558,
+      "acceptanceGroups": 33,
+      "workloads": 12,
+      "widths": [
+        {
+          "width": 1440,
+          "overflow": false
+        },
+        {
+          "width": 800,
+          "overflow": false
+        }
+      ],
+      "excludedFilter": 64,
+      "rabbitMqFilter": 3,
+      "searchAndDetails": true,
+      "localLinksAndAnchorsValid": true,
+      "pageErrors": [],
+      "visibleTabsOpened": 0
+    }
+  },
+  "diagrams": {
+    "total": 36,
+    "added": [
+      "35-provider-session-boundary",
+      "36-package-wire-boundary"
+    ],
+    "fullSizeVisuallyInspected": true,
+    "800pxBoundaryReaderVisuallyInspected": true
+  },
+  "noRealInference": true,
+  "noLiveProviderRequests": true,
+  "noVisibleBrowserTabs": true,
+  "noProductionApplicationStarted": true,
+  "remainingEvidence": [
+    "Native provider wire/auth/cache compatibility, including subscription profiles",
+    "Production session repository and crash recovery",
+    "Complete SDK contribution behavior and actual host authority",
+    "Native JCS, signatures, dependency closure, registry/state publication and rollback",
+    "Full stream/queue/credit consumption and target OS/process/sandbox/credential acceptance",
+    "Remaining domain schemas and backend/interface feasibility before full implementation planning"
+  ],
+  "sourceSha256": {
+    "docs/architecture/devworks-architecture.md": "1b8f29116ec2a6fc8ebbab00b49ca9bc140f0457db3a79780405da51979b7754",
+    "docs/architecture/provider-session-package-contracts.md": "6b26e04afa2f4b91c9069195bafef4d20ee68bcb5548df1fc7897670782f9e91",
+    "docs/architecture/shared-operation-contracts.md": "f258077153d555a07bc353a3073f10453117c7b386fa6faa2abb4d50a79b893e",
+    "docs/architecture/architecture-handoff.md": "306a12a3e33f37e8c6cccb4ab75de01e223dec6a7e49a5c2e604d50542d43b69",
+    "tools/contracts-eval/build_register.py": "d7a7a6d0573ff5ac63c9c144d314ca439008ecb06bc5406b66ef0c4a31aa6484",
+    "tools/contracts-eval/make_protocol_fixtures.py": "cec65289a2df913725c106b29b787b8963cb9bb0c3e8afbd7a13437382e719df",
+    "tools/contracts-eval/probe_package_process.py": "339f2d584c7456148a1ce24e854d454a272d7fe011f6f68ae480c9ee12ec82e9",
+    "tools/contracts-eval/verify_protocol_contracts.py": "581c09e8e1e30dc7d9eb778ac5e9798befc124c2047493d9ffe5c48620bb5799",
+    "tools/planning/build_architecture.cjs": "8cf979905d66448438181c1df875f25b0fb7707738f6cace90a0eb0cf9b9bb8a"
+  }
+}

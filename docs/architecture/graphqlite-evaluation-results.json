@@ -1,0 +1,6559 @@
+{
+  "title": "DevWorks GraphQLite and sqlite vec evaluation",
+  "date": "2026-11-01",
+  "state": "Evaluation completed; SQLite selected by user, GraphQLite not selected",
+  "versions": {
+    "graphqlite": "0.12.0",
+    "sqlite_vec": "0.1.7",
+    "rusqlite": "0.41.1",
+    "sqlite": "3.54.1"
+  },
+  "inference": false,
+  "indexed_adapter": {
+    "date": "2026-11-01",
+    "classification": "Local native evaluation, not production selection or platform acceptance",
+    "manifest": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/manifest.json",
+    "input": {
+      "phase": "measured",
+      "created_utc": "20261101T194050977085Z",
+      "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+      "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+      "workspace_lock_sha256": "54f37e01c554f6fba047ba9d66f1104c3d723cf7df7cce781247eba5090164aa",
+      "hardware": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "machine": "arm64",
+        "logical_cpus": 18
+      },
+      "inference": false,
+      "order_seed": 67321,
+      "rayon_threads": 4,
+      "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: aarch64-apple-darwin\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3",
+      "cache_policy": "Fresh process/database each case; OS filesystem cache not flushed; queries include first-access and warm samples",
+      "release_profile": {
+        "opt_level": 3,
+        "lto": false,
+        "codegen_units": 16
+      }
+    },
+    "profiles": {
+      "small": {
+        "graphqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 1000,
+              "min": 1000,
+              "max": 1000,
+              "runs": 3
+            },
+            "edges": {
+              "median": 1002,
+              "min": 1002,
+              "max": 1002,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 93691333,
+              "min": 91584666,
+              "max": 93944625,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 39014208,
+              "min": 38477583,
+              "max": 39933500,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 336417,
+              "min": 335666,
+              "max": 355000,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 18475584,
+              "min": 17238459,
+              "max": 18523583,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 43872,
+              "min": 43856,
+              "max": 43936,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 52176,
+              "min": 52128,
+              "max": 52272,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 63600,
+              "min": 63472,
+              "max": 63872,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 4004138,
+              "min": 4004138,
+              "max": 4004138,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 11138,
+              "min": 11138,
+              "max": 11138,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 4622432,
+              "min": 4622432,
+              "max": 4622432,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 65372160,
+              "min": 65257472,
+              "max": 65650688,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 3580000,
+              "min": 3327208,
+              "max": 3597208,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 4672333,
+              "min": 4542625,
+              "max": 4727708,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 5133833,
+              "min": 5025667,
+              "max": 5191750,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 369297250,
+              "min": 349094459,
+              "max": 370151542,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 369297250,
+              "min": 349094459,
+              "max": 370151542,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 5268208,
+              "min": 5208208,
+              "max": 5751500,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 9466041,
+              "min": 9298417,
+              "max": 9672166,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 12551833,
+              "min": 12236042,
+              "max": 14304000,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 613521041,
+              "min": 575444500,
+              "max": 620355667,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 613521041,
+              "min": 575444500,
+              "max": 620355667,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 82275000,
+              "min": 80385000,
+              "max": 87154375,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 82275000,
+              "min": 80385000,
+              "max": 87154375,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 289500,
+              "min": 263458,
+              "max": 315250,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 368625,
+              "min": 302750,
+              "max": 412417,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 826542,
+              "min": 745958,
+              "max": 831875,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 896917,
+              "min": 886709,
+              "max": 1091375,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 291375,
+              "min": 285208,
+              "max": 295916,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 419917,
+              "min": 411625,
+              "max": 422542,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 303750,
+              "min": 301708,
+              "max": 312542,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 407250,
+              "min": 390875,
+              "max": 433417,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 45708,
+              "min": 44500,
+              "max": 45833,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 87542,
+              "min": 77916,
+              "max": 89792,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 138750,
+              "min": 130667,
+              "max": 155333,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 72459,
+              "min": 71125,
+              "max": 74042,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 134042,
+              "min": 126584,
+              "max": 154916,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 72834,
+              "min": 71459,
+              "max": 74584,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 618208,
+              "min": 596209,
+              "max": 802083,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 3654875,
+              "min": 3499917,
+              "max": 3813625,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 4867250,
+              "min": 4828875,
+              "max": 5026083,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 5386500,
+              "min": 5286834,
+              "max": 5432583,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 3074042,
+              "min": 2886166,
+              "max": 3087083,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 4030708,
+              "min": 4021500,
+              "max": 4082625,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 396969625,
+              "min": 383257208,
+              "max": 411442375,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 396969625,
+              "min": 383257208,
+              "max": 411442375,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 5654541,
+              "min": 5489375,
+              "max": 5661375,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 9921291,
+              "min": 9691166,
+              "max": 9923250,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 13855833,
+              "min": 11982167,
+              "max": 14681500,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 5232834,
+              "min": 4973834,
+              "max": 5248000,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 12948916,
+              "min": 12506875,
+              "max": 17080541,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 636666084,
+              "min": 619417250,
+              "max": 641578250,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 636666084,
+              "min": 619417250,
+              "max": 641578250,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 76333,
+              "min": 74708,
+              "max": 78208,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 136375,
+              "min": 116917,
+              "max": 144375,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        },
+        "sqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 1000,
+              "min": 1000,
+              "max": 1000,
+              "runs": 3
+            },
+            "edges": {
+              "median": 1002,
+              "min": 1002,
+              "max": 1002,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 17042958,
+              "min": 16735167,
+              "max": 19281041,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 1869792,
+              "min": 1633792,
+              "max": 2063750,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 23792,
+              "min": 22625,
+              "max": 24084,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 326792,
+              "min": 307041,
+              "max": 377833,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 43776,
+              "min": 43760,
+              "max": 43808,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 49408,
+              "min": 49392,
+              "max": 49424,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 55072,
+              "min": 54800,
+              "max": 55152,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 3428352,
+              "min": 3428352,
+              "max": 3428352,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 11138,
+              "min": 11138,
+              "max": 11138,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 3160256,
+              "min": 3160256,
+              "max": 3160256,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 56737792,
+              "min": 56475648,
+              "max": 56737792,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 833,
+              "min": 584,
+              "max": 875,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 15125,
+              "min": 12667,
+              "max": 28375,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 75375,
+              "min": 38791,
+              "max": 89584,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 2577041,
+              "min": 1797167,
+              "max": 2819541,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 2577041,
+              "min": 1797167,
+              "max": 2819541,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 958,
+              "min": 709,
+              "max": 1042,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 39333,
+              "min": 34833,
+              "max": 49875,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 98584,
+              "min": 96250,
+              "max": 121167,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 4021834,
+              "min": 4006417,
+              "max": 4077750,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 4021834,
+              "min": 4006417,
+              "max": 4077750,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 8481792,
+              "min": 8315584,
+              "max": 8620083,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 8481792,
+              "min": 8315584,
+              "max": 8620083,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 308041,
+              "min": 304667,
+              "max": 313500,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 390459,
+              "min": 380250,
+              "max": 395250,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 140125,
+              "min": 138958,
+              "max": 184875,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 174417,
+              "min": 160541,
+              "max": 217292,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 277458,
+              "min": 277208,
+              "max": 282917,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 375666,
+              "min": 370417,
+              "max": 391125,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 286333,
+              "min": 283875,
+              "max": 290292,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 404500,
+              "min": 403709,
+              "max": 473250,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 875,
+              "min": 875,
+              "max": 875,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 1167,
+              "min": 1166,
+              "max": 1167,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 1542,
+              "min": 1458,
+              "max": 1542,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 7667,
+              "min": 7625,
+              "max": 7667,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 9834,
+              "min": 9500,
+              "max": 9834,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 7667,
+              "min": 7625,
+              "max": 7667,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 68916,
+              "min": 62750,
+              "max": 77417,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 1792,
+              "min": 1500,
+              "max": 2000,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 88917,
+              "min": 70792,
+              "max": 111375,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 187875,
+              "min": 146750,
+              "max": 228375,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 48791,
+              "min": 42709,
+              "max": 49875,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 193917,
+              "min": 160291,
+              "max": 206333,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 7786791,
+              "min": 7178708,
+              "max": 8078667,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 7786791,
+              "min": 7178708,
+              "max": 8078667,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 6541,
+              "min": 4875,
+              "max": 7875,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 143208,
+              "min": 138917,
+              "max": 145333,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 263208,
+              "min": 261292,
+              "max": 281042,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 46500,
+              "min": 42917,
+              "max": 46875,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 266958,
+              "min": 220042,
+              "max": 281334,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 9736333,
+              "min": 9173750,
+              "max": 10757833,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 9736333,
+              "min": 9173750,
+              "max": 10757833,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 8042,
+              "min": 8041,
+              "max": 8083,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 9667,
+              "min": 9500,
+              "max": 10333,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        }
+      },
+      "source": {
+        "graphqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 15587,
+              "min": 15587,
+              "max": 15587,
+              "runs": 3
+            },
+            "edges": {
+              "median": 24861,
+              "min": 24861,
+              "max": 24861,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 1340884042,
+              "min": 1337488250,
+              "max": 1343931208,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 38849417,
+              "min": 35858458,
+              "max": 42971334,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 167667,
+              "min": 154208,
+              "max": 393125,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 292738250,
+              "min": 289909708,
+              "max": 297966625,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 74224,
+              "min": 74208,
+              "max": 74240,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 124624,
+              "min": 124608,
+              "max": 124656,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 193808,
+              "min": 193584,
+              "max": 194096,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 35712907,
+              "min": 35712907,
+              "max": 35712907,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 25716,
+              "min": 25716,
+              "max": 25716,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 4622432,
+              "min": 4622432,
+              "max": 4622432,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 198672384,
+              "min": 198443008,
+              "max": 198983680,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 3596584,
+              "min": 3328416,
+              "max": 3639291,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 4758000,
+              "min": 4507208,
+              "max": 4782709,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 5113375,
+              "min": 5063375,
+              "max": 5172209,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 373772000,
+              "min": 347996292,
+              "max": 376359833,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 373772000,
+              "min": 347996292,
+              "max": 376359833,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 5399542,
+              "min": 5220041,
+              "max": 5405250,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 9517542,
+              "min": 9442792,
+              "max": 10195459,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 12583959,
+              "min": 12401583,
+              "max": 12868500,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 593873000,
+              "min": 587872750,
+              "max": 596675834,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 593873000,
+              "min": 587872750,
+              "max": 596675834,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 1324440583,
+              "min": 1280955750,
+              "max": 1338552500,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 1324440583,
+              "min": 1280955750,
+              "max": 1338552500,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 5356958,
+              "min": 5339583,
+              "max": 5425000,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 5938250,
+              "min": 5744833,
+              "max": 6145958,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 989500,
+              "min": 941792,
+              "max": 1182792,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 2894333,
+              "min": 2475750,
+              "max": 3850000,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 3180833,
+              "min": 3060167,
+              "max": 3234375,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 5776333,
+              "min": 5536792,
+              "max": 6008625,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 5361416,
+              "min": 5240333,
+              "max": 5429208,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 5975333,
+              "min": 5890083,
+              "max": 6361209,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 46375,
+              "min": 46083,
+              "max": 46584,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 81875,
+              "min": 65708,
+              "max": 93667,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 133291,
+              "min": 133125,
+              "max": 151208,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 76292,
+              "min": 76083,
+              "max": 76625,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 152875,
+              "min": 144834,
+              "max": 153750,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 114917,
+              "min": 103375,
+              "max": 118625,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 1218750,
+              "min": 1217291,
+              "max": 1252625,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 3047292,
+              "min": 3017916,
+              "max": 3673125,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 4136375,
+              "min": 4051167,
+              "max": 4915083,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 4584166,
+              "min": 4472292,
+              "max": 5419958,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 2570291,
+              "min": 2496791,
+              "max": 3048709,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 3388333,
+              "min": 3372125,
+              "max": 4077708,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 336677250,
+              "min": 318552125,
+              "max": 387227459,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 336677250,
+              "min": 318552125,
+              "max": 387227459,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 5441833,
+              "min": 5327708,
+              "max": 5753834,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 10016875,
+              "min": 9882917,
+              "max": 10257666,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 13766500,
+              "min": 12760291,
+              "max": 15264458,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 5000416,
+              "min": 4754709,
+              "max": 5266291,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 12422542,
+              "min": 11458083,
+              "max": 15437541,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 638886500,
+              "min": 619835291,
+              "max": 668631292,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 638886500,
+              "min": 619835291,
+              "max": 668631292,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 78583,
+              "min": 78459,
+              "max": 78875,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 161334,
+              "min": 142875,
+              "max": 164042,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        },
+        "sqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 15587,
+              "min": 15587,
+              "max": 15587,
+              "runs": 3
+            },
+            "edges": {
+              "median": 24861,
+              "min": 24861,
+              "max": 24861,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 216922416,
+              "min": 216220291,
+              "max": 217251875,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 1974417,
+              "min": 1618084,
+              "max": 2066500,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 30375,
+              "min": 25333,
+              "max": 32333,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 395875,
+              "min": 364250,
+              "max": 409292,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 74080,
+              "min": 74064,
+              "max": 74144,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 109904,
+              "min": 109856,
+              "max": 109952,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 156560,
+              "min": 156544,
+              "max": 156928,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 28446720,
+              "min": 28446720,
+              "max": 28446720,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 25716,
+              "min": 25716,
+              "max": 25716,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 3160256,
+              "min": 3160256,
+              "max": 3160256,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 160612352,
+              "min": 160612352,
+              "max": 160989184,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 7334,
+              "min": 5041,
+              "max": 8375,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 53750,
+              "min": 45792,
+              "max": 57250,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 95292,
+              "min": 84666,
+              "max": 125750,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 3823917,
+              "min": 3329042,
+              "max": 3850792,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 3823917,
+              "min": 3329042,
+              "max": 3850792,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 15708,
+              "min": 14000,
+              "max": 16334,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 96542,
+              "min": 94250,
+              "max": 100208,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 176292,
+              "min": 169666,
+              "max": 199292,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 6350667,
+              "min": 6314875,
+              "max": 6390041,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 6350667,
+              "min": 6314875,
+              "max": 6390041,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 135531000,
+              "min": 135151041,
+              "max": 137791084,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 135531000,
+              "min": 135151041,
+              "max": 137791084,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 5292875,
+              "min": 5272250,
+              "max": 5409791,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 6070916,
+              "min": 5976500,
+              "max": 6146834,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 104916,
+              "min": 100333,
+              "max": 125917,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 129541,
+              "min": 119250,
+              "max": 211208,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 3111042,
+              "min": 2912667,
+              "max": 3141459,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 5586250,
+              "min": 5560208,
+              "max": 5621875,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 5309500,
+              "min": 5251125,
+              "max": 5310209,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 5783000,
+              "min": 5689917,
+              "max": 5811042,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 1000,
+              "min": 1000,
+              "max": 1083,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 1916,
+              "min": 1792,
+              "max": 2083,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 2500,
+              "min": 2333,
+              "max": 3208,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 8292,
+              "min": 8208,
+              "max": 8625,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 12875,
+              "min": 12166,
+              "max": 13167,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 8250,
+              "min": 8250,
+              "max": 8792,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 126500,
+              "min": 121291,
+              "max": 141125,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 8042,
+              "min": 7375,
+              "max": 8083,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 81833,
+              "min": 66542,
+              "max": 83583,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 166833,
+              "min": 127542,
+              "max": 175458,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 36417,
+              "min": 28500,
+              "max": 37708,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 178167,
+              "min": 154083,
+              "max": 200500,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 7230959,
+              "min": 6351209,
+              "max": 7427500,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 7230959,
+              "min": 6351209,
+              "max": 7427500,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 15625,
+              "min": 13625,
+              "max": 16666,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 127667,
+              "min": 120625,
+              "max": 131709,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 255042,
+              "min": 226458,
+              "max": 275416,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 34666,
+              "min": 27875,
+              "max": 34708,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 215209,
+              "min": 192708,
+              "max": 232417,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 8846875,
+              "min": 8245958,
+              "max": 9168125,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 8846875,
+              "min": 8245958,
+              "max": 9168125,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 8459,
+              "min": 8417,
+              "max": 8916,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 12041,
+              "min": 11959,
+              "max": 12792,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        }
+      },
+      "overlay": {
+        "graphqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 28540,
+              "min": 28540,
+              "max": 28540,
+              "runs": 3
+            },
+            "edges": {
+              "median": 46182,
+              "min": 46182,
+              "max": 46182,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 2499048958,
+              "min": 2475401208,
+              "max": 2503219958,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 41639666,
+              "min": 34947584,
+              "max": 45809125,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 378917,
+              "min": 372500,
+              "max": 2235833,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 695380250,
+              "min": 648048875,
+              "max": 706750875,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 126816,
+              "min": 126784,
+              "max": 126960,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 208576,
+              "min": 208416,
+              "max": 208784,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 303040,
+              "min": 302832,
+              "max": 304192,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 65722150,
+              "min": 65722150,
+              "max": 65722150,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 38669,
+              "min": 38669,
+              "max": 38669,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 4622432,
+              "min": 4622432,
+              "max": 4622432,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 311164928,
+              "min": 310755328,
+              "max": 312295424,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 3606750,
+              "min": 3526541,
+              "max": 3661667,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 4623250,
+              "min": 4594584,
+              "max": 4747584,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 4945291,
+              "min": 4931583,
+              "max": 5152875,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 369127625,
+              "min": 362381000,
+              "max": 376313625,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 369127625,
+              "min": 362381000,
+              "max": 376313625,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 5291917,
+              "min": 5229500,
+              "max": 5570625,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 9674959,
+              "min": 9402125,
+              "max": 9962250,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 12691959,
+              "min": 11223542,
+              "max": 12830042,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 602097125,
+              "min": 585606917,
+              "max": 605069500,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 602097125,
+              "min": 585606917,
+              "max": 605069500,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 2380412333,
+              "min": 2375221167,
+              "max": 2418228125,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 2380412333,
+              "min": 2375221167,
+              "max": 2418228125,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 5509125,
+              "min": 5442167,
+              "max": 5515958,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 6364250,
+              "min": 6002750,
+              "max": 6430500,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 955625,
+              "min": 871250,
+              "max": 50554250,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 2623291,
+              "min": 2610459,
+              "max": 86988375,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 3733916,
+              "min": 3605959,
+              "max": 4805958,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 5765584,
+              "min": 5637708,
+              "max": 5919333,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 5383833,
+              "min": 5367125,
+              "max": 5453833,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 5965417,
+              "min": 5876083,
+              "max": 6242959,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 47042,
+              "min": 46667,
+              "max": 47333,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 93375,
+              "min": 88167,
+              "max": 94250,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 149042,
+              "min": 139709,
+              "max": 156042,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 78083,
+              "min": 78000,
+              "max": 78084,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 140459,
+              "min": 139708,
+              "max": 147000,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 116250,
+              "min": 108459,
+              "max": 126875,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 1166791,
+              "min": 1100791,
+              "max": 1264542,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 3547875,
+              "min": 2795625,
+              "max": 3662834,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 4967959,
+              "min": 4737416,
+              "max": 4977208,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 5465791,
+              "min": 5186042,
+              "max": 8447166,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 2968750,
+              "min": 2951500,
+              "max": 8195708,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 4266417,
+              "min": 3900667,
+              "max": 19686084,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 402746583,
+              "min": 386724750,
+              "max": 1301542250,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 402746583,
+              "min": 386724750,
+              "max": 1301542250,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 5462958,
+              "min": 5398625,
+              "max": 5544833,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 9711083,
+              "min": 9477417,
+              "max": 11206250,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 14919666,
+              "min": 13884375,
+              "max": 16942584,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 5154375,
+              "min": 4596042,
+              "max": 7850542,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 16203292,
+              "min": 10400000,
+              "max": 23438334,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 633646417,
+              "min": 622641042,
+              "max": 1919075375,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 633646417,
+              "min": 622641042,
+              "max": 1919075375,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 80125,
+              "min": 79750,
+              "max": 80209,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 149333,
+              "min": 135834,
+              "max": 150584,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        },
+        "sqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 28540,
+              "min": 28540,
+              "max": 28540,
+              "runs": 3
+            },
+            "edges": {
+              "median": 46182,
+              "min": 46182,
+              "max": 46182,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 419362167,
+              "min": 417758000,
+              "max": 433474584,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 1997542,
+              "min": 1942000,
+              "max": 2209667,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 36667,
+              "min": 31625,
+              "max": 41292,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 419500,
+              "min": 416000,
+              "max": 504667,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 126528,
+              "min": 126512,
+              "max": 126688,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 190960,
+              "min": 190912,
+              "max": 191040,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 257984,
+              "min": 257632,
+              "max": 260208,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 52097024,
+              "min": 52097024,
+              "max": 52097024,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 38669,
+              "min": 38669,
+              "max": 38669,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 3160256,
+              "min": 3160256,
+              "max": 3160256,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 264617984,
+              "min": 264093696,
+              "max": 266731520,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 8459,
+              "min": 8458,
+              "max": 10250,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 46917,
+              "min": 42791,
+              "max": 52375,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 97167,
+              "min": 85250,
+              "max": 103250,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 3696250,
+              "min": 3349250,
+              "max": 3912834,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 3696250,
+              "min": 3349250,
+              "max": 3912834,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 15042,
+              "min": 13625,
+              "max": 16458,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 87791,
+              "min": 85000,
+              "max": 101875,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 174167,
+              "min": 153459,
+              "max": 221458,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 6550041,
+              "min": 6095666,
+              "max": 6950875,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 6550041,
+              "min": 6095666,
+              "max": 6950875,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 292518583,
+              "min": 246361667,
+              "max": 340215584,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 292518583,
+              "min": 246361667,
+              "max": 340215584,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 5607667,
+              "min": 5471292,
+              "max": 6441500,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 6917792,
+              "min": 6321291,
+              "max": 7642458,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 123792,
+              "min": 97375,
+              "max": 138292,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 168625,
+              "min": 133917,
+              "max": 253583,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 3538125,
+              "min": 3448625,
+              "max": 4797417,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 5795250,
+              "min": 5655209,
+              "max": 7246334,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 5412041,
+              "min": 5374625,
+              "max": 6416916,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 5974875,
+              "min": 5958750,
+              "max": 7939167,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 1125,
+              "min": 1084,
+              "max": 1167,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 2250,
+              "min": 2208,
+              "max": 2292,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 3125,
+              "min": 2708,
+              "max": 3959,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 9000,
+              "min": 9000,
+              "max": 9250,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 13542,
+              "min": 13042,
+              "max": 14333,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 8875,
+              "min": 8833,
+              "max": 9375,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 155666,
+              "min": 122583,
+              "max": 161458,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 7958,
+              "min": 7792,
+              "max": 9750,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 79084,
+              "min": 73000,
+              "max": 102416,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 134583,
+              "min": 132292,
+              "max": 154250,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 40500,
+              "min": 36667,
+              "max": 45166,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 184917,
+              "min": 124958,
+              "max": 187167,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 7706125,
+              "min": 7087500,
+              "max": 7839000,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 7706125,
+              "min": 7087500,
+              "max": 7839000,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 15083,
+              "min": 14000,
+              "max": 16292,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 139916,
+              "min": 129583,
+              "max": 140250,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 240125,
+              "min": 208209,
+              "max": 241875,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 35792,
+              "min": 28834,
+              "max": 44833,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 222792,
+              "min": 219000,
+              "max": 231042,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 9156708,
+              "min": 8926750,
+              "max": 10709500,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 9156708,
+              "min": 8926750,
+              "max": 10709500,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 9334,
+              "min": 9292,
+              "max": 9500,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 15500,
+              "min": 13125,
+              "max": 15584,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        }
+      }
+    },
+    "failures": []
+  },
+  "original_native_id_adapter": {
+    "date": "2026-11-01",
+    "classification": "Local native evaluation, not production selection or platform acceptance",
+    "manifest": "work/graphqlite-eval-runs/measured/20261101T192949196362Z/manifest.json",
+    "input": {
+      "phase": "measured",
+      "created_utc": "20261101T192949196362Z",
+      "fixture": "/Users/michael/Documents/Codex/2026-10-31/if/work/storage-eval-fixtures/source.json",
+      "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+      "workspace_lock_sha256": "54f37e01c554f6fba047ba9d66f1104c3d723cf7df7cce781247eba5090164aa",
+      "hardware": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "machine": "arm64",
+        "logical_cpus": 18
+      },
+      "inference": false,
+      "order_seed": 67321,
+      "rayon_threads": 4,
+      "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: aarch64-apple-darwin\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3",
+      "cache_policy": "Fresh process/database each case; OS filesystem cache not flushed; queries include first-access and warm samples",
+      "release_profile": {
+        "opt_level": 3,
+        "lto": false,
+        "codegen_units": 16
+      }
+    },
+    "profiles": {
+      "small": {
+        "graphqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 1000,
+              "min": 1000,
+              "max": 1000,
+              "runs": 3
+            },
+            "edges": {
+              "median": 1002,
+              "min": 1002,
+              "max": 1002,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 92303666,
+              "min": 83905333,
+              "max": 92467750,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 47056750,
+              "min": 29531625,
+              "max": 74767250,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 126875,
+              "min": 81833,
+              "max": 131083,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 18889875,
+              "min": 17892625,
+              "max": 19113667,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 43696,
+              "min": 43248,
+              "max": 43888,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 52224,
+              "min": 51616,
+              "max": 52464,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 61584,
+              "min": 61568,
+              "max": 62608,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 4004138,
+              "min": 4004138,
+              "max": 4004138,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 11138,
+              "min": 11138,
+              "max": 11138,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 4622320,
+              "min": 4622320,
+              "max": 4622320,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 64438272,
+              "min": 63373312,
+              "max": 64946176,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 37791,
+              "min": 33292,
+              "max": 38625,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 81625,
+              "min": 66208,
+              "max": 93833,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 132500,
+              "min": 108125,
+              "max": 154750,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 17583542,
+              "min": 16294375,
+              "max": 18977208,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 17583542,
+              "min": 16294375,
+              "max": 18977208,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 38750,
+              "min": 37834,
+              "max": 41125,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 86250,
+              "min": 85792,
+              "max": 124209,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 191083,
+              "min": 150375,
+              "max": 208834,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 27774000,
+              "min": 26860792,
+              "max": 37549292,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 27774000,
+              "min": 26860792,
+              "max": 37549292,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 38257666,
+              "min": 36713041,
+              "max": 40738000,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 38257666,
+              "min": 36713041,
+              "max": 40738000,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 321333,
+              "min": 287875,
+              "max": 332125,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 378334,
+              "min": 350500,
+              "max": 459833,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 1142500,
+              "min": 1138792,
+              "max": 1188250,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 1600042,
+              "min": 1468959,
+              "max": 1716458,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 296625,
+              "min": 270875,
+              "max": 300292,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 370541,
+              "min": 365166,
+              "max": 453458,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 295917,
+              "min": 273958,
+              "max": 315916,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 402500,
+              "min": 345750,
+              "max": 451333,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 28959,
+              "min": 28375,
+              "max": 29584,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 42208,
+              "min": 35542,
+              "max": 71250,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 77250,
+              "min": 65291,
+              "max": 112375,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 32167,
+              "min": 31709,
+              "max": 32417,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 63375,
+              "min": 52041,
+              "max": 76791,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 32000,
+              "min": 31584,
+              "max": 32375,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 298708,
+              "min": 257667,
+              "max": 326750,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 44209,
+              "min": 43750,
+              "max": 48209,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 128834,
+              "min": 101458,
+              "max": 141792,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 276291,
+              "min": 189084,
+              "max": 296458,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 142875,
+              "min": 134375,
+              "max": 153583,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 313917,
+              "min": 280625,
+              "max": 319334,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 36543166,
+              "min": 35367167,
+              "max": 38881542,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 36543166,
+              "min": 35367167,
+              "max": 38881542,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 48083,
+              "min": 44833,
+              "max": 49917,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 187667,
+              "min": 184500,
+              "max": 190334,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 345166,
+              "min": 344875,
+              "max": 374500,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 150875,
+              "min": 136500,
+              "max": 163125,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 447042,
+              "min": 410500,
+              "max": 519167,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 57908292,
+              "min": 45221167,
+              "max": 72981125,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 57908292,
+              "min": 45221167,
+              "max": 72981125,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 34625,
+              "min": 34334,
+              "max": 35708,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 53584,
+              "min": 42083,
+              "max": 80500,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        },
+        "sqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 1000,
+              "min": 1000,
+              "max": 1000,
+              "runs": 3
+            },
+            "edges": {
+              "median": 1002,
+              "min": 1002,
+              "max": 1002,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 17028709,
+              "min": 16814125,
+              "max": 19569292,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 1733417,
+              "min": 1698917,
+              "max": 1760000,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 19334,
+              "min": 17333,
+              "max": 26875,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 303292,
+              "min": 299083,
+              "max": 379000,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 43584,
+              "min": 43568,
+              "max": 43792,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 49296,
+              "min": 49184,
+              "max": 49408,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 54816,
+              "min": 54528,
+              "max": 55632,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 3428352,
+              "min": 3428352,
+              "max": 3428352,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 11138,
+              "min": 11138,
+              "max": 11138,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 3160256,
+              "min": 3160256,
+              "max": 3160256,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 56426496,
+              "min": 56115200,
+              "max": 57262080,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 542,
+              "min": 459,
+              "max": 708,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 12250,
+              "min": 7875,
+              "max": 20375,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 47000,
+              "min": 44375,
+              "max": 65125,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 2200042,
+              "min": 2128584,
+              "max": 2278333,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 2200042,
+              "min": 2128584,
+              "max": 2278333,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 958,
+              "min": 833,
+              "max": 1000,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 53084,
+              "min": 43667,
+              "max": 56500,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 126167,
+              "min": 119000,
+              "max": 129667,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 3784750,
+              "min": 3734209,
+              "max": 3960334,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 3784750,
+              "min": 3734209,
+              "max": 3960334,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 8719542,
+              "min": 8169125,
+              "max": 9230625,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 8719542,
+              "min": 8169125,
+              "max": 9230625,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 316042,
+              "min": 294958,
+              "max": 333917,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 388333,
+              "min": 366833,
+              "max": 620583,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 141083,
+              "min": 125542,
+              "max": 197167,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 164917,
+              "min": 154041,
+              "max": 335875,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 278584,
+              "min": 271708,
+              "max": 286292,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 443542,
+              "min": 367959,
+              "max": 464791,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 286083,
+              "min": 269375,
+              "max": 298375,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 401084,
+              "min": 351208,
+              "max": 421416,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 916,
+              "min": 875,
+              "max": 1000,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 1250,
+              "min": 1209,
+              "max": 1708,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 3041,
+              "min": 1917,
+              "max": 12791,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 7625,
+              "min": 7584,
+              "max": 7792,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 12875,
+              "min": 11625,
+              "max": 21291,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 7625,
+              "min": 7625,
+              "max": 7833,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 89125,
+              "min": 72292,
+              "max": 90833,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 2166,
+              "min": 1584,
+              "max": 2333,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 84250,
+              "min": 75375,
+              "max": 102834,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 167750,
+              "min": 163125,
+              "max": 197250,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 47417,
+              "min": 40250,
+              "max": 52292,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 175500,
+              "min": 147084,
+              "max": 220708,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 7648500,
+              "min": 6973375,
+              "max": 7982500,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 7648500,
+              "min": 6973375,
+              "max": 7982500,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 2458,
+              "min": 1333,
+              "max": 4125,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 134708,
+              "min": 76375,
+              "max": 150750,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 281458,
+              "min": 234500,
+              "max": 292833,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 40916,
+              "min": 40667,
+              "max": 50500,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 247375,
+              "min": 113292,
+              "max": 250916,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 9443667,
+              "min": 9109875,
+              "max": 9851417,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 9443667,
+              "min": 9109875,
+              "max": 9851417,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 8167,
+              "min": 8042,
+              "max": 8250,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 12333,
+              "min": 11208,
+              "max": 25959,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        }
+      },
+      "source": {
+        "graphqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 15587,
+              "min": 15587,
+              "max": 15587,
+              "runs": 3
+            },
+            "edges": {
+              "median": 24861,
+              "min": 24861,
+              "max": 24861,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 1359909583,
+              "min": 1270820417,
+              "max": 1458898959,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 39325583,
+              "min": 36788000,
+              "max": 41897292,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 403625,
+              "min": 202667,
+              "max": 421833,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 294437708,
+              "min": 280324667,
+              "max": 300170375,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 74240,
+              "min": 74192,
+              "max": 74320,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 124816,
+              "min": 124752,
+              "max": 124928,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 181584,
+              "min": 179024,
+              "max": 185856,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 35712907,
+              "min": 35712907,
+              "max": 35712907,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 25716,
+              "min": 25716,
+              "max": 25716,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 4622320,
+              "min": 4622320,
+              "max": 4622320,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 186187776,
+              "min": 183648256,
+              "max": 190562304,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 478709,
+              "min": 475791,
+              "max": 535584,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 666500,
+              "min": 561917,
+              "max": 746709,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 867958,
+              "min": 768625,
+              "max": 908291,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 67767209,
+              "min": 64423250,
+              "max": 71939750,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 67767209,
+              "min": 64423250,
+              "max": 71939750,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 480333,
+              "min": 478000,
+              "max": 481250,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 866083,
+              "min": 764875,
+              "max": 935875,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 2225458,
+              "min": 1969792,
+              "max": 3105500,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 86911750,
+              "min": 80525041,
+              "max": 119700500,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 86911750,
+              "min": 80525041,
+              "max": 119700500,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 9296190291,
+              "min": 8941851667,
+              "max": 10150011417,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 9296190291,
+              "min": 8941851667,
+              "max": 10150011417,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 5477041,
+              "min": 5401042,
+              "max": 5743917,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 6267292,
+              "min": 5996875,
+              "max": 6766250,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 1229417,
+              "min": 1108250,
+              "max": 1495292,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 3055542,
+              "min": 2956750,
+              "max": 4922375,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 3127042,
+              "min": 3046458,
+              "max": 3396500,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 6045458,
+              "min": 5691834,
+              "max": 6122750,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 5382333,
+              "min": 5277000,
+              "max": 5641667,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 6234750,
+              "min": 5712333,
+              "max": 6244042,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 436709,
+              "min": 422125,
+              "max": 438291,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 542084,
+              "min": 529333,
+              "max": 584167,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 619584,
+              "min": 607000,
+              "max": 731667,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 573459,
+              "min": 550125,
+              "max": 615208,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 773875,
+              "min": 733792,
+              "max": 814125,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 561166,
+              "min": 534792,
+              "max": 592458,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 7940167,
+              "min": 7653208,
+              "max": 8109084,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 568625,
+              "min": 564833,
+              "max": 614625,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 798917,
+              "min": 689375,
+              "max": 801875,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 1061625,
+              "min": 1027750,
+              "max": 1312917,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 627375,
+              "min": 608792,
+              "max": 711750,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 931833,
+              "min": 900875,
+              "max": 1005042,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 85770458,
+              "min": 83712791,
+              "max": 101889542,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 85770458,
+              "min": 83712791,
+              "max": 101889542,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 585208,
+              "min": 518125,
+              "max": 621875,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 1172875,
+              "min": 1020542,
+              "max": 2547458,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 2144541,
+              "min": 1777166,
+              "max": 4704333,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 642500,
+              "min": 625583,
+              "max": 690667,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 2422125,
+              "min": 1238667,
+              "max": 3080959,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 114850333,
+              "min": 109293375,
+              "max": 144473375,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 114850333,
+              "min": 109293375,
+              "max": 144473375,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 677375,
+              "min": 652209,
+              "max": 690709,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 806000,
+              "min": 774833,
+              "max": 889292,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        },
+        "sqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 15587,
+              "min": 15587,
+              "max": 15587,
+              "runs": 3
+            },
+            "edges": {
+              "median": 24861,
+              "min": 24861,
+              "max": 24861,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 221570791,
+              "min": 219496292,
+              "max": 223878959,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 1899625,
+              "min": 1836459,
+              "max": 2172708,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 34833,
+              "min": 26875,
+              "max": 65709,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 399917,
+              "min": 356542,
+              "max": 419459,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 74064,
+              "min": 73936,
+              "max": 74880,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 109888,
+              "min": 109792,
+              "max": 110656,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 157184,
+              "min": 156160,
+              "max": 158048,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 28446720,
+              "min": 28446720,
+              "max": 28446720,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 25716,
+              "min": 25716,
+              "max": 25716,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 3160256,
+              "min": 3160256,
+              "max": 3160256,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 161251328,
+              "min": 160235520,
+              "max": 162168832,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 7708,
+              "min": 5959,
+              "max": 8958,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 53583,
+              "min": 48250,
+              "max": 53917,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 99958,
+              "min": 86750,
+              "max": 107166,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 3585459,
+              "min": 3537167,
+              "max": 3648458,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 3585459,
+              "min": 3537167,
+              "max": 3648458,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 14916,
+              "min": 13333,
+              "max": 15125,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 96166,
+              "min": 89500,
+              "max": 100375,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 180916,
+              "min": 165541,
+              "max": 191833,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 6045375,
+              "min": 5884083,
+              "max": 6348708,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 6045375,
+              "min": 5884083,
+              "max": 6348708,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 138763416,
+              "min": 136120209,
+              "max": 146907166,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 138763416,
+              "min": 136120209,
+              "max": 146907166,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 5378042,
+              "min": 5067333,
+              "max": 5433292,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 5805958,
+              "min": 5690917,
+              "max": 6876583,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 125625,
+              "min": 98667,
+              "max": 126833,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 156416,
+              "min": 117583,
+              "max": 164750,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 3034166,
+              "min": 2823875,
+              "max": 3795458,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 5939000,
+              "min": 5386792,
+              "max": 7016292,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 5454541,
+              "min": 5145667,
+              "max": 5472750,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 6560792,
+              "min": 5741416,
+              "max": 7247292,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 1000,
+              "min": 1000,
+              "max": 1042,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 2083,
+              "min": 1833,
+              "max": 2167,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 2875,
+              "min": 2375,
+              "max": 3416,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 8167,
+              "min": 8125,
+              "max": 8625,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 13500,
+              "min": 12083,
+              "max": 16542,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 8375,
+              "min": 8291,
+              "max": 8875,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 133916,
+              "min": 122750,
+              "max": 151334,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 7584,
+              "min": 5916,
+              "max": 9459,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 74209,
+              "min": 74209,
+              "max": 81500,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 154125,
+              "min": 139125,
+              "max": 175916,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 42750,
+              "min": 36041,
+              "max": 45708,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 176000,
+              "min": 144958,
+              "max": 193875,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 7500166,
+              "min": 6476125,
+              "max": 7601625,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 7500166,
+              "min": 6476125,
+              "max": 7601625,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 13208,
+              "min": 12667,
+              "max": 14583,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 133250,
+              "min": 115708,
+              "max": 136292,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 239875,
+              "min": 208125,
+              "max": 253834,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 35625,
+              "min": 28584,
+              "max": 45458,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 205625,
+              "min": 138125,
+              "max": 220958,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 8710333,
+              "min": 7826958,
+              "max": 9321042,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 8710333,
+              "min": 7826958,
+              "max": 9321042,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 8375,
+              "min": 8334,
+              "max": 8875,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 12209,
+              "min": 12167,
+              "max": 22500,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        }
+      },
+      "overlay": {
+        "graphqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 28540,
+              "min": 28540,
+              "max": 28540,
+              "runs": 3
+            },
+            "edges": {
+              "median": 46182,
+              "min": 46182,
+              "max": 46182,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 2503417042,
+              "min": 2390470041,
+              "max": 2526937916,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 37150334,
+              "min": 36851750,
+              "max": 68867167,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 382875,
+              "min": 233417,
+              "max": 12670458,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 719575208,
+              "min": 657974417,
+              "max": 785561667,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 126688,
+              "min": 126688,
+              "max": 126880,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 208720,
+              "min": 208496,
+              "max": 209072,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 295584,
+              "min": 294912,
+              "max": 297552,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 65722150,
+              "min": 65722150,
+              "max": 65722150,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 38669,
+              "min": 38669,
+              "max": 38669,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 4622320,
+              "min": 4622320,
+              "max": 4622320,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 303579136,
+              "min": 302858240,
+              "max": 305102848,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 937416,
+              "min": 889959,
+              "max": 984875,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 1219000,
+              "min": 1147375,
+              "max": 1551292,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 1403250,
+              "min": 1335041,
+              "max": 2018000,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 119669291,
+              "min": 106083000,
+              "max": 155247708,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 119669291,
+              "min": 106083000,
+              "max": 155247708,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 936500,
+              "min": 874667,
+              "max": 943666,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 2534625,
+              "min": 1846084,
+              "max": 3313500,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 5212917,
+              "min": 3339792,
+              "max": 7412041,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 152655500,
+              "min": 124527666,
+              "max": 166504875,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 152655500,
+              "min": 124527666,
+              "max": 166504875,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 30539821459,
+              "min": 30291662083,
+              "max": 31642709166,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 30539821459,
+              "min": 30291662083,
+              "max": 31642709166,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 5555042,
+              "min": 5498875,
+              "max": 5575875,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 7500333,
+              "min": 6166042,
+              "max": 8229209,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 1146083,
+              "min": 1084625,
+              "max": 43138792,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 3136500,
+              "min": 3015042,
+              "max": 62988667,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 3201500,
+              "min": 3093375,
+              "max": 4766375,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 5917000,
+              "min": 5575500,
+              "max": 7268333,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 5448375,
+              "min": 5282458,
+              "max": 5700458,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 6224500,
+              "min": 5918208,
+              "max": 7799208,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 797958,
+              "min": 776584,
+              "max": 947958,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 969500,
+              "min": 896709,
+              "max": 1186583,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 1102250,
+              "min": 973458,
+              "max": 1315542,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 1027583,
+              "min": 991416,
+              "max": 1220125,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 1408291,
+              "min": 1321916,
+              "max": 1677333,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 1039708,
+              "min": 989709,
+              "max": 1263459,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 15885708,
+              "min": 15868667,
+              "max": 18811333,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 1178875,
+              "min": 1013916,
+              "max": 1216833,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 1475166,
+              "min": 1446042,
+              "max": 1716250,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 1781459,
+              "min": 1764541,
+              "max": 3233792,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 1149291,
+              "min": 1146458,
+              "max": 8112708,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 1393625,
+              "min": 1359375,
+              "max": 13701041,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 143876417,
+              "min": 140014041,
+              "max": 1144961875,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 143876417,
+              "min": 140014041,
+              "max": 1144961875,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 1413333,
+              "min": 893834,
+              "max": 1422042,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 2250792,
+              "min": 1978875,
+              "max": 2522958,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 2902250,
+              "min": 2792750,
+              "max": 7159958,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 1344833,
+              "min": 1331000,
+              "max": 8185292,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 1924833,
+              "min": 1859375,
+              "max": 19773875,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 184829625,
+              "min": 184319250,
+              "max": 1500597958,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 184829625,
+              "min": 184319250,
+              "max": 1500597958,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 1246375,
+              "min": 1204334,
+              "max": 1392084,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 1466792,
+              "min": 1362875,
+              "max": 1782541,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        },
+        "sqlite": {
+          "runs_attempted": 3,
+          "runs_with_results": 3,
+          "process_failures": 0,
+          "correctness_failures": 0,
+          "metrics": {
+            "nodes": {
+              "median": 28540,
+              "min": 28540,
+              "max": 28540,
+              "runs": 3
+            },
+            "edges": {
+              "median": 46182,
+              "min": 46182,
+              "max": 46182,
+              "runs": 3
+            },
+            "import_and_index_ready_ns": {
+              "median": 461700958,
+              "min": 442855334,
+              "max": 5133829417,
+              "runs": 3
+            },
+            "open_ns": {
+              "median": 1642000,
+              "min": 1598542,
+              "max": 22330042,
+              "runs": 3
+            },
+            "close_ns": {
+              "median": 37209,
+              "min": 28666,
+              "max": 2474709,
+              "runs": 3
+            },
+            "reopen_ns": {
+              "median": 429750,
+              "min": 374833,
+              "max": 2503625,
+              "runs": 3
+            },
+            "baseline_rss_kib": {
+              "median": 126640,
+              "min": 126624,
+              "max": 126848,
+              "runs": 3
+            },
+            "imported_rss_kib": {
+              "median": 190976,
+              "min": 190944,
+              "max": 191472,
+              "runs": 3
+            },
+            "post_query_rss_kib": {
+              "median": 258048,
+              "min": 257776,
+              "max": 261760,
+              "runs": 3
+            },
+            "database_logical_bytes": {
+              "median": 52097024,
+              "min": 52097024,
+              "max": 52097024,
+              "runs": 3
+            },
+            "correctness_checks": {
+              "median": 38669,
+              "min": 38669,
+              "max": 38669,
+              "runs": 3
+            },
+            "binary_bytes": {
+              "median": 3160256,
+              "min": 3160256,
+              "max": 3160256,
+              "runs": 3
+            },
+            "process_peak_rss_bytes": {
+              "median": 264519680,
+              "min": 264241152,
+              "max": 268337152,
+              "runs": 3
+            },
+            "concurrent_10_lookup__median_ns": {
+              "median": 8458,
+              "min": 3833,
+              "max": 8959,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p95_ns": {
+              "median": 45125,
+              "min": 32666,
+              "max": 45625,
+              "runs": 3
+            },
+            "concurrent_10_lookup__p99_ns": {
+              "median": 96834,
+              "min": 80250,
+              "max": 120875,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__median_ns": {
+              "median": 3359750,
+              "min": 3122959,
+              "max": 3585416,
+              "runs": 3
+            },
+            "concurrent_10_wall_ns__p95_ns": {
+              "median": 3359750,
+              "min": 3122959,
+              "max": 3585416,
+              "runs": 3
+            },
+            "concurrent_20_lookup__median_ns": {
+              "median": 13792,
+              "min": 2833,
+              "max": 14208,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p95_ns": {
+              "median": 89417,
+              "min": 52167,
+              "max": 93791,
+              "runs": 3
+            },
+            "concurrent_20_lookup__p99_ns": {
+              "median": 155500,
+              "min": 143917,
+              "max": 172833,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__median_ns": {
+              "median": 5722000,
+              "min": 4842417,
+              "max": 6133917,
+              "runs": 3
+            },
+            "concurrent_20_wall_ns__p95_ns": {
+              "median": 5722000,
+              "min": 4842417,
+              "max": 6133917,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__median_ns": {
+              "median": 281080417,
+              "min": 253067750,
+              "max": 299764292,
+              "runs": 3
+            },
+            "health_degree_histogram_wall_ns__p95_ns": {
+              "median": 281080417,
+              "min": 253067750,
+              "max": 299764292,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__median_ns": {
+              "median": 5772209,
+              "min": 5492375,
+              "max": 5911208,
+              "runs": 3
+            },
+            "hybrid_fts_vector_rrf__p95_ns": {
+              "median": 6808791,
+              "min": 6060250,
+              "max": 7852416,
+              "runs": 3
+            },
+            "incremental_delete__median_ns": {
+              "median": 213167,
+              "min": 129833,
+              "max": 6799292,
+              "runs": 3
+            },
+            "incremental_delete__p95_ns": {
+              "median": 272833,
+              "min": 198125,
+              "max": 13324000,
+              "runs": 3
+            },
+            "knn_graph_scope__median_ns": {
+              "median": 4003083,
+              "min": 3086041,
+              "max": 4059583,
+              "runs": 3
+            },
+            "knn_graph_scope__p95_ns": {
+              "median": 6249167,
+              "min": 5669083,
+              "max": 6302708,
+              "runs": 3
+            },
+            "knn_project_view_scope__median_ns": {
+              "median": 5651917,
+              "min": 5374541,
+              "max": 5962833,
+              "runs": 3
+            },
+            "knn_project_view_scope__p95_ns": {
+              "median": 6626083,
+              "min": 5964250,
+              "max": 6838417,
+              "runs": 3
+            },
+            "lookup__median_ns": {
+              "median": 1125,
+              "min": 1125,
+              "max": 1583,
+              "runs": 3
+            },
+            "lookup__p95_ns": {
+              "median": 2583,
+              "min": 2209,
+              "max": 3292,
+              "runs": 3
+            },
+            "lookup__p99_ns": {
+              "median": 12542,
+              "min": 3666,
+              "max": 15167,
+              "runs": 3
+            },
+            "neighbors__median_ns": {
+              "median": 9333,
+              "min": 8875,
+              "max": 11875,
+              "runs": 3
+            },
+            "neighbors__p95_ns": {
+              "median": 23166,
+              "min": 18500,
+              "max": 25833,
+              "runs": 3
+            },
+            "reach_depth_3__median_ns": {
+              "median": 12209,
+              "min": 8916,
+              "max": 16708,
+              "runs": 3
+            },
+            "reach_depth_3__p95_ns": {
+              "median": 138292,
+              "min": 135583,
+              "max": 168291,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__median_ns": {
+              "median": 9834,
+              "min": 8167,
+              "max": 10708,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p95_ns": {
+              "median": 69708,
+              "min": 48375,
+              "max": 95166,
+              "runs": 3
+            },
+            "reader_writer_10_lookup__p99_ns": {
+              "median": 144917,
+              "min": 109541,
+              "max": 174250,
+              "runs": 3
+            },
+            "reader_writer_10_rename__median_ns": {
+              "median": 48291,
+              "min": 39791,
+              "max": 15001208,
+              "runs": 3
+            },
+            "reader_writer_10_rename__p95_ns": {
+              "median": 181625,
+              "min": 156958,
+              "max": 24225041,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__median_ns": {
+              "median": 8120083,
+              "min": 7918125,
+              "max": 1606027583,
+              "runs": 3
+            },
+            "reader_writer_10_wall_ns__p95_ns": {
+              "median": 8120083,
+              "min": 7918125,
+              "max": 1606027583,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__median_ns": {
+              "median": 11375,
+              "min": 3667,
+              "max": 12750,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p95_ns": {
+              "median": 158625,
+              "min": 35375,
+              "max": 165833,
+              "runs": 3
+            },
+            "reader_writer_20_lookup__p99_ns": {
+              "median": 282541,
+              "min": 280209,
+              "max": 5387750,
+              "runs": 3
+            },
+            "reader_writer_20_rename__median_ns": {
+              "median": 74709,
+              "min": 45916,
+              "max": 6928792,
+              "runs": 3
+            },
+            "reader_writer_20_rename__p95_ns": {
+              "median": 245583,
+              "min": 239041,
+              "max": 20065458,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__median_ns": {
+              "median": 11631292,
+              "min": 10035333,
+              "max": 792164542,
+              "runs": 3
+            },
+            "reader_writer_20_wall_ns__p95_ns": {
+              "median": 11631292,
+              "min": 10035333,
+              "max": 792164542,
+              "runs": 3
+            },
+            "reverse_neighbors__median_ns": {
+              "median": 9584,
+              "min": 9208,
+              "max": 12375,
+              "runs": 3
+            },
+            "reverse_neighbors__p95_ns": {
+              "median": 23791,
+              "min": 18792,
+              "max": 33667,
+              "runs": 3
+            }
+          },
+          "vector_recall": {
+            "knn_project_view_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            },
+            "knn_graph_scope": {
+              "mean": 1.0,
+              "minimum": 1.0,
+              "queries": 240,
+              "underfilled_queries": 0
+            }
+          },
+          "case_errors": []
+        }
+      }
+    },
+    "failures": []
+  },
+  "native_cache_profiles": {
+    "small": {
+      "nodes": 988,
+      "edges": 925,
+      "initial_load_ns": 593833,
+      "degree_total_ns": 1216708,
+      "after_delete_reload_ns": 212541,
+      "baseline_rss_kib": 45072,
+      "loaded_rss_kib": 49152,
+      "bfs_p95_ns": 11292,
+      "reload_insert_ns": 261292,
+      "correctness_checks": 3219
+    },
+    "source": {
+      "nodes": 15575,
+      "edges": 24140,
+      "initial_load_ns": 4443208,
+      "degree_total_ns": 18011916,
+      "after_delete_reload_ns": 3949375,
+      "baseline_rss_kib": 44896,
+      "loaded_rss_kib": 51024,
+      "bfs_p95_ns": 30750,
+      "reload_insert_ns": 3839417,
+      "correctness_checks": 46980
+    },
+    "overlay": {
+      "nodes": 28528,
+      "edges": 45471,
+      "initial_load_ns": 8262125,
+      "degree_total_ns": 34641916,
+      "after_delete_reload_ns": 7651166,
+      "baseline_rss_kib": 75200,
+      "loaded_rss_kib": 82640,
+      "bfs_p95_ns": 31833,
+      "reload_insert_ns": 8529584,
+      "correctness_checks": 85839
+    }
+  },
+  "cache_manifest": {
+    "source_manifest": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/manifest.json",
+    "inference": false,
+    "binary_sha256": "a58b9444838ece5aa2f4d69f82aad5e3db2f9582cd92ca239b22f1f089453f71",
+    "runs": [
+      {
+        "profile": "small",
+        "iteration": 1,
+        "command": [
+          "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+          "--cache-profile",
+          "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/small-1-graphqlite/config.json"
+        ],
+        "case": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/small-1-graphqlite",
+        "exit_code": 0,
+        "case_errors": [],
+        "checks": 1073
+      },
+      {
+        "profile": "source",
+        "iteration": 1,
+        "command": [
+          "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+          "--cache-profile",
+          "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/source-1-graphqlite/config.json"
+        ],
+        "case": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/source-1-graphqlite",
+        "exit_code": 0,
+        "case_errors": [],
+        "checks": 15660
+      },
+      {
+        "profile": "overlay",
+        "iteration": 1,
+        "command": [
+          "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+          "--cache-profile",
+          "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-1-graphqlite/config.json"
+        ],
+        "case": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-1-graphqlite",
+        "exit_code": 0,
+        "case_errors": [],
+        "checks": 28613
+      },
+      {
+        "profile": "small",
+        "iteration": 2,
+        "command": [
+          "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+          "--cache-profile",
+          "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/small-2-graphqlite/config.json"
+        ],
+        "case": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/small-2-graphqlite",
+        "exit_code": 0,
+        "case_errors": [],
+        "checks": 1073
+      },
+      {
+        "profile": "source",
+        "iteration": 2,
+        "command": [
+          "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+          "--cache-profile",
+          "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/source-2-graphqlite/config.json"
+        ],
+        "case": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/source-2-graphqlite",
+        "exit_code": 0,
+        "case_errors": [],
+        "checks": 15660
+      },
+      {
+        "profile": "overlay",
+        "iteration": 2,
+        "command": [
+          "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+          "--cache-profile",
+          "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-2-graphqlite/config.json"
+        ],
+        "case": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-2-graphqlite",
+        "exit_code": 0,
+        "case_errors": [],
+        "checks": 28613
+      },
+      {
+        "profile": "small",
+        "iteration": 3,
+        "command": [
+          "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+          "--cache-profile",
+          "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/small-3-graphqlite/config.json"
+        ],
+        "case": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/small-3-graphqlite",
+        "exit_code": 0,
+        "case_errors": [],
+        "checks": 1073
+      },
+      {
+        "profile": "source",
+        "iteration": 3,
+        "command": [
+          "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+          "--cache-profile",
+          "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/source-3-graphqlite/config.json"
+        ],
+        "case": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/source-3-graphqlite",
+        "exit_code": 0,
+        "case_errors": [],
+        "checks": 15660
+      },
+      {
+        "profile": "overlay",
+        "iteration": 3,
+        "command": [
+          "/Users/michael/Repos/DevWorks/tools/storage-eval/target/release/eval-graphqlite",
+          "--cache-profile",
+          "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-3-graphqlite/config.json"
+        ],
+        "case": "work/graphqlite-eval-runs/key-measured/20261101T194050977085Z/cache-profiles/overlay-3-graphqlite",
+        "exit_code": 0,
+        "case_errors": [],
+        "checks": 28613
+      }
+    ]
+  },
+  "freshness_repetitions": [
+    {
+      "after_reopen": [
+        "a",
+        "bulk",
+        "r",
+        "y"
+      ],
+      "baseline_bfs": [
+        "a",
+        "b"
+      ],
+      "capabilities": {
+        "cypher_dialect": "openCypher 9",
+        "features": {
+          "backtick_identifiers": true,
+          "bracket_property_access": true,
+          "call_procedures": true,
+          "call_subquery": true,
+          "case_expressions": true,
+          "create_constraint": true,
+          "create_index": true,
+          "cypher_rows_vtab": true,
+          "existential_subquery_full": true,
+          "existential_subquery_pattern": true,
+          "explain": true,
+          "foreach": true,
+          "graph_algorithms": true,
+          "json_path_access": true,
+          "label_disjunction": true,
+          "list_comprehension": true,
+          "list_literals": true,
+          "list_properties": true,
+          "load_csv": true,
+          "map_literals": true,
+          "map_projection_all_properties": true,
+          "map_properties": true,
+          "merge_on_create_on_match": true,
+          "multi_graph": true,
+          "named_paths": true,
+          "named_timezones": true,
+          "optional_match": true,
+          "parameters": true,
+          "pattern_comprehension": true,
+          "profile": true,
+          "quantifiers": true,
+          "reduce": true,
+          "shortest_path": true,
+          "temporal_types": true,
+          "timezone_historical_dst": true,
+          "union": true,
+          "unwind": true,
+          "validate": true,
+          "variable_length_paths": true,
+          "with_where": true,
+          "write_stats": true
+        },
+        "graphqlite_version": "0.12.0",
+        "neo4j_compat": false,
+        "schema_version": 1,
+        "sqlite": {
+          "json1": true,
+          "version": "3.54.1"
+        }
+      },
+      "case_errors": [],
+      "engine": "graphqlite",
+      "guard_contract": "All managed graph mutations update a transactional generation; PRAGMA data_version detects other-connection commits; total_changes detects own bulk writes. Write-transaction cache reads are rejected and invalidate the stamp; numeric generation reuse alone is insufficient. Guard must own the cache; scope is whole test database, not a permission boundary.",
+      "initial_load": {
+        "edge_count": 1,
+        "node_count": 3,
+        "status": "loaded"
+      },
+      "observations": [
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b",
+            "c"
+          ],
+          "managed_total_ns": 116375,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c"
+          ],
+          "native_query_ns": 132042,
+          "native_was_current": true,
+          "phase": "same_connection_node_and_edge_insert",
+          "reload_ns": 89208,
+          "reload_status": {
+            "edge_count": 2,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            2,
+            2,
+            44
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "managed_total_ns": 218584,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c"
+          ],
+          "native_query_ns": 104208,
+          "native_was_current": false,
+          "phase": "other_connection_committed_edge",
+          "reload_ns": 129083,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            3,
+            3,
+            44
+          ]
+        },
+        {
+          "after_guard": {
+            "distance": 16.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          },
+          "after_reload": {
+            "distance": 16.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          },
+          "before": {
+            "distance": 9.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          },
+          "expected_distance": 16,
+          "guard_reloaded": true,
+          "phase": "edge_weight_update",
+          "without_reload": {
+            "distance": 16.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          }
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "guard_detected_changed_generation": false,
+          "managed_result": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "managed_total_ns": 16875,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "native_query_ns": 24000,
+          "native_was_current": true,
+          "phase": "edge_weight_generation",
+          "reload_ns": 89458,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            4,
+            4,
+            44
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "managed_total_ns": 116291,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "native_query_ns": 127375,
+          "native_was_current": true,
+          "phase": "node_property_rename",
+          "reload_ns": 85916,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            5,
+            4,
+            47
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b"
+          ],
+          "expected_bfs": [
+            "a",
+            "b"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b"
+          ],
+          "managed_total_ns": 102625,
+          "native_before_reload": [
+            "a",
+            "b"
+          ],
+          "native_query_ns": 109125,
+          "native_was_current": true,
+          "phase": "same_connection_edge_delete",
+          "reload_ns": 82792,
+          "reload_status": {
+            "edge_count": 2,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            6,
+            4,
+            50
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 122417,
+          "native_before_reload": [
+            "a",
+            "b"
+          ],
+          "native_query_ns": 23542,
+          "native_was_current": false,
+          "phase": "other_connection_node_delete",
+          "reload_ns": 88208,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            50
+          ]
+        },
+        {
+          "managed_write_transaction_rejected": true,
+          "native_result": [
+            "a",
+            "x"
+          ],
+          "phase": "uncommitted_native_cache_control"
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 108167,
+          "native_before_reload": [
+            "a",
+            "x"
+          ],
+          "native_query_ns": 14375,
+          "native_was_current": false,
+          "phase": "rollback_after_caching_uncommitted_rows",
+          "reload_ns": 85334,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            60
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": false,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 11375,
+          "native_before_reload": [
+            "a"
+          ],
+          "native_query_ns": 13125,
+          "native_was_current": true,
+          "phase": "other_writer_uncommitted_not_visible",
+          "reload_ns": 82958,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            60
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": false,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 10833,
+          "native_before_reload": [
+            "a"
+          ],
+          "native_query_ns": 11500,
+          "native_was_current": true,
+          "phase": "other_writer_rollback",
+          "reload_ns": 85708,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            60
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "y"
+          ],
+          "expected_bfs": [
+            "a",
+            "y"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "y"
+          ],
+          "managed_total_ns": 110125,
+          "native_before_reload": [
+            "a",
+            "y"
+          ],
+          "native_query_ns": 115583,
+          "native_was_current": true,
+          "phase": "committed_graph_and_vector_transaction",
+          "reload_ns": 85750,
+          "reload_status": {
+            "edge_count": 2,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            8,
+            5,
+            70
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "r",
+            "y"
+          ],
+          "expected_bfs": [
+            "a",
+            "r",
+            "y"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "r",
+            "y"
+          ],
+          "managed_total_ns": 155583,
+          "native_before_reload": [
+            "a",
+            "y"
+          ],
+          "native_query_ns": 13125,
+          "native_was_current": false,
+          "phase": "read_snapshot_ends_after_other_writer_commit",
+          "reload_ns": 151875,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 5,
+            "status": "reloaded"
+          },
+          "stamp": [
+            9,
+            6,
+            70
+          ]
+        },
+        {
+          "expected_bfs": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_before_generation_bump": [
+            "a",
+            "r",
+            "y"
+          ],
+          "phase": "same_connection_public_bulk_helpers"
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "expected_bfs": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "managed_total_ns": 157792,
+          "native_before_reload": [
+            "a",
+            "r",
+            "y"
+          ],
+          "native_query_ns": 16209,
+          "native_was_current": false,
+          "phase": "other_connection_public_bulk_helpers",
+          "reload_ns": 85875,
+          "reload_status": {
+            "edge_count": 4,
+            "node_count": 6,
+            "status": "reloaded"
+          },
+          "stamp": [
+            10,
+            7,
+            70
+          ]
+        },
+        {
+          "before_stamp": [
+            10,
+            7,
+            70
+          ],
+          "committed_stamp": [
+            11,
+            7,
+            89
+          ],
+          "dirty_stamp": [
+            11,
+            7,
+            80
+          ],
+          "generation_reused": true,
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_after_new_commit": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "native_uncommitted": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "phase": "rollback_then_new_commit_generation_reuse"
+        }
+      ],
+      "real_inference": false,
+      "sqlite_vec": "0.1.7",
+      "vector_ids_after_reopen": [
+        1,
+        3,
+        4,
+        51,
+        53,
+        77,
+        89
+      ],
+      "version": "0.12.0",
+      "warm_guard": {
+        "query_ns": 13792,
+        "reloaded": false,
+        "stamp": [
+          11,
+          7,
+          89
+        ]
+      }
+    },
+    {
+      "after_reopen": [
+        "a",
+        "bulk",
+        "r",
+        "y"
+      ],
+      "baseline_bfs": [
+        "a",
+        "b"
+      ],
+      "capabilities": {
+        "cypher_dialect": "openCypher 9",
+        "features": {
+          "backtick_identifiers": true,
+          "bracket_property_access": true,
+          "call_procedures": true,
+          "call_subquery": true,
+          "case_expressions": true,
+          "create_constraint": true,
+          "create_index": true,
+          "cypher_rows_vtab": true,
+          "existential_subquery_full": true,
+          "existential_subquery_pattern": true,
+          "explain": true,
+          "foreach": true,
+          "graph_algorithms": true,
+          "json_path_access": true,
+          "label_disjunction": true,
+          "list_comprehension": true,
+          "list_literals": true,
+          "list_properties": true,
+          "load_csv": true,
+          "map_literals": true,
+          "map_projection_all_properties": true,
+          "map_properties": true,
+          "merge_on_create_on_match": true,
+          "multi_graph": true,
+          "named_paths": true,
+          "named_timezones": true,
+          "optional_match": true,
+          "parameters": true,
+          "pattern_comprehension": true,
+          "profile": true,
+          "quantifiers": true,
+          "reduce": true,
+          "shortest_path": true,
+          "temporal_types": true,
+          "timezone_historical_dst": true,
+          "union": true,
+          "unwind": true,
+          "validate": true,
+          "variable_length_paths": true,
+          "with_where": true,
+          "write_stats": true
+        },
+        "graphqlite_version": "0.12.0",
+        "neo4j_compat": false,
+        "schema_version": 1,
+        "sqlite": {
+          "json1": true,
+          "version": "3.54.1"
+        }
+      },
+      "case_errors": [],
+      "engine": "graphqlite",
+      "guard_contract": "All managed graph mutations update a transactional generation; PRAGMA data_version detects other-connection commits; total_changes detects own bulk writes. Write-transaction cache reads are rejected and invalidate the stamp; numeric generation reuse alone is insufficient. Guard must own the cache; scope is whole test database, not a permission boundary.",
+      "initial_load": {
+        "edge_count": 1,
+        "node_count": 3,
+        "status": "loaded"
+      },
+      "observations": [
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b",
+            "c"
+          ],
+          "managed_total_ns": 110667,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c"
+          ],
+          "native_query_ns": 144208,
+          "native_was_current": true,
+          "phase": "same_connection_node_and_edge_insert",
+          "reload_ns": 80750,
+          "reload_status": {
+            "edge_count": 2,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            2,
+            2,
+            44
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "managed_total_ns": 123750,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c"
+          ],
+          "native_query_ns": 23709,
+          "native_was_current": false,
+          "phase": "other_connection_committed_edge",
+          "reload_ns": 82667,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            3,
+            3,
+            44
+          ]
+        },
+        {
+          "after_guard": {
+            "distance": 16.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          },
+          "after_reload": {
+            "distance": 16.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          },
+          "before": {
+            "distance": 9.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          },
+          "expected_distance": 16,
+          "guard_reloaded": true,
+          "phase": "edge_weight_update",
+          "without_reload": {
+            "distance": 16.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          }
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "guard_detected_changed_generation": false,
+          "managed_result": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "managed_total_ns": 15000,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "native_query_ns": 14959,
+          "native_was_current": true,
+          "phase": "edge_weight_generation",
+          "reload_ns": 76792,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            4,
+            4,
+            44
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "managed_total_ns": 100917,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "native_query_ns": 98958,
+          "native_was_current": true,
+          "phase": "node_property_rename",
+          "reload_ns": 73000,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            5,
+            4,
+            47
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b"
+          ],
+          "expected_bfs": [
+            "a",
+            "b"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b"
+          ],
+          "managed_total_ns": 104333,
+          "native_before_reload": [
+            "a",
+            "b"
+          ],
+          "native_query_ns": 121250,
+          "native_was_current": true,
+          "phase": "same_connection_edge_delete",
+          "reload_ns": 78458,
+          "reload_status": {
+            "edge_count": 2,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            6,
+            4,
+            50
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 123709,
+          "native_before_reload": [
+            "a",
+            "b"
+          ],
+          "native_query_ns": 47959,
+          "native_was_current": false,
+          "phase": "other_connection_node_delete",
+          "reload_ns": 74625,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            50
+          ]
+        },
+        {
+          "managed_write_transaction_rejected": true,
+          "native_result": [
+            "a",
+            "x"
+          ],
+          "phase": "uncommitted_native_cache_control"
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 90709,
+          "native_before_reload": [
+            "a",
+            "x"
+          ],
+          "native_query_ns": 11833,
+          "native_was_current": false,
+          "phase": "rollback_after_caching_uncommitted_rows",
+          "reload_ns": 68667,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            60
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": false,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 9042,
+          "native_before_reload": [
+            "a"
+          ],
+          "native_query_ns": 11000,
+          "native_was_current": true,
+          "phase": "other_writer_uncommitted_not_visible",
+          "reload_ns": 66916,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            60
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": false,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 8667,
+          "native_before_reload": [
+            "a"
+          ],
+          "native_query_ns": 8958,
+          "native_was_current": true,
+          "phase": "other_writer_rollback",
+          "reload_ns": 69041,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            60
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "y"
+          ],
+          "expected_bfs": [
+            "a",
+            "y"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "y"
+          ],
+          "managed_total_ns": 92209,
+          "native_before_reload": [
+            "a",
+            "y"
+          ],
+          "native_query_ns": 97875,
+          "native_was_current": true,
+          "phase": "committed_graph_and_vector_transaction",
+          "reload_ns": 71625,
+          "reload_status": {
+            "edge_count": 2,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            8,
+            5,
+            70
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "r",
+            "y"
+          ],
+          "expected_bfs": [
+            "a",
+            "r",
+            "y"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "r",
+            "y"
+          ],
+          "managed_total_ns": 148750,
+          "native_before_reload": [
+            "a",
+            "y"
+          ],
+          "native_query_ns": 13500,
+          "native_was_current": false,
+          "phase": "read_snapshot_ends_after_other_writer_commit",
+          "reload_ns": 85583,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 5,
+            "status": "reloaded"
+          },
+          "stamp": [
+            9,
+            6,
+            70
+          ]
+        },
+        {
+          "expected_bfs": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_before_generation_bump": [
+            "a",
+            "r",
+            "y"
+          ],
+          "phase": "same_connection_public_bulk_helpers"
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "expected_bfs": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "managed_total_ns": 110667,
+          "native_before_reload": [
+            "a",
+            "r",
+            "y"
+          ],
+          "native_query_ns": 13875,
+          "native_was_current": false,
+          "phase": "other_connection_public_bulk_helpers",
+          "reload_ns": 103750,
+          "reload_status": {
+            "edge_count": 4,
+            "node_count": 6,
+            "status": "reloaded"
+          },
+          "stamp": [
+            10,
+            7,
+            70
+          ]
+        },
+        {
+          "before_stamp": [
+            10,
+            7,
+            70
+          ],
+          "committed_stamp": [
+            11,
+            7,
+            89
+          ],
+          "dirty_stamp": [
+            11,
+            7,
+            80
+          ],
+          "generation_reused": true,
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_after_new_commit": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "native_uncommitted": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "phase": "rollback_then_new_commit_generation_reuse"
+        }
+      ],
+      "real_inference": false,
+      "sqlite_vec": "0.1.7",
+      "vector_ids_after_reopen": [
+        1,
+        3,
+        4,
+        51,
+        53,
+        77,
+        89
+      ],
+      "version": "0.12.0",
+      "warm_guard": {
+        "query_ns": 13167,
+        "reloaded": false,
+        "stamp": [
+          11,
+          7,
+          89
+        ]
+      }
+    },
+    {
+      "after_reopen": [
+        "a",
+        "bulk",
+        "r",
+        "y"
+      ],
+      "baseline_bfs": [
+        "a",
+        "b"
+      ],
+      "capabilities": {
+        "cypher_dialect": "openCypher 9",
+        "features": {
+          "backtick_identifiers": true,
+          "bracket_property_access": true,
+          "call_procedures": true,
+          "call_subquery": true,
+          "case_expressions": true,
+          "create_constraint": true,
+          "create_index": true,
+          "cypher_rows_vtab": true,
+          "existential_subquery_full": true,
+          "existential_subquery_pattern": true,
+          "explain": true,
+          "foreach": true,
+          "graph_algorithms": true,
+          "json_path_access": true,
+          "label_disjunction": true,
+          "list_comprehension": true,
+          "list_literals": true,
+          "list_properties": true,
+          "load_csv": true,
+          "map_literals": true,
+          "map_projection_all_properties": true,
+          "map_properties": true,
+          "merge_on_create_on_match": true,
+          "multi_graph": true,
+          "named_paths": true,
+          "named_timezones": true,
+          "optional_match": true,
+          "parameters": true,
+          "pattern_comprehension": true,
+          "profile": true,
+          "quantifiers": true,
+          "reduce": true,
+          "shortest_path": true,
+          "temporal_types": true,
+          "timezone_historical_dst": true,
+          "union": true,
+          "unwind": true,
+          "validate": true,
+          "variable_length_paths": true,
+          "with_where": true,
+          "write_stats": true
+        },
+        "graphqlite_version": "0.12.0",
+        "neo4j_compat": false,
+        "schema_version": 1,
+        "sqlite": {
+          "json1": true,
+          "version": "3.54.1"
+        }
+      },
+      "case_errors": [],
+      "engine": "graphqlite",
+      "guard_contract": "All managed graph mutations update a transactional generation; PRAGMA data_version detects other-connection commits; total_changes detects own bulk writes. Write-transaction cache reads are rejected and invalidate the stamp; numeric generation reuse alone is insufficient. Guard must own the cache; scope is whole test database, not a permission boundary.",
+      "initial_load": {
+        "edge_count": 1,
+        "node_count": 3,
+        "status": "loaded"
+      },
+      "observations": [
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b",
+            "c"
+          ],
+          "managed_total_ns": 103375,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c"
+          ],
+          "native_query_ns": 131125,
+          "native_was_current": true,
+          "phase": "same_connection_node_and_edge_insert",
+          "reload_ns": 77542,
+          "reload_status": {
+            "edge_count": 2,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            2,
+            2,
+            44
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "managed_total_ns": 143417,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c"
+          ],
+          "native_query_ns": 51917,
+          "native_was_current": false,
+          "phase": "other_connection_committed_edge",
+          "reload_ns": 84333,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            3,
+            3,
+            44
+          ]
+        },
+        {
+          "after_guard": {
+            "distance": 16.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          },
+          "after_reload": {
+            "distance": 16.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          },
+          "before": {
+            "distance": 9.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          },
+          "expected_distance": 16,
+          "guard_reloaded": true,
+          "phase": "edge_weight_update",
+          "without_reload": {
+            "distance": 16.0,
+            "found": true,
+            "path": [
+              "a",
+              "b",
+              "c",
+              "d"
+            ]
+          }
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "guard_detected_changed_generation": false,
+          "managed_result": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "managed_total_ns": 13125,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "native_query_ns": 17625,
+          "native_was_current": true,
+          "phase": "edge_weight_generation",
+          "reload_ns": 75500,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            4,
+            4,
+            44
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "expected_bfs": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "managed_total_ns": 108167,
+          "native_before_reload": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "native_query_ns": 112458,
+          "native_was_current": true,
+          "phase": "node_property_rename",
+          "reload_ns": 78625,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            5,
+            4,
+            47
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "b"
+          ],
+          "expected_bfs": [
+            "a",
+            "b"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "b"
+          ],
+          "managed_total_ns": 96916,
+          "native_before_reload": [
+            "a",
+            "b"
+          ],
+          "native_query_ns": 96125,
+          "native_was_current": true,
+          "phase": "same_connection_edge_delete",
+          "reload_ns": 76375,
+          "reload_status": {
+            "edge_count": 2,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            6,
+            4,
+            50
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 116750,
+          "native_before_reload": [
+            "a",
+            "b"
+          ],
+          "native_query_ns": 25125,
+          "native_was_current": false,
+          "phase": "other_connection_node_delete",
+          "reload_ns": 80250,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            50
+          ]
+        },
+        {
+          "managed_write_transaction_rejected": true,
+          "native_result": [
+            "a",
+            "x"
+          ],
+          "phase": "uncommitted_native_cache_control"
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 94500,
+          "native_before_reload": [
+            "a",
+            "x"
+          ],
+          "native_query_ns": 11583,
+          "native_was_current": false,
+          "phase": "rollback_after_caching_uncommitted_rows",
+          "reload_ns": 76917,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            60
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": false,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 9709,
+          "native_before_reload": [
+            "a"
+          ],
+          "native_query_ns": 13666,
+          "native_was_current": true,
+          "phase": "other_writer_uncommitted_not_visible",
+          "reload_ns": 73750,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            60
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a"
+          ],
+          "expected_bfs": [
+            "a"
+          ],
+          "guard_detected_changed_generation": false,
+          "managed_result": [
+            "a"
+          ],
+          "managed_total_ns": 9750,
+          "native_before_reload": [
+            "a"
+          ],
+          "native_query_ns": 10209,
+          "native_was_current": true,
+          "phase": "other_writer_rollback",
+          "reload_ns": 74583,
+          "reload_status": {
+            "edge_count": 1,
+            "node_count": 3,
+            "status": "reloaded"
+          },
+          "stamp": [
+            7,
+            5,
+            60
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "y"
+          ],
+          "expected_bfs": [
+            "a",
+            "y"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "y"
+          ],
+          "managed_total_ns": 105417,
+          "native_before_reload": [
+            "a",
+            "y"
+          ],
+          "native_query_ns": 144833,
+          "native_was_current": true,
+          "phase": "committed_graph_and_vector_transaction",
+          "reload_ns": 79167,
+          "reload_status": {
+            "edge_count": 2,
+            "node_count": 4,
+            "status": "reloaded"
+          },
+          "stamp": [
+            8,
+            5,
+            70
+          ]
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "r",
+            "y"
+          ],
+          "expected_bfs": [
+            "a",
+            "r",
+            "y"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "r",
+            "y"
+          ],
+          "managed_total_ns": 119416,
+          "native_before_reload": [
+            "a",
+            "y"
+          ],
+          "native_query_ns": 14084,
+          "native_was_current": false,
+          "phase": "read_snapshot_ends_after_other_writer_commit",
+          "reload_ns": 77500,
+          "reload_status": {
+            "edge_count": 3,
+            "node_count": 5,
+            "status": "reloaded"
+          },
+          "stamp": [
+            9,
+            6,
+            70
+          ]
+        },
+        {
+          "expected_bfs": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_before_generation_bump": [
+            "a",
+            "r",
+            "y"
+          ],
+          "phase": "same_connection_public_bulk_helpers"
+        },
+        {
+          "after_explicit_reload": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "expected_bfs": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "guard_detected_changed_generation": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "managed_total_ns": 112167,
+          "native_before_reload": [
+            "a",
+            "r",
+            "y"
+          ],
+          "native_query_ns": 15167,
+          "native_was_current": false,
+          "phase": "other_connection_public_bulk_helpers",
+          "reload_ns": 78750,
+          "reload_status": {
+            "edge_count": 4,
+            "node_count": 6,
+            "status": "reloaded"
+          },
+          "stamp": [
+            10,
+            7,
+            70
+          ]
+        },
+        {
+          "before_stamp": [
+            10,
+            7,
+            70
+          ],
+          "committed_stamp": [
+            11,
+            7,
+            89
+          ],
+          "dirty_stamp": [
+            11,
+            7,
+            80
+          ],
+          "generation_reused": true,
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_after_new_commit": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "native_uncommitted": [
+            "a",
+            "bulk",
+            "ghost",
+            "r",
+            "y"
+          ],
+          "phase": "rollback_then_new_commit_generation_reuse"
+        }
+      ],
+      "real_inference": false,
+      "sqlite_vec": "0.1.7",
+      "vector_ids_after_reopen": [
+        1,
+        3,
+        4,
+        51,
+        53,
+        77,
+        89
+      ],
+      "version": "0.12.0",
+      "warm_guard": {
+        "query_ns": 16833,
+        "reloaded": false,
+        "stamp": [
+          11,
+          7,
+          89
+        ]
+      }
+    }
+  ],
+  "freshness_binary": "a58b9444838ece5aa2f4d69f82aad5e3db2f9582cd92ca239b22f1f089453f71",
+  "recovery": {
+    "inference": false,
+    "fixture_sha256": "84588880e378beb11ed839c91ecbce5d7e33b9002b60aec6fd4c600447a56034",
+    "cases": [
+      {
+        "engine": "graphqlite",
+        "action": "recovery_writer",
+        "binary_sha256": "a58b9444838ece5aa2f4d69f82aad5e3db2f9582cd92ca239b22f1f089453f71",
+        "case": "work/graphqlite-eval-runs/recovery-final/20261101T194854608653Z/graphqlite-recovery_writer",
+        "acknowledgment_seen": true,
+        "import_finished_before_kill": false,
+        "writer_exit": -9,
+        "verify_exit": 0,
+        "verify_wall_seconds": 0.3453310828190297,
+        "result": {
+          "action": "recovery_check",
+          "checks": 1028,
+          "engine": "graphqlite",
+          "real_inference": false,
+          "reopen_ns": 19623083
+        }
+      },
+      {
+        "engine": "graphqlite",
+        "action": "interrupted_writer",
+        "binary_sha256": "a58b9444838ece5aa2f4d69f82aad5e3db2f9582cd92ca239b22f1f089453f71",
+        "case": "work/graphqlite-eval-runs/recovery-final/20261101T194854608653Z/graphqlite-interrupted_writer",
+        "acknowledgment_seen": true,
+        "import_finished_before_kill": false,
+        "writer_exit": -9,
+        "verify_exit": 0,
+        "verify_wall_seconds": 0.020864292047917843,
+        "result": {
+          "action": "interrupted_open",
+          "checks": 0,
+          "engine": "graphqlite",
+          "real_inference": false,
+          "reopen_ns": 9855583
+        }
+      },
+      {
+        "engine": "sqlite",
+        "action": "recovery_writer",
+        "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+        "case": "work/graphqlite-eval-runs/recovery-final/20261101T194854608653Z/sqlite-recovery_writer",
+        "acknowledgment_seen": true,
+        "import_finished_before_kill": false,
+        "writer_exit": -9,
+        "verify_exit": 0,
+        "verify_wall_seconds": 0.2911540830973536,
+        "result": {
+          "action": "recovery_check",
+          "checks": 1028,
+          "engine": "sqlite",
+          "real_inference": false,
+          "reopen_ns": 470833
+        }
+      },
+      {
+        "engine": "sqlite",
+        "action": "interrupted_writer",
+        "binary_sha256": "e9d4ec918fe3b57c35e5f0e61c295bfbfc49a39f15bc9053e4b2a667fabd3fe9",
+        "case": "work/graphqlite-eval-runs/recovery-final/20261101T194854608653Z/sqlite-interrupted_writer",
+        "acknowledgment_seen": true,
+        "import_finished_before_kill": false,
+        "writer_exit": -9,
+        "verify_exit": 0,
+        "verify_wall_seconds": 0.010578999994322658,
+        "result": {
+          "action": "interrupted_open",
+          "checks": 0,
+          "engine": "sqlite",
+          "real_inference": false,
+          "reopen_ns": 1384917
+        }
+      }
+    ]
+  },
+  "confidence": "High for reproduced local outcomes, moderate for general performance ranking, target-platform qualification incomplete"
+}

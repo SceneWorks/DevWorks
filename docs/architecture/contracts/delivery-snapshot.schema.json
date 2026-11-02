@@ -1,0 +1,173 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "GitOid": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/ObjectFormat"
+        },
+        "hex": {
+          "pattern": "^[a-f0-9]{40}([a-f0-9]{24})?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "hex"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "MergeObservation": {
+      "enum": [
+        "Accepted",
+        "Queued",
+        "NotMerged",
+        "Merged",
+        "OutcomeUnknown"
+      ],
+      "type": "string"
+    },
+    "ObjectFormat": {
+      "enum": [
+        "Sha1",
+        "Sha256"
+      ],
+      "type": "string"
+    },
+    "RepositoryMerge": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "expectedHead": {
+          "$ref": "#/$defs/GitOid"
+        },
+        "mergeCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitOid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation": {
+          "$ref": "#/$defs/MergeObservation"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "requestTicketId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "evidence",
+        "repositoryId",
+        "expectedHead",
+        "observation"
+      ],
+      "type": "object"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:delivery-snapshot",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cleanupPending": {
+      "type": "boolean"
+    },
+    "deliveryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "deploymentPending": {
+      "type": "boolean"
+    },
+    "featureComplete": {
+      "type": "boolean"
+    },
+    "releasePending": {
+      "type": "boolean"
+    },
+    "repositories": {
+      "items": {
+        "$ref": "#/$defs/RepositoryMerge"
+      },
+      "type": "array"
+    },
+    "revision": {
+      "$ref": "#/$defs/Revision"
+    }
+  },
+  "required": [
+    "deliveryId",
+    "revision",
+    "repositories",
+    "featureComplete",
+    "cleanupPending",
+    "releasePending",
+    "deploymentPending"
+  ],
+  "title": "DeliverySnapshot",
+  "type": "object"
+}

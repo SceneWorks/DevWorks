@@ -1,0 +1,26 @@
+sequenceDiagram
+ actor User
+ participant App as Application gateway
+ participant Store as SQLite ownership and history
+ participant Sup as Agent supervisor
+ participant Router as Inference router
+ participant Broker as Tool broker
+ User->>App: Start or Continue work
+ App->>Store: Validate plan, holds and expected revisions
+ alt Planning is incomplete
+  App-->>User: Candidate plan and approval/input request
+ else Work is eligible
+  App->>Store: Record owner and activation intent
+  Store-->>Sup: Durable dispatch
+  Sup->>Store: Reserve root work subagent slots
+  par Independent ready task A
+   Sup->>Router: Scoped session request
+   Router-->>Sup: Ordered response and tool call
+   Sup->>Broker: Durable permitted tool intent
+   Broker-->>Sup: Observed result or uncertainty
+  and Independent ready task B
+   Sup->>Store: Another assignment within root allowance
+  end
+  Sup->>Store: Evidence, checkpoints and next state
+  Store-->>User: Incremental inspectable work state
+ end

@@ -1,0 +1,211 @@
+{
+  "contract": "1.0-draft.1",
+  "date": "2026-11-02",
+  "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
+  "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
+  "schemaSources": [
+    "../../../tools/contracts-eval/src/lib.rs",
+    "../../../tools/contracts-eval/src/provider.rs",
+    "../../../tools/contracts-eval/src/package.rs",
+    "../../../tools/contracts-eval/src/data_delivery.rs",
+    "../../../tools/contracts-eval/src/domain_generated.rs",
+    "../../../tools/contracts-eval/src/domain_support.rs",
+    "../../../tools/contracts-eval/src/domain_rules.rs",
+    "../../../tools/contracts-eval/domain_spec.py",
+    "../../../tools/contracts-eval/domain-spec.json"
+  ],
+  "schemas": [
+    {
+      "file": "addon-command-reply.schema.json",
+      "sha256": "637eee3780cc14573e10702b4aadbc09db930094e920f21e4aebf3380952085a"
+    },
+    {
+      "file": "addon-command-request.schema.json",
+      "sha256": "1e50cc8d48544e561378d4e5d3f83e94258b0d9dccd2d3d59a349de4760a5f7e"
+    },
+    {
+      "file": "artifact-command-reply.schema.json",
+      "sha256": "b206db3d40608fdc2e641e69504865691d273ba03c9206413b6b61931ba96f2c"
+    },
+    {
+      "file": "artifact-command-request.schema.json",
+      "sha256": "733fedefbc5215e983255c0883b4f5c1a43462cf77f0bd730d804b96e22f426b"
+    },
+    {
+      "file": "artifact-deletion-request.schema.json",
+      "sha256": "017deb36675a1241cbe34edbb218b6115a65a65fd776a42b8b211c5629af0c85"
+    },
+    {
+      "file": "artifact-query-request.schema.json",
+      "sha256": "ab542e20f1f0738e29466c3360176c494e4f2c24af80e6ec1fa762def92db078"
+    },
+    {
+      "file": "attempt-envelope.schema.json",
+      "sha256": "fc2fa155875ecc3910b6d98e1b78184b79299b7987f713e9a7b8bfe158d948b7"
+    },
+    {
+      "file": "capability-snapshot.schema.json",
+      "sha256": "311cff64bfa457b12d1d13671d66528e5176823e012dc3d9bf6d000516a4d649"
+    },
+    {
+      "file": "command-reply.schema.json",
+      "sha256": "c718d37915e0029d7c98e1b33980e633f9d35923f98ab470be9fc9cd3ba84627"
+    },
+    {
+      "file": "command-request.schema.json",
+      "sha256": "4ae635d9f6ac948f68e8eafb156064e92f9e74ba7ed01239718b30592707f736"
+    },
+    {
+      "file": "delivery-barrier.schema.json",
+      "sha256": "25aaa75a46cef7a0e3d055b8dff1a76fc25325f0a2efe5202abd80e3c28a72c2"
+    },
+    {
+      "file": "delivery-snapshot.schema.json",
+      "sha256": "a5b59fd9d7dbed631c1445dbbda361b53a7c799f98717b9f9d131d6fee42806b"
+    },
+    {
+      "file": "domain-command-reply.schema.json",
+      "sha256": "1c88a6a14db2850905c0265806823d7bdfa37a8923e824d3987f3bea19e95f2f"
+    },
+    {
+      "file": "domain-query-reply.schema.json",
+      "sha256": "861ee54dfdbe7c693fe50747059b9f09fb79d954c6b19b14f49b326943fd8863"
+    },
+    {
+      "file": "domain-request.schema.json",
+      "sha256": "b8887dc68d2235739406edff6e2049937c687174b490dd8c8c101945e6c4ab7c"
+    },
+    {
+      "file": "event.schema.json",
+      "sha256": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc"
+    },
+    {
+      "file": "git-command-request.schema.json",
+      "sha256": "a3ecd93b8f261d3536978d4a9e3739c101da9925ffd0e16e3fde36c26b6ec318"
+    },
+    {
+      "file": "graph-page.schema.json",
+      "sha256": "aca9af7d0e3c8615e00434eadc5556085108c08ee2a4edc2c8279a14c6439231"
+    },
+    {
+      "file": "graph-read-request.schema.json",
+      "sha256": "5eacbde85e8366c95ba683d14b5fafe865b0ee39dd042cf97cefaad6275efe0b"
+    },
+    {
+      "file": "index-command-request.schema.json",
+      "sha256": "b058cdb9e5b60123b8c05683216990f3c818ae4eece06eb8f96102561269f63b"
+    },
+    {
+      "file": "inference-request.schema.json",
+      "sha256": "303b3a3d4bd49a39c44148658c2bc6320a4e77453960b75f07cfeb2051da8211"
+    },
+    {
+      "file": "inference-spec.schema.json",
+      "sha256": "e4734b6a32933313adcdf74f07ada57c2a20f7d911eb676c7c63d44f1225d516"
+    },
+    {
+      "file": "operation-completion.schema.json",
+      "sha256": "60ef6bd81f2d33e77cd2282fffce205f88982db13d35392f759df084b35fe7e1"
+    },
+    {
+      "file": "operation-result.schema.json",
+      "sha256": "f50c651dcd949f4c3e2d8184957ca334b8c30830c0f221cc179731e6abce3316"
+    },
+    {
+      "file": "package-host-request.schema.json",
+      "sha256": "190beae90c974720523774ca4cb366033ba74ba104dc46dbcdd780b30811f5b9"
+    },
+    {
+      "file": "package-manifest.schema.json",
+      "sha256": "7f5989387bc31c599cb97ffe0b43dc52227aa2e36c075c54be55e69d6edd8b21"
+    },
+    {
+      "file": "package-notification.schema.json",
+      "sha256": "d19320d2683b3bb226c9e65c88c83842d60702c8d6de6d4df889b05aa0d29a9d"
+    },
+    {
+      "file": "package-request.schema.json",
+      "sha256": "44dcdc0367afa44757108bf0bb43dd39f9a1011739ed16150fce6e5669422ceb"
+    },
+    {
+      "file": "package-response.schema.json",
+      "sha256": "303c7c0031c60eb1bf77be6d2aadbcfc1d09bfd51163e29c7b4646cc8555f517"
+    },
+    {
+      "file": "provider-codec-event.schema.json",
+      "sha256": "16d1f63f42babd80f5840c16644706abd37a74b4c7ac9859463b86a8f06b31f9"
+    },
+    {
+      "file": "provider-event.schema.json",
+      "sha256": "de1ac95963613ec2144471a56c55f6b88d1f1091a58e1839e153b07065c2a9c8"
+    },
+    {
+      "file": "publication-request.schema.json",
+      "sha256": "416f189e19c7926c05f6fe4d979478036ce586336e59550b2577629e2944008c"
+    },
+    {
+      "file": "query-reply.schema.json",
+      "sha256": "5e62392bbd693563a8dc1de57fe40e9a3025ae9d5cde4b3fe87c438a05ec802f"
+    },
+    {
+      "file": "query-request.schema.json",
+      "sha256": "33e3ed9f91f1981b65c7102263bbe9a17e1f965142ff6389f2e0ce4119d46469"
+    },
+    {
+      "file": "release-command-request.schema.json",
+      "sha256": "8c1ff3b64d926dd8b49da66fb1bbb7589162d27c414f13d06ad90dfb35b587be"
+    },
+    {
+      "file": "resolved-view-set.schema.json",
+      "sha256": "38585a4d25f0dfdc6d03012c2d6f0e048c3f88729712dd63233b67ca1796d17e"
+    },
+    {
+      "file": "retrieval-page.schema.json",
+      "sha256": "c54381130a251caccfcdd675820894a03073cf72915e2bff330b82f64c85b4da"
+    },
+    {
+      "file": "retrieval-request.schema.json",
+      "sha256": "9a7faaac8e7c31cc3f70f33f94509d56780f992e60998122f21c02f9a8cc15bb"
+    },
+    {
+      "file": "route-decision.schema.json",
+      "sha256": "3cbba022c46345fc38a9e64ffdc14cafb85358dfbbefd7a60eb91a4d9e22e38f"
+    },
+    {
+      "file": "session-command-reply.schema.json",
+      "sha256": "a1db7ae3130a65b45c457687039220fd016677acedfb52ab5852f0045c2846da"
+    },
+    {
+      "file": "session-command-request.schema.json",
+      "sha256": "e0a66d6d36586b39b6a518fdd0d006a04765c8fe0fea390cc5860cac7019cc86"
+    },
+    {
+      "file": "session-query-request.schema.json",
+      "sha256": "c24d63c61e590546b82b7311078e486bad45245f9a61de716972c484f1899339"
+    },
+    {
+      "file": "transcript-batch.schema.json",
+      "sha256": "fd9643a8069ac9f9098902cc41a4be1ae7e4463c92a26be523ced0a80eb65d1a"
+    },
+    {
+      "file": "transcript-page.schema.json",
+      "sha256": "a8d9783c980489d9121986f906766bcd8492537c78670ecf7e34b5531fb143e4"
+    }
+  ],
+  "fixtures": "fixtures.json",
+  "fixtureSets": [
+    "fixtures.json",
+    "provider-package-fixtures.json",
+    "data-delivery-fixtures.json",
+    "domain-fixtures.json"
+  ],
+  "scenarioSets": [
+    "provider-package-scenarios.json"
+  ],
+  "operationCoverage": "family-coverage.json",
+  "notes": [
+    "Schema checks structural constraints; typed decoding checks signed-64 range and cross-field consistency.",
+    "Authority, relationships, current eligibility and receipt/dispatch transitions remain application service obligations.",
+    "All registered operations now have concrete input/result candidates and explicit mode, authority, effect and recovery metadata. New query/command/completion envelopes coexist with earlier specialized candidate replies; no published SDK compatibility or production behavior claimed. Selection constraints must be applied before dispatch and before result publication."
+  ]
+}

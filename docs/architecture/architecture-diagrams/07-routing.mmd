@@ -1,0 +1,14 @@
+flowchart TB
+ REQ["Typed inference request<br/>purpose, work, modalities and current controls"] --> PIN["Resolve eligible persistent conversational pin<br/>or auxiliary purpose route"]
+ PIN --> AVAIL{"Eligible route available?"}
+ AVAIL -- Cooling --> WAIT["One durable cooldown / capacity wakeup"]
+ WAIT --> PIN
+ AVAIL -- Auth or unsupported --> HOLD["Actionable blocker; preserve work"]
+ AVAIL -- Yes --> BUILD["Stable native history and current instructions<br/>count context; compact at required boundary"]
+ BUILD --> ADMIT["Atomic current admission<br/>priced reservation or free / untracked classification"]
+ ADMIT --> WIRE["Provider-specific request and ordered stream"]
+ WIRE --> SAVE["Durable partial / terminal observations<br/>native continuation and usage"]
+ SAVE --> CALL{"Valid complete tool calls?"}
+ CALL -- Yes --> BROKER["Tool broker admission and observed results<br/>reuse recorded call identities"]
+ BROKER --> BUILD
+ CALL -- No --> END["Recorded turn outcome; reconcile before retry"]

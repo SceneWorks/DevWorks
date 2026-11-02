@@ -1,0 +1,5 @@
+{"start": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/pilots/20261101T192631305393Z/pilot-1-graphqlite"}
+{"finish": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/pilots/20261101T192631305393Z/pilot-1-graphqlite", "exit_code": 0, "errors": []}
+{"start": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/pilots/20261101T192631305393Z/pilot-1-sqlite"}
+{"finish": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/pilots/20261101T192631305393Z/pilot-1-sqlite", "exit_code": 0, "errors": []}
+{"manifest": "/Users/michael/Documents/Codex/2026-10-31/if/work/graphqlite-eval-runs/pilots/20261101T192631305393Z/manifest.json"}

@@ -1,0 +1,111 @@
+{
+  "binary_sha256": "42d86fdab4e5ff948bac61666e4d92644f82e1d0134ebd084a73dd97a0d0fccb",
+  "runs": [
+    {
+      "i": 5,
+      "exit": 0,
+      "errors": [],
+      "stale_phases": [
+        "other_connection_committed_edge",
+        "other_connection_node_delete",
+        "rollback_after_caching_uncommitted_rows",
+        "read_snapshot_ends_after_other_writer_commit",
+        "other_connection_public_bulk_helpers"
+      ],
+      "bulk": [
+        {
+          "expected_bfs": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_before_generation_bump": [
+            "a",
+            "r",
+            "y"
+          ],
+          "phase": "same_connection_public_bulk_helpers"
+        }
+      ]
+    },
+    {
+      "i": 6,
+      "exit": 0,
+      "errors": [],
+      "stale_phases": [
+        "other_connection_committed_edge",
+        "other_connection_node_delete",
+        "rollback_after_caching_uncommitted_rows",
+        "read_snapshot_ends_after_other_writer_commit",
+        "other_connection_public_bulk_helpers"
+      ],
+      "bulk": [
+        {
+          "expected_bfs": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_before_generation_bump": [
+            "a",
+            "r",
+            "y"
+          ],
+          "phase": "same_connection_public_bulk_helpers"
+        }
+      ]
+    },
+    {
+      "i": 7,
+      "exit": 0,
+      "errors": [],
+      "stale_phases": [
+        "other_connection_committed_edge",
+        "other_connection_node_delete",
+        "rollback_after_caching_uncommitted_rows",
+        "read_snapshot_ends_after_other_writer_commit",
+        "other_connection_public_bulk_helpers"
+      ],
+      "bulk": [
+        {
+          "expected_bfs": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "guard_reloaded": true,
+          "managed_result": [
+            "a",
+            "bulk",
+            "r",
+            "y"
+          ],
+          "native_before_generation_bump": [
+            "a",
+            "r",
+            "y"
+          ],
+          "phase": "same_connection_public_bulk_helpers"
+        }
+      ]
+    }
+  ],
+  "real_inference": false
+}

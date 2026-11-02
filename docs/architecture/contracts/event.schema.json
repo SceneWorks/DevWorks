@@ -1,0 +1,426 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "Blocker": {
+      "additionalProperties": false,
+      "properties": {
+        "cause": {
+          "$ref": "#/$defs/Cause"
+        },
+        "holdId": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "subject": {
+          "$ref": "#/$defs/Subject"
+        }
+      },
+      "required": [
+        "holdId",
+        "revision",
+        "subject",
+        "cause"
+      ],
+      "type": "object"
+    },
+    "BlockerChange": {
+      "enum": [
+        "Raised",
+        "Cleared"
+      ],
+      "type": "string"
+    },
+    "Cause": {
+      "enum": [
+        "HumanPause",
+        "RestartContinue",
+        "BudgetContinue",
+        "Approval",
+        "Dependency",
+        "Reconciliation",
+        "Credentials",
+        "Capacity",
+        "StorageUnavailable",
+        "Policy"
+      ],
+      "type": "string"
+    },
+    "ControlReason": {
+      "enum": [
+        "Paused",
+        "Continued"
+      ],
+      "type": "string"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "DesiredState": {
+      "enum": [
+        "Enabled",
+        "Paused"
+      ],
+      "type": "string"
+    },
+    "EventBody": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "CommandDecided",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "commandId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "RootControlChanged",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/ControlReason"
+            },
+            "root": {
+              "$ref": "#/$defs/RootControl"
+            }
+          },
+          "required": [
+            "kind",
+            "root",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "executionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "generation": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "ActivationRequested",
+              "type": "string"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "rootId",
+            "executionId",
+            "generation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blocker": {
+              "$ref": "#/$defs/Blocker"
+            },
+            "change": {
+              "$ref": "#/$defs/BlockerChange"
+            },
+            "kind": {
+              "const": "BlockerChanged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "blocker",
+            "change"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attemptId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "OperationObserved",
+              "type": "string"
+            },
+            "observation": {
+              "$ref": "#/$defs/ObservationDisposition"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            },
+            "ownerGeneration": {
+              "$ref": "#/$defs/Revision"
+            },
+            "state": {
+              "$ref": "#/$defs/OperationState"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId",
+            "attemptId",
+            "ownerGeneration",
+            "observation",
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "ObservationDisposition": {
+      "enum": [
+        "CurrentOwner",
+        "StaleOwnerEvidenceOnly"
+      ],
+      "type": "string"
+    },
+    "OperationState": {
+      "enum": [
+        "IntentRecorded",
+        "Preflighted",
+        "Dispatching",
+        "ObservedComplete",
+        "Failed",
+        "OutcomeUnknown",
+        "NeedsInput",
+        "RetryPending",
+        "CancelledBeforeDispatch"
+      ],
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RevisionKind": {
+      "enum": [
+        "Work",
+        "Control",
+        "Blocker",
+        "Operation",
+        "Policy",
+        "Scope",
+        "Plan",
+        "Authority"
+      ],
+      "type": "string"
+    },
+    "RootControl": {
+      "additionalProperties": false,
+      "properties": {
+        "desiredState": {
+          "$ref": "#/$defs/DesiredState"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "rootId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "rootId",
+        "revision",
+        "desiredState"
+      ],
+      "type": "object"
+    },
+    "Subject": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "root",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "assignment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "resource",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "blocker",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:event",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "actorId": {
+      "$ref": "#/$defs/Id"
+    },
+    "aggregate": {
+      "$ref": "#/$defs/Subject"
+    },
+    "aggregateRevision": {
+      "$ref": "#/$defs/Revision"
+    },
+    "aggregateRevisionKind": {
+      "$ref": "#/$defs/RevisionKind"
+    },
+    "commandId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "event": {
+      "$ref": "#/$defs/EventBody"
+    },
+    "eventId": {
+      "$ref": "#/$defs/Id"
+    },
+    "occurredAtMs": {
+      "$ref": "#/$defs/Counter"
+    },
+    "projectId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "rootId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sequence": {
+      "$ref": "#/$defs/Revision"
+    }
+  },
+  "required": [
+    "protocol",
+    "eventId",
+    "sequence",
+    "aggregate",
+    "aggregateRevision",
+    "aggregateRevisionKind",
+    "actorId",
+    "occurredAtMs",
+    "event"
+  ],
+  "title": "Event",
+  "type": "object"
+}

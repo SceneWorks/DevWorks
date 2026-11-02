@@ -1,0 +1,530 @@
+    Updating crates.io index
+    Updating git repository `https://github.com/HelixDB/helix-db.git`
+    Updating git repository `https://github.com/HelixDB/slatedb.git`
+     Locking 493 packages to highest Rust 1.101.0-nightly compatible versions
+      Adding crossbeam-epoch v0.9.18 (available: v0.9.21)
+      Adding cxx v1.0.138 (available: v1.0.205)
+      Adding cxxbridge-cmd v1.0.138 (available: v1.0.205)
+      Adding cxxbridge-flags v1.0.138 (available: v1.0.205)
+      Adding cxxbridge-macro v1.0.138 (available: v1.0.205)
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding sqlite-vec v0.1.7 (available: v0.1.9)
+ Downloading crates ...
+  Downloaded cxxbridge-flags v1.0.138
+  Downloaded scratch v1.0.9
+  Downloaded crossbeam-queue v0.3.14
+  Downloaded bincode v2.0.1
+  Downloaded bincode_derive v2.0.1
+  Downloaded unty v0.0.4
+  Downloaded link-cplusplus v1.0.12
+  Downloaded arcstr v1.2.0
+  Downloaded crossbeam v0.8.5
+  Downloaded parking_lot_core v0.10.0
+  Downloaded lock_api v0.5.0
+  Downloaded rmp v0.8.15
+  Downloaded rmp-serde v1.3.1
+  Downloaded virtue v0.0.18
+  Downloaded cxxbridge-macro v1.0.138
+  Downloaded parking_lot v0.13.0
+  Downloaded cxx-build v1.0.205
+  Downloaded unicode-normalization v0.1.26
+  Downloaded grafeo-storage v0.6.0
+  Downloaded cxx v1.0.138
+  Downloaded grafeo-adapters v0.6.0
+  Downloaded grafeo-core v0.6.0
+  Downloaded libsqlite3-sys v0.39.1
+  Downloaded kuzu v0.11.3
+  Downloaded grafeo-common v0.6.0
+  Downloaded grafeo-engine v0.6.0
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling libc v0.2.191
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling find-msvc-tools v0.1.15
+   Compiling cfg-if v1.0.5
+   Compiling shlex v2.0.1
+   Compiling memchr v2.8.3
+   Compiling pin-project-lite v0.2.17
+   Compiling allocator-api2 v0.2.21
+   Compiling jobserver v0.1.35
+   Compiling equivalent v1.0.3
+   Compiling autocfg v1.5.1
+   Compiling syn v3.0.9
+   Compiling cc v1.10.0
+   Compiling syn v2.0.119
+   Compiling errno v0.3.14
+   Compiling foldhash v0.2.0
+   Compiling smallvec v1.16.4
+   Compiling itoa v1.0.18
+   Compiling pkg-config v0.3.34
+   Compiling once_cell v1.21.4
+   Compiling bitflags v2.13.2
+   Compiling version_check v0.9.5
+   Compiling num-traits v0.2.19
+   Compiling futures-core v0.3.34
+   Compiling hashbrown v0.17.1
+   Compiling signal-hook-registry v1.4.8
+   Compiling mio v1.2.4
+   Compiling socket2 v0.6.5
+   Compiling stable_deref_trait v1.2.1
+   Compiling futures-sink v0.3.34
+   Compiling scopeguard v1.2.0
+   Compiling futures-channel v0.3.34
+   Compiling zmij v1.0.23
+   Compiling futures-io v0.3.34
+   Compiling futures-task v0.3.34
+   Compiling slab v0.4.12
+   Compiling serde_json v1.0.154
+   Compiling crossbeam-utils v0.8.23
+   Compiling lock_api v0.4.14
+   Compiling synstructure v0.14.0
+   Compiling indexmap v2.14.2
+   Compiling cmake v0.1.58
+   Compiling rand_core v0.10.1
+   Compiling either v1.19.0
+   Compiling getrandom v0.4.3
+   Compiling parking_lot_core v0.9.12
+   Compiling thiserror v2.0.21
+   Compiling typenum v1.20.1
+   Compiling serde_derive v1.0.229
+   Compiling tokio-macros v2.7.2
+   Compiling futures-macro v0.3.34
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling futures-util v0.3.34
+   Compiling zerovec-derive v0.11.7
+   Compiling zerofrom v0.1.8
+   Compiling log v0.4.35
+   Compiling yoke v0.8.4
+   Compiling thiserror-impl v2.0.21
+   Compiling displaydoc v0.2.7
+   Compiling zerovec v0.11.9
+   Compiling fs_extra v1.3.0
+   Compiling dunce v1.0.5
+   Compiling core-foundation-sys v0.8.7
+   Compiling aws-lc-sys v0.47.0
+   Compiling chacha20 v0.10.2
+   Compiling zeroize v1.9.1
+   Compiling rand v0.10.3
+   Compiling tinystr v0.8.5
+   Compiling bytes v1.12.1
+   Compiling tracing-attributes v0.1.31
+   Compiling ring v0.17.14
+   Compiling tracing-core v0.1.36
+   Compiling tokio v1.54.1
+   Compiling aws-lc-rs v1.19.0
+   Compiling litemap v0.8.3
+   Compiling utf_types v1.0.0
+   Compiling writeable v0.6.4
+   Compiling tracing v0.1.44
+   Compiling utf8_iter v1.1.0
+   Compiling icu_locale_core v2.4.0
+   Compiling http v1.5.0
+   Compiling rustls-pki-types v1.15.1
+   Compiling potential_utf v0.1.6
+   Compiling zerotrie v0.2.5
+   Compiling crossbeam-epoch v0.9.18
+   Compiling generic-array v0.14.7
+   Compiling icu_normalizer_data v2.4.0
+   Compiling icu_properties_data v2.4.0
+   Compiling ryu v1.0.23
+   Compiling icu_provider v2.4.0
+   Compiling icu_collections v2.4.0
+   Compiling getrandom v0.2.17
+   Compiling rustix v1.1.6
+   Compiling percent-encoding v2.3.2
+   Compiling fnv v1.0.7
+   Compiling untrusted v0.9.0
+   Compiling crossbeam-deque v0.8.8
+   Compiling byteorder v1.5.0
+   Compiling http-body v1.1.0
+   Compiling getrandom v0.3.4
+   Compiling hashbrown v0.15.5
+   Compiling httparse v1.10.1
+   Compiling rustls v0.23.46
+   Compiling icu_properties v2.4.0
+   Compiling tokio-util v0.7.20
+   Compiling icu_normalizer v2.4.0
+   Compiling core-foundation v0.10.1
+   Compiling security-framework-sys v2.17.0
+   Compiling tower-service v0.3.3
+   Compiling crc32fast v1.5.3
+   Compiling zerocopy v0.8.63
+   Compiling anyhow v1.0.104
+   Compiling atomic-waker v1.1.2
+   Compiling subtle v2.6.1
+   Compiling try-lock v0.2.5
+   Compiling rustversion v1.0.23
+   Compiling want v0.3.2
+   Compiling h2 v0.4.20
+   Compiling security-framework v3.7.0
+   Compiling idna_adapter v1.2.2
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling form_urlencoded v1.2.2
+   Compiling parking_lot v0.12.5
+   Compiling async-trait v0.1.92
+   Compiling zstd-sys v2.1.2+zstd.1.5.7
+   Compiling rayon-core v1.13.0
+   Compiling digest v0.10.7
+   Compiling idna v1.1.0
+   Compiling hyper v1.12.0
+   Compiling iana-time-zone v0.1.65
+   Compiling sync_wrapper v1.0.2
+   Compiling deranged v0.5.9
+   Compiling num-conv v0.2.2
+   Compiling ipnet v2.12.2
+   Compiling powerfmt v0.2.1
+   Compiling bumpalo v3.20.3
+   Compiling time-core v0.1.9
+   Compiling tower-layer v0.3.3
+   Compiling base64 v0.23.1
+   Compiling time v0.3.55
+   Compiling tower v0.5.3
+   Compiling hyper-util v0.1.21
+   Compiling chrono v0.4.45
+   Compiling url v2.5.8
+   Compiling rustls-native-certs v0.8.5
+   Compiling rand_core v0.9.5
+   Compiling webpki-roots v1.0.11
+   Compiling hybrid-array v0.4.15
+   Compiling itertools v0.15.0
+   Compiling zstd-safe v7.4.0
+   Compiling rayon v1.12.0
+   Compiling tower-http v0.6.11
+   Compiling ppv-lite86 v0.2.21
+   Compiling http-body-util v0.1.5
+   Compiling crossbeam-channel v0.5.17
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling hashbrown v0.16.1
+   Compiling hashbrown v0.14.5
+   Compiling rand_chacha v0.9.0
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling dashmap v6.2.1
+   Compiling serde_urlencoded v0.7.1
+   Compiling ordered-float v5.5.1
+   Compiling memoffset v0.9.1
+   Compiling memmap2 v0.9.12
+   Compiling crunchy v0.2.4
+   Compiling virtue v0.0.18
+   Compiling const-oid v0.10.2
+   Compiling cfg_aliases v0.2.2
+   Compiling simdutf8 v0.1.5
+   Compiling yansi v1.0.1
+   Compiling digest v0.11.3
+   Compiling nix v0.31.3
+   Compiling bincode_derive v2.0.1
+   Compiling rand v0.9.5
+   Compiling pin-project-internal v1.1.13
+   Compiling lock_api v0.5.0
+   Compiling lz4-sys v1.11.1+lz4-1.10.0
+   Compiling parking_lot_core v0.10.0
+   Compiling winnow v0.7.15
+   Compiling regex-syntax v0.8.11
+   Compiling same-file v1.0.6
+   Compiling rust_decimal v1.43.0
+   Compiling fastrand v2.5.0
+   Compiling unty v0.0.4
+   Compiling strsim v0.11.1
+   Compiling paste v1.0.15
+   Compiling ident_case v1.0.1
+   Compiling darling_core v0.24.1
+   Compiling bincode v2.0.1
+   Compiling walkdir v2.5.0
+   Compiling pin-project v1.1.13
+   Compiling parking_lot v0.13.0
+   Compiling halfbrown v0.4.0
+   Compiling mixtrics v0.2.6
+   Compiling foyer-tokio v0.22.6
+   Compiling uuid v1.29.0
+   Compiling bincode v1.3.3
+   Compiling arcstr v1.2.0
+   Compiling ptr_meta_derive v0.3.2
+   Compiling crossbeam-queue v0.3.14
+   Compiling float-cmp v0.10.0
+   Compiling ownedbytes v0.9.0
+   Compiling link-cplusplus v1.0.12
+   Compiling zstd v0.13.4
+   Compiling arrayvec v0.7.8
+   Compiling twox-hash v2.1.5
+   Compiling spin v0.10.1
+   Compiling semver v1.0.28
+   Compiling prettyplease v0.3.0
+   Compiling humantime v2.4.0
+   Compiling typeid v1.0.3
+   Compiling scratch v1.0.9
+   Compiling rustc_version v0.4.1
+   Compiling crc-fast v1.10.0
+   Compiling foyer-common v0.22.6
+   Compiling tantivy-common v0.11.0
+   Compiling value-trait v0.12.3
+   Compiling ptr_meta v0.3.2
+   Compiling crossbeam v0.8.5
+   Compiling grafeo-common v0.6.0
+   Compiling bitpacking v0.9.3
+   Compiling darling_macro v0.24.1
+   Compiling foyer-intrusive-collections v0.10.0-dev
+   Compiling md-5 v0.11.0
+   Compiling fs4 v0.13.1
+   Compiling futures-executor v0.3.34
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling quick-xml v0.41.0
+   Compiling bytemuck_derive v1.12.1
+   Compiling itertools v0.14.0
+   Compiling uncased v0.9.10
+   Compiling toml_write v0.1.2
+   Compiling asyncband v0.7.4
+   Compiling thiserror v1.0.69
+   Compiling parking v2.2.1
+   Compiling unicode-width v0.2.3
+   Compiling small_ctor v0.1.2
+   Compiling termcolor v1.4.1
+   Compiling utf8-ranges v1.0.5
+   Compiling web-time v1.1.0
+   Compiling cxxbridge-flags v1.0.138
+   Compiling erased-serde v0.4.11
+   Compiling tinyvec v1.13.3
+   Compiling datasketches v0.3.0
+   Compiling base64 v0.22.1
+   Compiling unicode-normalization v0.1.26
+   Compiling foyer-memory v0.22.6
+   Compiling cxx v1.0.138
+   Compiling tantivy-fst v0.5.0
+   Compiling fastant v0.1.11
+   Compiling codespan-reporting v0.13.1
+   Compiling tantivy-bitpacker v0.10.0
+   Compiling event-listener v5.4.2
+   Compiling toml_edit v0.22.27
+   Compiling bytemuck v1.25.2
+   Compiling futures v0.3.34
+   Compiling darling v0.24.1
+   Compiling rancor v0.1.3
+   Compiling simd-json v0.18.1
+   Compiling lz4 v1.28.1
+   Compiling flatbuffers v25.12.19
+   Compiling tempfile v3.27.0
+   Compiling pear_codegen v0.2.9
+   Compiling rand_xoshiro v0.7.0
+   Compiling eval-common v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/common)
+   Compiling arc-swap v1.9.3
+   Compiling terminal_size v0.4.4
+   Compiling crossbeam-skiplist v0.1.3
+   Compiling bytecheck_derive v0.8.3
+   Compiling thiserror-impl v1.0.69
+   Compiling helix-ast-arena-derive v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling figment v0.10.19
+   Compiling ahash v0.8.12
+   Compiling objc2-core-foundation v0.3.2
+   Compiling thread_local v1.1.10
+   Compiling winnow v1.0.4
+   Compiling option-ext v0.2.0
+   Compiling clap_lex v1.1.1
+   Compiling vcpkg v0.2.15
+   Compiling unsafe-libyaml v0.2.11
+   Compiling murmurhash32 v0.3.1
+   Compiling inlinable_string v0.1.15
+   Compiling minimal-lexical v0.2.1
+   Compiling foyer v0.22.6
+   Compiling anstyle v1.0.14
+   Compiling heck v0.4.1
+   Compiling typetag v0.2.23
+   Compiling ouroboros_macro v0.18.5
+   Compiling clap_builder v4.6.7
+   Compiling pear v0.2.9
+   Compiling nom v7.1.3
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling libsqlite3-sys v0.39.1
+   Compiling tantivy-stacker v0.7.0
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling objc2-io-kit v0.3.2
+   Compiling dirs-sys v0.5.0
+   Compiling helix-ast v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling bytecheck v0.8.3
+   Compiling cxx-build v1.0.205
+   Compiling bon-macros v3.10.3
+   Compiling toml v0.8.23
+   Compiling foyer-storage v0.22.6
+   Compiling event-listener-strategy v0.5.4
+   Compiling tantivy-sstable v0.7.0
+   Compiling grafeo-core v0.6.0
+   Compiling rustls-webpki v0.103.16
+   Compiling regex-automata v0.4.18
+   Compiling typetag-impl v0.2.23
+   Compiling concurrent-queue v2.5.0
+   Compiling munge_macro v0.4.7
+   Compiling spin v0.9.9
+   Compiling serde_spanned v1.1.2
+   Compiling toml_datetime v0.7.5+spec-1.1.0
+   Compiling fs2 v0.4.3
+   Compiling helix-value-semantics v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling aliasable v0.1.3
+   Compiling inventory v0.3.25
+   Compiling downcast-rs v2.0.2
+   Compiling winnow v0.6.26
+   Compiling fastdivide v0.4.2
+   Compiling grafeo-engine v0.6.0
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling static_assertions v1.1.0
+   Compiling ouroboros v0.18.5
+   Compiling toml v0.9.12+spec-1.1.0
+   Compiling tokio-rustls v0.26.6
+   Compiling hyper-rustls v0.27.10
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling reqwest v0.13.5
+   Compiling reqwest v0.12.28
+   Compiling object_store v0.14.2
+   Compiling slatedb-common v0.16.0 (https://github.com/HelixDB/slatedb.git?rev=2fb25fdaa61d42cc3756f979a8a7b37dbfc483fd#2fb25fda)
+   Compiling slatedb-txn-obj v0.16.0 (https://github.com/HelixDB/slatedb.git?rev=2fb25fdaa61d42cc3756f979a8a7b37dbfc483fd#2fb25fda)
+   Compiling grafeo-adapters v0.6.0
+   Compiling duration-str v0.11.3
+   Compiling tantivy-columnar v0.7.0
+   Compiling helix-planner v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling grafeo-storage v0.6.0
+   Compiling munge v0.4.7
+   Compiling flume v0.12.0
+   Compiling async-channel v2.5.0
+   Compiling regex v1.13.1
+   Compiling bon v3.10.3
+   Compiling kuzu v0.11.3
+   Compiling rend v0.5.4
+   Compiling dirs v6.0.0
+   Compiling sysinfo v0.35.2
+   Compiling tantivy-query-grammar v0.26.0
+   Compiling clap v4.6.7
+   Compiling atomic v0.6.1
+   Compiling backon v1.6.0
+   Compiling fail-parallel v0.6.0
+   Compiling ulid v1.2.1
+   Compiling lru v0.16.4
+   Compiling cxxbridge-macro v1.0.138
+   Compiling md-5 v0.10.6
+   Compiling sketches-ddsketch v0.4.2
+   Compiling rust-stemmers v1.2.0
+   Compiling quick-xml v0.38.4
+   Compiling tantivy-tokenizer-api v0.7.0
+   Compiling measure_time v0.9.0
+   Compiling rkyv_derive v0.8.18
+   Compiling divan-macros v0.1.21
+   Compiling rmp v0.8.15
+   Compiling lru v0.18.5
+   Compiling sqlite-vec v0.1.7
+   Compiling cpufeatures v0.3.1
+   Compiling console v0.16.6
+   Compiling cpufeatures v0.2.17
+   Compiling aho-corasick v1.1.5
+   Compiling similar v2.7.0
+   Compiling lz4_flex v0.13.1
+   Compiling overgraph v0.18.0
+   Compiling levenshtein_automata v0.2.1
+   Compiling regex-lite v0.1.9
+   Compiling census v0.4.2
+   Compiling condtype v1.3.0
+   Compiling rustc-hash v2.1.3
+   Compiling dotenvy v0.15.7
+   Compiling oneshot v0.1.13
+   Compiling datasketches v0.2.0
+   Compiling siphasher v1.0.4
+   Compiling htmlescape v0.3.1
+   Compiling foldhash v0.1.5
+   Compiling tantivy v0.26.2
+   Compiling slatedb v0.16.0 (https://github.com/HelixDB/slatedb.git?rev=2fb25fdaa61d42cc3756f979a8a7b37dbfc483fd#2fb25fda)
+   Compiling divan v0.1.21
+   Compiling insta v1.49.0
+   Compiling sha2 v0.10.9
+   Compiling sha2 v0.11.1
+   Compiling rmp-serde v1.3.1
+   Compiling rkyv v0.8.18
+   Compiling object_store v0.12.5
+   Compiling helix-cypher v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling helix-metrics v0.1.1 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling roaring v0.11.5
+   Compiling range-cache v0.1.1
+   Compiling xxhash-rust v0.8.19
+   Compiling fallible-iterator v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling rusqlite v0.41.1
+   Compiling db v0.1.0 (https://github.com/HelixDB/helix-db.git?rev=6f2a69653772b60ea099d8d36a02a1d4408147ec#6f2a6965)
+   Compiling grafeo v0.6.0
+   Compiling eval-sqlite v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/sqlite)
+   Compiling eval-grafeo v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/grafeo)
+   Compiling eval-overgraph v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/overgraph)
+   Compiling eval-helix v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/helix)
+   Compiling eval-kuzu v0.0.0 (/Users/michael/Repos/DevWorks/tools/storage-eval/kuzu)
+error[E0425]: cannot find function `fresh_probe_path` in crate `eval_common`
+ --> kuzu/src/main.rs:4:29
+  |
+4 |     let path = eval_common::fresh_probe_path()?;
+  |                             ^^^^^^^^^^^^^^^^ not found in `eval_common`
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `eval-kuzu` (bin "eval-kuzu") due to 1 previous error
+warning: unused dependency `anyhow`
+ --> common/Cargo.toml:8:1
+  |
+8 | anyhow.workspace = true
+  | ^^^^^^
+  |
+  = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `anyhow`
+warning: unused dependency `serde`
+ --> common/Cargo.toml:9:1
+  |
+9 | serde.workspace = true
+  | ^^^^^
+  |
+help: consider removing the dependency on `serde`
+warning: unused dependency `serde_json`
+  --> common/Cargo.toml:10:1
+   |
+10 | serde_json.workspace = true
+   | ^^^^^^^^^^
+   |
+help: consider removing the dependency on `serde_json`
+warning: `eval-common` (manifest) generated 3 warnings
+warning: unused dependency `eval-common`
+  --> grafeo/Cargo.toml:10:1
+   |
+10 | eval-common.workspace = true
+   | ^^^^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `eval-common`
+warning: `eval-grafeo` (manifest) generated 1 warning
+warning: unused dependency `eval-common`
+  --> helix/Cargo.toml:10:1
+   |
+10 | eval-common.workspace = true
+   | ^^^^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `eval-common`
+warning: `eval-helix` (manifest) generated 1 warning
+warning: unused dependency `eval-common`
+  --> overgraph/Cargo.toml:10:1
+   |
+10 | eval-common.workspace = true
+   | ^^^^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `eval-common`
+warning: `eval-overgraph` (manifest) generated 1 warning
+warning: unused dependency `eval-common`
+  --> sqlite/Cargo.toml:10:1
+   |
+10 | eval-common.workspace = true
+   | ^^^^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `eval-common`
+warning: unused dependency `sqlite-vec`
+  --> sqlite/Cargo.toml:12:1
+   |
+12 | sqlite-vec = "=0.1.7"
+   | ^^^^^^^^^^^^^^^^^^^^^
+   |
+help: consider removing the dependency on `sqlite-vec`
+warning: `eval-sqlite` (manifest) generated 2 warnings

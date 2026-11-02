@@ -1,0 +1,476 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "BrokerCall": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "arguments": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "inputSchema": {
+              "$ref": "#/$defs/SchemaRef"
+            },
+            "kind": {
+              "const": "Application",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/QualifiedId"
+            }
+          },
+          "required": [
+            "kind",
+            "operation",
+            "inputSchema",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ArtifactRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "connectionHandle": {
+              "$ref": "#/$defs/Id"
+            },
+            "endpointId": {
+              "$ref": "#/$defs/Id"
+            },
+            "httpMethod": {
+              "$ref": "#/$defs/HttpMethod"
+            },
+            "kind": {
+              "const": "Http",
+              "type": "string"
+            },
+            "relativePath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "connectionHandle",
+            "endpointId",
+            "httpMethod",
+            "relativePath"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "inputSchema": {
+              "$ref": "#/$defs/SchemaRef"
+            },
+            "kind": {
+              "const": "Inference",
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "inputSchema",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "ArtifactRead",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "artifact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ArtifactWrite",
+              "type": "string"
+            },
+            "proposal": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "proposal"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "BrokerInvoke": {
+      "additionalProperties": false,
+      "properties": {
+        "actionKey": {
+          "$ref": "#/$defs/Id"
+        },
+        "call": {
+          "$ref": "#/$defs/BrokerCall"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "invocationToken": {
+          "$ref": "#/$defs/Id"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "invocationId",
+        "invocationToken",
+        "actionKey",
+        "call"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "EventCommit": {
+      "additionalProperties": false,
+      "properties": {
+        "eventId": {
+          "$ref": "#/$defs/Id"
+        },
+        "expectedCheckpoint": {
+          "$ref": "#/$defs/Counter"
+        },
+        "expectedStateRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "intents": {
+          "items": {
+            "$ref": "#/$defs/EventIntent"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "invocationToken": {
+          "$ref": "#/$defs/Id"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "stateGeneration": {
+          "$ref": "#/$defs/Revision"
+        },
+        "stateProposal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subscriptionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "invocationId",
+        "invocationToken",
+        "subscriptionId",
+        "eventId",
+        "expectedCheckpoint",
+        "stateGeneration",
+        "expectedStateRevision",
+        "intents"
+      ],
+      "type": "object"
+    },
+    "EventIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "actionKey": {
+          "$ref": "#/$defs/Id"
+        },
+        "call": {
+          "$ref": "#/$defs/BrokerCall"
+        }
+      },
+      "required": [
+        "actionKey",
+        "call"
+      ],
+      "type": "object"
+    },
+    "HttpMethod": {
+      "enum": [
+        "Get",
+        "Post",
+        "Put",
+        "Delete",
+        "Patch"
+      ],
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "QualifiedId": {
+      "pattern": "^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$",
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RpcVersion": {
+      "enum": [
+        "2.0"
+      ],
+      "type": "string"
+    },
+    "SchemaRef": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "schemaId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "schemaId",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "StateAction": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "CompareAndSet",
+              "type": "string"
+            },
+            "proposal": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "expectedRevision",
+            "proposal"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StateRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/StateAction"
+        },
+        "actionKey": {
+          "$ref": "#/$defs/Id"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "invocationToken": {
+          "$ref": "#/$defs/Id"
+        },
+        "processSessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "stateGeneration": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "processSessionId",
+        "invocationId",
+        "invocationToken",
+        "actionKey",
+        "stateGeneration",
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:package-request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "broker.call",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/BrokerInvoke"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "id",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "broker.state",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/StateRequest"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "id",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/RpcVersion"
+        },
+        "method": {
+          "const": "broker.commit_event",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/EventCommit"
+        }
+      },
+      "required": [
+        "method",
+        "jsonrpc",
+        "id",
+        "params"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "PackageRequest"
+}

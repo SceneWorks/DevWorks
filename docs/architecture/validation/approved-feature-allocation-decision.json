@@ -1,0 +1,44 @@
+{
+  "title": "Automatic feature allocation requires implementation approval",
+  "date": "2026-11-01",
+  "status": "WORK-09 clarified and confirmed; concrete ownership contracts remain under review",
+  "requirements": 334,
+  "traceability": "All IDs, statements and statuses match; no removals",
+  "word": {
+    "pages": 65,
+    "unchangedPageBodies": 57,
+    "changedPagesVisuallyReviewed": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      45,
+      50,
+      56
+    ],
+    "allRequirementIdsPresent": true,
+    "work09TextPresent": true
+  },
+  "readers": {
+    "widths": [
+      1440,
+      800
+    ],
+    "approvedOnlyPolicyPresent": true,
+    "horizontalOverflow": false,
+    "brokenImages": 0
+  },
+  "nativeRuntime": "No product implementation or inference executed",
+  "documentSha256": {
+    "tools/planning/requirements_content.py": "e03994f7a90c7f54ce106e79cb08e489924bf21763ca9800d3896256b8874668",
+    "tools/planning/requirements_expansion.py": "ff70b45a65a052a0b669a8b44232c964f6ecd1f2330610e5c2c1a836154f2f50",
+    "docs/planning/requirements-interview.json": "569e79cce8e1915b7a65f9ef98d6ccfe334b6356093d672050385a80ef633834",
+    "docs/planning/requirements-content.json": "ff2ae87c12a990210c80a3656b90d911bf1d4f8d9e08177122f6e0faffd14aaf",
+    "docs/planning/devworks-requirements.html": "114f51990074e35671692d654df56971b66a0c6088641ea90a66beb8e0130852",
+    "docs/planning/devworks-requirements.docx": "b9624d3b93bf8e9a9736593f0fcd4fa450b2e8b57abb773d0d82c8db3e13faec",
+    "docs/architecture/devworks-architecture.md": "00a1cd3ef117a161960c6b499ce090e4ca29309c0980e515425d27ffc8ed1517",
+    "docs/architecture/devworks-architecture.html": "5a0b90c16f260b85c289b7e4ad3c3c65e2d3ec539b8eb8c0fe4d091cbc3bd4cd",
+    "docs/architecture/devworks-requirements-traceability.json": "4a5d535bcfe84e01725bffe7f7d38b2a447ddbe3f4b9ff017cf0ceecdee21033"
+  }
+}

@@ -1,0 +1,310 @@
+[
+  {
+    "id": "01-components",
+    "title": "Component responsibilities",
+    "source": "01-components.mmd",
+    "rendered": "01-components.svg",
+    "status": "Proposed architecture diagram; not implemented types"
+  },
+  {
+    "id": "02-domain",
+    "title": "Work and conversation identity",
+    "source": "02-domain.mmd",
+    "rendered": "02-domain.svg",
+    "status": "Proposed architecture diagram; not implemented types"
+  },
+  {
+    "id": "03-storage",
+    "title": "SQLite commits and derived index publication",
+    "source": "03-storage.mmd",
+    "rendered": "03-storage.svg",
+    "status": "Adopted persistence semantic contracts; not compiled application types"
+  },
+  {
+    "id": "04-operation-state",
+    "title": "Effect lifecycle and recovery",
+    "source": "04-operation-state.mmd",
+    "rendered": "04-operation-state.svg",
+    "status": "Adopted technical runtime contract; unimplemented and subject to adapter/target validation"
+  },
+  {
+    "id": "05-execution",
+    "title": "Feature and issue activation",
+    "source": "05-execution.mmd",
+    "rendered": "05-execution.svg",
+    "status": "Proposed architecture diagram; not implemented types"
+  },
+  {
+    "id": "06-screen-context",
+    "title": "Shared Home session and screen awareness",
+    "source": "06-screen-context.mmd",
+    "rendered": "06-screen-context.svg",
+    "status": "Proposed architecture diagram; not implemented types"
+  },
+  {
+    "id": "07-routing",
+    "title": "Router eligibility and continuation",
+    "source": "07-routing.mmd",
+    "rendered": "07-routing.svg",
+    "status": "Adopted router contract; endpoint compatibility and native implementation pending"
+  },
+  {
+    "id": "08-policy",
+    "title": "Common authority and effect boundary",
+    "source": "08-policy.mmd",
+    "rendered": "08-policy.svg",
+    "status": "Adopted authority semantics; OS enforcement and target tests pending"
+  },
+  {
+    "id": "09-delivery",
+    "title": "Feature delivery across repositories",
+    "source": "09-delivery.mmd",
+    "rendered": "09-delivery.svg",
+    "status": "Proposed architecture diagram; not implemented types"
+  },
+  {
+    "id": "10-indexing",
+    "title": "Snapshot and overlay isolation",
+    "source": "10-indexing.mmd",
+    "rendered": "10-indexing.svg",
+    "status": "Proposed architecture diagram; not implemented types"
+  },
+  {
+    "id": "11-knowledge",
+    "title": "Managed document and Knowledge retrieval",
+    "source": "11-knowledge.mmd",
+    "rendered": "11-knowledge.svg",
+    "status": "Proposed architecture diagram; not implemented types"
+  },
+  {
+    "id": "12-extension-interfaces",
+    "title": "Proposed Rust extension types and traits",
+    "source": "12-extension-interfaces.mmd",
+    "rendered": "12-extension-interfaces.svg",
+    "status": "Adopted package semantic contracts; native SDK and OS containment pending"
+  },
+  {
+    "id": "13-extension-lifecycle",
+    "title": "Package version lifecycle",
+    "source": "13-extension-lifecycle.mmd",
+    "rendered": "13-extension-lifecycle.svg",
+    "status": "Adopted package semantic contracts; native SDK and OS containment pending"
+  },
+  {
+    "id": "14-lifecycle",
+    "title": "Resume and stop behavior",
+    "source": "14-lifecycle.mmd",
+    "rendered": "14-lifecycle.svg",
+    "status": "Proposed architecture diagram; not implemented types"
+  },
+  {
+    "id": "15-testing",
+    "title": "Inference-free normal tests",
+    "source": "15-testing.mmd",
+    "rendered": "15-testing.svg",
+    "status": "Proposed architecture diagram; not implemented types"
+  },
+  {
+    "id": "16-persistence-interfaces",
+    "title": "Persistence traits and transaction ownership",
+    "source": "16-persistence-interfaces.mmd",
+    "rendered": "16-persistence-interfaces.svg",
+    "status": "Adopted persistence semantic contracts; not compiled application types"
+  },
+  {
+    "id": "17-activation-races",
+    "title": "Start races, pause admission and crash recovery",
+    "source": "17-activation-races.mmd",
+    "rendered": "17-activation-races.svg",
+    "status": "Adopted technical runtime contract; unimplemented and subject to adapter/target validation"
+  },
+  {
+    "id": "18-parallel-tool-turn",
+    "title": "Parallel tool results and scoped approval waits",
+    "source": "18-parallel-tool-turn.mmd",
+    "rendered": "18-parallel-tool-turn.svg",
+    "status": "Adopted technical runtime contract; unimplemented and subject to adapter/target validation"
+  },
+  {
+    "id": "19-control-and-wakeups",
+    "title": "Durable approval wakeups and redirect adoption",
+    "source": "19-control-and-wakeups.mmd",
+    "rendered": "19-control-and-wakeups.svg",
+    "status": "Adopted technical design under delegated architectural discretion; unimplemented"
+  },
+  {
+    "id": "20-shutdown-recovery",
+    "title": "Bounded shutdown and distinct recovery classes",
+    "source": "20-shutdown-recovery.mmd",
+    "rendered": "20-shutdown-recovery.svg",
+    "status": "Adopted technical design under delegated architectural discretion; unimplemented"
+  },
+  {
+    "id": "21-persistence-transactions",
+    "title": "Atomic records, history and queue claims",
+    "source": "21-persistence-transactions.mmd",
+    "rendered": "21-persistence-transactions.svg",
+    "status": "Adopted persistence design; implementation and target conformance pending"
+  },
+  {
+    "id": "22-overlay-publication",
+    "title": "Layer masking, scope and checked index publication",
+    "source": "22-overlay-publication.mmd",
+    "rendered": "22-overlay-publication.svg",
+    "status": "Adopted persistence design; implementation and target conformance pending"
+  },
+  {
+    "id": "23-backup-restore",
+    "title": "Manual consistent backup and staged stopped restore",
+    "source": "23-backup-restore.mmd",
+    "rendered": "23-backup-restore.svg",
+    "status": "Adopted persistence design; implementation and target conformance pending"
+  },
+  {
+    "id": "24-provider-turn",
+    "title": "Provider-native turn and durable host tools",
+    "source": "24-provider-turn.mmd",
+    "rendered": "24-provider-turn.svg",
+    "status": "Adopted router technical design; no live provider or application implementation claim"
+  },
+  {
+    "id": "25-provider-recovery",
+    "title": "Partial output and effect-aware failover",
+    "source": "25-provider-recovery.mmd",
+    "rendered": "25-provider-recovery.svg",
+    "status": "Adopted router technical design; no live provider or application implementation claim"
+  },
+  {
+    "id": "26-pricing-ledger",
+    "title": "Weekly price snapshots and attempt cost coverage",
+    "source": "26-pricing-ledger.mmd",
+    "rendered": "26-pricing-ledger.svg",
+    "status": "Adopted router technical design; no live provider or application implementation claim"
+  },
+  {
+    "id": "27-package-invocation",
+    "title": "Version-pinned invocation, cancellation and uncertain effects",
+    "source": "27-package-invocation.mmd",
+    "rendered": "27-package-invocation.svg",
+    "status": "Adopted package technical design; no native SDK implementation claim"
+  },
+  {
+    "id": "28-package-update",
+    "title": "Trusted update barrier and atomic package publication",
+    "source": "28-package-update.mmd",
+    "rendered": "28-package-update.svg",
+    "status": "Adopted package technical design; no native SDK implementation claim"
+  },
+  {
+    "id": "29-authority-revocation",
+    "title": "Policy revision races and effective native authority",
+    "source": "29-authority-revocation.mmd",
+    "rendered": "29-authority-revocation.svg",
+    "status": "Adopted security technical design; native enforcement not demonstrated"
+  },
+  {
+    "id": "30-repository-deletion",
+    "title": "Dedicated user confirmation and guarded repository deletion",
+    "source": "30-repository-deletion.mmd",
+    "rendered": "30-repository-deletion.svg",
+    "status": "Adopted security technical design; native enforcement not demonstrated"
+  },
+  {
+    "id": "31-local-event-delivery",
+    "title": "Atomic durable events and bounded Tokio dispatch",
+    "source": "31-local-event-delivery.mmd",
+    "rendered": "31-local-event-delivery.svg",
+    "status": "Adopted architecture/validation contract; implementation and workload evidence pending"
+  },
+  {
+    "id": "32-capability-validation",
+    "title": "Frozen source inventory to actual native acceptance",
+    "source": "32-capability-validation.mmd",
+    "rendered": "32-capability-validation.svg",
+    "status": "Adopted architecture/validation contract; implementation and workload evidence pending"
+  },
+  {
+    "id": "33-app-update",
+    "title": "Signed app staging, exact approval and guarded rollback",
+    "source": "33-app-update.mmd",
+    "rendered": "33-app-update.svg",
+    "status": "Adopted update contract; native installer/platform acceptance pending"
+  },
+  {
+    "id": "34-command-receipts",
+    "title": "Lost commit acknowledgment, immutable receipt replay and newer Pause fencing",
+    "source": "34-command-receipts.mmd",
+    "rendered": "34-command-receipts.svg",
+    "status": "Adopted common contract candidate; actual gateway/supervisor qualification pending"
+  },
+  {
+    "id": "35-provider-session-boundary",
+    "title": "Provider observations, durable tool calls and later outcomes",
+    "source": "35-provider-session-boundary.mmd",
+    "rendered": "35-provider-session-boundary.svg",
+    "status": "Candidate schemas and native state models; actual provider transport/store qualification pending"
+  },
+  {
+    "id": "36-package-wire-boundary",
+    "title": "Owned package protocol, callback authority and cancellation boundary",
+    "source": "36-package-wire-boundary.mmd",
+    "rendered": "36-package-wire-boundary.svg",
+    "status": "Native helper framing/RPC experiment passed; production host/SDK/authority qualification pending"
+  },
+  {
+    "id": "37-exact-graph-view",
+    "title": "Immutable graph view and scoped publication",
+    "source": "37-exact-graph-view.mmd",
+    "rendered": "37-exact-graph-view.svg",
+    "status": "Adopted candidate contracts; narrow native experiments, production services and target qualification pending"
+  },
+  {
+    "id": "38-artifact-version-lifecycle",
+    "title": "Retained artifact versions and explicit deletion",
+    "source": "38-artifact-version-lifecycle.mmd",
+    "rendered": "38-artifact-version-lifecycle.svg",
+    "status": "Adopted candidate contracts; narrow native experiments, production services and target qualification pending"
+  },
+  {
+    "id": "39-delivery-reconciliation",
+    "title": "Exact-head delivery and uncertain merge reconciliation",
+    "source": "39-delivery-reconciliation.mmd",
+    "rendered": "39-delivery-reconciliation.svg",
+    "status": "Adopted candidate contracts; narrow native experiments, production services and target qualification pending"
+  },
+  {
+    "id": "40-native-backend-boundaries",
+    "title": "Native backend ownership and qualification",
+    "source": "40-native-backend-boundaries.mmd",
+    "rendered": "40-native-backend-boundaries.svg",
+    "status": "Adopted candidate boundaries; narrow native probes and ownership coverage only, production acceptance pending"
+  },
+  {
+    "id": "41-implementation-coverage",
+    "title": "Implementation ownership and acceptance gates",
+    "source": "41-implementation-coverage.mmd",
+    "rendered": "41-implementation-coverage.svg",
+    "status": "Adopted candidate boundaries; narrow native probes and ownership coverage only, production acceptance pending"
+  },
+  {
+    "id": "42-domain-operation-admission",
+    "title": "Strict operation mode and result admission",
+    "source": "42-domain-operation-admission.mmd",
+    "rendered": "42-domain-operation-admission.svg",
+    "status": "Adopted candidate contracts; DTO/schema checks only, actual native services and authority pending"
+  },
+  {
+    "id": "43-structured-decision-contract",
+    "title": "Native structured decision and authority boundary",
+    "source": "43-structured-decision-contract.mmd",
+    "rendered": "43-structured-decision-contract.svg",
+    "status": "Adopted candidate contracts; DTO/schema checks only, actual native services and authority pending"
+  },
+  {
+    "id": "44-mcp-server-boundary",
+    "title": "Other harnesses use the shared DevWorks gateway",
+    "source": "44-mcp-server-boundary.mmd",
+    "rendered": "44-mcp-server-boundary.svg",
+    "status": "Baseline 1.1 design; incoming server protocol, authentication, clients and target acceptance pending"
+  }
+]

@@ -1,0 +1,15 @@
+flowchart TD
+    A[Authorized source handle] --> B[Verify bytes and stage immutable file]
+    B --> C[Publish version and active selection]
+    C --> D[Replacement publishes another version]
+    D --> E[Old citation retains original version]
+    C --> F[Explicit revision-bound deletion]
+    F --> G{Requested intent?}
+    G -->|Detach| H[Remove named project reference and preserve surviving shares]
+    G -->|Delete version or artifact| N{All affected references authorized?}
+    N -->|No| O[Return shared-reference blocker without global deletion]
+    N -->|Yes| I[Commit logical unavailability and event]
+    I --> J[Clear active selection without older-version fallback]
+    J --> K[Wait for admitted readers and backup holds]
+    K --> L[Journaled physical unlink]
+    E --> M[Exact authorized read or honest unavailable status]

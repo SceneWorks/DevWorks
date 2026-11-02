@@ -1,0 +1,20 @@
+{
+  "accesskitNodesAcrossFrames": 570,
+  "checks": [
+    "virtualized_100k_rows_materializes_only_visible_range",
+    "native_accesskit_updates_and_tessellation_exist",
+    "shared_session_draft_survives_frames_and_resize",
+    "dropped_file_event_available_to_native_ui"
+  ],
+  "egui": "0.37.0",
+  "host": "macOS arm64",
+  "limits": [
+    "Headless egui frames, not eframe window/GPU, OS screen reader, clipboard/dialog or performance qualification.",
+    "Fixture session/draft state is shared by construction, not production session persistence."
+  ],
+  "maxRowsMaterialized": 39,
+  "noInference": true,
+  "noWindowOpened": true,
+  "paintPrimitivesAcrossFrames": 36,
+  "passed": 4
+}

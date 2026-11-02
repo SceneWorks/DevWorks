@@ -1,0 +1,138 @@
+{
+  "title": "DevWorks security and platform architecture refinement review",
+  "date": "2026-11-01",
+  "status": "Documentation/source review verified; native enforcement and target qualification remain pending",
+  "confirmedDecisions": {
+    "SEC-03": "Full initial default for new projects, with tighter access selectable; mandatory restrictions remain",
+    "SEC-04": "Dedicated user-confirmed primary-repository deletion; agent operation approval cannot substitute; drive/filesystem roots blocked"
+  },
+  "adoptedDecisions": [
+    "AD-37",
+    "AD-38",
+    "AD-39",
+    "AD-40"
+  ],
+  "requirements": {
+    "count": 340,
+    "confirmed": 203,
+    "proposed": 137,
+    "idsAndStatusesPreserved": true,
+    "changedStatementsOnly": [
+      "SEC-03",
+      "SEC-04"
+    ],
+    "inputSha256": "16fcffdd3513a7528b52f62a1eb732fa3fd47b5c6696c1e6eeb5ae51618cd280",
+    "allIdsInWord": true
+  },
+  "reader": {
+    "checks": [
+      {
+        "width": 1440,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 30
+      },
+      {
+        "width": 800,
+        "overflow": false,
+        "brokenImages": [],
+        "diagramCount": 30
+      }
+    ],
+    "browser": "local headless Chromium; no user-facing tab opened",
+    "decisionRows": 40,
+    "anchors": 11,
+    "localLinksValid": true,
+    "sectionSearch": true,
+    "requirementSearch": true,
+    "statusFilter": true,
+    "pageErrors": []
+  },
+  "diagrams": {
+    "total": 30,
+    "allXmlValid": true,
+    "changedAndVisuallyReviewed": [
+      "08-policy",
+      "29-authority-revocation",
+      "30-repository-deletion"
+    ],
+    "inlineAndPlatformTableWidthsChecked": [
+      1440,
+      800
+    ]
+  },
+  "word": {
+    "renderedPages": 67,
+    "changedPagesVisuallyReviewed": [
+      29,
+      48
+    ],
+    "exactBodyMatchesToPriorVerifiedRender": 65,
+    "comparison": "Exact body pixels excluding bottom 7 percent footer against verified package-pass render",
+    "footerNumbersVerified": true
+  },
+  "referenceEvidence": {
+    "DevWorksIndex": "20715bbefe7ae356d81696a39ea36223e736e538; no application graph",
+    "primarySources": [
+      "https://developer.apple.com/documentation/security/protecting-user-data-with-app-sandbox",
+      "https://developer.apple.com/documentation/xcode/embedding-a-helper-tool-in-a-sandboxed-app",
+      "https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation",
+      "https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects",
+      "https://www.kernel.org/doc/html/v6.12/userspace-api/landlock.html",
+      "https://developer.apple.com/documentation/security/using-the-keychain-to-manage-user-secrets",
+      "https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata",
+      "https://specifications.freedesktop.org/secret-service/latest-single/",
+      "https://doc.rust-lang.org/rustc/platform-support.html",
+      "https://ubuntu.com/project/docs/release-team/list-of-releases/",
+      "https://www.debian.org/releases/",
+      "https://learn.microsoft.com/en-us/lifecycle/faq/windows",
+      "https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html"
+    ],
+    "limits": "API/source feasibility establishes candidate mechanisms and limitations, not working DevWorks enforcement or product target acceptance. Apple JavaScript pages were read through their official Markdown versions."
+  },
+  "nativeTargets": [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu"
+  ],
+  "qualificationStillRequired": [
+    "Real target native builds, clean installs, OS/build/CPU/display records and optional-runtime absence",
+    "Verified-read adapters and indirect-effect denial",
+    "ExecutionBoundary escape tests for complete filesystem/network/IPC/process profiles",
+    "Authority revocation, process transition and unknown effect reconciliation",
+    "Real stable-handle destructive-target races and dedicated-confirmation paths",
+    "SecretStore, transport credential handling, outbound scope/redaction and restore cases",
+    "Browser/desktop/semantic pack/document/container capability matrix",
+    "Representative performance and retained capability inventory"
+  ],
+  "notClaimed": [
+    "Native DevWorks app/security implementation",
+    "Strong OS confinement from working directories, process groups, Job Objects or command parsing alone",
+    "Universal interception of Full-mode arbitrary native code",
+    "Qualified OS/CPU product support",
+    "Real inference or production credentials used"
+  ],
+  "nextPass": "Retained CodeGraph operation/capability mapping, acceptance scenarios and representative performance workloads",
+  "documentSha256": {
+    "docs/architecture/devworks-architecture.md": "2a9b7cd90bcc0d47ba1471b93f1e3081baa5499cd3ec87422253321fd135e63a",
+    "docs/architecture/devworks-architecture.html": "1e488d7d0c19cf365d6eff3e8e5e884bfcf7a68316d7bcb7db0d8f7a97df9452",
+    "docs/architecture/architecture-contracts.json": "6501ad61dd2aefa1518c46901dd2776d07080f26f2afee754c111c2d5710ff43",
+    "docs/architecture/devworks-requirements-traceability.json": "31a638ea07218f0b31b82d3ddd2c48e71a57f15e89ca9063d91b7da8c7d0c082",
+    "docs/architecture/architecture-diagrams/manifest.json": "836408b0c65816a00342ecd58286e8e3d6f05e03729fb918cdd75188a3df4187",
+    "docs/planning/requirements-content.json": "16fcffdd3513a7528b52f62a1eb732fa3fd47b5c6696c1e6eeb5ae51618cd280",
+    "docs/planning/requirements-interview.json": "3edf4f1db99c39cd5dfbbb9b38dd2325de1b94dcdbfed3a6ec54015f94f9b48b",
+    "docs/planning/devworks-requirements.docx": "a92c7f94b8cc0be3ce57f4ea7e411342f713bfde0f9fb78e222290cd240c14ee",
+    "tools/planning/requirements_content.py": "a273239c63f13e7ef303f1ba33cd35af75943d99cdf0e155c41f5a80cb151800",
+    "tools/planning/requirements_expansion.py": "6ccfbb203e0e2b748d6f466c0076d25a3694eaabc8b30a1cdcbe57e493d92fc8",
+    "docs/architecture/architecture-diagrams/08-policy.mmd": "1f5f8ef34914c3effff3a7726fbae3709f26b60a5b52f58da69fa2899aff59a2",
+    "docs/architecture/architecture-diagrams/08-policy.svg": "94b243f1641481c23e08595523f8311ab2278effc7702167876176062fe10bc6",
+    "docs/architecture/architecture-diagrams/29-authority-revocation.mmd": "d1d101d01ce80d34f45a2b10c4505387f6f17a5cd4c1d8d30db4840d4e91a800",
+    "docs/architecture/architecture-diagrams/29-authority-revocation.svg": "c8bdc33e336c4dd3f423cac784617a751712bb6f0afa401dc2a28e8f23b61e39",
+    "docs/architecture/architecture-diagrams/30-repository-deletion.mmd": "d10e85cc6d963a681c9edb39c31eea78570cfc67e064a9171268c22e92e3cc85",
+    "docs/architecture/architecture-diagrams/30-repository-deletion.svg": "efbd056ad79d832ebc385f5d1ccac1ab8fe0956e569e647197af96554d8e0b27"
+  },
+  "confidence": "High in recorded authority decisions and semantic contracts; medium in candidate platform mechanisms until implemented and qualified"
+}

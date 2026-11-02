@@ -1,0 +1,56 @@
+{
+  "date": "2026-11-02",
+  "architectureVersion": "1.1",
+  "passed": true,
+  "status": "Requirements, publication candidates, ownership, generated documents and scoped QA reconciled; native MCP server unimplemented",
+  "counts": {
+    "slices": 63,
+    "operationFamilies": 48,
+    "operations": 351,
+    "requirements": 350,
+    "requirementsByStatus": {
+      "Confirmed": 209,
+      "Proposed": 141
+    },
+    "inputSchemaCandidates": 351,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "publication": {
+    "catalogOperations": 351,
+    "modeDispositions": 356,
+    "tools": 152,
+    "readTools": 95,
+    "commandTools": 57
+  },
+  "architectureDecisions": 78,
+  "diagrams": 44,
+  "htmlReaders": 13,
+  "htmlDocumentsChecked": 17,
+  "localTargetsChecked": 414,
+  "imagesChecked": 101,
+  "jsonFilesParsed": 480,
+  "schemaFixtureChecks": 1049,
+  "wordRequirementsVerified": 350,
+  "wordPages": 66,
+  "wordSha256": "6f7b087e689302af7a7a410580f80e3d3d2029392641acf72c40c863809fb801",
+  "wordVisualReview": "All pages reviewed in contact sheets; affected MCP, component/settings, acceptance and reference pages reviewed at full size after final rendering.",
+  "remaining": "DW-063/064 actual native transport, credentials/IPC, complete projection, two-client, command authority/recovery and supported-target acceptance; all prior G01\u2013G12 production obligations remain.",
+  "sources": {
+    "docs/architecture/devworks-architecture.md": "49dac906d9b8e70d0a1a5c60bc054516cf2a786b0de4574953cadcc0fc718df8",
+    "docs/architecture/mcp-server-contracts.md": "dfba6e1f3918fb828c49061e141dbb7ef347d55647e7c80134a238b2c50119e8",
+    "docs/architecture/mcp-publication-candidates.json": "d4e7a7bf846c2fda4f89b766767b30300b4016dd03d6f6c8afe9cfa7b7c804ee",
+    "docs/architecture/implementation-plan.json": "de0d0440fbdc16b7a254a247f51b4f17b161736972737ae5cc9ab52299687255",
+    "docs/planning/requirements-content.json": "088de2bbfcceb8ee63f82ffcfd0f1bed6c5cdd7153f550abfc9f07973db4970a",
+    "docs/planning/requirements-interview.json": "5bd5b553a45ca17f1f25f9ae8921e115f348325e3b02afbb36208f622b84e8a7",
+    "docs/planning/devworks-requirements.docx": "6f7b087e689302af7a7a410580f80e3d3d2029392641acf72c40c863809fb801",
+    "tools/planning/build_mcp_publication.py": "6becbe4f3f48f4512f4cbb7654380b321feeff6dde1b2e8fefe8a437832cb349"
+  }
+}
