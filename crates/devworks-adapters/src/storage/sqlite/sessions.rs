@@ -677,15 +677,13 @@ fn lineage(
         id: String::new(),
     });
     // One keyset over three sources: the work hierarchy, the root's links and its command and
-    // artifact history facts, ordered by (sequence, source, id). A related work item is keyed by
-    // the first history fact attached to it (its creation), so work added after a pager passed
-    // earlier positions still appears on a later page.
+    // artifact history facts, ordered by (sequence, source, id). Related work has the fixed key
+    // (0, 0, id), which never changes once visible; a change to the hierarchy changes the
+    // membership digest that lineage cursors bind (`work_membership`), so it expires them.
     let sql = format!(
         "SELECT seq,src,id FROM (
-           SELECT coalesce((SELECT min(e.seq) FROM events e WHERE e.root_id=w.id),0) AS seq,0 AS src,w.id AS id
-             FROM work_items w WHERE w.id=(SELECT parent_feature_id FROM work_items WHERE id=?1)
-           UNION ALL SELECT coalesce((SELECT min(e.seq) FROM events e WHERE e.root_id=w.id),0),0,w.id
-             FROM work_items w WHERE w.parent_feature_id=?1
+           SELECT 0 AS seq,0 AS src,id FROM work_items WHERE id=(SELECT parent_feature_id FROM work_items WHERE id=?1)
+           UNION ALL SELECT 0,0,id FROM work_items WHERE parent_feature_id=?1
            UNION ALL SELECT seq,1,id FROM history_links WHERE root_id=?1
            UNION ALL SELECT seq,2,id FROM events WHERE root_id=?1 AND aggregate_kind IN ({LINEAGE_EVENT_AGGREGATES})
          ) WHERE seq>?2 OR (seq=?2 AND (src>?3 OR (src=?3 AND id>?4)))
@@ -806,6 +804,23 @@ macro_rules! session_reads {
                 batch_id: &Id,
             ) -> Result<Option<StoredBatch>, StorageError> {
                 batch(self.conn, session, batch_id)
+            }
+            fn work_membership(&self, root: &RootId) -> Result<String, StorageError> {
+                let (parent, children): (Option<String>, Option<String>) = db(db(self
+                    .conn
+                    .prepare_cached(
+                        "SELECT (SELECT parent_feature_id FROM work_items WHERE id=?1),
+                         (SELECT group_concat(id,',') FROM (SELECT id FROM work_items WHERE parent_feature_id=?1 ORDER BY id))",
+                    ))?
+                .query_row([root.0.as_str()], |r| Ok((r.get(0)?, r.get(1)?))))?;
+                Ok(devworks_core::fingerprint::sha256_hex(
+                    format!(
+                        "{}|{}",
+                        parent.unwrap_or_default(),
+                        children.unwrap_or_default()
+                    )
+                    .as_bytes(),
+                ))
             }
             fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError> {
                 exists(

@@ -1009,6 +1009,9 @@ impl SessionRead for Unsupported {
     fn project_exists(&self, _: &ProjectId) -> Result<bool, StorageError> {
         Ok(false)
     }
+    fn work_membership(&self, _: &RootId) -> Result<String, StorageError> {
+        nope()
+    }
     fn project_has_repository(&self, _: &ProjectId, _: &Id) -> Result<bool, StorageError> {
         nope()
     }

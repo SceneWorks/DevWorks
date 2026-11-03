@@ -458,20 +458,15 @@ impl HistoryService {
 
     fn lineage_record(row: LineageRow, root: &WorkRoot) -> Result<LineageRecord, Failure> {
         Ok(match row {
-            LineageRow::Work { work, key } => {
+            LineageRow::Work { work, .. } => {
                 let parent = root.parent_feature_id.as_ref() == Some(&work.id);
-                let first = if key.sequence > 0 {
-                    format!("; first recorded at sequence {}", key.sequence)
-                } else {
-                    String::new()
-                };
                 LineageRecord {
                     id: work.id.0.clone(),
                     parent_id: None,
                     kind: label(if parent { "parent_feature" } else { &work.kind }, "work"),
                     related_id: work.id.0.clone(),
                     summary: content(&format!(
-                        "{} ({} in project {}, work revision {}{first})",
+                        "{} ({} in project {}, work revision {})",
                         work.title,
                         work.kind,
                         work.project_id.0.as_str(),
@@ -546,7 +541,15 @@ impl HistoryService {
     ) -> Result<OperationResult, Failure> {
         let read = snapshot.sessions();
         let root = visible_root(read, ctx, &input.root_id)?;
-        let binding = Self::binding(ctx, "history.work_lineage", &root);
+        // Related work rows have fixed keys at the start of the order, so a hierarchy change
+        // (work added, moved in or out) expires the cursor visibly instead of skipping it.
+        let membership = read.work_membership(&root.id)?;
+        let binding = CursorBinding::new(
+            ctx,
+            "history.work_lineage",
+            &[root.id.0.as_str(), &membership],
+            root.scope_revision,
+        );
         let paged = Self::page(
             &binding,
             input.page.cursor.as_ref().map(|c| c.0.as_str()),

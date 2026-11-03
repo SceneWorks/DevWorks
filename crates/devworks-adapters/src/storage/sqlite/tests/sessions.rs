@@ -1705,7 +1705,14 @@ fn delta(block: u32, text: &str) -> Value {
 }
 /// Appends what `turn` has not flushed yet as one batch at the session's next sequence.
 fn flush(fx: &Fx, ctx: &InvocationContext, turn: &mut TurnAssembler, batch: &str) -> usize {
-    let bodies = turn.take();
+    append_bodies(fx, ctx, turn.take(), batch)
+}
+fn append_bodies(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    bodies: Vec<TranscriptBody>,
+    batch: &str,
+) -> usize {
     let n = bodies.len();
     if n > 0 {
         let next = fx.session("session-a").next_sequence;
@@ -1758,14 +1765,10 @@ fn recorded_stream_scenarios_decide_what_becomes_durable() {
         fx.seed_session("session-a", "agent-a", Some("root-a"));
         let worker = fx.worker("agent-a", "session-a");
         flush(&fx, &worker, &mut turn, "turn-1");
-        // A stream that never reached its terminal event is recorded interrupted by the runtime.
-        if turn.terminal().is_none() && fx.session("session-a").next_sequence > 1 {
-            let marker = interruption_marker(id("request-a"), AttemptId(id("attempt-a")));
-            let next = fx.session("session-a").next_sequence;
-            let b = batch_of(&id("session-a"), id("eof"), 0, next, vec![marker], || {
-                id("eof-1")
-            });
-            accepted(fx.append(&worker, SessionBatch::entries(b)));
+        // A stream that never reached its terminal event ends at EOF, interrupted.
+        if turn.terminal().is_none() {
+            let rest = turn.end_of_stream();
+            append_bodies(&fx, &worker, rest, "eof");
         }
         let page = fx.transcript(&worker, "session-a", None);
         let calls: Vec<String> = page
@@ -1792,8 +1795,12 @@ fn recorded_stream_scenarios_decide_what_becomes_durable() {
         }
         let expected: Vec<(String, bool)> = match id_ {
             "text-completion" => vec![("Hello".into(), false)],
-            "attempt-change-fenced" => vec![("Partial".into(), false), (String::new(), true)],
-            "incomplete-turn-retains-unready-call" => vec![(String::new(), true)],
+            // Text was the last content of an interrupted turn: its last chunk is marked.
+            "attempt-change-fenced" => vec![("Partial".into(), true)],
+            // An interrupted turn without trailing text: one interruption marker.
+            "incomplete-turn-retains-unready-call"
+            | "eof-with-call-is-not-ready"
+            | "duplicate-call-does-not-advance-stream" => vec![(String::new(), true)],
             _ => vec![],
         };
         assert_eq!(texts(&page), expected, "{id_}");
@@ -1803,52 +1810,124 @@ fn recorded_stream_scenarios_decide_what_becomes_durable() {
     }
 }
 
-#[test]
-fn content_blocks_keep_their_structure_and_flushes_never_duplicate() {
-    let fx = Fx::new();
-    fx.seed_session("session-a", "agent-a", Some("root-a"));
-    let worker = fx.worker("agent-a", "session-a");
+/// Feeds `events` to a new assembler, taking after the event indexes in `flush_after`, and
+/// returns every entry taken (in order), ending the stream at EOF when it has no terminal.
+fn assemble(events: &[Value], flush_after: &[usize]) -> Vec<TranscriptBody> {
     let mut turn = TurnAssembler::new();
-    for (i, e) in [
-        delta(0, "A"),
-        delta(1, "B"),
-        delta(0, "C"),
-        json!({"kind": "NativeContinuation", "binding": binding(), "artifact": art()}),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        turn.accept(&provider_event(i as i64 + 1, e)).unwrap();
+    let mut out = Vec::new();
+    for (i, e) in events.iter().enumerate() {
+        turn.accept(&provider_event(i as i64 + 1, e.clone()))
+            .unwrap();
+        if flush_after.contains(&i) {
+            out.extend(turn.take());
+        }
     }
-    // A partial flush while the stream runs: block 0 keeps "AC", block 1 "B", then the item.
-    assert_eq!(flush(&fx, &worker, &mut turn, "f-1"), 3);
-    turn.accept(&provider_event(5, delta(1, "D"))).unwrap();
-    turn.accept(&provider_event(
-        6,
-        json!({"kind": "Terminal", "outcome": "Completed"}),
-    ))
-    .unwrap();
-    // Only what was not flushed before.
-    assert_eq!(flush(&fx, &worker, &mut turn, "f-2"), 1);
-    assert_eq!(flush(&fx, &worker, &mut turn, "f-3"), 0);
-    let page = fx.transcript(&worker, "session-a", None);
+    if turn.terminal().is_some() {
+        out.extend(turn.take());
+    } else {
+        out.extend(turn.end_of_stream());
+    }
+    out
+}
+fn shape(bodies: &[TranscriptBody]) -> Vec<String> {
+    bodies
+        .iter()
+        .map(|b| match b {
+            TranscriptBody::AssistantAttempt {
+                visible_text,
+                interrupted,
+                ..
+            } => format!("text:{visible_text}:{interrupted}"),
+            TranscriptBody::NativeItem { .. } => "native".into(),
+            TranscriptBody::ToolCallRecorded { tool_call } => {
+                format!("call:{}", tool_call.call.native_call_id)
+            }
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+fn native_event() -> Value {
+    json!({"kind": "NativeContinuation", "binding": binding(), "artifact": art()})
+}
+fn terminal(outcome: &str) -> Value {
+    json!({"kind": "Terminal", "outcome": outcome})
+}
+
+#[test]
+fn the_same_stream_yields_the_same_entries_whatever_the_flush_timing() {
+    // Interleaved blocks 0, 1, 0: each block change starts a new run, in arrival order.
+    let interleaved = [
+        delta(0, "a"),
+        delta(1, "b"),
+        delta(0, "c"),
+        delta(0, "d"),
+        terminal("Completed"),
+    ];
+    let expected = ["text:a:false", "text:b:false", "text:cd:false"];
+    for flushes in [&[][..], &[0], &[1], &[2], &[0, 1, 2, 3]] {
+        assert_eq!(
+            shape(&assemble(&interleaved, flushes)),
+            expected,
+            "{flushes:?}"
+        );
+    }
+    // Text after a native item comes after it, even within one block.
+    let around_native = [
+        delta(0, "a"),
+        native_event(),
+        delta(0, "c"),
+        terminal("Completed"),
+    ];
+    for flushes in [&[][..], &[0], &[1], &[0, 1, 2]] {
+        assert_eq!(
+            shape(&assemble(&around_native, flushes)),
+            ["text:a:false", "native", "text:c:false"],
+            "{flushes:?}"
+        );
+    }
+    // Interrupted turns: the last chunk is marked when text is last, a marker otherwise.
+    for flushes in [&[][..], &[0], &[0, 1]] {
+        assert_eq!(
+            shape(&assemble(
+                &[delta(0, "a"), native_event(), terminal("Incomplete")],
+                flushes
+            )),
+            ["text:a:false", "native", "text::true"],
+            "{flushes:?}"
+        );
+        assert_eq!(
+            shape(&assemble(
+                &[delta(0, "a"), delta(0, "b"), terminal("Cancelled")],
+                flushes
+            )),
+            ["text:ab:true"],
+            "{flushes:?}"
+        );
+    }
+}
+
+#[test]
+fn empty_deltas_and_tool_only_turns_write_no_text() {
+    assert!(assemble(&[delta(0, ""), terminal("Completed")], &[0]).is_empty());
     assert_eq!(
-        kinds(&page),
-        [
-            "AssistantAttempt",
-            "AssistantAttempt",
-            "NativeItem",
-            "AssistantAttempt"
-        ]
+        shape(&assemble(
+            &[
+                delta(0, "a"),
+                delta(0, ""),
+                delta(1, ""),
+                delta(0, "b"),
+                terminal("Completed")
+            ],
+            &[1, 2]
+        )),
+        ["text:ab:false"]
     );
-    assert_eq!(
-        texts(&page),
-        [
-            ("AC".to_owned(), false),
-            ("B".to_owned(), false),
-            ("D".to_owned(), false)
-        ]
-    );
+    let tool_only = [
+        json!({"kind": "ToolCallComplete", "toolCall": call("call:a", 0)}),
+        delta(0, ""),
+        terminal("ToolCallsReady"),
+    ];
+    assert_eq!(shape(&assemble(&tool_only, &[0, 1])), ["call:call:a"]);
 }
 
 #[test]
@@ -1857,30 +1936,21 @@ fn a_crash_mid_stream_after_a_partial_flush_keeps_the_partial_and_marks_it_inter
     fx.seed_session("session-a", "agent-a", Some("root-a"));
     let worker = fx.worker("agent-a", "session-a");
     let mut turn = TurnAssembler::new();
+    // A block change ends the first run, so it can be flushed while the stream runs.
     turn.accept(&provider_event(1, delta(0, "Hel"))).unwrap();
-    flush(&fx, &worker, &mut turn, "partial");
-    turn.accept(&provider_event(2, delta(0, "lo"))).unwrap();
-    // The process dies: the unflushed "lo" was only a preview and is not durable.
+    turn.accept(&provider_event(2, delta(1, "lo"))).unwrap();
+    assert_eq!(flush(&fx, &worker, &mut turn, "partial"), 1);
+    // The process dies: the open run "lo" was only a preview and is not durable.
     drop(turn);
     let fx = fx.restart();
     let marker = interruption_marker(id("request-a"), AttemptId(id("attempt-a")));
-    let next = fx.session("session-a").next_sequence;
-    let b = batch_of(
-        &id("session-a"),
-        id("recovered"),
-        0,
-        next,
-        vec![marker],
-        || id("recovered-1"),
-    );
-    accepted(fx.append(&worker, SessionBatch::entries(b)));
+    append_bodies(&fx, &worker, vec![marker], "recovered");
     let page = fx.transcript(&fx.user(), "session-a", None);
     assert_eq!(
         texts(&page),
         [("Hel".to_owned(), false), (String::new(), true)]
     );
 }
-
 #[test]
 fn long_streamed_text_is_persisted_as_ordered_bounded_utf8_chunks() {
     let fx = Fx::new();
@@ -2485,20 +2555,44 @@ fn workspace_scope_lists_home_sessions_and_home_is_shared_across_surfaces() {
 }
 
 #[test]
-fn lineage_includes_work_added_after_the_pager_passed() {
+fn lineage_keys_are_stable_and_a_hierarchy_change_expires_the_cursor() {
     let fx = Fx::new();
     let user = fx.user();
     let scoped = user
         .clone()
         .with_lineage(Some(project("project-a")), Some(root("root-a")), None);
-    fx.command(
-        &scoped,
-        "sessions.start",
-        json!({"scope": {"kind": "Project", "projectId": "project-a"}, "title": "t"}),
-    );
+    let start = json!({"scope": {"kind": "Project", "projectId": "project-a"}, "title": "t"});
+    fx.command(&scoped, "sessions.start", start.clone());
+    fx.command(&scoped, "sessions.start", start.clone());
+    // The first page holds the child task; the pager is past it.
     let first = lineage_page(fx.lineage(&user, "root-a", 1, None));
+    assert_eq!(first.items.0[0].id, id("task-a"));
     let cursor = first.next_cursor.expect("more").0;
-    // A child task created after the first page: its creation fact is its lineage position.
+    // A command targeted at the child gives it history; its lineage position does not move,
+    // so it is not seen again.
+    fx.command(
+        &user,
+        "sessions.start",
+        json!({"scope": {"kind": "Project", "projectId": "project-a"}, "rootId": "task-a",
+            "title": "t"}),
+    );
+    let mut seen = vec![first.items.0[0].id.clone()];
+    let mut next = Some(cursor);
+    while let Some(c) = next {
+        let page = lineage_page(fx.lineage(&user, "root-a", 1, Some(&c)));
+        seen.extend(page.items.0.iter().map(|l| l.id.clone()));
+        next = page.next_cursor.map(|c| c.0);
+    }
+    assert_eq!(
+        seen.iter().filter(|i| **i == id("task-a")).count(),
+        1,
+        "{seen:?}"
+    );
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    // A child created while paging changes the hierarchy: the cursor expires visibly rather
+    // than skipping it, and a fresh listing shows it once.
+    let page = lineage_page(fx.lineage(&user, "root-a", 1, None));
+    let cursor = page.next_cursor.expect("more").0;
     fx.store
         .with_writer_connection(|c| {
             super::super::conn::db(c.execute_batch(
@@ -2506,40 +2600,25 @@ fn lineage_includes_work_added_after_the_pager_passed() {
             ))
         })
         .unwrap();
-    fx.write(|tx| {
-        let id_ = devworks_core::protocol::EventId(tx.new_id(devworks_core::ports::IdKind::Event));
-        tx.history().append(NewEvent {
-            id: id_,
-            actor: actor("user-a"),
-            project_id: Some(project("project-a")),
-            root_id: Some(root("task-late")),
-            operation_id: None,
-            aggregate_kind: "work".into(),
-            aggregate_id: "task-late".into(),
-            aggregate_revision: 1,
-            kind: "WorkCreated".into(),
-            payload: json!({}),
-        })
-    });
-    let rest = lineage_page(fx.lineage(&user, "root-a", 50, Some(&cursor)));
-    assert!(
-        rest.items.0.iter().any(|l| l.id == id("task-late")),
-        "{:?}",
-        rest.items
-            .0
-            .iter()
-            .map(|l| l.id.as_str())
-            .collect::<Vec<_>>()
+    assert_eq!(
+        fault(fx.lineage(&user, "root-a", 1, Some(&cursor))).code,
+        DomainErrorCode::CursorExpired
+    );
+    let all = lineage_page(fx.lineage(&user, "root-a", 50, None));
+    let ids: Vec<&str> = all.items.0.iter().map(|l| l.id.as_str()).collect();
+    assert_eq!(
+        ids.iter().filter(|i| **i == "task-late").count(),
+        1,
+        "{ids:?}"
     );
     // Summaries carry the attribution the record has no fields for.
-    let command = rest.items.0.iter().find(|l| l.kind.0 == "command").unwrap();
+    let command = all.items.0.iter().find(|l| l.kind.0 == "command").unwrap();
     assert!(
         command.summary.0.contains("by user-a at "),
         "{}",
         command.summary.0
     );
 }
-
 #[test]
 fn retained_endpoints_behave_through_their_mapped_operations() {
     let fx = Fx::new();

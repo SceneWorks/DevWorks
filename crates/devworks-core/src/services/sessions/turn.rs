@@ -12,15 +12,18 @@
 //!   EOF, an incomplete, failed or cancelled turn is retained by the assembler but never written
 //!   as a durable call.
 //! * Streamed text is a preview until [`TurnAssembler::take`] moves it into a batch. Content
-//!   blocks keep their structure (CACHE-03): each content block's text is its own ordered run
-//!   of `AssistantAttempt` chunks of at most 64 KiB, and native continuation items keep their
-//!   position among the blocks. A tool-only turn writes no assistant text.
-//! * `take` is incremental: it returns only what was not taken before (the flushed watermark),
-//!   so a long stream can be flushed while it runs without duplicating text. Chunks flushed
-//!   before the terminal event are not marked interrupted (the outcome is not known yet); the
-//!   final take marks the last chunk — or, when the turn ended interrupted with nothing left, an
-//!   empty marker — `interrupted`. After a crash mid-stream the runtime appends
-//!   [`interruption_marker`], since the turn will never end.
+//!   keeps its arrival order (CACHE-03): a text run ends whenever the content block index changes
+//!   or a native continuation item arrives, so each run is its own ordered sequence of
+//!   `AssistantAttempt` chunks of at most 64 KiB and native items keep their position. Empty
+//!   deltas carry no content and a tool-only turn writes no assistant text.
+//! * The durable entries never depend on when `take` is called. `take` returns only content
+//!   that can no longer change: ended runs, native items, and the full 64 KiB chunks of the run
+//!   still being streamed; the open run's tail waits for the run to end. Chunks are never marked
+//!   interrupted before the outcome is known. When the turn ends interrupted (an interrupted
+//!   terminal, or [`TurnAssembler::end_of_stream`] at EOF), the last chunk is marked
+//!   `interrupted` if text was the last content; otherwise one [`interruption_marker`] records
+//!   it — the only empty assistant entry ever written. After a crash mid-stream the runtime
+//!   appends that marker itself, since the turn will never end.
 //!
 //! Endpoint wire decoding, broker admission and result assembly are the transport and tool-turn
 //! owners'; this assembler only decides what of a normalized turn is durable.
@@ -49,11 +52,19 @@ pub enum StreamRefusal {
     TerminalMismatch,
 }
 
-/// Content not yet taken, in arrival order.
+/// Content that can no longer change, not yet taken, in arrival order.
 #[derive(Clone, Debug)]
 enum Item {
-    Text { block: i64, text: String },
+    /// An ended text run (or a full chunk of the open run).
+    Text(String),
     Native(ArtifactRef),
+}
+
+/// The text run still being streamed: its block and the text not yet taken.
+#[derive(Clone, Debug)]
+struct Run {
+    block: i64,
+    text: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -62,11 +73,13 @@ pub struct TurnAssembler {
     attempt: Option<AttemptId>,
     binding: Option<NativeBinding>,
     next: i64,
-    /// Content after the flushed watermark.
     pending: Vec<Item>,
+    open: Option<Run>,
     preview: String,
     calls: Vec<CompleteToolCall>,
     terminal: Option<TurnOutcome>,
+    /// The stream ended without a terminal event (EOF).
+    cut_off: bool,
     calls_taken: bool,
     finished: bool,
 }
@@ -76,9 +89,17 @@ impl TurnAssembler {
         Self::default()
     }
 
+    fn end_run(&mut self) {
+        if let Some(run) = self.open.take() {
+            for chunk in chunks(&run.text) {
+                self.pending.push(Item::Text(chunk.to_owned()));
+            }
+        }
+    }
+
     pub fn accept(&mut self, e: &ProviderEvent) -> Result<(), StreamRefusal> {
         e.validate().map_err(StreamRefusal::Invalid)?;
-        if self.terminal.is_some() {
+        if self.terminal.is_some() || self.cut_off {
             return Err(StreamRefusal::AfterTerminal);
         }
         if self.request.is_some()
@@ -118,26 +139,40 @@ impl TurnAssembler {
         self.binding = Some(e.binding.clone());
         self.next = presented;
         match &e.event {
+            // An empty delta carries no content: it neither starts nor ends a run.
+            ProviderBody::TextDelta { text, .. } if text.is_empty() => {}
             ProviderBody::TextDelta { block_index, text } => {
                 let block = block_index.get();
                 self.preview.push_str(text);
-                // Deltas of a content block extend that block, even when another block's
-                // deltas arrived in between.
-                match self
-                    .pending
-                    .iter_mut()
-                    .find(|i| matches!(i, Item::Text { block: b, .. } if *b == block))
-                {
-                    Some(Item::Text { text: t, .. }) => t.push_str(text),
-                    _ => self.pending.push(Item::Text {
-                        block,
-                        text: text.clone(),
-                    }),
+                if self.open.as_ref().is_some_and(|r| r.block != block) {
+                    self.end_run();
+                }
+                match &mut self.open {
+                    Some(run) => run.text.push_str(text),
+                    None => {
+                        self.open = Some(Run {
+                            block,
+                            text: text.clone(),
+                        })
+                    }
+                }
+                // Full chunks of the open run can no longer change.
+                if let Some(run) = &mut self.open {
+                    while run.text.len() > TEXT_CHUNK {
+                        let mut cut = TEXT_CHUNK;
+                        while !run.text.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        let rest = run.text.split_off(cut);
+                        let full = std::mem::replace(&mut run.text, rest);
+                        self.pending.push(Item::Text(full));
+                    }
                 }
             }
             ProviderBody::ToolCallComplete { tool_call } => self.calls.push(tool_call.clone()),
             ProviderBody::NativeContinuation { artifact, .. } => {
-                self.pending.push(Item::Native(artifact.clone()))
+                self.end_run();
+                self.pending.push(Item::Native(artifact.clone()));
             }
             ProviderBody::Terminal { outcome, .. } => self.terminal = Some(outcome.clone()),
             ProviderBody::Usage { .. } | ProviderBody::Heartbeat => {}
@@ -161,9 +196,17 @@ impl TurnAssembler {
         &self.calls
     }
 
-    /// The durable entries not taken before (see the module documentation), advancing the
-    /// flushed watermark: text chunks per content block and native items in arrival order, then
-    /// — once the turn is ready — the complete calls in ordinal order.
+    /// The stream ended without a terminal event (EOF, a dropped connection): the turn is
+    /// interrupted and its calls are not dispatchable. Returns the remaining durable entries.
+    pub fn end_of_stream(&mut self) -> Vec<TranscriptBody> {
+        if self.terminal.is_none() {
+            self.cut_off = true;
+        }
+        self.take()
+    }
+
+    /// The durable entries that can no longer change and were not taken before (see the module
+    /// documentation), then — once the turn is ready — the complete calls in ordinal order.
     pub fn take(&mut self) -> Vec<TranscriptBody> {
         let (Some(request), Some(attempt), Some(binding)) = (
             self.request.clone(),
@@ -176,36 +219,36 @@ impl TurnAssembler {
             return Vec::new();
         }
         let interrupted = match &self.terminal {
+            None if self.cut_off => Some(true),
             None => None,
             Some(TurnOutcome::Completed | TurnOutcome::ToolCallsReady) => Some(false),
             Some(_) => Some(true),
         };
+        // Whether text is the last content of the turn (decided by content, not flush timing).
+        let text_last = self.open.is_some();
+        if interrupted.is_some() {
+            self.end_run();
+        }
         let mut out = Vec::new();
         for item in std::mem::take(&mut self.pending) {
-            match item {
-                Item::Text { text, .. } => {
-                    for chunk in chunks(&text) {
-                        out.push(TranscriptBody::AssistantAttempt {
-                            request_id: request.clone(),
-                            attempt_id: attempt.clone(),
-                            visible_text: chunk.to_owned(),
-                            interrupted: false,
-                        });
-                    }
-                }
-                Item::Native(artifact) => out.push(TranscriptBody::NativeItem {
+            out.push(match item {
+                Item::Text(text) => TranscriptBody::AssistantAttempt {
+                    request_id: request.clone(),
+                    attempt_id: attempt.clone(),
+                    visible_text: text,
+                    interrupted: false,
+                },
+                Item::Native(artifact) => TranscriptBody::NativeItem {
                     binding: binding.clone(),
                     artifact,
-                }),
-            }
+                },
+            });
         }
         if interrupted == Some(true) {
-            match out
-                .iter_mut()
-                .rev()
-                .find(|b| matches!(b, TranscriptBody::AssistantAttempt { .. }))
-            {
-                Some(TranscriptBody::AssistantAttempt { interrupted, .. }) => *interrupted = true,
+            match out.last_mut() {
+                Some(TranscriptBody::AssistantAttempt { interrupted, .. }) if text_last => {
+                    *interrupted = true
+                }
                 _ => out.push(interruption_marker(request.clone(), attempt.clone())),
             }
         }

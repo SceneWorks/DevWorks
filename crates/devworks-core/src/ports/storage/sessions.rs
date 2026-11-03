@@ -228,8 +228,9 @@ pub struct SequenceKey {
 /// One row of a work root's lineage, in committed-sequence order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LineageRow {
-    /// A parent feature or child task/issue of the root, keyed by the committed sequence of the
-    /// first history fact attached to that work item (0 for work with no history at all).
+    /// A parent feature or child task/issue of the root, at the fixed key `(0, 0, id)` that never
+    /// changes once visible (a hierarchy change expires lineage cursors instead; see
+    /// [`SessionRead::work_membership`]).
     Work {
         key: SequenceKey,
         work: WorkRoot,
@@ -275,6 +276,9 @@ pub trait SessionRead {
     /// The receipt of `batch_id` in `session` (batch identities are scoped per session).
     fn batch(&self, session: &Id, batch_id: &Id) -> Result<Option<StoredBatch>, StorageError>;
     fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError>;
+    /// Digest of the root's work hierarchy (its parent feature and child work items); it
+    /// changes whenever work is added to, moved into or out of the root's hierarchy.
+    fn work_membership(&self, root: &RootId) -> Result<String, StorageError>;
     /// Whether `repository` is a member of `project`.
     fn project_has_repository(
         &self,
