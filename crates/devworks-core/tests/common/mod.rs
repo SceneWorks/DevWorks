@@ -1089,6 +1089,26 @@ impl SessionRead for Unsupported {
     ) -> Result<Vec<EventRecord>, StorageError> {
         nope()
     }
+    fn scope_events(
+        &self,
+        _: &HistoryScope,
+        _: &[&str],
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<EventRecord>, StorageError> {
+        nope()
+    }
+    fn project_scope_revision(&self, _: &ProjectId) -> Result<Option<i64>, StorageError> {
+        Ok(None)
+    }
+    fn usage_facts(
+        &self,
+        _: &RootId,
+        _: Option<&SequenceKey>,
+        _: u16,
+    ) -> Result<Vec<UsageFact>, StorageError> {
+        nope()
+    }
 }
 impl SessionRepository for Unsupported {
     fn insert_session(&mut self, _: &StoredSession) -> Result<(), StorageError> {

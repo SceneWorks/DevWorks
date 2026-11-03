@@ -135,6 +135,14 @@
         },
         {
           "additionalProperties": false,
+          "description": "The committed history of one work root or, from schema revision 2, of one project: exactly\none of `rootId` and `projectId`. Revision 1 requires `rootId`.",
+          "oneOf": [
+            {
+              "required": [
+                "rootId"
+              ]
+            }
+          ],
           "properties": {
             "after": {
               "maxLength": 4096,
@@ -160,7 +168,6 @@
           },
           "required": [
             "kind",
-            "rootId",
             "limit"
           ],
           "type": "object"

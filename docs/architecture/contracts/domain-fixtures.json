@@ -5563,5 +5563,327 @@
     "raw": "{\"kind\":\"artifacts.list\",\"value\":{\"items\":[{\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"name\":\"fixture\",\"createdAtMs\":\"0\",\"scope\":{\"kind\":\"Workspace\"},\"referenceCount\":\"0\",\"tags\":[]}],\"hasMore\":false}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r2-events-root",
+    "entry": "query-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"query\":{\"kind\":\"history.events\",\"rootId\":\"root-a\",\"limit\":100},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-events-project",
+    "entry": "query-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"query\":{\"kind\":\"history.events\",\"limit\":100,\"projectId\":\"project-a\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r1-events-root-explicit",
+    "entry": "query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"query\":{\"kind\":\"history.events\",\"rootId\":\"root-a\",\"limit\":100},\"schemaRevision\":1}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-events-project",
+    "entry": "query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"query\":{\"kind\":\"history.events\",\"limit\":100,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-explicit-events-project",
+    "entry": "query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"query\":{\"kind\":\"history.events\",\"limit\":100,\"projectId\":\"project-a\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-events-root-and-project",
+    "entry": "query-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"query\":{\"kind\":\"history.events\",\"limit\":100,\"projectId\":\"project-a\",\"rootId\":\"root-a\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-events-no-scope",
+    "entry": "query-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"query\":{\"kind\":\"history.events\",\"limit\":100},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-events-null-project",
+    "entry": "query-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"query\":{\"kind\":\"history.events\",\"limit\":100,\"projectId\":null},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-history.events",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.events\",\"value\":{\"items\":[{\"protocol\":\"1.0-draft.1\",\"eventId\":\"event-a\",\"sequence\":\"8\",\"aggregate\":{\"kind\":\"root\",\"id\":\"root-a\"},\"aggregateRevision\":\"2\",\"aggregateRevisionKind\":\"Work\",\"actorId\":\"user-a\",\"occurredAtMs\":\"1793570000000\",\"commandId\":\"cmd-a\",\"rootId\":\"root-a\",\"event\":{\"kind\":\"CommandDecided\",\"commandId\":\"cmd-a\"}},{\"protocol\":\"1.0-draft.1\",\"eventId\":\"event-a\",\"sequence\":\"8\",\"aggregate\":{\"kind\":\"command\",\"id\":\"cmd-a\"},\"aggregateRevision\":\"1\",\"aggregateRevisionKind\":\"Command\",\"actorId\":\"user-a\",\"occurredAtMs\":\"1793570000000\",\"commandId\":\"cmd-a\",\"rootId\":\"root-a\",\"event\":{\"kind\":\"CommandDecided\",\"commandId\":\"cmd-a\"}}],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-history.events-more",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.events\",\"value\":{\"items\":[{\"protocol\":\"1.0-draft.1\",\"eventId\":\"event-a\",\"sequence\":\"8\",\"aggregate\":{\"kind\":\"command\",\"id\":\"cmd-a\"},\"aggregateRevision\":\"1\",\"aggregateRevisionKind\":\"Command\",\"actorId\":\"user-a\",\"occurredAtMs\":\"1793570000000\",\"commandId\":\"cmd-a\",\"rootId\":\"root-a\",\"event\":{\"kind\":\"CommandDecided\",\"commandId\":\"cmd-a\"}}],\"hasMore\":true,\"nextCursor\":\"cursor-b\",\"checkpoint\":\"cursor-b\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-history.events-empty-tail",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.events\",\"value\":{\"items\":[],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-command-aggregate",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"history.events\",\"value\":{\"items\":[{\"protocol\":\"1.0-draft.1\",\"eventId\":\"event-a\",\"sequence\":\"8\",\"aggregate\":{\"kind\":\"command\",\"id\":\"cmd-a\"},\"aggregateRevision\":\"1\",\"aggregateRevisionKind\":\"Command\",\"actorId\":\"user-a\",\"occurredAtMs\":\"1793570000000\",\"commandId\":\"cmd-a\",\"rootId\":\"root-a\",\"event\":{\"kind\":\"CommandDecided\",\"commandId\":\"cmd-a\"}}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-result-checkpoint",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"history.events\",\"value\":{\"items\":[{\"protocol\":\"1.0-draft.1\",\"eventId\":\"event-a\",\"sequence\":\"8\",\"aggregate\":{\"kind\":\"root\",\"id\":\"root-a\"},\"aggregateRevision\":\"2\",\"aggregateRevisionKind\":\"Work\",\"actorId\":\"user-a\",\"occurredAtMs\":\"1793570000000\",\"commandId\":\"cmd-a\",\"rootId\":\"root-a\",\"event\":{\"kind\":\"CommandDecided\",\"commandId\":\"cmd-a\"}}],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-checkpoint-not-next-cursor",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.events\",\"value\":{\"items\":[{\"protocol\":\"1.0-draft.1\",\"eventId\":\"event-a\",\"sequence\":\"8\",\"aggregate\":{\"kind\":\"command\",\"id\":\"cmd-a\"},\"aggregateRevision\":\"1\",\"aggregateRevisionKind\":\"Command\",\"actorId\":\"user-a\",\"occurredAtMs\":\"1793570000000\",\"commandId\":\"cmd-a\",\"rootId\":\"root-a\",\"event\":{\"kind\":\"CommandDecided\",\"commandId\":\"cmd-a\"}}],\"hasMore\":true,\"nextCursor\":\"cursor-b\",\"checkpoint\":\"cursor-c\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-command-aggregate-revision",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.events\",\"value\":{\"items\":[{\"protocol\":\"1.0-draft.1\",\"eventId\":\"event-a\",\"sequence\":\"8\",\"aggregate\":{\"kind\":\"command\",\"id\":\"cmd-a\"},\"aggregateRevision\":\"2\",\"aggregateRevisionKind\":\"Command\",\"actorId\":\"user-a\",\"occurredAtMs\":\"1793570000000\",\"commandId\":\"cmd-a\",\"rootId\":\"root-a\",\"event\":{\"kind\":\"CommandDecided\",\"commandId\":\"cmd-a\"}}],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-command-aggregate-other-command",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.events\",\"value\":{\"items\":[{\"protocol\":\"1.0-draft.1\",\"eventId\":\"event-a\",\"sequence\":\"8\",\"aggregate\":{\"kind\":\"command\",\"id\":\"cmd-b\"},\"aggregateRevision\":\"1\",\"aggregateRevisionKind\":\"Command\",\"actorId\":\"user-a\",\"occurredAtMs\":\"1793570000000\",\"commandId\":\"cmd-a\",\"rootId\":\"root-a\",\"event\":{\"kind\":\"CommandDecided\",\"commandId\":\"cmd-a\"}}],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-command-kind-without-command",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.events\",\"value\":{\"items\":[{\"protocol\":\"1.0-draft.1\",\"eventId\":\"event-a\",\"sequence\":\"8\",\"aggregate\":{\"kind\":\"root\",\"id\":\"root-a\"},\"aggregateRevision\":\"2\",\"aggregateRevisionKind\":\"Command\",\"actorId\":\"user-a\",\"occurredAtMs\":\"1793570000000\",\"commandId\":\"cmd-a\",\"rootId\":\"root-a\",\"event\":{\"kind\":\"CommandDecided\",\"commandId\":\"cmd-a\"}}],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-history.work_lineage",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.work_lineage\",\"value\":{\"items\":[{\"id\":\"id-a\",\"kind\":\"fixture\",\"relatedId\":\"id-a\",\"summary\":\"Fixture content\",\"actorId\":\"actor-a\",\"occurredAtMs\":\"1793570000000\",\"repositoryId\":\"repo-a\",\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},{\"id\":\"id-a\",\"kind\":\"fixture\",\"relatedId\":\"id-a\",\"summary\":\"Fixture content\"}],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-history.evidence_links",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.evidence_links\",\"value\":{\"items\":[{\"id\":\"id-a\",\"targetId\":\"id-a\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"summary\":\"Fixture content\",\"actorId\":\"actor-a\",\"occurredAtMs\":\"1\"}],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-history.git_links",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.git_links\",\"value\":{\"items\":[{\"repositoryId\":\"id-a\",\"workId\":\"id-a\",\"head\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"actorId\":\"actor-a\",\"occurredAtMs\":\"1\"}],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-lineage-attribution",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"history.work_lineage\",\"value\":{\"items\":[{\"id\":\"id-a\",\"kind\":\"fixture\",\"relatedId\":\"id-a\",\"summary\":\"Fixture content\",\"actorId\":\"actor-a\",\"occurredAtMs\":\"1793570000000\",\"repositoryId\":\"repo-a\",\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-vcs-link-actor",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"history.git_links\",\"value\":{\"items\":[{\"repositoryId\":\"id-a\",\"workId\":\"id-a\",\"head\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"actorId\":\"actor-a\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-vcs-link-revision-member",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.git_links\",\"value\":{\"items\":[{\"repositoryId\":\"id-a\",\"workId\":\"id-a\",\"head\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"hasMore\":false,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-history.tool_usage",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.tool_usage\",\"value\":{\"items\":[{\"requestId\":\"id-a\",\"purpose\":\"fixture\",\"modelId\":\"id-a\",\"inputTokens\":\"0\",\"outputTokens\":\"0\",\"cacheReadTokens\":\"0\",\"cacheWriteTokens\":\"0\",\"priceKind\":\"Reported\",\"priceOrigin\":\"OfficialSnapshot\",\"incomplete\":false,\"amountUsd\":\"0\"}],\"hasMore\":false,\"checkpoint\":\"cursor-a\",\"toolInvocations\":[{\"callId\":\"entry-call-a\",\"sessionId\":\"session-a\",\"toolName\":\"tasks.edit\",\"outcome\":\"Failed\",\"durationMs\":\"120\",\"errorCode\":\"conflict\",\"actorId\":\"actor-a\",\"occurredAtMs\":\"1793570000000\"},{\"callId\":\"entry-call-b\",\"sessionId\":\"session-a\",\"toolName\":\"releases.publish\",\"outcome\":\"ApprovalRequired\",\"operationId\":\"operation-a\",\"actorId\":\"actor-a\",\"occurredAtMs\":\"1793570000000\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r1-result-history.tool_usage-usage",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"history.tool_usage\",\"value\":{\"items\":[{\"requestId\":\"id-a\",\"purpose\":\"fixture\",\"modelId\":\"id-a\",\"inputTokens\":\"0\",\"outputTokens\":\"0\",\"cacheReadTokens\":\"0\",\"cacheWriteTokens\":\"0\",\"priceKind\":\"Reported\",\"priceOrigin\":\"OfficialSnapshot\",\"incomplete\":false,\"amountUsd\":\"0\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-tool-invocations",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"history.tool_usage\",\"value\":{\"items\":[{\"requestId\":\"id-a\",\"purpose\":\"fixture\",\"modelId\":\"id-a\",\"inputTokens\":\"0\",\"outputTokens\":\"0\",\"cacheReadTokens\":\"0\",\"cacheWriteTokens\":\"0\",\"priceKind\":\"Reported\",\"priceOrigin\":\"OfficialSnapshot\",\"incomplete\":false,\"amountUsd\":\"0\"}],\"hasMore\":false,\"toolInvocations\":[{\"callId\":\"entry-call-a\",\"sessionId\":\"session-a\",\"toolName\":\"tasks.edit\",\"outcome\":\"Failed\",\"durationMs\":\"120\",\"errorCode\":\"conflict\",\"actorId\":\"actor-a\",\"occurredAtMs\":\"1793570000000\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-tool-invocation-outcome",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.tool_usage\",\"value\":{\"items\":[],\"hasMore\":false,\"checkpoint\":\"cursor-a\",\"toolInvocations\":[{\"callId\":\"entry-call-a\",\"sessionId\":\"session-a\",\"toolName\":\"tasks.edit\",\"outcome\":\"Succeeded\",\"durationMs\":\"120\",\"errorCode\":\"conflict\",\"actorId\":\"actor-a\",\"occurredAtMs\":\"1793570000000\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-usage-page-continuation",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"history.tool_usage\",\"value\":{\"items\":[],\"hasMore\":true,\"checkpoint\":\"cursor-a\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-history.work_lineage",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"history.work_lineage\",\"rootId\":\"root-a\",\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-history.git_links",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"history.git_links\",\"rootId\":\"root-a\",\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-history.evidence_links",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"history.evidence_links\",\"rootId\":\"root-a\",\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-history.tool_usage",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"history.tool_usage\",\"rootId\":\"root-a\",\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-sessions.briefing",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"item\":\"root-a\",\"paths\":[\"src/lib.rs\",\"crates/core\"],\"budgetTokens\":1500},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-sessions.briefing-plain",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r1-input-sessions.briefing-explicit",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\"},\"schemaRevision\":1}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-briefing-budget",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"budgetTokens\":1500}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-briefing-item",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"item\":\"root-a\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-briefing-not-negotiated",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"paths\":[\"src\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-briefing-zero-budget",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"budgetTokens\":0},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-briefing-budget-above-bound",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"budgetTokens\":1000001},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-briefing-empty-paths",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"paths\":[]},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-briefing-absolute-path",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"paths\":[\"/etc/passwd\"]},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-briefing-parent-path",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"paths\":[\"src/../secrets\"]},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-briefing-duplicate-paths",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"paths\":[\"src\",\"src\"]},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-briefing-null-item",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.briefing\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"item\":null},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-sessions.briefing",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"sessions.briefing\",\"value\":{\"items\":[{\"id\":\"id-a\",\"kind\":\"fixture\",\"sourceRevision\":\"1\",\"tokenEstimate\":\"0\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
   }
 ]

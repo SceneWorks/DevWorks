@@ -389,6 +389,64 @@
       "type": "array",
       "uniqueItems": true
     },
+    "AttributedGitLink": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head": {
+          "$ref": "#/$defs/GitOid"
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "pullRequestUrl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "workId": {
+          "$ref": "#/$defs/Id"
+        },
+        "worktreeId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "repositoryId",
+        "workId",
+        "head"
+      ],
+      "type": "object"
+    },
     "BackupRecord": {
       "additionalProperties": false,
       "properties": {
@@ -2135,13 +2193,13 @@
           "$ref": "#/$defs/Id"
         },
         "aggregate": {
-          "$ref": "#/$defs/Subject"
+          "$ref": "#/$defs/EventSubject"
         },
         "aggregateRevision": {
           "$ref": "#/$defs/Revision"
         },
         "aggregateRevisionKind": {
-          "$ref": "#/$defs/RevisionKind"
+          "$ref": "#/$defs/EventRevisionKind"
         },
         "commandId": {
           "anyOf": [
@@ -2323,6 +2381,139 @@
         }
       ]
     },
+    "EventRevisionKind": {
+      "description": "The revision dimension of an [`Event`]'s aggregate: the recorded [`RevisionKind`] values\nplus, from schema revision 2, `Command` for a command aggregate ([`EventSubject::Command`]).\nSeparate from [`RevisionKind`] so that revision conflicts, which never concern a command, keep\ntheir recorded shape at every revision.",
+      "oneOf": [
+        {
+          "enum": [
+            "Work",
+            "Control",
+            "Blocker",
+            "Operation",
+            "Policy",
+            "Scope",
+            "Plan",
+            "Authority"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "Command",
+          "description": "Schema revision 2: the only revision (1) of a decided command.",
+          "type": "string",
+          "x-since": 2
+        }
+      ]
+    },
+    "EventSubject": {
+      "description": "The aggregate an [`Event`] is about: the recorded [`Subject`] variants plus, from schema\nrevision 2, the command (receipt) itself, for a decision whose command names no existing work\nitem or durable operation. A separate union from [`Subject`] so that blockers and revision\nconflicts, which can never name a command, keep their recorded shape at every revision.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "root",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "assignment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "resource",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "blocker",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Schema revision 2: the decided command; its revision is always 1 (a receipt is immutable).",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object",
+          "x-since": 2
+        }
+      ]
+    },
     "EvidenceKind": {
       "enum": [
         "Conversation",
@@ -2336,11 +2527,27 @@
     "EvidenceLink": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
         "artifact": {
           "$ref": "#/$defs/ArtifactRef"
         },
         "id": {
           "$ref": "#/$defs/Id"
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "revision": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         },
         "summary": {
           "$ref": "#/$defs/Text0To65536"
@@ -3567,11 +3774,19 @@
     "LineageRecord": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
         "kind": {
           "$ref": "#/$defs/Text1To256"
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         },
         "parentId": {
           "anyOf": [
@@ -3585,6 +3800,14 @@
         },
         "relatedId": {
           "$ref": "#/$defs/Id"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "revision": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         },
         "summary": {
           "$ref": "#/$defs/Text0To65536"
@@ -3633,6 +3856,14 @@
     "List_ArtifactRef_0_500": {
       "items": {
         "$ref": "#/$defs/ArtifactRef"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AttributedGitLink_0_500": {
+      "items": {
+        "$ref": "#/$defs/AttributedGitLink"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -3787,14 +4018,6 @@
         "$ref": "#/$defs/GitLink"
       },
       "maxItems": 128,
-      "minItems": 0,
-      "type": "array"
-    },
-    "List_GitLink_0_500": {
-      "items": {
-        "$ref": "#/$defs/GitLink"
-      },
-      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -4171,6 +4394,14 @@
         "$ref": "#/$defs/TierName"
       },
       "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_ToolInvocation_0_500": {
+      "items": {
+        "$ref": "#/$defs/ToolInvocation"
+      },
+      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -5987,7 +6218,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page10"
+              "$ref": "#/$defs/UsagePage"
             }
           },
           "required": [
@@ -6004,7 +6235,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page11"
+              "$ref": "#/$defs/Page10"
             }
           },
           "required": [
@@ -6089,7 +6320,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page12"
+              "$ref": "#/$defs/Page11"
             }
           },
           "required": [
@@ -6140,7 +6371,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -6174,7 +6405,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page14"
+              "$ref": "#/$defs/Page13"
             }
           },
           "required": [
@@ -6225,7 +6456,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -6242,7 +6473,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -6259,7 +6490,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -6276,7 +6507,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -6293,7 +6524,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -6395,7 +6626,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page15"
+              "$ref": "#/$defs/Page14"
             }
           },
           "required": [
@@ -6412,7 +6643,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page16"
+              "$ref": "#/$defs/Page15"
             }
           },
           "required": [
@@ -6429,7 +6660,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page17"
+              "$ref": "#/$defs/Page16"
             }
           },
           "required": [
@@ -6599,7 +6830,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page18"
+              "$ref": "#/$defs/Page17"
             }
           },
           "required": [
@@ -6769,7 +7000,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page19"
+              "$ref": "#/$defs/Page18"
             }
           },
           "required": [
@@ -6990,7 +7221,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page18"
+              "$ref": "#/$defs/Page17"
             }
           },
           "required": [
@@ -7024,7 +7255,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page20"
+              "$ref": "#/$defs/Page19"
             }
           },
           "required": [
@@ -7075,7 +7306,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -7160,7 +7391,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page22"
+              "$ref": "#/$defs/Page21"
             }
           },
           "required": [
@@ -7211,7 +7442,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -7228,7 +7459,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -7245,7 +7476,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -7279,7 +7510,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -7483,7 +7714,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -7568,7 +7799,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -7602,7 +7833,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -7619,7 +7850,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page23"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -7636,7 +7867,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page24"
+              "$ref": "#/$defs/Page23"
             }
           },
           "required": [
@@ -7704,7 +7935,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page25"
+              "$ref": "#/$defs/Page24"
             }
           },
           "required": [
@@ -7806,7 +8037,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page23"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -7823,7 +8054,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page26"
+              "$ref": "#/$defs/Page25"
             }
           },
           "required": [
@@ -7874,7 +8105,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page27"
+              "$ref": "#/$defs/Page26"
             }
           },
           "required": [
@@ -7976,7 +8207,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page11"
+              "$ref": "#/$defs/Page10"
             }
           },
           "required": [
@@ -7993,7 +8224,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page28"
+              "$ref": "#/$defs/Page27"
             }
           },
           "required": [
@@ -8027,7 +8258,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page28"
+              "$ref": "#/$defs/Page27"
             }
           },
           "required": [
@@ -8044,7 +8275,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page28"
+              "$ref": "#/$defs/Page27"
             }
           },
           "required": [
@@ -8061,7 +8292,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page29"
+              "$ref": "#/$defs/Page28"
             }
           },
           "required": [
@@ -8129,7 +8360,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page30"
+              "$ref": "#/$defs/Page29"
             }
           },
           "required": [
@@ -8146,7 +8377,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page30"
+              "$ref": "#/$defs/Page29"
             }
           },
           "required": [
@@ -8163,7 +8394,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page31"
+              "$ref": "#/$defs/Page30"
             }
           },
           "required": [
@@ -8265,7 +8496,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page32"
+              "$ref": "#/$defs/Page31"
             }
           },
           "required": [
@@ -8282,7 +8513,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page32"
+              "$ref": "#/$defs/Page31"
             }
           },
           "required": [
@@ -8469,7 +8700,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page33"
+              "$ref": "#/$defs/Page32"
             }
           },
           "required": [
@@ -8503,7 +8734,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page34"
+              "$ref": "#/$defs/Page33"
             }
           },
           "required": [
@@ -8656,7 +8887,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page35"
+              "$ref": "#/$defs/Page34"
             }
           },
           "required": [
@@ -8809,7 +9040,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page36"
+              "$ref": "#/$defs/Page35"
             }
           },
           "required": [
@@ -8843,7 +9074,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page36"
+              "$ref": "#/$defs/Page35"
             }
           },
           "required": [
@@ -8860,7 +9091,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page36"
+              "$ref": "#/$defs/Page35"
             }
           },
           "required": [
@@ -8877,7 +9108,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page37"
+              "$ref": "#/$defs/Page36"
             }
           },
           "required": [
@@ -8894,7 +9125,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page38"
+              "$ref": "#/$defs/Page37"
             }
           },
           "required": [
@@ -8996,7 +9227,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page39"
+              "$ref": "#/$defs/Page38"
             }
           },
           "required": [
@@ -9064,7 +9295,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page40"
+              "$ref": "#/$defs/Page39"
             }
           },
           "required": [
@@ -9098,7 +9329,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page41"
+              "$ref": "#/$defs/Page40"
             }
           },
           "required": [
@@ -9149,7 +9380,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page42"
+              "$ref": "#/$defs/Page41"
             }
           },
           "required": [
@@ -9183,7 +9414,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page43"
+              "$ref": "#/$defs/Page42"
             }
           },
           "required": [
@@ -9200,7 +9431,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page44"
+              "$ref": "#/$defs/Page43"
             }
           },
           "required": [
@@ -9217,7 +9448,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page42"
+              "$ref": "#/$defs/Page41"
             }
           },
           "required": [
@@ -9234,7 +9465,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page45"
+              "$ref": "#/$defs/Page44"
             }
           },
           "required": [
@@ -9285,7 +9516,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page19"
+              "$ref": "#/$defs/Page18"
             }
           },
           "required": [
@@ -9302,7 +9533,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page46"
+              "$ref": "#/$defs/Page45"
             }
           },
           "required": [
@@ -9336,7 +9567,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page46"
+              "$ref": "#/$defs/Page45"
             }
           },
           "required": [
@@ -9353,7 +9584,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page46"
+              "$ref": "#/$defs/Page45"
             }
           },
           "required": [
@@ -9387,7 +9618,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page19"
+              "$ref": "#/$defs/Page18"
             }
           },
           "required": [
@@ -9404,7 +9635,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page19"
+              "$ref": "#/$defs/Page18"
             }
           },
           "required": [
@@ -9489,7 +9720,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page47"
+              "$ref": "#/$defs/Page46"
             }
           },
           "required": [
@@ -9523,7 +9754,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page11"
+              "$ref": "#/$defs/Page10"
             }
           },
           "required": [
@@ -9625,7 +9856,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page11"
+              "$ref": "#/$defs/Page10"
             }
           },
           "required": [
@@ -9642,7 +9873,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page48"
+              "$ref": "#/$defs/Page47"
             }
           },
           "required": [
@@ -9778,7 +10009,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page49"
+              "$ref": "#/$defs/Page48"
             }
           },
           "required": [
@@ -9931,7 +10162,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page50"
+              "$ref": "#/$defs/Page49"
             }
           },
           "required": [
@@ -10118,7 +10349,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page51"
+              "$ref": "#/$defs/Page50"
             }
           },
           "required": [
@@ -10441,7 +10672,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page52"
+              "$ref": "#/$defs/Page51"
             }
           },
           "required": [
@@ -11079,7 +11310,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_UsageItem_0_500"
+          "$ref": "#/$defs/List_RepositoryRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11105,7 +11336,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_RepositoryRecord_0_500"
+          "$ref": "#/$defs/List_IndexRunRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11131,7 +11362,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_IndexRunRecord_0_500"
+          "$ref": "#/$defs/List_MetricRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11157,7 +11388,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_MetricRecord_0_500"
+          "$ref": "#/$defs/List_ClusterRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11183,7 +11414,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ClusterRecord_0_500"
+          "$ref": "#/$defs/List_SchemaConnection_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11209,7 +11440,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_SchemaConnection_0_500"
+          "$ref": "#/$defs/List_SchemaObject_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11235,7 +11466,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_SchemaObject_0_500"
+          "$ref": "#/$defs/List_SchemaRelation_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11261,7 +11492,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_SchemaRelation_0_500"
+          "$ref": "#/$defs/List_KnowledgeClaim_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11287,7 +11518,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_KnowledgeClaim_0_500"
+          "$ref": "#/$defs/List_Diagnostic_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11313,7 +11544,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_Diagnostic_0_500"
+          "$ref": "#/$defs/List_DreamRun_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11365,7 +11596,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_DreamRun_0_500"
+          "$ref": "#/$defs/List_InstructionRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11391,7 +11622,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_InstructionRecord_0_500"
+          "$ref": "#/$defs/List_DocumentRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11417,7 +11648,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_DocumentRecord_0_500"
+          "$ref": "#/$defs/List_ArtifactRef_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11443,7 +11674,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ArtifactRef_0_500"
+          "$ref": "#/$defs/List_ProposalRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11469,7 +11700,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ProposalRecord_0_500"
+          "$ref": "#/$defs/List_NotificationRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11495,7 +11726,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_NotificationRecord_0_500"
+          "$ref": "#/$defs/List_ReviewRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11521,7 +11752,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ReviewRecord_0_500"
+          "$ref": "#/$defs/List_ReviewFinding_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11547,7 +11778,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ReviewFinding_0_500"
+          "$ref": "#/$defs/List_GithubObservation_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11573,7 +11804,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_GithubObservation_0_500"
+          "$ref": "#/$defs/List_ResourceRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11599,7 +11830,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ResourceRecord_0_500"
+          "$ref": "#/$defs/List_LeaseRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11651,7 +11882,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_LeaseRecord_0_500"
+          "$ref": "#/$defs/List_BrowserSession_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11677,7 +11908,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_BrowserSession_0_500"
+          "$ref": "#/$defs/List_BrowserObservation_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11703,7 +11934,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_BrowserObservation_0_500"
+          "$ref": "#/$defs/List_WebResult_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11729,7 +11960,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_WebResult_0_500"
+          "$ref": "#/$defs/List_ContainerCapability_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11755,7 +11986,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ContainerCapability_0_500"
+          "$ref": "#/$defs/List_JobRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11781,7 +12012,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_JobRecord_0_500"
+          "$ref": "#/$defs/List_SettingEntry_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11807,7 +12038,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_SettingEntry_0_500"
+          "$ref": "#/$defs/List_RouteModel_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11833,7 +12064,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_RouteModel_0_500"
+          "$ref": "#/$defs/List_ConnectionRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11859,7 +12090,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ConnectionRecord_0_500"
+          "$ref": "#/$defs/List_ModelPriceStatus_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11885,7 +12116,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ModelPriceStatus_0_500"
+          "$ref": "#/$defs/List_DecisionModel_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11937,7 +12168,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_DecisionModel_0_500"
+          "$ref": "#/$defs/List_McpServer_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11963,7 +12194,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpServer_0_500"
+          "$ref": "#/$defs/List_McpCapability_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11989,7 +12220,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpCapability_0_500"
+          "$ref": "#/$defs/List_McpResource_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -12015,7 +12246,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpResource_0_500"
+          "$ref": "#/$defs/List_McpPrompt_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -12041,7 +12272,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpPrompt_0_500"
+          "$ref": "#/$defs/List_PackageRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -12067,7 +12298,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_PackageRecord_0_500"
+          "$ref": "#/$defs/List_HelpTopic_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -12093,7 +12324,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_HelpTopic_0_500"
+          "$ref": "#/$defs/List_UpdateRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -12119,7 +12350,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_UpdateRecord_0_500"
+          "$ref": "#/$defs/List_QueueDelivery_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -12145,7 +12376,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_QueueDelivery_0_500"
+          "$ref": "#/$defs/List_ImportRun_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -12171,7 +12402,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ImportRun_0_500"
+          "$ref": "#/$defs/List_McpClientAccess_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -12218,33 +12449,13 @@
     },
     "Page50": {
       "additionalProperties": false,
+      "description": "A page of committed history (`history.events`, `.work_lineage`, `.git_links`,\n`.evidence_links`). Revision 1 is exactly the recorded [`Page`]: `nextCursor` is present\nexactly when `hasMore`. Schema revision 2 adds `checkpoint`, the continuation after the last\nfact this page covers, returned on every page including the current tail (an empty page keeps\nthe position it was asked from), so a poller resumes without replaying the history. While\n`hasMore`, the checkpoint is the `nextCursor`. It keeps the recorded `Page` schema name, so\nrevision-1 documents are unchanged.",
       "properties": {
-        "hasMore": {
-          "type": "boolean"
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
+          "x-since": 2
         },
-        "items": {
-          "$ref": "#/$defs/List_McpClientAccess_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
-    "Page51": {
-      "additionalProperties": false,
-      "properties": {
         "hasMore": {
           "type": "boolean"
         },
@@ -12268,7 +12479,7 @@
       ],
       "type": "object"
     },
-    "Page52": {
+    "Page51": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -12322,7 +12533,13 @@
     },
     "Page7": {
       "additionalProperties": false,
+      "description": "A page of committed history (`history.events`, `.work_lineage`, `.git_links`,\n`.evidence_links`). Revision 1 is exactly the recorded [`Page`]: `nextCursor` is present\nexactly when `hasMore`. Schema revision 2 adds `checkpoint`, the continuation after the last\nfact this page covers, returned on every page including the current tail (an empty page keeps\nthe position it was asked from), so a poller resumes without replaying the history. While\n`hasMore`, the checkpoint is the `nextCursor`. It keeps the recorded `Page` schema name, so\nrevision-1 documents are unchanged.",
       "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
+          "x-since": 2
+        },
         "hasMore": {
           "type": "boolean"
         },
@@ -12348,12 +12565,18 @@
     },
     "Page8": {
       "additionalProperties": false,
+      "description": "A page of committed history (`history.events`, `.work_lineage`, `.git_links`,\n`.evidence_links`). Revision 1 is exactly the recorded [`Page`]: `nextCursor` is present\nexactly when `hasMore`. Schema revision 2 adds `checkpoint`, the continuation after the last\nfact this page covers, returned on every page including the current tail (an empty page keeps\nthe position it was asked from), so a poller resumes without replaying the history. While\n`hasMore`, the checkpoint is the `nextCursor`. It keeps the recorded `Page` schema name, so\nrevision-1 documents are unchanged.",
       "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
+          "x-since": 2
+        },
         "hasMore": {
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_GitLink_0_500"
+          "$ref": "#/$defs/List_AttributedGitLink_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -12374,7 +12597,13 @@
     },
     "Page9": {
       "additionalProperties": false,
+      "description": "A page of committed history (`history.events`, `.work_lineage`, `.git_links`,\n`.evidence_links`). Revision 1 is exactly the recorded [`Page`]: `nextCursor` is present\nexactly when `hasMore`. Schema revision 2 adds `checkpoint`, the continuation after the last\nfact this page covers, returned on every page including the current tail (an empty page keeps\nthe position it was asked from), so a poller resumes without replaying the history. While\n`hasMore`, the checkpoint is the `nextCursor`. It keeps the recorded `Page` schema name, so\nrevision-1 documents are unchanged.",
       "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
+          "x-since": 2
+        },
         "hasMore": {
           "type": "boolean"
         },
@@ -13814,19 +14043,6 @@
       ],
       "type": "string"
     },
-    "RevisionKind": {
-      "enum": [
-        "Work",
-        "Control",
-        "Blocker",
-        "Operation",
-        "Policy",
-        "Scope",
-        "Plan",
-        "Authority"
-      ],
-      "type": "string"
-    },
     "RevisionedRef": {
       "additionalProperties": false,
       "properties": {
@@ -14653,6 +14869,79 @@
       ],
       "type": "object"
     },
+    "ToolInvocation": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "callId": {
+          "$ref": "#/$defs/Id"
+        },
+        "durationMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errorCode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "operationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/ToolInvocationOutcome"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "toolName": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "callId",
+        "sessionId",
+        "toolName",
+        "outcome",
+        "actorId",
+        "occurredAtMs"
+      ],
+      "type": "object"
+    },
+    "ToolInvocationOutcome": {
+      "enum": [
+        "Completed",
+        "Failed",
+        "ApprovalRequired",
+        "DependencyBlocked",
+        "CancelledBeforeDispatch",
+        "OutcomeUnknown"
+      ],
+      "type": "string"
+    },
     "ToolOutcome": {
       "oneOf": [
         {
@@ -15180,6 +15469,40 @@
         "priceKind",
         "priceOrigin",
         "incomplete"
+      ],
+      "type": "object"
+    },
+    "UsagePage": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_UsageItem_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toolInvocations": {
+          "$ref": "#/$defs/List_ToolInvocation_0_500",
+          "x-since": 2
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
       ],
       "type": "object"
     },

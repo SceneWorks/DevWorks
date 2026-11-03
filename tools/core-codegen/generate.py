@@ -40,9 +40,11 @@ SHARED = set('Id Revision Counter HoldRef Protocol CommandRequest QueryRequest R
 PROVIDER = set('Digest ArtifactRef SchemaRef TranscriptPage Attribution'.split())
 DATA = set('DataScope ViewSelection Coverage GitOid GraphPage RetrievalPage DeliveryBarrier DeliverySnapshot '
            'ArtifactTags'.split())
-SUPPORT = set('Check Label Text Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page Limit Depth Port '
-              'ByteLimit Url RelativePath Money SignedCounter PositiveCounter Finite Probability DynamicJson '
-              'DomainErrorCode DomainFault'.split())
+SUPPORT = set('Check Label Text Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page HistoryPage Limit '
+              'Depth Port ByteLimit TokenBudget Url RelativePath Money SignedCounter PositiveCounter Finite Probability '
+              'DynamicJson DomainErrorCode DomainFault'.split())
+# Hand-written support types that gate a member by schema revision themselves.
+GATED_SUPPORT = {'HistoryPage'}
 PRIMITIVE = {'bool', 'i32', 'Option'}
 
 SPECIALIZED = {
@@ -499,7 +501,8 @@ def gen_results(ops):
     out += ['        }', '    }', '}', 'impl Check for OperationResult {', '    fn check(&self) -> Result<(), String> {',
             '        match self {']
     out += [f'            Self::{pascal(n)} {{ value }} => value.check()?,' for n, _ in results]
-    projected = [n for n, t in results if tokens(t) & RC]
+    # HistoryPage is a support type with its own revision-2 member (the tail checkpoint).
+    projected = [n for n, t in results if tokens(t) & (RC | GATED_SUPPORT)]
     out += ['        }',
             '        crate::protocol::rules::result(self.operation(), &serde_json::to_value(self).map_err(|e| e.to_string())?)',
             '    }', '}',

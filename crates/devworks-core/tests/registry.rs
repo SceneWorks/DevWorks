@@ -250,8 +250,59 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
     }
     assert_eq!(
         revisioned,
-        BTreeSet::from(["artifacts.list", "artifacts.save"])
+        BTreeSet::from([
+            "artifacts.list",
+            "artifacts.save",
+            "history.events",
+            "history.evidence_links",
+            "history.git_links",
+            "history.tool_usage",
+            "history.work_lineage",
+            "sessions.briefing",
+        ])
     );
+    // Revision 1 of the history pages is exactly the recorded Page; revision 2 adds the tail
+    // checkpoint, the command aggregate, structured attribution and tool invocations.
+    let schema = |s| serde_json::to_value(s).unwrap().to_string();
+    for (name, members) in [
+        ("history.events", &["checkpoint", "command"][..]),
+        (
+            "history.work_lineage",
+            &["checkpoint", "actorId", "occurredAtMs", "repositoryId"][..],
+        ),
+        ("history.git_links", &["checkpoint", "actorId"][..]),
+        ("history.evidence_links", &["checkpoint", "actorId"][..]),
+        ("history.tool_usage", &["checkpoint", "toolInvocations"][..]),
+    ] {
+        let d = registry::find(name).unwrap();
+        let (r1, r2) = (
+            schema(d.result_schema(SchemaRevision(1))),
+            schema(d.result_schema(SchemaRevision(2))),
+        );
+        for m in members {
+            let quoted = format!("\"{}\"", m.trim_matches('"'));
+            assert!(!r1.contains(&quoted), "{name} revision 1 has {m}");
+            assert!(r2.contains(&quoted), "{name} revision 2 lacks {m}");
+        }
+        assert!(
+            !r1.contains("x-since") && r2.contains("\"x-since\":2"),
+            "{name}"
+        );
+    }
+    let events = registry::find("history.events").unwrap();
+    let (q1, q2) = (
+        schema(events.modes[0].input_schema(SchemaRevision(1))),
+        schema(events.modes[0].input_schema(SchemaRevision(2))),
+    );
+    assert!(!q1.contains("\"projectId\"") && q2.contains("\"projectId\""));
+    let briefing = registry::find("sessions.briefing").unwrap();
+    let (b1, b2) = (
+        schema(briefing.modes[0].input_schema(SchemaRevision(1))),
+        schema(briefing.modes[0].input_schema(SchemaRevision(2))),
+    );
+    for m in ["item", "paths", "budgetTokens"] {
+        assert!(!b1.contains(&format!("\"{m}\"")) && b2.contains(&format!("\"{m}\"")));
+    }
     // Revision 1 is exactly the earlier shape; revision 2 adds the tags member and its bounds.
     for (name, mode) in [
         ("artifacts.save", Mode::Command),

@@ -141,6 +141,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         "operation-result" => decode_domain::<OperationResult>(&raw, |v| {
                             at_revision(v, revision)?;
+                            // A union alternative introduced later (the command aggregate of an
+                            // event) cannot be cleared from a value; its revision refuses it.
+                            if let OperationResult::HistoryEvents { value } = v {
+                                for event in &value.items.0 {
+                                    event.validate_revision(revision)?;
+                                    event.validate()?;
+                                }
+                            }
                             devworks_contract_probe::domain_support::Check::check(v)
                         }),
                         "operation-completion" => {
@@ -156,6 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "query-request" => serde_json::from_str::<QueryRequest>(&raw)
                             .map_err(|e| e.to_string())
                             .and_then(|v| {
+                                at_revision(&v, revision)?;
                                 v.validate().map_err(str::to_owned)?;
                                 serde_json::to_value(v).map_err(|e| e.to_string())
                             }),
@@ -620,6 +629,24 @@ mod revision {
                     if let Some(Value::Array(req)) = m.get_mut("required") {
                         req.retain(|r| !gone.iter().any(|g| r == g));
                     }
+                }
+                // A union alternative introduced later is removed too; a union left with one
+                // alternative and nothing else is that alternative.
+                for key in ["oneOf", "anyOf"] {
+                    if let Some(Value::Array(alts)) = m.get_mut(key) {
+                        alts.retain(|a| !since(a).is_some_and(|s| s > u64::from(revision)));
+                    }
+                }
+                let single = (m.len() == 1)
+                    .then(|| m.get("oneOf").or_else(|| m.get("anyOf")))
+                    .flatten()
+                    .and_then(Value::as_array)
+                    .filter(|alts| alts.len() == 1)
+                    .map(|alts| alts[0].clone());
+                if let Some(alt) = single {
+                    *v = alt;
+                    strip(v, revision);
+                    return;
                 }
                 m.values_mut().for_each(|x| strip(x, revision));
             }

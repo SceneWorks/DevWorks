@@ -30,8 +30,22 @@ class SchemaRevisionRules(unittest.TestCase):
         names = {o['operation'] for _, o in generate.operations()}
         self.assertIn('artifacts.save', names)
         carried = {o['operation']: generate.introduced_in(o) for _, o in generate.operations()}
-        self.assertEqual({n for n, s in carried.items() if s}, {'artifacts.save', 'artifacts.list'})
+        self.assertEqual({n for n, s in carried.items() if s}, {
+            'artifacts.save', 'artifacts.list', 'history.events', 'history.work_lineage',
+            'history.git_links', 'history.evidence_links', 'history.tool_usage', 'sessions.briefing'})
         self.assertEqual(carried['artifacts.save'], {2})
+        # Shared envelopes and union alternatives count only for the operation that selects them:
+        # runs.inspect shares the query envelope and reaches Subject (via blockers), never the
+        # command aggregate or project scope of history.events.
+        self.assertEqual(carried['history.events'], {2})
+        self.assertEqual(carried['runs.inspect'], set())
+        self.assertEqual(carried['history.operation_status'], set())
+
+    def test_a_history_page_result_is_projected(self):
+        # HistoryPage gates its own checkpoint, so every result carrying it is projected.
+        results = generate.gen_results(generate.operations())
+        for op in ['HistoryEvents', 'HistoryWorkLineage', 'HistoryGitLinks', 'HistoryEvidenceLinks', 'HistoryToolUsage']:
+            self.assertIn(f'Self::{op} {{ value }} => value.retain_revision(revision),', results)
 
     def test_a_gated_member_of_an_operation_that_never_registers_its_revision_fails(self):
         # ProjectRecord is the result of projects.get, which registers only revision 1.

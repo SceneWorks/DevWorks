@@ -150,17 +150,19 @@ pub enum OperationResult {
     #[serde(rename = "ui.current_screen")]
     UiCurrentScreen { value: ScreenContext },
     #[serde(rename = "history.events")]
-    HistoryEvents { value: Page<Event> },
+    HistoryEvents { value: HistoryPage<Event> },
     #[serde(rename = "history.work_lineage")]
-    HistoryWorkLineage { value: Page<LineageRecord> },
+    HistoryWorkLineage { value: HistoryPage<LineageRecord> },
     #[serde(rename = "history.git_links")]
-    HistoryGitLinks { value: Page<GitLink> },
+    HistoryGitLinks {
+        value: HistoryPage<AttributedGitLink>,
+    },
     #[serde(rename = "history.evidence_links")]
-    HistoryEvidenceLinks { value: Page<EvidenceLink> },
+    HistoryEvidenceLinks { value: HistoryPage<EvidenceLink> },
     #[serde(rename = "history.operation_status")]
     HistoryOperationStatus { value: OperationRef },
     #[serde(rename = "history.tool_usage")]
-    HistoryToolUsage { value: Page<UsageItem> },
+    HistoryToolUsage { value: UsagePage },
     #[serde(rename = "history.command_receipt")]
     HistoryCommandReceipt { value: ReceiptObservation },
     #[serde(rename = "code.search")]
@@ -1456,6 +1458,11 @@ impl Check for OperationResult {
 impl Revisioned for OperationResult {
     fn retain_revision(&mut self, revision: u32) {
         match self {
+            Self::HistoryEvents { value } => value.retain_revision(revision),
+            Self::HistoryWorkLineage { value } => value.retain_revision(revision),
+            Self::HistoryGitLinks { value } => value.retain_revision(revision),
+            Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
+            Self::HistoryToolUsage { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             _ => {}

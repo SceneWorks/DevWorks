@@ -438,7 +438,17 @@
         "id": "Id",
         "target_id": "Id",
         "artifact": "ArtifactRef",
-        "summary": "Content"
+        "summary": "Content",
+        "actor_id": "?ActorId",
+        "occurred_at_ms": "?Counter",
+        "repository_id": "?Id",
+        "revision": "?Text"
+      },
+      "since": {
+        "actor_id": 2,
+        "occurred_at_ms": 2,
+        "repository_id": 2,
+        "revision": 2
       }
     },
     "StatusRecord": {
@@ -469,7 +479,17 @@
         "parent_id": "?Id",
         "kind": "Label",
         "related_id": "Id",
-        "summary": "Content"
+        "summary": "Content",
+        "actor_id": "?ActorId",
+        "occurred_at_ms": "?Counter",
+        "repository_id": "?Id",
+        "revision": "?Text"
+      },
+      "since": {
+        "actor_id": 2,
+        "occurred_at_ms": 2,
+        "repository_id": 2,
+        "revision": 2
       }
     },
     "AgentRecord": {
@@ -1000,6 +1020,23 @@
         "head": "GitOid"
       }
     },
+    "AttributedGitLink": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "work_id": "Id",
+        "worktree_id": "?Id",
+        "branch": "?Text",
+        "pull_request_url": "?Url",
+        "head": "GitOid",
+        "actor_id": "?ActorId",
+        "occurred_at_ms": "?Counter"
+      },
+      "since": {
+        "actor_id": 2,
+        "occurred_at_ms": 2
+      }
+    },
     "ReleaseRecord": {
       "kind": "record",
       "fields": {
@@ -1454,6 +1491,45 @@
         "price_origin": "PriceOrigin",
         "price_revision": "?Revision",
         "incomplete": "bool"
+      }
+    },
+    "ToolInvocationOutcome": {
+      "kind": "enum",
+      "values": [
+        "Completed",
+        "Failed",
+        "ApprovalRequired",
+        "DependencyBlocked",
+        "CancelledBeforeDispatch",
+        "OutcomeUnknown"
+      ]
+    },
+    "ToolInvocation": {
+      "kind": "record",
+      "fields": {
+        "call_id": "Id",
+        "session_id": "Id",
+        "tool_name": "Label",
+        "outcome": "ToolInvocationOutcome",
+        "duration_ms": "?Counter",
+        "error_code": "?Label",
+        "operation_id": "?OperationId",
+        "actor_id": "ActorId",
+        "occurred_at_ms": "Counter"
+      }
+    },
+    "UsagePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<UsageItem>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "checkpoint": "?Cursor",
+        "tool_invocations": "?Rows<ToolInvocation>"
+      },
+      "since": {
+        "checkpoint": 2,
+        "tool_invocations": 2
       }
     },
     "UsageReport": {
@@ -3032,12 +3108,20 @@
       "mode": "Query",
       "fields": {
         "session_id": "Id",
-        "expected_context_epoch": "Counter"
+        "expected_context_epoch": "Counter",
+        "item": "?RootId",
+        "paths": "?NonEmpty<RelativePath>",
+        "budget_tokens": "?TokenBudget"
       },
       "result": "Page<ContextSource>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: item adds that visible work item of the session's scope to the briefing; paths (distinct) scope it; budgetTokens caps the summed source estimates (4 bytes per token, rounded up) at a prefix of the briefing order.",
+      "since": {
+        "item": 2,
+        "paths": 2,
+        "budget_tokens": 2
+      }
     },
     "sessions.context_sources": {
       "operation": "sessions.context_sources",
@@ -3093,10 +3177,10 @@
         "root_id": "RootId",
         "page": "PageRequest"
       },
-      "result": "Page<LineageRecord>",
+      "result": "HistoryPage<LineageRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution."
     },
     "history.git_links": {
       "operation": "history.git_links",
@@ -3105,10 +3189,10 @@
         "root_id": "RootId",
         "page": "PageRequest"
       },
-      "result": "Page<GitLink>",
+      "result": "HistoryPage<AttributedGitLink>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution."
     },
     "history.evidence_links": {
       "operation": "history.evidence_links",
@@ -3117,10 +3201,10 @@
         "root_id": "RootId",
         "page": "PageRequest"
       },
-      "result": "Page<EvidenceLink>",
+      "result": "HistoryPage<EvidenceLink>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution."
     },
     "history.tool_usage": {
       "operation": "history.tool_usage",
@@ -3129,10 +3213,10 @@
         "root_id": "RootId",
         "page": "PageRequest"
       },
-      "result": "Page<UsageItem>",
+      "result": "UsagePage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: tool invocations (one per durable initial tool response) are interleaved with inference usage in committed-sequence order, and every page carries a continuation checkpoint."
     },
     "indexing.discover": {
       "operation": "indexing.discover",
@@ -6243,7 +6327,7 @@
     "runs.eligibility": "EligibilitySnapshot",
     "history.operation_status": "OperationRef",
     "history.command_receipt": "ReceiptObservation",
-    "history.events": "Page<Event>",
+    "history.events": "HistoryPage<Event>",
     "sessions.append_message": "SessionRecord",
     "sessions.transcript": "TranscriptPage",
     "addons.install": "PackageRecord",
@@ -6301,6 +6385,30 @@
       2
     ],
     "artifacts.list": [
+      1,
+      2
+    ],
+    "history.events": [
+      1,
+      2
+    ],
+    "history.work_lineage": [
+      1,
+      2
+    ],
+    "history.git_links": [
+      1,
+      2
+    ],
+    "history.evidence_links": [
+      1,
+      2
+    ],
+    "history.tool_usage": [
+      1,
+      2
+    ],
+    "sessions.briefing": [
       1,
       2
     ]

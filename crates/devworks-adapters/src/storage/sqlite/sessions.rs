@@ -61,13 +61,22 @@ fn require<P: rusqlite::Params>(
 
 fn work_root(conn: &Connection, root: &RootId) -> Result<Option<WorkRoot>, StorageError> {
     let raw = db(db(conn.prepare_cached(
-        "SELECT id,project_id,kind,title,revision,scope_revision,parent_feature_id FROM work_items WHERE id=?1",
+        "SELECT id,project_id,kind,title,revision,scope_revision,parent_feature_id,created_at FROM work_items WHERE id=?1",
     ))?
     .query_row([root.0.as_str()], work_row)
     .optional())?;
     raw.map(work_of).transpose()
 }
-type WorkRaw = (String, String, String, String, i64, i64, Option<String>);
+type WorkRaw = (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    Option<String>,
+    i64,
+);
 fn work_row(r: &Row<'_>) -> rusqlite::Result<WorkRaw> {
     Ok((
         r.get(0)?,
@@ -77,10 +86,11 @@ fn work_row(r: &Row<'_>) -> rusqlite::Result<WorkRaw> {
         r.get(4)?,
         r.get(5)?,
         r.get(6)?,
+        r.get(7)?,
     ))
 }
 fn work_of(raw: WorkRaw) -> Result<WorkRoot, StorageError> {
-    let (id, project, kind, title, revision, scope, parent) = raw;
+    let (id, project, kind, title, revision, scope, parent, created) = raw;
     Ok(WorkRoot {
         id: RootId(id_of(id)?),
         project_id: ProjectId(id_of(project)?),
@@ -89,6 +99,7 @@ fn work_of(raw: WorkRaw) -> Result<WorkRoot, StorageError> {
         revision,
         scope_revision: scope,
         parent_feature_id: opt_id(parent)?.map(RootId),
+        created_at_ms: created,
     })
 }
 
@@ -757,6 +768,92 @@ fn root_events(
         .collect()
 }
 
+fn usage_facts(
+    conn: &Connection,
+    root: &RootId,
+    after: Option<&SequenceKey>,
+    limit: u16,
+) -> Result<Vec<UsageFact>, StorageError> {
+    let n = bounded(limit)?;
+    let key = after.cloned().unwrap_or(SequenceKey {
+        sequence: -1,
+        source: 0,
+        id: String::new(),
+    });
+    // One keyset over the root's tool responses (source 1, keyed by link ID) and its usage
+    // observations (source 3, keyed by the zero-padded ordinal as in `usage`).
+    let mut stmt = db(conn.prepare_cached(
+        "SELECT seq,src,id FROM (
+           SELECT seq,1 AS src,id FROM history_links WHERE root_id=?1 AND kind='tool_response'
+           UNION ALL SELECT committed_seq,3,printf('%06d',ordinal) FROM session_usage WHERE root_id=?1
+         ) WHERE seq>?2 OR (seq=?2 AND (src>?3 OR (src=?3 AND id>?4)))
+         ORDER BY seq,src,id LIMIT ?5",
+    ))?;
+    let rows = db(stmt.query_map(
+        params![root.0.as_str(), key.sequence, key.source as i64, key.id, n],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        },
+    ))?;
+    let keys: Vec<(i64, i64, String)> = db(rows.collect())?;
+    let mut out = Vec::with_capacity(keys.len());
+    for (seq, src, id) in keys {
+        let key = SequenceKey {
+            sequence: seq,
+            source: src as u8,
+            id: id.clone(),
+        };
+        if src == 1 {
+            let link = link(conn, &id_of(id)?)?.ok_or_else(|| corrupt("tool response vanished"))?;
+            out.push(UsageFact::ToolResponse { key, link });
+        } else {
+            // The usage row at exactly this key: the observation before it, then one row.
+            let before = SequenceKey {
+                sequence: seq,
+                source: 3,
+                id: format!(
+                    "{:06}",
+                    id.parse::<i64>().map_err(|_| corrupt("usage ordinal"))? - 1
+                ),
+            };
+            let (_, usage) = usage(conn, root, Some(&before), 1)?
+                .into_iter()
+                .next()
+                .filter(|(k, _)| *k == key)
+                .ok_or_else(|| corrupt("usage observation vanished"))?;
+            out.push(UsageFact::Inference { key, usage });
+        }
+    }
+    Ok(out)
+}
+
+fn scope_events(
+    conn: &Connection,
+    scope: &HistoryScope,
+    kinds: &[&str],
+    after: i64,
+    limit: u16,
+) -> Result<Vec<EventRecord>, StorageError> {
+    let n = bounded(limit)?;
+    let (column, value) = match scope {
+        HistoryScope::Root(r) => ("root_id", r.0.as_str()),
+        HistoryScope::Project(p) => ("project_id", p.0.as_str()),
+    };
+    let mut stmt = db(conn.prepare_cached(&format!(
+        "SELECT {EVENT_COLUMNS} FROM events WHERE {column}=?1 AND seq>?2
+         AND kind IN (SELECT value FROM json_each(?3)) ORDER BY seq LIMIT ?4"
+    )))?;
+    let rows = db(stmt.query_map(params![value, after, kinds_json(kinds), n], event_row))?;
+    db(rows.collect::<rusqlite::Result<Vec<_>>>())?
+        .into_iter()
+        .map(event_of)
+        .collect()
+}
+
 macro_rules! session_reads {
     ($t:ty) => {
         impl SessionRead for $t {
@@ -828,6 +925,16 @@ macro_rules! session_reads {
                     "SELECT 1 FROM projects WHERE id=?1",
                     [project.0.as_str()],
                 )
+            }
+            fn project_scope_revision(
+                &self,
+                project: &ProjectId,
+            ) -> Result<Option<i64>, StorageError> {
+                db(db(self
+                    .conn
+                    .prepare_cached("SELECT scope_revision FROM projects WHERE id=?1"))?
+                .query_row([project.0.as_str()], |r| r.get(0))
+                .optional())
             }
             fn project_has_repository(
                 &self,
@@ -913,6 +1020,14 @@ macro_rules! session_reads {
             ) -> Result<Vec<(SequenceKey, StoredUsage)>, StorageError> {
                 usage(self.conn, root, after, limit)
             }
+            fn usage_facts(
+                &self,
+                root: &RootId,
+                after: Option<&SequenceKey>,
+                limit: u16,
+            ) -> Result<Vec<UsageFact>, StorageError> {
+                usage_facts(self.conn, root, after, limit)
+            }
             fn link(&self, id: &Id) -> Result<Option<StoredLink>, StorageError> {
                 link(self.conn, id)
             }
@@ -949,6 +1064,15 @@ macro_rules! session_reads {
                 limit: u16,
             ) -> Result<Vec<EventRecord>, StorageError> {
                 root_events(self.conn, root, kinds, after, limit)
+            }
+            fn scope_events(
+                &self,
+                scope: &HistoryScope,
+                kinds: &[&str],
+                after: i64,
+                limit: u16,
+            ) -> Result<Vec<EventRecord>, StorageError> {
+                scope_events(self.conn, scope, kinds, after, limit)
             }
         }
     };

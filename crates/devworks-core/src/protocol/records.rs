@@ -797,6 +797,34 @@ pub struct EvidenceLink {
     pub target_id: Id,
     pub artifact: ArtifactRef,
     pub summary: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub actor_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub occurred_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub repository_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub revision: Option<Text>,
 }
 impl Check for EvidenceLink {
     fn check(&self) -> Result<(), String> {
@@ -804,11 +832,32 @@ impl Check for EvidenceLink {
         self.target_id.check()?;
         self.artifact.check()?;
         self.summary.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        self.repository_id.check()?;
+        self.revision.check()?;
         crate::protocol::rules::record(
             "EvidenceLink",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for EvidenceLink {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.actor_id = None;
+        }
+        if revision < 2 {
+            self.occurred_at_ms = None;
+        }
+        if revision < 2 {
+            self.repository_id = None;
+        }
+        if revision < 2 {
+            self.revision = None;
+        }
     }
 }
 
@@ -871,6 +920,34 @@ pub struct LineageRecord {
     pub kind: Label,
     pub related_id: Id,
     pub summary: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub actor_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub occurred_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub repository_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub revision: Option<Text>,
 }
 impl Check for LineageRecord {
     fn check(&self) -> Result<(), String> {
@@ -879,11 +956,32 @@ impl Check for LineageRecord {
         self.kind.check()?;
         self.related_id.check()?;
         self.summary.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        self.repository_id.check()?;
+        self.revision.check()?;
         crate::protocol::rules::record(
             "LineageRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for LineageRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.actor_id = None;
+        }
+        if revision < 2 {
+            self.occurred_at_ms = None;
+        }
+        if revision < 2 {
+            self.repository_id = None;
+        }
+        if revision < 2 {
+            self.revision = None;
+        }
     }
 }
 
@@ -2165,6 +2263,62 @@ impl Check for GitLink {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttributedGitLink {
+    pub repository_id: Id,
+    pub work_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_url: Option<Url>,
+    pub head: GitOid,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub actor_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub occurred_at_ms: Option<Counter>,
+}
+impl Check for AttributedGitLink {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.work_id.check()?;
+        self.worktree_id.check()?;
+        self.branch.check()?;
+        self.pull_request_url.check()?;
+        self.head.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        crate::protocol::rules::record(
+            "AttributedGitLink",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for AttributedGitLink {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.actor_id = None;
+        }
+        if revision < 2 {
+            self.occurred_at_ms = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReleaseRecord {
     pub id: Id,
     pub revision: Revision,
@@ -3231,6 +3385,104 @@ impl Check for UsageItem {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ToolInvocationOutcome {
+    Completed,
+    Failed,
+    ApprovalRequired,
+    DependencyBlocked,
+    CancelledBeforeDispatch,
+    OutcomeUnknown,
+}
+impl Check for ToolInvocationOutcome {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolInvocation {
+    pub call_id: Id,
+    pub session_id: Id,
+    pub tool_name: Label,
+    pub outcome: ToolInvocationOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    pub actor_id: ActorId,
+    pub occurred_at_ms: Counter,
+}
+impl Check for ToolInvocation {
+    fn check(&self) -> Result<(), String> {
+        self.call_id.check()?;
+        self.session_id.check()?;
+        self.tool_name.check()?;
+        self.outcome.check()?;
+        self.duration_ms.check()?;
+        self.error_code.check()?;
+        self.operation_id.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        crate::protocol::rules::record(
+            "ToolInvocation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsagePage {
+    pub items: Rows<UsageItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 2))]
+    pub checkpoint: Option<Cursor>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<ToolInvocation>", extend("x-since" = 2))]
+    pub tool_invocations: Option<Rows<ToolInvocation>>,
+}
+impl Check for UsagePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.checkpoint.check()?;
+        self.tool_invocations.check()?;
+        crate::protocol::rules::record(
+            "UsagePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for UsagePage {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.checkpoint = None;
+        }
+        if revision < 2 {
+            self.tool_invocations = None;
+        }
     }
 }
 

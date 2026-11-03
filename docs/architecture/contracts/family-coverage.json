@@ -2814,11 +2814,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Schema revision 2: item adds that visible work item of the session's scope to the briefing; paths (distinct) scope it; budgetTokens caps the summed source estimates (4 bytes per token, rounded up) at a prefix of the briefing order.",
           "familyRules": "Session identity, context epoch and native continuation belong to service. Query or conversation creation never starts/resumes work.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -3089,7 +3097,7 @@
             "pointer": "/kind",
             "equals": "history.events"
           },
-          "resultValueType": "Page<Event>",
+          "resultValueType": "HistoryPage<Event>",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -3099,6 +3107,14 @@
               "inputSchema": "query-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "query-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -3135,7 +3151,7 @@
             "pointer": "/kind",
             "equals": "history.work_lineage"
           },
-          "resultValueType": "Page<LineageRecord>",
+          "resultValueType": "HistoryPage<LineageRecord>",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -3147,11 +3163,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution.",
           "familyRules": "Append-only attributed lineage; scoped stable pagination. Receipt lookup uses exact durable result schema/artifact, never guesses unacknowledged completion.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -3181,7 +3205,7 @@
             "pointer": "/kind",
             "equals": "history.git_links"
           },
-          "resultValueType": "Page<GitLink>",
+          "resultValueType": "HistoryPage<AttributedGitLink>",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -3193,11 +3217,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution.",
           "familyRules": "Append-only attributed lineage; scoped stable pagination. Receipt lookup uses exact durable result schema/artifact, never guesses unacknowledged completion.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -3227,7 +3259,7 @@
             "pointer": "/kind",
             "equals": "history.evidence_links"
           },
-          "resultValueType": "Page<EvidenceLink>",
+          "resultValueType": "HistoryPage<EvidenceLink>",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -3239,11 +3271,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution.",
           "familyRules": "Append-only attributed lineage; scoped stable pagination. Receipt lookup uses exact durable result schema/artifact, never guesses unacknowledged completion.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -3319,7 +3359,7 @@
             "pointer": "/kind",
             "equals": "history.tool_usage"
           },
-          "resultValueType": "Page<UsageItem>",
+          "resultValueType": "UsagePage",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -3331,11 +3371,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Schema revision 2: tool invocations (one per durable initial tool response) are interleaved with inference usage in committed-sequence order, and every page carries a continuation checkpoint.",
           "familyRules": "Append-only attributed lineage; scoped stable pagination. Receipt lookup uses exact durable result schema/artifact, never guesses unacknowledged completion.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

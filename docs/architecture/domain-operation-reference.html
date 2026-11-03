@@ -399,7 +399,7 @@
 </tr>
 <tr>
 <td><code>sessions.briefing</code></td>
-<td><strong>Query</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedContextEpoch</code>: <code>Counter</code></td>
+<td><strong>Query</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedContextEpoch</code>: <code>Counter</code><br><code>item</code>: <code>?RootId</code><br><code>paths</code>: <code>?NonEmpty&lt;RelativePath&gt;</code><br><code>budgetTokens</code>: <code>?TokenBudget</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;ContextSource&gt;</code></td>
 </tr>
 <tr>
@@ -451,23 +451,23 @@
 </thead>
 <tbody><tr>
 <td><code>history.events</code></td>
-<td><strong>Query</strong><br><a href="contracts/query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;history.events&#39;}</td>
-<td><code>Page&lt;Event&gt;</code></td>
+<td><strong>Query</strong><br><a href="contracts/query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;history.events&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/query-request.r2.schema.json">revision 2 input</a>)</td>
+<td><code>HistoryPage&lt;Event&gt;</code></td>
 </tr>
 <tr>
 <td><code>history.work_lineage</code></td>
-<td><strong>Query</strong><br><code>rootId</code>: <code>RootId</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;LineageRecord&gt;</code></td>
+<td><strong>Query</strong><br><code>rootId</code>: <code>RootId</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><code>HistoryPage&lt;LineageRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>history.git_links</code></td>
-<td><strong>Query</strong><br><code>rootId</code>: <code>RootId</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;GitLink&gt;</code></td>
+<td><strong>Query</strong><br><code>rootId</code>: <code>RootId</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><code>HistoryPage&lt;AttributedGitLink&gt;</code></td>
 </tr>
 <tr>
 <td><code>history.evidence_links</code></td>
-<td><strong>Query</strong><br><code>rootId</code>: <code>RootId</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;EvidenceLink&gt;</code></td>
+<td><strong>Query</strong><br><code>rootId</code>: <code>RootId</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><code>HistoryPage&lt;EvidenceLink&gt;</code></td>
 </tr>
 <tr>
 <td><code>history.operation_status</code></td>
@@ -476,8 +476,8 @@
 </tr>
 <tr>
 <td><code>history.tool_usage</code></td>
-<td><strong>Query</strong><br><code>rootId</code>: <code>RootId</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;UsageItem&gt;</code></td>
+<td><strong>Query</strong><br><code>rootId</code>: <code>RootId</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><code>UsagePage</code></td>
 </tr>
 <tr>
 <td><code>history.command_receipt</code></td>
@@ -2811,6 +2811,22 @@
 <td><code>summary</code></td>
 <td><code>Content</code></td>
 </tr>
+<tr>
+<td><code>actorId</code></td>
+<td><code>?ActorId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>occurredAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>repositoryId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>revision</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
 </tbody></table>
 <h3 id="statusrecord">StatusRecord</h3>
 <table>
@@ -2901,6 +2917,22 @@
 <tr>
 <td><code>summary</code></td>
 <td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>actorId</code></td>
+<td><code>?ActorId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>occurredAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>repositoryId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>revision</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="agentrecord">AgentRecord</h3>
@@ -4491,6 +4523,47 @@
 <td><code>GitOid</code></td>
 </tr>
 </tbody></table>
+<h3 id="attributedgitlink">AttributedGitLink</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>workId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>worktreeId</code></td>
+<td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>branch</code></td>
+<td><code>?Text</code></td>
+</tr>
+<tr>
+<td><code>pullRequestUrl</code></td>
+<td><code>?Url</code></td>
+</tr>
+<tr>
+<td><code>head</code></td>
+<td><code>GitOid</code></td>
+</tr>
+<tr>
+<td><code>actorId</code></td>
+<td><code>?ActorId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>occurredAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+</tbody></table>
 <h3 id="releaserecord">ReleaseRecord</h3>
 <table>
 <thead>
@@ -5629,6 +5702,82 @@
 <tr>
 <td><code>incomplete</code></td>
 <td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="toolinvocationoutcome">ToolInvocationOutcome</h3>
+<p><code>Completed</code>, <code>Failed</code>, <code>ApprovalRequired</code>, <code>DependencyBlocked</code>, <code>CancelledBeforeDispatch</code>, <code>OutcomeUnknown</code>.</p>
+<h3 id="toolinvocation">ToolInvocation</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>callId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>sessionId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>toolName</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>outcome</code></td>
+<td><code>ToolInvocationOutcome</code></td>
+</tr>
+<tr>
+<td><code>durationMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>errorCode</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>operationId</code></td>
+<td><code>?OperationId</code></td>
+</tr>
+<tr>
+<td><code>actorId</code></td>
+<td><code>ActorId</code></td>
+</tr>
+<tr>
+<td><code>occurredAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="usagepage">UsagePage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>items</code></td>
+<td><code>Rows&lt;UsageItem&gt;</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>checkpoint</code></td>
+<td><code>?Cursor</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>toolInvocations</code></td>
+<td><code>?Rows&lt;ToolInvocation&gt;</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="usagereport">UsageReport</h3>

@@ -133,6 +133,44 @@ impl<T: Check> Check for Page<T> {
         Ok(())
     }
 }
+/// A page of committed history (`history.events`, `.work_lineage`, `.git_links`,
+/// `.evidence_links`). Revision 1 is exactly the recorded [`Page`]: `nextCursor` is present
+/// exactly when `hasMore`. Schema revision 2 adds `checkpoint`, the continuation after the last
+/// fact this page covers, returned on every page including the current tail (an empty page keeps
+/// the position it was asked from), so a poller resumes without replaying the history. While
+/// `hasMore`, the checkpoint is the `nextCursor`. It keeps the recorded `Page` schema name, so
+/// revision-1 documents are unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(rename = "Page")]
+pub struct HistoryPage<T> {
+    pub items: Rows<T>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    /// Schema revision 2: the continuation checkpoint (present on every revision-2 page).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 2))]
+    pub checkpoint: Option<Cursor>,
+}
+impl<T: Check> Check for HistoryPage<T> {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        if self.has_more != self.next_cursor.is_some() {
+            return Err("page continuation mismatch".into());
+        }
+        if let (Some(next), Some(checkpoint)) = (&self.next_cursor, &self.checkpoint) {
+            if next.0 != checkpoint.0 {
+                return Err("a page with more facts continues at its checkpoint".into());
+            }
+        }
+        Ok(())
+    }
+}
 /// A value whose wire shape grew in a later operation schema revision (members annotated
 /// `x-since`). `retain_revision(r)` clears every member introduced after revision `r`.
 pub trait Revisioned {
@@ -162,6 +200,20 @@ impl<T: Revisioned> Revisioned for Page<T> {
         self.items.retain_revision(revision)
     }
 }
+impl<T: Revisioned> Revisioned for HistoryPage<T> {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.checkpoint = None;
+        }
+        self.items.retain_revision(revision)
+    }
+}
+/// Events gate a union alternative (the command aggregate), which cannot be cleared from a
+/// value: the producer never emits one below revision 2, and [`Event::validate_revision`] is the
+/// earlier revision's refusal.
+impl Revisioned for Event {
+    fn retain_revision(&mut self, _: u32) {}
+}
 /// Deserializer of a member introduced in a later schema revision: it is either omitted or
 /// carries a value. It has no explicit-null spelling, so its presence is always visible to the
 /// strict reader of an earlier revision (which refuses it rather than discarding it).
@@ -182,6 +234,8 @@ int_bound!(Limit, 1, 500);
 int_bound!(Depth, 0, 32);
 int_bound!(Port, 1, 65535);
 int_bound!(ByteLimit, 1, 1048576);
+// A briefing's estimated-token cap (`sessions.briefing` `budgetTokens`, schema revision 2).
+int_bound!(TokenBudget, 1, 1000000);
 macro_rules! text_rule {($n:ident,$pattern:expr,$validate:expr)=>{
  #[derive(Clone,Debug,Serialize)]#[serde(transparent)]pub struct $n(pub String);
  impl<'de> Deserialize<'de> for $n{fn deserialize<D:Deserializer<'de>>(d:D)->Result<Self,D::Error>{let s=String::deserialize(d)?;if !($validate)(&s){return Err(D::Error::custom(concat!("invalid ",stringify!($n))))}Ok(Self(s))}}
@@ -423,3 +477,13 @@ validated_leaf!(
     crate::data_delivery::DeliveryBarrier,
     crate::data_delivery::DeliverySnapshot
 );
+/// Schema revision 2 adds the project scope of `history.events`.
+impl Revisioned for QueryRequest {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Query::Events { project_id, .. } = &mut self.query {
+            if revision < 2 {
+                *project_id = None;
+            }
+        }
+    }
+}

@@ -82,6 +82,18 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
                 "unrecorded receipt cannot claim reply",
             )?
         }
+        "UsagePage" => {
+            require(
+                v["hasMore"] == present(v, "nextCursor"),
+                "page continuation mismatch",
+            )?;
+            require(
+                !present(v, "nextCursor")
+                    || !present(v, "checkpoint")
+                    || v["nextCursor"] == v["checkpoint"],
+                "a page with more facts continues at its checkpoint",
+            )?;
+        }
         "UsageItem" => {
             if v["priceKind"] == "Untracked" {
                 require(
@@ -122,6 +134,9 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
         "messageIds",
     ] {
         require(unique(v, k), "duplicate identity in set")?
+    }
+    if op == "sessions.briefing" {
+        require(unique(v, "paths"), "duplicate briefing path")?
     }
     if op.ends_with(".configure") || op.ends_with(".draft") {
         let key = if present(v, "serverId") {

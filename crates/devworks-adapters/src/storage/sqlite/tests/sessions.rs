@@ -12,19 +12,20 @@ use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
+use devworks_core::ports::storage::contract::StoreHarness;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::{
     ProviderEvent, TranscriptBatch, TranscriptBody, TranscriptPage,
 };
 use devworks_core::protocol::records::{
-    ContextSource, EvidenceLink, GitLink, LineageRecord, ReceiptLookupState, SessionRecord,
-    UsageItem,
+    AttributedGitLink, ContextSource, EvidenceLink, LineageRecord, ReceiptLookupState,
+    SessionRecord, ToolInvocationOutcome, UsageItem,
 };
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
 };
-use devworks_core::protocol::shared::{Event, RevisionKind, Subject};
-use devworks_core::protocol::support::Page;
+use devworks_core::protocol::shared::{Event, EventRevisionKind, EventSubject};
+use devworks_core::protocol::support::{HistoryPage, Revisioned};
 use devworks_core::protocol::{
     ActorId, AttemptId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, OperationId,
     ProjectId, Rejection, Revision, RootId,
@@ -494,7 +495,7 @@ fn refusal(o: BatchOutcome) -> BatchRefusal {
         other => panic!("expected a refused batch, got {other:?}"),
     }
 }
-fn lineage_page(reply: DomainQueryReply) -> Page<LineageRecord> {
+fn lineage_page(reply: DomainQueryReply) -> HistoryPage<LineageRecord> {
     match result(reply) {
         OperationResult::HistoryWorkLineage { value } => value,
         other => panic!("{other:?}"),
@@ -1293,7 +1294,7 @@ fn corrections_preserve_prior_records() {
         .items
         .0
         .iter()
-        .map(|g: &GitLink| g.head.hex.as_str())
+        .map(|g: &AttributedGitLink| g.head.hex.as_str())
         .collect();
     assert_eq!(heads, ["a".repeat(40), "b".repeat(40)]);
     let evidence_links = match result(fx.query(
@@ -2053,9 +2054,9 @@ fn a_command_decision_is_attached_to_its_target_and_keeps_a_resolvable_project()
     };
     assert_eq!(events.items.0.len(), 1);
     let e = &events.items.0[0];
-    assert!(matches!(&e.aggregate, Subject::Root(r) if *r == root("task-a")));
+    assert!(matches!(&e.aggregate, EventSubject::Root(r) if *r == root("task-a")));
     assert_eq!(e.aggregate_revision.get(), 1);
-    assert!(matches!(e.aggregate_revision_kind, RevisionKind::Work));
+    assert!(matches!(e.aggregate_revision_kind, EventRevisionKind::Work));
     // The lineage-only decision is history of root-a, but not an Event the contract can type.
     let root_events = match result(fx.events(&fx.user(), "root-a", None)) {
         OperationResult::HistoryEvents { value } => value,
@@ -2675,4 +2676,683 @@ fn retained_endpoints_behave_through_their_mapped_operations() {
         other => panic!("{other:?}"),
     };
     assert!(git.items.0.is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Schema revision 2: tail checkpoints, command aggregates, the project feed, attribution, tool
+// invocations and briefing inputs
+
+/// A domain query frame at `revision` (`None`: no `schemaRevision` member, i.e. revision 1).
+fn at_revision(op: &str, mut body: Value, revision: Option<u32>) -> Value {
+    body["kind"] = json!(op);
+    let mut frame =
+        json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-r", "body": body});
+    if let Some(r) = revision {
+        frame["schemaRevision"] = json!(r);
+    }
+    frame
+}
+/// A `history.events` frame over `scope` (`{"rootId": ..}` or `{"projectId": ..}`).
+fn events_frame(scope: Value, after: Option<&str>, limit: u32, revision: Option<u32>) -> Value {
+    let mut q = json!({"kind": "history.events", "limit": limit});
+    for (k, v) in scope.as_object().unwrap() {
+        q[k] = v.clone();
+    }
+    if let Some(a) = after {
+        q["after"] = json!(a);
+    }
+    let mut frame = json!({"protocol": "1.0-draft.1", "queryId": "q-e", "query": q});
+    if let Some(r) = revision {
+        frame["schemaRevision"] = json!(r);
+    }
+    frame
+}
+fn events_page(reply: DomainQueryReply) -> HistoryPage<Event> {
+    match result(reply) {
+        OperationResult::HistoryEvents { value } => value,
+        other => panic!("{other:?}"),
+    }
+}
+fn wire(r: &OperationResult) -> String {
+    serde_json::to_string(r).unwrap()
+}
+/// The revision-1 projection of a revision-2 result.
+fn projected(mut r: OperationResult) -> String {
+    r.retain_revision(1);
+    wire(&r)
+}
+
+impl Fx {
+    fn at(
+        &self,
+        ctx: &InvocationContext,
+        op: &str,
+        body: Value,
+        r: Option<u32>,
+    ) -> DomainQueryReply {
+        self.raw_query(ctx, op, at_revision(op, body, r))
+    }
+    fn feed(
+        &self,
+        ctx: &InvocationContext,
+        scope: Value,
+        after: Option<&str>,
+        limit: u32,
+        r: Option<u32>,
+    ) -> DomainQueryReply {
+        self.raw_query(ctx, "history.events", events_frame(scope, after, limit, r))
+    }
+    /// One decision attached to `root-a` only by lineage (no target), one targeting `task-a`,
+    /// one project-b decision and one project-a decision without a root.
+    fn decisions(&self) {
+        let lineage =
+            self.user()
+                .with_lineage(Some(project("project-a")), Some(root("root-a")), None);
+        self.command(
+            &lineage,
+            "sessions.start",
+            json!({"scope": {"kind": "Project", "projectId": "project-a"}, "title": "t"}),
+        );
+        self.command(
+            &self.user(),
+            "sessions.start",
+            json!({"scope": {"kind": "Project", "projectId": "project-a"}, "rootId": "task-a",
+                "title": "t"}),
+        );
+        let b = self
+            .user()
+            .with_lineage(Some(project("project-b")), None, None);
+        self.command(
+            &b,
+            "sessions.start",
+            json!({"scope": {"kind": "Project", "projectId": "project-b"}, "title": "t"}),
+        );
+        let a = self
+            .user()
+            .with_lineage(Some(project("project-a")), None, None);
+        self.command(
+            &a,
+            "sessions.start",
+            json!({"scope": {"kind": "Project", "projectId": "project-a"}, "title": "t"}),
+        );
+    }
+}
+
+#[test]
+fn revision_two_history_pages_carry_a_tail_checkpoint_that_polls_new_facts_only() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let agent = fx
+        .ctx("agent-p", PrincipalKind::Agent, Some("project-a"))
+        .with_lineage(Some(project("project-a")), Some(root("root-a")), None);
+    for _ in 0..2 {
+        fx.start(
+            &agent,
+            json!({"kind": "Project", "projectId": "project-a"}),
+            Some("root-a"),
+        );
+    }
+    // At the tail a revision-2 page still carries a continuation; revision 1 does not.
+    let r1 = events_page(fx.feed(&user, json!({"rootId": "root-a"}), None, 50, None));
+    assert!(!r1.has_more && r1.next_cursor.is_none() && r1.checkpoint.is_none());
+    let tail = events_page(fx.feed(&user, json!({"rootId": "root-a"}), None, 50, Some(2)));
+    assert_eq!(tail.items.0.len(), 2);
+    assert!(!tail.has_more && tail.next_cursor.is_none());
+    let checkpoint = tail.checkpoint.clone().unwrap().0;
+    // Polling the checkpoint replays nothing, and keeps its position while nothing is new.
+    let quiet = events_page(fx.feed(
+        &user,
+        json!({"rootId": "root-a"}),
+        Some(&checkpoint),
+        50,
+        Some(2),
+    ));
+    assert!(quiet.items.0.is_empty());
+    assert_eq!(quiet.checkpoint.as_ref().unwrap().0, checkpoint);
+    fx.start(
+        &agent,
+        json!({"kind": "Project", "projectId": "project-a"}),
+        Some("root-a"),
+    );
+    let new = events_page(fx.feed(
+        &user,
+        json!({"rootId": "root-a"}),
+        Some(&checkpoint),
+        50,
+        Some(2),
+    ));
+    assert_eq!(new.items.0.len(), 1);
+    assert!(new.items.0[0].sequence.get() > tail.items.0[1].sequence.get());
+    // While there is more, the checkpoint is the next cursor.
+    let first = events_page(fx.feed(&user, json!({"rootId": "root-a"}), None, 1, Some(2)));
+    assert!(first.has_more);
+    assert_eq!(first.checkpoint.unwrap().0, first.next_cursor.unwrap().0);
+    // A revision-1 cursor does not continue a revision-2 list (it covers other facts).
+    let r1_first = events_page(fx.feed(&user, json!({"rootId": "root-a"}), None, 1, None));
+    let c1 = r1_first.next_cursor.unwrap().0;
+    assert_eq!(
+        fault(fx.feed(&user, json!({"rootId": "root-a"}), Some(&c1), 1, Some(2))).code,
+        DomainErrorCode::CursorExpired
+    );
+    // Lineage, links and usage pages carry it too; revision 1 never does.
+    for op in [
+        "history.work_lineage",
+        "history.git_links",
+        "history.evidence_links",
+        "history.tool_usage",
+    ] {
+        let body = json!({"rootId": "root-a", "page": {"limit": 50}});
+        let r2 = serde_json::to_value(result(fx.at(&user, op, body.clone(), Some(2)))).unwrap();
+        assert!(r2["value"]["checkpoint"].is_string(), "{op}: {r2}");
+        let r1 = serde_json::to_value(result(fx.at(&user, op, body, None))).unwrap();
+        assert!(r1["value"].get("checkpoint").is_none(), "{op}: {r1}");
+        assert_eq!(r1["value"]["hasMore"], false);
+    }
+    // An empty history still has a checkpoint: the start, which then sees the first fact.
+    let empty = events_page(fx.feed(&user, json!({"rootId": "root-b"}), None, 50, Some(2)));
+    assert!(empty.items.0.is_empty());
+    let start = empty.checkpoint.unwrap().0;
+    let b = fx
+        .user()
+        .with_lineage(Some(project("project-b")), None, None);
+    fx.command(
+        &b,
+        "sessions.start",
+        json!({"scope": {"kind": "Project", "projectId": "project-b"}, "rootId": "root-b",
+            "title": "t"}),
+    );
+    let first_b = events_page(fx.feed(
+        &user,
+        json!({"rootId": "root-b"}),
+        Some(&start),
+        50,
+        Some(2),
+    ));
+    assert_eq!(first_b.items.0.len(), 1);
+}
+
+#[test]
+fn revision_two_publishes_lineage_only_decisions_with_a_command_aggregate() {
+    let fx = Fx::new();
+    fx.decisions();
+    let user = fx.user();
+    // Revision 1: only decisions the recorded Subject can type (none on root-a).
+    let r1 = result(fx.feed(&user, json!({"rootId": "root-a"}), None, 50, None));
+    let OperationResult::HistoryEvents { value } = &r1 else {
+        panic!()
+    };
+    assert!(value.items.0.is_empty());
+    assert!(!wire(&r1).contains("\"command\"") && !wire(&r1).contains("checkpoint"));
+    // Revision 2: the lineage-only decision, with the command as its aggregate.
+    let r2 = events_page(fx.feed(&user, json!({"rootId": "root-a"}), None, 50, Some(2)));
+    assert_eq!(r2.items.0.len(), 1);
+    let e = &r2.items.0[0];
+    let command = e.command_id.clone().unwrap();
+    assert!(matches!(&e.aggregate, EventSubject::Command(c) if *c == command));
+    assert!(matches!(
+        e.aggregate_revision_kind,
+        EventRevisionKind::Command
+    ));
+    assert_eq!(e.aggregate_revision.get(), 1);
+    e.validate().unwrap();
+    assert!(e.validate_revision(1).is_err() && e.validate_revision(2).is_ok());
+    // A decision with a real subject keeps it at revision 2, identical to revision 1.
+    let t1 = result(fx.feed(&user, json!({"rootId": "task-a"}), None, 50, None));
+    let t2 = result(fx.feed(&user, json!({"rootId": "task-a"}), None, 50, Some(2)));
+    assert_eq!(projected(t2), wire(&t1));
+    let OperationResult::HistoryEvents { value } = t1 else {
+        panic!()
+    };
+    assert!(matches!(&value.items.0[0].aggregate, EventSubject::Root(r) if *r == root("task-a")));
+    // An unregistered revision is refused before the store is read.
+    assert_eq!(
+        fault(fx.feed(&user, json!({"rootId": "root-a"}), None, 50, Some(3))).code,
+        DomainErrorCode::SchemaMismatch
+    );
+}
+
+#[test]
+fn the_project_feed_serves_every_decision_of_a_visible_project_in_commit_order() {
+    let fx = Fx::new();
+    fx.decisions();
+    let user = fx.user();
+    let feed = events_page(fx.feed(&user, json!({"projectId": "project-a"}), None, 50, Some(2)));
+    // Every project-a decision: lineage-only on root-a, targeted at task-a, project-only.
+    assert_eq!(feed.items.0.len(), 3);
+    assert!(
+        feed.items
+            .0
+            .iter()
+            .all(|e| e.project_id == Some(project("project-a")))
+    );
+    let seqs: Vec<i64> = feed.items.0.iter().map(|e| e.sequence.get()).collect();
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
+    assert!(
+        feed.items
+            .0
+            .iter()
+            .any(|e| e.root_id.is_none() && matches!(e.aggregate, EventSubject::Command(_)))
+    );
+    assert!(
+        feed.items
+            .0
+            .iter()
+            .any(|e| matches!(&e.aggregate, EventSubject::Root(r) if *r == root("task-a")))
+    );
+    let OperationResult::HistoryEvents { .. } =
+        result(fx.feed(&user, json!({"projectId": "project-b"}), None, 50, Some(2)))
+    else {
+        panic!()
+    };
+    // Paging in ones covers the same facts; each cursor is bound to its project feed.
+    let one = events_page(fx.feed(&user, json!({"projectId": "project-a"}), None, 1, Some(2)));
+    let c = one.next_cursor.unwrap().0;
+    let two = events_page(fx.feed(
+        &user,
+        json!({"projectId": "project-a"}),
+        Some(&c),
+        1,
+        Some(2),
+    ));
+    assert_eq!(two.items.0[0].event_id, feed.items.0[1].event_id);
+    for (who, scope) in [
+        (fx.user(), json!({"projectId": "project-b"})),
+        (fx.user(), json!({"rootId": "root-a"})),
+        (
+            fx.ctx("user-b", PrincipalKind::Human, None),
+            json!({"projectId": "project-a"}),
+        ),
+    ] {
+        assert_eq!(
+            fault(fx.feed(&who, scope, Some(&c), 1, Some(2))).code,
+            DomainErrorCode::CursorExpired
+        );
+    }
+    // A change to who can see the project expires its cursors.
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute(
+                "UPDATE projects SET scope_revision=2 WHERE id='project-a'",
+                [],
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        fault(fx.feed(
+            &user,
+            json!({"projectId": "project-a"}),
+            Some(&c),
+            1,
+            Some(2)
+        ))
+        .code,
+        DomainErrorCode::CursorExpired
+    );
+    // Visibility: a project-b agent does not learn project-a exists; nor does anyone an
+    // unknown project. A project-a agent reads its own project's feed.
+    let outsider = fx.ctx("agent-b", PrincipalKind::Agent, Some("project-b"));
+    for (who, p) in [(&outsider, "project-a"), (&user, "project-gone")] {
+        let f = fault(fx.feed(who, json!({"projectId": p}), None, 50, Some(2)));
+        assert_eq!(
+            (f.code, kind_of(&f)),
+            (DomainErrorCode::NotFound, "project")
+        );
+    }
+    let insider = fx.ctx("agent-p", PrincipalKind::Agent, Some("project-a"));
+    assert_eq!(
+        events_page(fx.feed(
+            &insider,
+            json!({"projectId": "project-a"}),
+            None,
+            50,
+            Some(2)
+        ))
+        .items
+        .0
+        .len(),
+        3
+    );
+    // Revision 1 has no project feed, and a feed names exactly one scope.
+    for (scope, r) in [
+        (json!({"projectId": "project-a"}), None),
+        (json!({"projectId": "project-a"}), Some(1)),
+        (
+            json!({"projectId": "project-a", "rootId": "root-a"}),
+            Some(2),
+        ),
+        (json!({}), Some(2)),
+    ] {
+        assert_eq!(
+            fault(fx.feed(&user, scope, None, 50, r)).code,
+            DomainErrorCode::InvalidArgument
+        );
+    }
+}
+
+#[test]
+fn revision_two_lineage_evidence_and_git_records_carry_structured_attribution() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let ctx = user.clone();
+    fx.write(move |tx| {
+        record_link(
+            tx,
+            &ctx,
+            NewHistoryLink {
+                root_id: root("root-a"),
+                kind: LinkKind::Git,
+                git: Some(GitFacts {
+                    repository_id: id("repo-a"),
+                    worktree_id: None,
+                    branch: Some("main".into()),
+                    pull_request_url: None,
+                    head: serde_json::from_value(json!({"format": "Sha1", "hex": "c".repeat(40)}))
+                        .unwrap(),
+                }),
+                artifact: None,
+                target: None,
+                summary: "Pushed".into(),
+                supersedes: None,
+            },
+        )?
+        .map_err(|r| StorageError::InvalidRecord(format!("{r:?}")))?;
+        record_link(
+            tx,
+            &ctx,
+            NewHistoryLink {
+                root_id: root("root-a"),
+                kind: LinkKind::Evidence,
+                git: None,
+                artifact: Some(serde_json::from_value(art()).unwrap()),
+                target: None,
+                summary: "Report".into(),
+                supersedes: None,
+            },
+        )?
+        .map_err(|r| StorageError::InvalidRecord(format!("{r:?}")))
+    });
+    let body = json!({"rootId": "root-a", "page": {"limit": 50}});
+    let lineage = fx.at(&user, "history.work_lineage", body.clone(), Some(2));
+    let OperationResult::HistoryWorkLineage { value } = result(lineage) else {
+        panic!()
+    };
+    let work = &value.items.0[0];
+    assert_eq!(work.kind.0, "task");
+    // Work items record no creator; the time is the creation.
+    assert!(work.actor_id.is_none() && work.repository_id.is_none() && work.revision.is_none());
+    assert_eq!(work.occurred_at_ms.as_ref().unwrap().get(), 1);
+    let git = value.items.0.iter().find(|l| l.kind.0 == "git").unwrap();
+    assert_eq!(git.actor_id, Some(actor("user-a")));
+    assert_eq!(git.repository_id, Some(id("repo-a")));
+    assert_eq!(git.revision.as_ref().unwrap().0, "c".repeat(40));
+    assert_eq!(git.occurred_at_ms.as_ref().unwrap().get(), T0);
+    let evidence = value
+        .items
+        .0
+        .iter()
+        .find(|l| l.kind.0 == "evidence")
+        .unwrap();
+    assert_eq!(evidence.actor_id, Some(actor("user-a")));
+    assert!(evidence.repository_id.is_none() && evidence.revision.is_none());
+    for op in ["history.git_links", "history.evidence_links"] {
+        let r2 = serde_json::to_value(result(fx.at(&user, op, body.clone(), Some(2)))).unwrap();
+        let item = &r2["value"]["items"][0];
+        assert_eq!(item["actorId"], "user-a", "{op}");
+        assert_eq!(item["occurredAtMs"], T0.to_string(), "{op}");
+    }
+    // Revision 1 is byte-identical to the revision-2 page projected onto revision 1, and its
+    // summaries keep the attribution text.
+    for op in [
+        "history.work_lineage",
+        "history.git_links",
+        "history.evidence_links",
+    ] {
+        let r1 = result(fx.at(&user, op, body.clone(), None));
+        let r2 = result(fx.at(&user, op, body.clone(), Some(2)));
+        assert_eq!(projected(r2), wire(&r1), "{op}");
+        for member in ["actorId", "occurredAtMs", "\"revision\"", "checkpoint"] {
+            assert!(!wire(&r1).contains(member), "{op} revision 1 has {member}");
+        }
+        // Git links always named their repository; lineage and evidence gain it at revision 2.
+        assert_eq!(
+            wire(&r1).contains("repositoryId"),
+            op == "history.git_links",
+            "{op}"
+        );
+    }
+    assert!(git.summary.0.contains("by user-a"));
+    for op in ["history.work_lineage", "history.git_links"] {
+        assert_eq!(
+            fault(fx.at(&user, op, body.clone(), Some(3))).code,
+            DomainErrorCode::SchemaMismatch
+        );
+    }
+}
+
+#[test]
+fn revision_two_tool_usage_serves_redacted_tool_invocations_in_commit_order() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    let mut first = SessionBatch::entries(calls_and_response("session-a"));
+    first.usage = vec![usage("request-a")];
+    accepted(fx.append(&worker, first));
+    // A later batch answers call:a with a failure whose code is credential-shaped.
+    let secret = format!("ghp_{}", "A1b2C3d4E5".repeat(4));
+    StoreHarness::set_now(&fx.h, T0 + 250);
+    accepted(fx.append(
+        &worker,
+        SessionBatch::entries(tbatch(
+            "batch-failure",
+            "session-a",
+            0,
+            4,
+            vec![entry(
+                "r-a",
+                4,
+                json!({"kind": "ToolResponseRecorded", "call": key("call:a", 0),
+                    "outcome": {"kind": "Failed", "code": secret}}),
+            )],
+        )),
+    ));
+    let user = fx.user();
+    let body = json!({"rootId": "root-a", "page": {"limit": 50}});
+    let r2 = result(fx.at(&user, "history.tool_usage", body.clone(), Some(2)));
+    let OperationResult::HistoryToolUsage { value } = &r2 else {
+        panic!()
+    };
+    assert_eq!(value.items.0.len(), 1);
+    let tools = &value.tool_invocations.as_ref().unwrap().0;
+    assert_eq!(tools.len(), 2);
+    let (wait, failed) = (&tools[0], &tools[1]);
+    assert_eq!(
+        (wait.tool_name.0.as_str(), wait.call_id.as_str()),
+        ("core/read", "c-b")
+    );
+    assert!(matches!(
+        wait.outcome,
+        ToolInvocationOutcome::ApprovalRequired
+    ));
+    assert_eq!(wait.operation_id, Some(OperationId(id("op-b"))));
+    assert_eq!(wait.duration_ms.as_ref().unwrap().get(), 0);
+    assert_eq!(wait.session_id, id("session-a"));
+    assert_eq!(wait.actor_id, actor("agent-a"));
+    assert!(matches!(failed.outcome, ToolInvocationOutcome::Failed));
+    assert_eq!(failed.call_id, id("c-a"));
+    assert_eq!(failed.duration_ms.as_ref().unwrap().get(), 250);
+    // The credential-shaped error code never leaves the store; arguments are never included.
+    let code = failed.error_code.as_ref().unwrap().0.clone();
+    assert!(
+        !code.contains(&secret) && code.contains("REDACTED"),
+        "{code}"
+    );
+    let published = wire(&r2);
+    assert!(!published.contains(&secret) && !published.contains("arguments"));
+    // Revision 1: the inference usage alone, byte-identical to its recorded shape.
+    let r1 = result(fx.at(&user, "history.tool_usage", body.clone(), None));
+    assert!(!wire(&r1).contains("toolInvocations") && !wire(&r1).contains("checkpoint"));
+    let OperationResult::HistoryToolUsage { value: v1 } = &r1 else {
+        panic!()
+    };
+    assert_eq!(v1.items.0.len(), 1);
+    assert_eq!(projected(r2.clone()), {
+        let mut only = r2.clone();
+        if let OperationResult::HistoryToolUsage { value } = &mut only {
+            value.tool_invocations = None;
+            value.checkpoint = None;
+        }
+        wire(&only)
+    });
+    // In pages of one, the facts arrive in committed-sequence order, each exactly once.
+    let mut cursor: Option<String> = None;
+    let mut order = Vec::new();
+    loop {
+        let mut page = json!({"limit": 1});
+        if let Some(c) = &cursor {
+            page["cursor"] = json!(c);
+        }
+        let OperationResult::HistoryToolUsage { value } = result(fx.at(
+            &user,
+            "history.tool_usage",
+            json!({"rootId": "root-a", "page": page}),
+            Some(2),
+        )) else {
+            panic!()
+        };
+        order.extend(
+            value
+                .items
+                .0
+                .iter()
+                .map(|u| u.request_id.as_str().to_owned()),
+        );
+        order.extend(
+            value
+                .tool_invocations
+                .unwrap()
+                .0
+                .iter()
+                .map(|t| t.call_id.as_str().to_owned()),
+        );
+        match value.next_cursor {
+            Some(c) => cursor = Some(c.0),
+            None => break,
+        }
+    }
+    assert_eq!(order, ["c-b", "request-a", "c-a"]);
+    assert_eq!(
+        fault(fx.at(&user, "history.tool_usage", body, Some(3))).code,
+        DomainErrorCode::SchemaMismatch
+    );
+}
+
+#[test]
+fn revision_two_briefings_take_an_item_paths_and_a_token_budget() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    let mut batch = SessionBatch::entries(calls_and_response("session-a"));
+    batch.checkpoint = Some(serde_json::from_value(art()).unwrap());
+    batch.context_sources = (0..6)
+        .map(|i| ContextSourceInput {
+            source_id: id(&format!("source-{i}")),
+            kind: "retrieved".into(),
+            source_revision: 1,
+            artifact: None,
+            token_estimate: 10,
+            disposition: SourceDisposition::Included,
+        })
+        .collect();
+    accepted(fx.append(&worker, batch));
+    let user = fx.user();
+    let base = json!({"sessionId": "session-a", "expectedContextEpoch": "0"});
+    let brief = |extra: Value, r: Option<u32>| {
+        let mut body = base.clone();
+        for (k, v) in extra.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        fx.at(&user, "sessions.briefing", body, r)
+    };
+    let page = |reply| match result(reply) {
+        OperationResult::SessionsBriefing { value } => value,
+        other => panic!("{other:?}"),
+    };
+    // Revision 1 and a plain revision-2 briefing are the same briefing.
+    let plain = result(brief(json!({}), None));
+    assert_eq!(wire(&result(brief(json!({}), Some(2)))), wire(&plain));
+    let OperationResult::SessionsBriefing { value: full } = &plain else {
+        panic!()
+    };
+    // work:feature (3), checkpoint (1), pending call, operation and six sources of 10.
+    let total: i64 = full.items.0.iter().map(|s| s.token_estimate.get()).sum();
+    assert_eq!(full.items.0.len(), 10);
+    assert_eq!(total, 64);
+    // The focus item follows the session's own work item.
+    let focused = page(brief(
+        json!({"item": "task-a", "paths": ["src/lib.rs"]}),
+        Some(2),
+    ));
+    assert_eq!(focused.items.0[1].kind.0, "focus:task");
+    assert_eq!(focused.items.0[1].id, id("task-a"));
+    assert_eq!(focused.items.0.len(), 11);
+    // Naming the session's own work adds nothing; work outside its project is unknown.
+    assert_eq!(
+        page(brief(json!({"item": "root-a"}), Some(2)))
+            .items
+            .0
+            .len(),
+        10
+    );
+    for item in ["root-b", "root-gone"] {
+        let f = fault(brief(json!({"item": item}), Some(2)));
+        assert_eq!((f.code, kind_of(&f)), (DomainErrorCode::NotFound, "root"));
+    }
+    // The budget keeps the longest prefix that fits, continuing the recorded sources after it.
+    let capped = page(brief(json!({"budgetTokens": 30}), Some(2)));
+    let spent: i64 = capped.items.0.iter().map(|s| s.token_estimate.get()).sum();
+    assert!(spent <= 30, "{spent}");
+    assert_eq!(capped.items.0.len(), 6);
+    assert_eq!(spent, 24);
+    let rest = match result(fx.query(
+        &user,
+        "sessions.context_sources",
+        json!({"sessionId": "session-a", "expectedContextEpoch": "0",
+            "page": {"limit": 50, "cursor": capped.next_cursor.unwrap().0}}),
+    )) {
+        OperationResult::SessionsContextSources { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(rest.items.0.len(), 4);
+    // A budget smaller than the first source leaves the briefing empty, still continuable.
+    let none = page(brief(json!({"budgetTokens": 1}), Some(2)));
+    assert!(none.items.0.is_empty() && none.has_more);
+    // A budget the briefing fits in changes nothing.
+    assert_eq!(
+        wire(&OperationResult::SessionsBriefing {
+            value: page(brief(json!({"budgetTokens": 64}), Some(2)))
+        }),
+        wire(&plain)
+    );
+    // Revision 1 cannot send the new members; the bounds hold at revision 2.
+    for (extra, r) in [
+        (json!({"budgetTokens": 30}), None),
+        (json!({"item": "task-a"}), Some(1)),
+        (json!({"paths": ["src"]}), None),
+        (json!({"budgetTokens": 0}), Some(2)),
+        (json!({"budgetTokens": 1000001}), Some(2)),
+        (json!({"paths": []}), Some(2)),
+        (json!({"paths": ["/etc/passwd"]}), Some(2)),
+        (json!({"paths": ["a/../b"]}), Some(2)),
+        (json!({"paths": ["src", "src"]}), Some(2)),
+    ] {
+        assert_eq!(
+            fault(brief(extra.clone(), r)).code,
+            DomainErrorCode::InvalidArgument,
+            "{extra} at {r:?}"
+        );
+    }
+    assert_eq!(
+        fault(brief(json!({}), Some(3))).code,
+        DomainErrorCode::SchemaMismatch
+    );
 }

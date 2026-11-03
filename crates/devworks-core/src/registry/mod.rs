@@ -208,8 +208,9 @@ fn schema_of<T: JsonSchema>() -> Schema {
     schemars::schema_for!(T)
 }
 
-/// A schema at `revision`: properties annotated `x-since` later than `revision` (and the
-/// definitions only they reference) are removed, which is that revision's exact shape.
+/// A schema at `revision`: properties and union alternatives annotated `x-since` later than
+/// `revision` (and the definitions only they reference) are removed, which is that revision's
+/// exact shape.
 pub fn schema_at(schema: Schema, revision: SchemaRevision) -> Schema {
     fn later(v: &Value, revision: u32) -> bool {
         v.get("x-since")
@@ -230,6 +231,24 @@ pub fn schema_at(schema: Schema, revision: SchemaRevision) -> Schema {
                 }
                 if let Some(Value::Array(required)) = m.get_mut("required") {
                     required.retain(|r| !gone.iter().any(|g| r == g));
+                }
+                // A union alternative introduced later is removed too; a union left with one
+                // alternative and nothing else is that alternative.
+                for key in ["oneOf", "anyOf"] {
+                    if let Some(Value::Array(alts)) = m.get_mut(key) {
+                        alts.retain(|a| !later(a, revision));
+                    }
+                }
+                let single = (m.len() == 1)
+                    .then(|| m.get("oneOf").or_else(|| m.get("anyOf")))
+                    .flatten()
+                    .and_then(Value::as_array)
+                    .filter(|alts| alts.len() == 1)
+                    .map(|alts| alts[0].clone());
+                if let Some(alt) = single {
+                    *v = alt;
+                    strip(v, revision);
+                    return;
                 }
                 m.values_mut().for_each(|x| strip(x, revision));
             }
@@ -377,7 +396,6 @@ macro_rules! specialized {
     )*};
 }
 specialized!(
-    crate::protocol::QueryRequest => |v| v.validate(),
     data::GraphReadRequest => |v| v.validate(),
     data::ArtifactDeletionRequest => |_| Ok(()),
     data::GitCommandRequest => |v| v.validate(),
@@ -405,6 +423,19 @@ macro_rules! revisioned_artifact {
     )*};
 }
 revisioned_artifact!(data::ArtifactCommandRequest, data::ArtifactQueryRequest);
+/// Revision 2 adds the project scope of `history.events` (`projectId`).
+impl SpecializedEnvelope for crate::protocol::QueryRequest {
+    fn validate_envelope(&self) -> Result<(), String> {
+        self.validate().map_err(str::to_owned)
+    }
+    fn retain_revision(&mut self, revision: u32) {
+        if let crate::protocol::Query::Events { project_id, .. } = &mut self.query
+            && revision < 2
+        {
+            *project_id = None;
+        }
+    }
+}
 impl SpecializedEnvelope for crate::protocol::CommandRequest {
     fn validate_envelope(&self) -> Result<(), String> {
         self.validate().map_err(str::to_owned)

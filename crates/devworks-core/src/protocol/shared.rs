@@ -187,6 +187,27 @@ pub enum Subject {
     Resource(ResourceId),
     Blocker(HoldId),
 }
+/// The aggregate an [`Event`] is about: the recorded [`Subject`] variants plus, from schema
+/// revision 2, the command (receipt) itself, for a decision whose command names no existing work
+/// item or durable operation. A separate union from [`Subject`] so that blockers and revision
+/// conflicts, which can never name a command, keep their recorded shape at every revision.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    content = "id",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum EventSubject {
+    Root(RootId),
+    Assignment(AssignmentId),
+    Operation(OperationId),
+    Resource(ResourceId),
+    Blocker(HoldId),
+    /// Schema revision 2: the decided command; its revision is always 1 (a receipt is immutable).
+    #[schemars(extend("x-since" = 2))]
+    Command(CommandId),
+}
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "kind",
@@ -240,6 +261,24 @@ pub enum RevisionKind {
     Scope,
     Plan,
     Authority,
+}
+/// The revision dimension of an [`Event`]'s aggregate: the recorded [`RevisionKind`] values
+/// plus, from schema revision 2, `Command` for a command aggregate ([`EventSubject::Command`]).
+/// Separate from [`RevisionKind`] so that revision conflicts, which never concern a command, keep
+/// their recorded shape at every revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum EventRevisionKind {
+    Work,
+    Control,
+    Blocker,
+    Operation,
+    Policy,
+    Scope,
+    Plan,
+    Authority,
+    /// Schema revision 2: the only revision (1) of a decided command.
+    #[schemars(extend("x-since" = 2))]
+    Command,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum RetryAdvice {
@@ -376,9 +415,22 @@ pub enum Query {
     Operation { operation_id: OperationId },
     #[serde(rename = "history.command_receipt")]
     Receipt { request_key: RequestKey },
+    /// The committed history of one work root or, from schema revision 2, of one project: exactly
+    /// one of `rootId` and `projectId`. Revision 1 requires `rootId`.
     #[serde(rename = "history.events")]
+    #[schemars(extend("oneOf" = [{"required": ["rootId"]}, {"required": ["projectId"], "x-since": 2}]))]
     Events {
-        root_id: RootId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "RootId")]
+        root_id: Option<RootId>,
+        /// Schema revision 2: the project change feed (every decided command of the project).
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::protocol::support::gated_member"
+        )]
+        #[schemars(with = "ProjectId", extend("x-since" = 2))]
+        project_id: Option<ProjectId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(length(min = 1, max = 4096))]
         after: Option<String>,
@@ -388,6 +440,15 @@ pub enum Query {
 }
 impl QueryRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
+        if let Query::Events {
+            root_id,
+            project_id,
+            ..
+        } = &self.query
+            && root_id.is_some() == project_id.is_some()
+        {
+            return Err("history events name exactly one of a root and a project");
+        }
         if let Query::Events { after, limit, .. } = &self.query
             && (*limit == 0
                 || *limit > 500
@@ -487,9 +548,9 @@ pub struct Event {
     pub protocol: Protocol,
     pub event_id: EventId,
     pub sequence: Revision,
-    pub aggregate: Subject,
+    pub aggregate: EventSubject,
     pub aggregate_revision: Revision,
-    pub aggregate_revision_kind: RevisionKind,
+    pub aggregate_revision_kind: EventRevisionKind,
     pub actor_id: ActorId,
     pub occurred_at_ms: Counter,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -612,39 +673,65 @@ impl CommandReply {
     }
 }
 impl Event {
+    /// Schema revision 2 introduced the command aggregate and revision kind; an event carrying
+    /// either has no revision-1 shape, so a revision-1 reader refuses it.
+    pub fn validate_revision(&self, revision: u32) -> Result<(), &'static str> {
+        if revision < 2
+            && (matches!(self.aggregate, EventSubject::Command(_))
+                || matches!(self.aggregate_revision_kind, EventRevisionKind::Command))
+        {
+            return Err("a command aggregate is introduced at schema revision 2");
+        }
+        Ok(())
+    }
     pub fn validate(&self) -> Result<(), &'static str> {
+        if !matches!(self.event, EventBody::CommandDecided { .. })
+            && (matches!(self.aggregate, EventSubject::Command(_))
+                || matches!(self.aggregate_revision_kind, EventRevisionKind::Command))
+        {
+            return Err("only a command decision has a command aggregate");
+        }
         match &self.event {
             EventBody::CommandDecided { command_id } => {
                 if self.command_id.as_ref() != Some(command_id) {
                     return Err("command causation mismatch");
                 }
+                // A command aggregate is the decided command itself, at its only revision.
+                let command_aggregate = matches!(self.aggregate, EventSubject::Command(_));
+                if matches!(&self.aggregate, EventSubject::Command(id) if id != command_id)
+                    || command_aggregate
+                        != matches!(self.aggregate_revision_kind, EventRevisionKind::Command)
+                    || (command_aggregate && self.aggregate_revision.as_str() != "1")
+                {
+                    return Err("command aggregate mismatch");
+                }
             }
             EventBody::RootControlChanged { root, .. } => {
-                if !matches!(&self.aggregate,Subject::Root(id) if id==&root.root_id)
+                if !matches!(&self.aggregate,EventSubject::Root(id) if id==&root.root_id)
                     || self.root_id.as_ref() != Some(&root.root_id)
-                    || !matches!(self.aggregate_revision_kind, RevisionKind::Control)
+                    || !matches!(self.aggregate_revision_kind, EventRevisionKind::Control)
                     || self.aggregate_revision != root.revision
                 {
                     return Err("root event mismatch");
                 }
             }
             EventBody::ActivationRequested { root_id, .. } => {
-                if !matches!(&self.aggregate,Subject::Root(id) if id==root_id)
+                if !matches!(&self.aggregate,EventSubject::Root(id) if id==root_id)
                     || self.root_id.as_ref() != Some(root_id)
                 {
                     return Err("activation scope mismatch");
                 }
             }
             EventBody::BlockerChanged { blocker, .. } => {
-                if !matches!(&self.aggregate,Subject::Blocker(id) if id==&blocker.hold_id)
-                    || !matches!(self.aggregate_revision_kind, RevisionKind::Blocker)
+                if !matches!(&self.aggregate,EventSubject::Blocker(id) if id==&blocker.hold_id)
+                    || !matches!(self.aggregate_revision_kind, EventRevisionKind::Blocker)
                     || self.aggregate_revision != blocker.revision
                 {
                     return Err("blocker event mismatch");
                 }
             }
             EventBody::OperationObserved { operation_id, .. } => {
-                if !matches!(&self.aggregate,Subject::Operation(id) if id==operation_id) {
+                if !matches!(&self.aggregate,EventSubject::Operation(id) if id==operation_id) {
                     return Err("operation observation mismatch");
                 }
             }

@@ -1,0 +1,217 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "EligibilityTarget": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "root",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "assignment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "Purpose": {
+      "enum": [
+        "Planning",
+        "Implementation",
+        "Resume"
+      ],
+      "type": "string"
+    },
+    "Query": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "runs.inspect",
+              "type": "string"
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "rootId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "runs.eligibility",
+              "type": "string"
+            },
+            "purpose": {
+              "$ref": "#/$defs/Purpose"
+            },
+            "target": {
+              "$ref": "#/$defs/EligibilityTarget"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "purpose"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "history.operation_status",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "history.command_receipt",
+              "type": "string"
+            },
+            "requestKey": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "requestKey"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The committed history of one work root or, from schema revision 2, of one project: exactly\none of `rootId` and `projectId`. Revision 1 requires `rootId`.",
+          "oneOf": [
+            {
+              "required": [
+                "rootId"
+              ]
+            },
+            {
+              "required": [
+                "projectId"
+              ],
+              "x-since": 2
+            }
+          ],
+          "properties": {
+            "after": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "history.events",
+              "type": "string"
+            },
+            "limit": {
+              "format": "uint16",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id",
+              "description": "Schema revision 2: the project change feed (every decided command of the project).",
+              "x-since": 2
+            },
+            "rootId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "limit"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:query-request.r2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "query": {
+      "$ref": "#/$defs/Query"
+    },
+    "queryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "schemaRevision": {
+      "description": "Negotiated operation schema revision. Absent means 1. Only revisions the selected operation registers are admitted; any other is UnsupportedSchema before authority.",
+      "maximum": 65535,
+      "minimum": 2,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "protocol",
+    "queryId",
+    "query",
+    "schemaRevision"
+  ],
+  "title": "QueryRequest",
+  "type": "object"
+}
