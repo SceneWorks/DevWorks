@@ -159,9 +159,15 @@ fn filesystem_roots_home_and_app_data_are_blocked() {
         Some(&BlockReason::FilesystemRoot)
     );
     if NativeFilesystem::new().home().is_some() {
-        assert_eq!(
-            blocked(&check(&t, DestructiveKind::RemoveTree, &["~"], None)),
-            Some(&BlockReason::ProtectedUserDirectory)
+        // Where the application data root lies inside the home directory (Windows temp under
+        // AppData), the more specific ApplicationData refusal applies first; either way the
+        // home directory is refused.
+        assert!(
+            matches!(
+                blocked(&check(&t, DestructiveKind::RemoveTree, &["~"], None)),
+                Some(BlockReason::ProtectedUserDirectory | BlockReason::ApplicationData)
+            ),
+            "home must be refused"
         );
     }
     assert_eq!(
@@ -1250,6 +1256,16 @@ mod precedence {
     use super::*;
     use devworks_core::authority::shell::{Blocking, CommandVerdict, preflight_command};
 
+    /// A path quoted for a POSIX `sh` script: forward slashes (a backslash is an escape under
+    /// `sh`, and Windows accepts `/`) inside single quotes.
+    fn q(path: &str) -> String {
+        format!("'{}'", path.replace('\\', "/"))
+    }
+    /// A path quoted for PowerShell: a single-quoted literal (no escapes inside).
+    fn ps(path: &str) -> String {
+        format!("'{path}'")
+    }
+
     fn verdict(t: &Tree, argv: &[&str], cwd: &str) -> CommandVerdict {
         let argv: Vec<String> = argv.iter().map(|s| (*s).to_owned()).collect();
         preflight_command(&NativeFilesystem::new(), &t.roots, &argv, Some(cwd), &[])
@@ -1266,7 +1282,9 @@ mod precedence {
     #[test]
     fn a_refusable_step_blocks_the_whole_command_whatever_else_it_holds() {
         let t = tree("precedence");
-        let repo = t.s.p("repo");
+        let raw = t.s.p("repo");
+        let repo = q(&raw);
+        let git = |rest: &str| q(&format!("{raw}/.git/{rest}"));
         let cwd = t.s.p("outside");
         let sh = |script: String| verdict(&t, &["sh", "-c", &script], &cwd);
         assert_eq!(
@@ -1290,7 +1308,9 @@ mod precedence {
         // Every refused step is reported.
         assert_eq!(
             blocked_reasons(&sh(format!(
-                "rm -rf {repo}/.git/objects; : > {repo}/.git/HEAD; rm -rf {repo}"
+                "rm -rf {}; : > {}; rm -rf {repo}",
+                git("objects"),
+                git("HEAD")
             ))),
             [
                 "RepositoryMetadata",
@@ -1304,32 +1324,28 @@ mod precedence {
             ["ProtectedBranch"]
         );
         // A PowerShell block deleting the repository next to an unmodeled construct.
-        let ps = verdict(
-            &t,
-            &[
-                "pwsh",
-                "-Command",
-                &format!("Rename-Item x y; if (1) {{ Remove-Item {repo} -Recurse }}"),
-            ],
-            &cwd,
+        let script = format!(
+            "Rename-Item x y; if (1) {{ Remove-Item {} -Recurse }}",
+            ps(&raw)
         );
-        assert_eq!(blocked_reasons(&ps), ["PrimaryRepository"]);
-        let ps = verdict(
-            &t,
-            &[
-                "pwsh",
-                "-Command",
-                &format!("try {{ Remove-Item {repo} -Recurse }} catch {{ Set-Content x y }}"),
-            ],
-            &cwd,
+        assert_eq!(
+            blocked_reasons(&verdict(&t, &["pwsh", "-Command", &script], &cwd)),
+            ["PrimaryRepository"]
         );
-        assert_eq!(blocked_reasons(&ps), ["PrimaryRepository"]);
+        let script = format!(
+            "try {{ Remove-Item {} -Recurse }} catch {{ Set-Content x y }}",
+            ps(&raw)
+        );
+        assert_eq!(
+            blocked_reasons(&verdict(&t, &["pwsh", "-Command", &script], &cwd)),
+            ["PrimaryRepository"]
+        );
     }
 
     #[test]
     fn approving_a_held_command_never_dispatches_a_refused_step() {
         let t = tree("approval");
-        let repo = t.s.p("repo");
+        let repo = q(&t.s.p("repo"));
         let cwd = t.s.p("outside");
         let argv = |script: String| vec!["sh".to_owned(), "-c".to_owned(), script];
         let run = |roots: &ProtectedRoots, script: String| {
@@ -1347,7 +1363,7 @@ mod precedence {
         assert!(blocked.dispatchable_after_approval().is_none());
         // Held only: approval may dispatch exactly the allowed steps.
         std::fs::create_dir_all(t.s.0.join("outside/build")).unwrap();
-        let script = format!("rm -rf {}; cp a b", t.s.p("outside/build"));
+        let script = format!("rm -rf {}; cp a b", q(&t.s.p("outside/build")));
         let held = run(&t.roots, script.clone());
         let CommandVerdict::NeedsInput { allowed, .. } = &held else {
             panic!("{held:?}")
@@ -1371,4 +1387,82 @@ mod precedence {
         assert_eq!(blocked_reasons(&fresh), ["PrimaryRepository"]);
         assert!(fresh.dispatchable_after_approval().is_none());
     }
+
+    #[test]
+    fn a_windows_path_mangled_by_sh_escapes_is_held_never_allowed() {
+        let t = tree("mangled");
+        let cwd = t.s.p("outside");
+        // Under `sh` the backslashes are escapes: `C:\Users\x\repo` becomes `C:Usersxrepo`,
+        // which names nothing that was meant. It must be held, on every platform.
+        for script in [
+            r"rm -rf C:\Users\runner\repo".to_owned(),
+            format!("rm -rf {}", t.s.p("repo").replace('/', "\\")),
+            "rm -rf C:repo".to_owned(),
+            r"rm -rf \\server\share\repo".to_owned(),
+        ] {
+            match verdict(&t, &["sh", "-c", &script], &cwd) {
+                CommandVerdict::NeedsInput { held, allowed } => {
+                    assert!(allowed.is_empty(), "{script}: {allowed:?}");
+                    assert!(
+                        held.iter().any(|h| matches!(
+                            h,
+                            InputNeeded::UnresolvedTarget | InputNeeded::UnresolvedExpansion
+                        )),
+                        "{script}: {held:?}"
+                    );
+                }
+                other => panic!("{script}: {other:?}"),
+            }
+        }
+        // The alias-bypass idiom `\rm` stays a precise, refusable command.
+        let repo = q(&t.s.p("repo"));
+        assert_eq!(
+            blocked_reasons(&verdict(
+                &t,
+                &["sh", "-c", &format!(r"\rm -rf {repo}")],
+                &cwd
+            )),
+            ["PrimaryRepository"]
+        );
+    }
+}
+
+/// Windows path forms resolve through the same identity checks, or are not resolved at all.
+#[cfg(windows)]
+#[test]
+fn windows_path_forms_resolve_through_identity_or_are_held() {
+    let t = tree("winforms");
+    let fs = NativeFilesystem::new();
+    // Drive-relative and device-namespace paths are never resolved.
+    for path in ["C:repo", "C:", r"\\.\PhysicalDrive0", r"\\.\C:\x"] {
+        assert!(fs.resolve(path, None).is_err(), "{path}");
+        assert_eq!(
+            check(&t, DestructiveKind::RemoveTree, &[path], None).verdict,
+            PreflightVerdict::NeedsInput(InputNeeded::UnresolvedTarget),
+            "{path}"
+        );
+    }
+    // The verbatim form and the 8.3 short form (the runner's temp directory) of the
+    // registered root are the same protected root.
+    let canonical = std::fs::canonicalize(t.s.0.join("repo")).unwrap();
+    let verbatim = canonical.to_string_lossy().into_owned();
+    assert!(verbatim.starts_with(r"\\?\"), "{verbatim}");
+    assert_eq!(
+        blocked(&check(&t, DestructiveKind::RemoveTree, &[&verbatim], None)),
+        Some(&repo_block())
+    );
+    let forward = t.s.p("repo").replace('\\', "/");
+    assert_eq!(
+        blocked(&check(&t, DestructiveKind::RemoveTree, &[&forward], None)),
+        Some(&repo_block())
+    );
+    assert_eq!(
+        blocked(&check(
+            &t,
+            DestructiveKind::RemoveTree,
+            &[&t.s.p("REPO")],
+            None
+        )),
+        Some(&repo_block())
+    );
 }

@@ -6,10 +6,13 @@ use crate::fs::NativeFilesystem;
 use crate::paths::FsPathProbe;
 use crate::storage::sqlite::SqliteStore;
 use devworks_core::admission::{self, Selection};
+// The dedicated deletion flow needs stable directory identities (Unix in this adapter).
+#[cfg(unix)]
 use devworks_core::authority::deletion::{self, DeletionRefusal, RepositoryDependencies};
+#[cfg(unix)]
+use devworks_core::authority::destructive::DestructiveExecutor;
 use devworks_core::authority::destructive::{
-    self, BlockReason, DestructiveExecutor, DestructiveKind, EffectPlan, IntendedScope,
-    PreflightVerdict, ProtectedRoots,
+    self, BlockReason, DestructiveKind, EffectPlan, IntendedScope, PreflightVerdict, ProtectedRoots,
 };
 use devworks_core::authority::service::{self as auth, AdminError, GrantBounds};
 use devworks_core::authority::{
@@ -1495,6 +1498,12 @@ fn register_repository(fx: &Fx, rid: &str, location: &str) {
         })
         .unwrap();
 }
+/// A path quoted for a POSIX `sh` script: forward slashes (Windows accepts them; a backslash
+/// is an escape under `sh`) inside single quotes.
+fn sh_quote(path: &str) -> String {
+    format!("'{}'", path.replace('\\', "/"))
+}
+
 /// The protected roots as the host reads them: from the store, bound to its identity.
 fn roots(fx: &Fx) -> ProtectedRoots {
     ProtectedRoots::read(&*fx.store, Vec::new(), None).unwrap()
@@ -2805,7 +2814,10 @@ fn a_blocked_command_records_every_refused_step_with_its_rationale() {
     let argv: Vec<String> = vec![
         "sh".into(),
         "-c".into(),
-        format!("rm -rf {repo}; git push -f origin main; cp a b"),
+        format!(
+            "rm -rf {}; git push -f origin main; cp a b",
+            sh_quote(&repo)
+        ),
     ];
     let verdict = preflight_command(&NativeFilesystem::new(), &roots(&fx), &argv, None, &[]);
     assert!(

@@ -298,13 +298,21 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
         let c = chars[i];
         match c {
             _ if c == escape => {
-                in_word = true;
                 if let Some(&n) = chars.get(i + 1) {
+                    // A POSIX escape before a letter or digit inside a word changes nothing in a
+                    // real path but is exactly what a Windows path (`C:\Users\x`) turns into
+                    // under `sh`: the word no longer means what was written, so it is held.
+                    // (`\rm` at the start of a word, the alias bypass, stays literal.)
+                    if dialect == Dialect::Posix && in_word && n.is_ascii_alphanumeric() {
+                        dynamic = true;
+                    }
+                    in_word = true;
                     if !(dialect == Dialect::Posix && n == '\n') {
                         word.push(n);
                     }
                     i += 2;
                 } else {
+                    in_word = true;
                     i += 1;
                 }
                 continue;
@@ -575,7 +583,12 @@ impl Collector<'_> {
         let mut resolved = Vec::new();
         let mut complete = true;
         for w in words {
-            if w.dynamic {
+            if drive_relative(&w.text) {
+                // `C:repo` means "repo in drive C's own current directory", which no saved
+                // working directory determines.
+                self.hold(InputNeeded::UnresolvedTarget);
+                complete = false;
+            } else if w.dynamic {
                 self.hold(InputNeeded::UnresolvedExpansion);
                 complete = false;
             } else if self.cwd == Cwd::Unknown && !absolute(&w.text) {
@@ -591,6 +604,16 @@ impl Collector<'_> {
         }
         complete
     }
+}
+
+/// A drive letter and colon not followed by a separator: relative to that drive's current
+/// directory.
+fn drive_relative(p: &str) -> bool {
+    let b = p.as_bytes();
+    b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && !matches!(b.get(2), Some(b'\\' | b'/'))
 }
 
 fn absolute(p: &str) -> bool {

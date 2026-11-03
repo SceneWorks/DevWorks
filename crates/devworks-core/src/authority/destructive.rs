@@ -503,6 +503,8 @@ fn within(a: &Located, b: &Located) -> bool {
 }
 
 fn has_wildcard(s: &str) -> bool {
+    // The `?` of a Windows verbatim prefix (`\\?\C:\…`) is not a glob.
+    let s = s.strip_prefix(r"\\?\").unwrap_or(s);
     s.contains(['*', '?', '['])
 }
 
