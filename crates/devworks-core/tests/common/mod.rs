@@ -339,6 +339,9 @@ impl ReadSnapshot for MemSnapshot {
     fn configuration(&self) -> &dyn ConfigurationRead {
         &self.unsupported
     }
+    fn authority(&self) -> &dyn AuthorityRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -392,6 +395,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
+        &mut self.unsupported
+    }
+    fn authority(&mut self) -> &mut dyn AuthorityLedger {
         &mut self.unsupported
     }
 }
@@ -617,6 +623,43 @@ impl DurableQueue for Unsupported {
 }
 impl GrantRead for Unsupported {
     fn grant(&self, _: &Id) -> Result<Option<GrantRecord>, StorageError> {
+        nope()
+    }
+}
+impl AuthorityRead for Unsupported {
+    fn principal(&self, _: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
+        nope()
+    }
+    fn authority_grant(&self, _: &Id) -> Result<Option<AuthorityGrant>, StorageError> {
+        nope()
+    }
+    fn registered_repositories(&self) -> Result<Vec<RegisteredRepository>, StorageError> {
+        nope()
+    }
+}
+impl AuthorityLedger for Unsupported {
+    fn bind_principal(
+        &mut self,
+        _: NewPrincipalBinding,
+        _: Option<i64>,
+    ) -> Result<PrincipalBinding, StorageError> {
+        nope()
+    }
+    fn revoke_principal(&mut self, _: &ActorId, _: i64) -> Result<PrincipalBinding, StorageError> {
+        nope()
+    }
+    fn issue_grant(&mut self, _: NewAuthorityGrant) -> Result<AuthorityGrant, StorageError> {
+        nope()
+    }
+    fn revoke_grant(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &ActorId,
+    ) -> Result<AuthorityGrant, StorageError> {
+        nope()
+    }
+    fn consume_grant(&mut self, _: &GrantUse, _: &ActorId) -> Result<AuthorityGrant, StorageError> {
         nope()
     }
 }

@@ -62,6 +62,7 @@ name = "devworks-adapters"
 version = "0.1.0"
 dependencies = [
  "devworks-core",
+ "libc",
  "rusqlite",
  "serde_json",
  "sha2",

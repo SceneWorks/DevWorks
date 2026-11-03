@@ -1,6 +1,6 @@
 //! Replaceable boundaries used by the gateway (ARCH-08). Production adapters implement them
-//! (SQLite storage in `devworks-adapters`, host authority in the authority item); tests use small
-//! deterministic substitutes.
+//! (SQLite storage in `devworks-adapters`; host authority is [`crate::authority::HostAuthority`]
+//! over the storage ports); tests use small deterministic substitutes.
 //!
 //! Every port is `Send + Sync` and object-safe: ARCH-03 runs gateway calls off the UI thread,
 //! and command use cases execute on the storage write owner's thread, so the gateway hands them
@@ -12,7 +12,9 @@ use crate::fingerprint::Fingerprint;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::OperationInput;
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::{Counter, DomainFault, Id, OperationId, ReadStamp, Receipt};
+use crate::protocol::{
+    ActorId, Counter, DomainFault, Id, OperationId, ProjectId, ReadStamp, Receipt,
+};
 use crate::registry::{EffectClass, ModeBinding, OperationDescriptor, SchemaRevision};
 use storage::{ReadSnapshot, StorageError, WriteTransaction};
 
@@ -48,6 +50,9 @@ pub struct AuthorityRequest<'a> {
     /// The effective action label for action-dependent bindings.
     pub action: Option<&'static str>,
     pub input: &'a OperationInput,
+    /// Digest of the normalized selected request: an exact-request grant binds to it, so
+    /// changed arguments can never reuse a narrowly approved target.
+    pub fingerprint: &'a Fingerprint,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthorityDenial {
@@ -68,23 +73,70 @@ pub struct GrantUse {
     pub expected_revision: i64,
 }
 
+/// A host authority fact the authorization depended on. The command unit of work re-checks every
+/// fence inside its transaction before the receipt lookup, and a query re-checks them on a fresh
+/// snapshot before publishing its result, so a change committed after authorization (a revoked
+/// or re-bound principal, a narrowed access policy) fences the request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuthorityFence {
+    /// The principal binding revision authority resolved.
+    Principal { actor: ActorId, revision: i64 },
+    /// Digest of the access-relevant effective policy of the invocation's scope.
+    Policy {
+        project_id: Option<ProjectId>,
+        digest: String,
+    },
+}
+
 /// What current authority established for one request. For a command it is consumed by the
-/// write unit of work: listed grant uses are spent together with the receipt.
+/// write unit of work: listed grant uses are spent together with the receipt and every fence
+/// must still hold.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Authorization {
     grants: Vec<GrantUse>,
+    authority_grants: Vec<GrantUse>,
+    fences: Vec<AuthorityFence>,
+    replay_only: bool,
 }
 impl Authorization {
     /// Authority held directly by the principal's current role/scope; nothing to consume.
     pub fn direct() -> Self {
         Self::default()
     }
-    /// Authority that depends on spending one use of each listed grant.
+    /// Authority that depends on spending one use of each listed resume grant.
     pub fn with_grants(grants: Vec<GrantUse>) -> Self {
-        Self { grants }
+        Self {
+            grants,
+            ..Self::default()
+        }
+    }
+    /// Adds uses of host-minted authority grants ([`storage::AuthorityLedger`]).
+    pub fn spending(mut self, grants: Vec<GrantUse>) -> Self {
+        self.authority_grants.extend(grants);
+        self
+    }
+    /// Adds facts that must still hold when the request commits or publishes.
+    pub fn fenced_by(mut self, fences: Vec<AuthorityFence>) -> Self {
+        self.fences.extend(fences);
+        self
+    }
+    /// Authority sufficient only to replay an existing receipt (for example the grant that
+    /// authorized it has since been spent or has expired): a new decision is denied.
+    pub fn replay_only(mut self) -> Self {
+        self.replay_only = true;
+        self
+    }
+    pub fn is_replay_only(&self) -> bool {
+        self.replay_only
     }
     pub fn grants(&self) -> &[GrantUse] {
         &self.grants
+    }
+    pub fn authority_grants(&self) -> &[GrantUse] {
+        &self.authority_grants
+    }
+    pub fn fences(&self) -> &[AuthorityFence] {
+        &self.fences
     }
 }
 

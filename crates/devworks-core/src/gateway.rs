@@ -23,10 +23,10 @@ use crate::context::{InvocationContext, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
-    ActorRegistry, CommandLedger, CommandLedgerRead, ConfigurationRepository, DurableQueue,
-    EventFilter, EventPage, EventRecord, GrantLedger, HistoryLog, HistoryRead, LedgerEntry,
-    NewEvent, OperationJournal, PackageHandlerLedger, ReadOptions, RevisionConflict, Savepoint,
-    StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ActorRegistry, AuthorityLedger, CommandLedger, CommandLedgerRead, ConfigurationRepository,
+    DurableQueue, EventFilter, EventPage, EventRecord, GrantLedger, HistoryLog, HistoryRead,
+    LedgerEntry, NewEvent, OperationJournal, PackageHandlerLedger, ReadOptions, RevisionConflict,
+    Savepoint, StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
@@ -193,15 +193,19 @@ impl Gateway<'_> {
             effect: decoded.effect,
             action: decoded.action,
             input: &decoded.input,
+            fingerprint: &decoded.fingerprint,
         };
-        if let Err(denial) = self.authority.authorize(ctx, &request) {
-            let code = match denial {
-                AuthorityDenial::PermissionDenied => DomainErrorCode::PermissionDenied,
-                AuthorityDenial::InvalidTarget => DomainErrorCode::InvalidArgument,
-                AuthorityDenial::NotFound => DomainErrorCode::NotFound,
-            };
-            return Ok(self.query_fault(query_id, code, RetryAdvice::Never));
-        }
+        let authorization = match self.authority.authorize(ctx, &request) {
+            Ok(a) => a,
+            Err(denial) => {
+                let code = match denial {
+                    AuthorityDenial::PermissionDenied => DomainErrorCode::PermissionDenied,
+                    AuthorityDenial::InvalidTarget => DomainErrorCode::InvalidArgument,
+                    AuthorityDenial::NotFound => DomainErrorCode::NotFound,
+                };
+                return Ok(self.query_fault(query_id, code, RetryAdvice::Never));
+            }
+        };
         let admitted = AdmittedQuery {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
@@ -217,6 +221,22 @@ impl Gateway<'_> {
             }
             Ok(Some((handler.query(ctx, &admitted, snapshot), stamp)))
         });
+        // Publication point: authority that was revoked or narrowed while the answer was being
+        // prepared denies the output. Checked on a fresh snapshot, after the answer exists.
+        if matches!(answered, Ok(Some((Ok(_), _))))
+            && (!authorization.fences().is_empty() || !authorization.authority_grants().is_empty())
+        {
+            let holds = read_snapshot(self.store, &ReadOptions::default(), |s| {
+                crate::authority::authorization_holds(s, &authorization)
+            });
+            if !matches!(holds, Ok(true)) {
+                return Ok(self.query_fault(
+                    admitted.query_id,
+                    DomainErrorCode::PermissionDenied,
+                    RetryAdvice::Never,
+                ));
+            }
+        }
         let reply = match answered {
             Err(e) => {
                 let (code, retry) = storage_fault(&e);
@@ -311,6 +331,7 @@ impl Gateway<'_> {
             effect: decoded.effect,
             action: decoded.action,
             input: &decoded.input,
+            fingerprint: &decoded.fingerprint,
         };
         let authorization = match self.authority.authorize(ctx, &request) {
             Ok(a) => a,
@@ -503,6 +524,12 @@ fn unit_of_work(
         // Receipts and history are attributed to a host-registered principal.
         return Ok(Unit::Denied);
     }
+    if !crate::authority::fences_hold(tx, authorization.fences())? {
+        // Authority changed after it was resolved (revoked or re-bound principal, narrowed
+        // policy). Checked before the receipt lookup, so a revoked caller is denied rather
+        // than handed an old receipt.
+        return Ok(Unit::Denied);
+    }
 
     // Step 3: the receipt check precedes any current-state evaluation. A key reused for another
     // operation is a different intent. The stored contract/schema revision is checked before the
@@ -536,6 +563,8 @@ fn unit_of_work(
             hold_incompatible(tx, ctx, command, &contract)?;
             return Ok(Unit::IncompatibleRecord);
         }
+        // Authority that can only replay never reaches a new decision.
+        None if authorization.is_replay_only() => return Ok(Unit::Denied),
         None => {}
     }
 
@@ -563,8 +592,17 @@ fn unit_of_work(
                     ));
                 }
             } else {
-                for grant in authorization.grants() {
-                    match tx.grants().consume(grant, ctx.principal()) {
+                let resume = authorization.grants().iter().map(|g| (false, g));
+                let host = authorization.authority_grants().iter().map(|g| (true, g));
+                for (authority, grant) in resume.chain(host) {
+                    let spent = if authority {
+                        tx.authority()
+                            .consume_grant(grant, ctx.principal())
+                            .map(|_| ())
+                    } else {
+                        tx.grants().consume(grant, ctx.principal()).map(|_| ())
+                    };
+                    match spent {
                         Ok(_) => {}
                         Err(
                             StorageError::ScopeDenied
@@ -746,6 +784,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self.inner.get_mut().configuration()
+    }
+    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+        self.inner.get_mut().authority()
     }
 }
 

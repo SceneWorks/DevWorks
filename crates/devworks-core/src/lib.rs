@@ -6,8 +6,9 @@
 //! * **Dependencies point inward.** Core depends only on serde, serde_json, schemars and sha2.
 //!   It has no UI, database-driver, HTTP or async-runtime dependency; persistence, authority,
 //!   clocks and identifiers are reached through the object-safe `Send + Sync` traits in [`ports`].
-//!   `devworks-adapters::storage::sqlite` implements [`ports::storage`]; host authority is a later
-//!   item; tests replace both with deterministic substitutes. There is no global mutable state.
+//!   `devworks-adapters::storage::sqlite` implements [`ports::storage`]; [`authority::HostAuthority`]
+//!   is the host authority port over those records; tests replace both with deterministic
+//!   substitutes. There is no global mutable state.
 //! * **One admission path (ARCH-02).** [`gateway::Gateway`] is the only way to reach a use case:
 //!   handlers receive [`gateway::AdmittedQuery`]/[`gateway::AdmittedCommand`], which only the
 //!   gateway can construct after strict framing, version, selected-operation/mode, typed decode,
@@ -36,6 +37,7 @@
 #![allow(clippy::large_enum_variant, clippy::result_large_err)]
 
 pub mod admission;
+pub mod authority;
 pub mod context;
 pub mod fingerprint;
 pub mod framing;

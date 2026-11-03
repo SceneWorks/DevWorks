@@ -20,6 +20,8 @@ pub enum PrincipalKind {
     Human,
     Agent,
     Package,
+    /// An authorized incoming MCP client identity (MCP server surface).
+    McpClient,
     Schedule,
     Host,
 }

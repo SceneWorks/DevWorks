@@ -105,6 +105,7 @@ impl StoreHarness for Harness {
     }
 }
 
+mod authority;
 mod settings;
 
 mod contract {
@@ -552,6 +553,16 @@ fn shipped_migrations_increase_and_settings_apply_on_top() {
         report.minimum_writer, highest_floor,
         "the store keeps the highest declared writer floor"
     );
+    let authority = MIGRATIONS
+        .iter()
+        .find(|m| m.version == 5)
+        .expect("authority migration");
+    assert_eq!(
+        authority.checksum(),
+        MIGRATION_0005_SHA256,
+        "an applied migration was edited"
+    );
+    assert_eq!(authority.minimum_writer, 5);
     assert!(report.migrations.iter().any(|m| m.version == 4));
     drop(s);
     assert_eq!(version_and_ledger(&h, "configuration_proposals").0, 1);
