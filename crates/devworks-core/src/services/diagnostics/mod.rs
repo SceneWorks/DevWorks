@@ -159,8 +159,14 @@ pub const MESSAGE_LIMIT: usize = 8 * 1024;
 pub const OUTPUT_LIMIT: usize = 16 * 1024;
 /// Most records one export carries.
 pub const EXPORT_MAX_RECORDS: usize = 5_000;
-/// Most bytes one export carries.
+/// Most bytes of one export document, as written (pretty-printed, with health and envelope).
 pub const EXPORT_MAX_BYTES: usize = 8 * 1024 * 1024;
+/// How long an export waits for another attempt's claim on its request key.
+pub const EXPORT_CLAIM_WAIT: Duration = Duration::from_secs(30);
+/// Interval at which a waiting export re-reads the claim.
+const EXPORT_CLAIM_POLL: Duration = Duration::from_millis(10);
+/// Store-clock age after which a claim that never recorded its command is taken over.
+pub const EXPORT_CLAIM_STALE_MS: i64 = 5 * 60 * 1000;
 /// Format identifier of an export document.
 pub const EXPORT_FORMAT: &str = "devworks.diagnostics-export/1";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -715,7 +721,9 @@ pub struct RenderedExport {
     /// The export document (JSON, `application/json`), redacted.
     pub bytes: Vec<u8>,
     pub records: usize,
-    /// More records matched than the export carries ([`EXPORT_MAX_RECORDS`]/[`EXPORT_MAX_BYTES`]).
+    /// Matching records the export leaves out ([`EXPORT_MAX_RECORDS`]/[`EXPORT_MAX_BYTES`]).
+    pub omitted: usize,
+    /// More records matched than the export carries.
     pub truncated: bool,
 }
 
@@ -726,6 +734,9 @@ pub enum ExportFailure {
     Denied,
     Invalid(&'static str),
     Staging(ExportRefused),
+    /// Another attempt holds this request key's claim and has not recorded its command yet;
+    /// retry the same request.
+    Pending,
     Storage(StorageError),
 }
 
@@ -1038,7 +1049,10 @@ impl DiagnosticService {
     }
 
     /// Renders a bounded, redacted export of the records `query` selects (oldest first) and the
-    /// current health checks, as `ctx` may see them.
+    /// current health checks, as `ctx` may see them. The bound is the final document: its
+    /// serialized bytes, health checks, envelope and redaction included, are at most
+    /// [`EXPORT_MAX_BYTES`]. Records that do not fit are dropped from the end (newest), and the
+    /// document says how many matched and how many it omits.
     pub fn render_export(
         &self,
         ctx: &InvocationContext,
@@ -1052,26 +1066,33 @@ impl DiagnosticService {
         let mut q = query.clone();
         q.descending = false;
         let now = self.now();
-        let (records, truncated, health) =
+        let redactor = self
+            .redactor
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let (records, matched, health) =
             read_snapshot(&*self.store, &ReadOptions::default(), |s| {
                 let Some(audience) = audience(s.authority(), ctx)? else {
                     return Ok(None);
                 };
                 let mut filter = q.filter(audience);
+                let matched = s.diagnostics().count_diagnostics(&filter)?;
+                // Candidates: redacted as they will be written. A record's compact size is a
+                // lower bound of its share of the final document, so reading stops once their
+                // sum alone exceeds the bound.
                 let mut records = Vec::new();
-                let mut bytes = 0usize;
-                let mut truncated = false;
+                let mut compact = 0usize;
                 'pages: loop {
                     let page = s.diagnostics().diagnostics(&filter, 500)?;
                     let done = page.len() < 500;
                     for d in &page {
-                        let e = serde_json::to_value(entry(d)?).unwrap_or(Value::Null);
-                        let n = e.to_string().len();
-                        if records.len() >= EXPORT_MAX_RECORDS || bytes + n > EXPORT_MAX_BYTES {
-                            truncated = true;
+                        if records.len() >= EXPORT_MAX_RECORDS || compact > EXPORT_MAX_BYTES {
                             break 'pages;
                         }
-                        bytes += n;
+                        let e = redactor
+                            .redact_json(&serde_json::to_value(entry(d)?).unwrap_or(Value::Null));
+                        compact += e.to_string().len();
                         records.push(e);
                         filter.after_sequence = d.sequence;
                     }
@@ -1082,37 +1103,56 @@ impl DiagnosticService {
                 let health: Vec<Value> = health::checks(self, ctx, s, now)
                     .iter()
                     .filter_map(|c| {
-                        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
                         health::wire(c, &self.store.info().host_actor, now, &redactor).ok()
                     })
                     .filter_map(|e| serde_json::to_value(e).ok())
                     .collect();
-                Ok(Some((records, truncated, health)))
+                Ok(Some((records, matched.max(0) as usize, health)))
             })
             .map_err(ExportFailure::Storage)?
             .ok_or(ExportFailure::Denied)?;
-        let count = records.len();
-        let document = json!({
-            "format": EXPORT_FORMAT,
-            "exportedAtMs": now,
-            "storeId": self.store.info().store_id.0.as_str(),
-            "exportedBy": ctx.principal().0.as_str(),
-            "selection": format!("{q:?}"),
-            "truncated": truncated,
-            "health": health,
-            "records": records,
-        });
-        // Defence in depth: records were redacted when persisted; the document is redacted again
-        // with the secrets registered since.
-        let redacted = self
-            .redactor
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .redact_json(&document);
+        let selection = redactor.redact_text(&format!("{q:?}"));
+        let health = Value::Array(health);
+        let document = |k: usize| {
+            let omitted = matched.saturating_sub(k);
+            serde_json::to_vec_pretty(&json!({
+                "format": EXPORT_FORMAT,
+                "exportedAtMs": now,
+                "storeId": self.store.info().store_id.0.as_str(),
+                "exportedBy": ctx.principal().0.as_str(),
+                "selection": selection,
+                "matchedRecords": matched,
+                "omittedRecords": omitted,
+                "truncated": omitted > 0,
+                "health": health,
+                "records": &records[..k],
+            }))
+            .unwrap_or_default()
+        };
+        // The most records whose whole document fits (its size grows with the record count).
+        let mut best = document(0);
+        if best.len() > EXPORT_MAX_BYTES {
+            return Err(ExportFailure::Invalid(
+                "the health checks alone exceed the export size limit",
+            ));
+        }
+        let (mut lo, mut hi, mut kept) = (1usize, records.len(), 0usize);
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            let bytes = document(mid);
+            if bytes.len() <= EXPORT_MAX_BYTES {
+                best = bytes;
+                kept = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
         Ok(RenderedExport {
-            bytes: serde_json::to_vec_pretty(&redacted).unwrap_or_default(),
-            records: count,
-            truncated,
+            bytes: best,
+            records: kept,
+            omitted: matched.saturating_sub(kept),
+            truncated: kept < matched,
         })
     }
 
@@ -1135,16 +1175,22 @@ impl DiagnosticService {
     }
 
     /// Exports the selection as an artifact of the invocation's project through the one
-    /// artifact service: renders it, stages it (the attached [`ExportStaging`]), records the
-    /// export's intent and submits `artifacts.save` under `request_key` with `submit` (the
-    /// runtime's command admission), returning that command's outcome.
+    /// artifact service: claims the export's intent, renders it, stages it (the attached
+    /// [`ExportStaging`]), records the command and submits `artifacts.save` under
+    /// `request_key` with `submit` (the runtime's command admission), returning that command's
+    /// outcome.
     ///
-    /// **Retries.** The intent binds the request key to the selection, the destination project
-    /// and the exact command submitted, durably. A retry with the same key and selection
-    /// resubmits that command unchanged, so the gateway replays its receipt under current
-    /// authority (preparation stages nothing for a replay). If no receipt was recorded, the
-    /// export is rendered and staged again. The key used for a different selection or project,
-    /// or already used by another command, is `IdempotencyConflict`; nothing is staged.
+    /// **One claimant per request key.** The intent is claimed atomically (insert-if-absent,
+    /// re-read in the same unit of work) before anything is staged, binding the key to the
+    /// selection and destination project. Only the claimant renders, stages and records the
+    /// command, once; a recorded command is never replaced. Any other attempt with the key
+    /// (a retry, or an export overlapping the claimant's) waits for the claimant's command, up
+    /// to [`EXPORT_CLAIM_WAIT`], and resubmits it unchanged, so the gateway replays its receipt
+    /// under current authority or, if the claimant's submission is still running, decides it
+    /// once. A claim pending past [`EXPORT_CLAIM_STALE_MS`] (its claimant stopped) is taken over.
+    /// The key used for a different selection or project, or by another command, is
+    /// `IdempotencyConflict`; nothing is staged. A retry after the staged file's ticket expired
+    /// is refused by the save (its source no longer resolves): export again under a new key.
     ///
     /// **Staging.** Once the save is decided (recorded or rejected) the staged file is released;
     /// a file whose outcome is unknown stays for a retry and is swept after its ticket expires.
@@ -1172,17 +1218,6 @@ impl DiagnosticService {
                 .to_string()
                 .as_bytes(),
         );
-        let (intent, receipt) = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
-            Ok((
-                s.diagnostics().export_intent(
-                    identity.actor_id(),
-                    identity.scope_key().as_str(),
-                    request_key,
-                )?,
-                s.receipts().lookup(&identity)?.is_some(),
-            ))
-        })
-        .map_err(ExportFailure::Storage)?;
         let conflict = || {
             Ok(Ok(CommandReply::Rejected {
                 protocol: Protocol::Draft1,
@@ -1192,42 +1227,102 @@ impl DiagnosticService {
                 correlation_id: CorrelationId(self.ids.next_id(IdKind::Correlation)),
             }))
         };
-        match &intent {
-            Some(i) if i.selection_sha256 != selection || i.project_id != project => {
+        let mut mine = ExportIntent {
+            actor: identity.actor_id().clone(),
+            scope_key: identity.scope_key().as_str().to_owned(),
+            request_key: request_key.to_owned(),
+            project_id: project.clone(),
+            selection_sha256: selection,
+            command: None,
+            claim: self.ids.next_id(IdKind::Diagnostic).as_str().to_owned(),
+            created_at_ms: self.now(),
+        };
+        let claim = |intent: ExportIntent| {
+            let identity = identity.clone();
+            run_write(&*self.store, WriteOptions::default(), move |tx| {
+                let stored = tx.diagnostics().claim_export_intent(&intent)?;
+                let receipt = tx.receipts().lookup(&identity)?.is_some();
+                Ok((stored, receipt))
+            })
+            .map_err(ExportFailure::Storage)
+        };
+        let (mut stored, mut receipt) = claim(mine.clone())?;
+        let deadline = std::time::Instant::now() + EXPORT_CLAIM_WAIT;
+        while stored.claim != mine.claim {
+            if stored.selection_sha256 != mine.selection_sha256 || stored.project_id != project {
                 return conflict();
             }
-            // The recorded save of this export: the same command replays through the gateway.
-            Some(i) if receipt => return Ok(submit(i.command.as_bytes())),
-            // The key belongs to another command.
-            None if receipt => return conflict(),
-            // Nothing was recorded under the key yet: (re)stage below.
-            _ => {}
+            if let Some(command) = &stored.command {
+                // The claimant's command: replayed (or decided once) by the gateway.
+                return Ok(submit(command.as_bytes()));
+            }
+            if self.now().saturating_sub(stored.created_at_ms) > EXPORT_CLAIM_STALE_MS {
+                let (from, takeover) = (stored.claim.clone(), mine.clone());
+                let taken = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                    tx.diagnostics().take_over_export_intent(&takeover, &from)
+                })
+                .map_err(ExportFailure::Storage)?;
+                if taken {
+                    break;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ExportFailure::Pending);
+            }
+            std::thread::sleep(EXPORT_CLAIM_POLL);
+            // Re-claim: the claimant may have recorded its command, or released its claim.
+            mine.created_at_ms = self.now();
+            (stored, receipt) = claim(mine.clone())?;
         }
-        let rendered = self.render_export(ctx, query)?;
+        // This attempt holds the claim.
+        let release_claim = |intent: &ExportIntent| {
+            let intent = intent.clone();
+            let _ = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                tx.diagnostics().release_export_intent(&intent)
+            });
+        };
+        if receipt {
+            // The key already belongs to another command.
+            release_claim(&mine);
+            return conflict();
+        }
+        let rendered = match self.render_export(ctx, query) {
+            Ok(r) => r,
+            Err(e) => {
+                release_claim(&mine);
+                return Err(e);
+            }
+        };
         let name = format!("devworks-diagnostics-{}.json", self.now());
-        let source = staging
-            .stage(ctx, &name, &rendered.bytes)
-            .map_err(ExportFailure::Staging)?;
+        let source = match staging.stage(ctx, &name, &rendered.bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                release_claim(&mine);
+                return Err(ExportFailure::Staging(e));
+            }
+        };
         let frame = json!({"protocol": "1.0-draft.1", "requestKey": request_key, "command": {
             "kind": "Save", "projectId": project.0.as_str(), "title": "Diagnostics export",
             "mediaType": "application/json", "source": source,
             "expectedDigest": sha256_hex(&rendered.bytes),
             "expectedBytes": rendered.bytes.len().to_string()}})
         .to_string();
-        let record = ExportIntent {
-            actor: identity.actor_id().clone(),
-            scope_key: identity.scope_key().as_str().to_owned(),
-            request_key: request_key.to_owned(),
-            project_id: project,
-            selection_sha256: selection,
-            command: frame.clone(),
-            created_at_ms: self.now(),
-        };
-        if let Err(e) = run_write(&*self.store, WriteOptions::default(), move |tx| {
-            tx.diagnostics().put_export_intent(&record)
-        }) {
-            staging.release(&source);
-            return Err(ExportFailure::Storage(e));
+        let (claimed, command) = (mine.clone(), frame.clone());
+        let recorded = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            tx.diagnostics().complete_export_intent(&claimed, &command)
+        });
+        match recorded {
+            Ok(true) => {}
+            Ok(false) => {
+                // The claim was taken over meanwhile: the other attempt owns the key now.
+                staging.release(&source);
+                return Err(ExportFailure::Pending);
+            }
+            Err(e) => {
+                staging.release(&source);
+                release_claim(&mine);
+                return Err(ExportFailure::Storage(e));
+            }
         }
         let outcome = submit(frame.as_bytes());
         if matches!(

@@ -129,6 +129,10 @@ pub struct PrunedDiagnostics {
 /// The durable intent of one diagnostic export: what a request key exported, and the exact
 /// `artifacts.save` command it submitted, so a retry with that key resubmits the same command
 /// (the gateway replays its receipt) and a different selection under the key is a conflict.
+///
+/// An intent is claimed before anything is staged ([`DiagnosticRepository::claim_export_intent`],
+/// insert-if-absent): only the claimant stages and records the command, once
+/// ([`DiagnosticRepository::complete_export_intent`]); a recorded command is never replaced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportIntent {
     pub actor: ActorId,
@@ -138,8 +142,10 @@ pub struct ExportIntent {
     pub project_id: ProjectId,
     /// SHA-256 of the export's selection and destination.
     pub selection_sha256: String,
-    /// The submitted `artifacts.save` command frame (JSON).
-    pub command: String,
+    /// The submitted `artifacts.save` command frame (JSON); `None` while its claimant stages.
+    pub command: Option<String>,
+    /// The claimant's opaque token.
+    pub claim: String,
     pub created_at_ms: i64,
 }
 
@@ -170,8 +176,25 @@ pub trait DiagnosticRepository: DiagnosticRead {
         &mut self,
         record: &StoredDiagnostic,
     ) -> Result<StoredDiagnostic, StorageError>;
-    /// Records (or replaces) the export intent of its receipt identity.
-    fn put_export_intent(&mut self, intent: &ExportIntent) -> Result<(), StorageError>;
+    /// Inserts `intent` (pending: no command) unless its receipt identity already has one, and
+    /// returns the stored intent: `intent` itself for the claimant, the earlier one otherwise.
+    fn claim_export_intent(&mut self, intent: &ExportIntent) -> Result<ExportIntent, StorageError>;
+    /// Records the command of a pending intent held by `claim`; `false` when the intent is not
+    /// pending under that claim (nothing changes: a recorded command is never replaced).
+    fn complete_export_intent(
+        &mut self,
+        intent: &ExportIntent,
+        command: &str,
+    ) -> Result<bool, StorageError>;
+    /// Hands a pending intent from claim `from` to `intent.claim` (taking over an abandoned
+    /// claim); `false` when it is no longer pending under `from`.
+    fn take_over_export_intent(
+        &mut self,
+        intent: &ExportIntent,
+        from: &str,
+    ) -> Result<bool, StorageError>;
+    /// Removes a pending intent held by `intent.claim` (its export could not be staged).
+    fn release_export_intent(&mut self, intent: &ExportIntent) -> Result<bool, StorageError>;
     /// Removes records recorded before `older_than_ms`, then the oldest records beyond
     /// `keep_at_most`, and export intents created before `older_than_ms`. The sequence counter
     /// is never reset.

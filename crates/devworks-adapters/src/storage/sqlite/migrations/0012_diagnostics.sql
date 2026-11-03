@@ -71,14 +71,19 @@ CREATE TABLE diagnostic_records (
 -- The durable intent of each diagnostic export, by receipt identity: the selection and
 -- destination it exported and the exact `artifacts.save` command it submitted, so a retry with
 -- the request key resubmits that command (the gateway replays its receipt under current
--- authority) and other use of the key is a conflict. Pruned with the log's retention window.
+-- authority) and other use of the key is a conflict. An intent is claimed (insert-if-absent,
+-- `command` NULL) before anything is staged; only its claimant records the command, once.
+-- Pruned with the log's retention window.
 CREATE TABLE diagnostic_exports (
     actor_id TEXT NOT NULL CHECK (length(actor_id) BETWEEN 1 AND 128),
     scope_key TEXT NOT NULL CHECK (length(scope_key) BETWEEN 1 AND 1024),
     request_key TEXT NOT NULL CHECK (length(request_key) BETWEEN 1 AND 128),
     project_id TEXT NOT NULL CHECK (length(project_id) BETWEEN 1 AND 128),
     selection_sha256 TEXT NOT NULL CHECK (length(selection_sha256) = 64),
-    command TEXT NOT NULL CHECK (json_valid(command) AND json_type(command) = 'object'),
+    command TEXT CHECK (
+        command IS NULL OR (json_valid(command) AND json_type(command) = 'object')
+    ),
+    claim TEXT NOT NULL CHECK (length(claim) BETWEEN 1 AND 128),
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     PRIMARY KEY (actor_id, scope_key, request_key)
 ) STRICT;

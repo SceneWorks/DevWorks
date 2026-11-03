@@ -1472,3 +1472,65 @@ fn process_health_reads_every_page_and_finds_a_problem_past_the_first() {
         "1"
     );
 }
+
+#[test]
+fn an_export_fits_its_byte_limit_as_written_and_counts_what_it_omits() {
+    use devworks_core::services::diagnostics::EXPORT_MAX_BYTES;
+    let fx = Fx::new();
+    let user = fx.user();
+    // 560 records of about 16 KiB of output each, with nested metrics: well past the limit.
+    let svc = fx.svc.clone();
+    fx.write(move |tx| {
+        for i in 0..560 {
+            let entry = LogEntry {
+                output: Some("zq9x ".repeat(3_200)),
+                metrics: (0..20)
+                    .map(|m| {
+                        MetricReading::new(
+                            &format!("metric{m}"),
+                            Some("count"),
+                            Metric::Unavailable(format!("probe zq9x {m} did not answer")),
+                        )
+                    })
+                    .collect(),
+                ..LogEntry::new("client", "bulk", Severity::Info, format!("record {i}"))
+            };
+            svc.log_in(tx, &entry)
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        }
+        Ok(())
+    });
+    // A secret registered after the records were written: the export's redaction grows them.
+    fx.svc.register_secret("zq9x");
+    let export = fx
+        .svc
+        .render_export(
+            &user,
+            &devworks_core::services::diagnostics::LogQuery::default(),
+        )
+        .unwrap();
+    assert!(
+        export.bytes.len() <= EXPORT_MAX_BYTES,
+        "{} bytes",
+        export.bytes.len()
+    );
+    // Near the limit: no further record would have fit.
+    assert!(
+        export.bytes.len() > EXPORT_MAX_BYTES - 64 * 1024,
+        "{}",
+        export.bytes.len()
+    );
+    assert!(export.truncated);
+    assert!(export.omitted > 0);
+    assert_eq!(export.records + export.omitted, 560);
+    let document: Value = serde_json::from_slice(&export.bytes).unwrap();
+    assert_eq!(
+        document["records"].as_array().unwrap().len(),
+        export.records
+    );
+    assert_eq!(document["omittedRecords"], json!(export.omitted));
+    assert_eq!(document["matchedRecords"], json!(560));
+    assert_eq!(document["truncated"], json!(true));
+    assert!(!document["health"].as_array().unwrap().is_empty());
+    assert!(!String::from_utf8_lossy(&export.bytes).contains("zq9x"));
+}

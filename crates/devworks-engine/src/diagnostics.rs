@@ -53,6 +53,15 @@ fn boot_metrics(r: &BootReport) -> Vec<MetricReading> {
     ]
 }
 
+/// Up to five digests, then how many more.
+fn digests(all: &[String]) -> String {
+    let shown: Vec<&str> = all.iter().take(5).map(String::as_str).collect();
+    match all.len().saturating_sub(5) {
+        0 => shown.join(", "),
+        more => format!("{} and {more} more", shown.join(", ")),
+    }
+}
+
 /// What needs attention after a boot's recovery (empty: nothing).
 fn attention(r: &BootReport) -> Vec<String> {
     let mut out = Vec::new();
@@ -65,8 +74,16 @@ fn attention(r: &BootReport) -> Vec<String> {
     }
     if !r.artifacts.missing.is_empty() {
         out.push(format!(
-            "{} managed files are missing",
-            r.artifacts.missing.len()
+            "{} managed files are missing ({})",
+            r.artifacts.missing.len(),
+            digests(&r.artifacts.missing)
+        ));
+    }
+    if !r.artifacts.quarantined.is_empty() {
+        out.push(format!(
+            "{} corrupt managed files were quarantined; their artifact versions cannot be read until restored ({})",
+            r.artifacts.quarantined.len(),
+            digests(&r.artifacts.quarantined)
         ));
     }
     let failed = r.artifacts.failed_unlinks.len() + r.artifacts.quarantine_failed.len();
@@ -95,6 +112,17 @@ fn boot_links(r: &BootReport) -> Vec<RecoveryLink> {
         links.push(RecoveryLink::new(
             "queue.reconcile",
             "Reconcile a held delivery once its outcome is known",
+        ));
+    }
+    let a = &r.artifacts;
+    if !a.quarantined.is_empty() || !a.missing.is_empty() {
+        links.push(RecoveryLink::new(
+            "workspace.restore",
+            "Restore a verified manual backup holding the corrupt or missing files",
+        ));
+        links.push(RecoveryLink::new(
+            "artifacts.list",
+            "Find the artifacts whose files are affected",
         ));
     }
     let p = &r.resources.recovery;

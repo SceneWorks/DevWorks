@@ -272,15 +272,16 @@ fn export_intent(
     scope_key: &str,
     request_key: &str,
 ) -> Result<Option<ExportIntent>, StorageError> {
-    let found: Option<(String, String, String, i64)> = db(conn
+    type Row = (String, String, Option<String>, String, i64);
+    let found: Option<Row> = db(conn
         .query_row(
-            "SELECT project_id,selection_sha256,command,created_at FROM diagnostic_exports WHERE actor_id=?1 AND scope_key=?2 AND request_key=?3",
+            "SELECT project_id,selection_sha256,command,claim,created_at FROM diagnostic_exports WHERE actor_id=?1 AND scope_key=?2 AND request_key=?3",
             params![actor.0.as_str(), scope_key, request_key],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional())?;
     found
-        .map(|(project, selection, command, created)| {
+        .map(|(project, selection, command, claim, created)| {
             Ok(ExportIntent {
                 actor: actor.clone(),
                 scope_key: scope_key.to_owned(),
@@ -288,6 +289,7 @@ fn export_intent(
                 project_id: ProjectId(id_of(project)?),
                 selection_sha256: selection,
                 command,
+                claim,
                 created_at_ms: created,
             })
         })
@@ -406,20 +408,64 @@ impl DiagnosticRepository for Unit<'_> {
         Ok(PrunedDiagnostics { expired, over_cap })
     }
 
-    fn put_export_intent(&mut self, i: &ExportIntent) -> Result<(), StorageError> {
+    fn claim_export_intent(&mut self, i: &ExportIntent) -> Result<ExportIntent, StorageError> {
+        if i.command.is_some() {
+            return Err(invalid(
+                "an export intent is claimed before its command exists",
+            ));
+        }
+        // Insert-if-absent, then re-read inside the same write: exactly one claimant per
+        // receipt identity, and an existing intent is never touched.
         db(self.conn.execute(
-            "INSERT INTO diagnostic_exports(actor_id,scope_key,request_key,project_id,selection_sha256,command,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(actor_id,scope_key,request_key) DO UPDATE SET project_id=excluded.project_id,selection_sha256=excluded.selection_sha256,command=excluded.command,created_at=excluded.created_at",
+            "INSERT INTO diagnostic_exports(actor_id,scope_key,request_key,project_id,selection_sha256,command,claim,created_at) VALUES(?1,?2,?3,?4,?5,NULL,?6,?7) ON CONFLICT(actor_id,scope_key,request_key) DO NOTHING",
             params![
                 i.actor.0.as_str(),
                 i.scope_key,
                 i.request_key,
                 i.project_id.0.as_str(),
                 i.selection_sha256,
-                i.command,
+                i.claim,
                 i.created_at_ms,
             ],
         ))?;
-        Ok(())
+        export_intent(self.conn, &i.actor, &i.scope_key, &i.request_key)?
+            .ok_or_else(|| corrupt("a claimed export intent is missing"))
+    }
+
+    fn complete_export_intent(
+        &mut self,
+        i: &ExportIntent,
+        command: &str,
+    ) -> Result<bool, StorageError> {
+        Ok(db(self.conn.execute(
+            "UPDATE diagnostic_exports SET command=?5 WHERE actor_id=?1 AND scope_key=?2 AND request_key=?3 AND claim=?4 AND command IS NULL",
+            params![i.actor.0.as_str(), i.scope_key, i.request_key, i.claim, command],
+        ))? == 1)
+    }
+
+    fn take_over_export_intent(
+        &mut self,
+        i: &ExportIntent,
+        from: &str,
+    ) -> Result<bool, StorageError> {
+        Ok(db(self.conn.execute(
+            "UPDATE diagnostic_exports SET claim=?5, created_at=?6 WHERE actor_id=?1 AND scope_key=?2 AND request_key=?3 AND claim=?4 AND command IS NULL",
+            params![
+                i.actor.0.as_str(),
+                i.scope_key,
+                i.request_key,
+                from,
+                i.claim,
+                i.created_at_ms
+            ],
+        ))? == 1)
+    }
+
+    fn release_export_intent(&mut self, i: &ExportIntent) -> Result<bool, StorageError> {
+        Ok(db(self.conn.execute(
+            "DELETE FROM diagnostic_exports WHERE actor_id=?1 AND scope_key=?2 AND request_key=?3 AND claim=?4 AND command IS NULL",
+            params![i.actor.0.as_str(), i.scope_key, i.request_key, i.claim],
+        ))? == 1)
     }
 }
 

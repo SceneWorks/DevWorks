@@ -574,3 +574,155 @@ fn the_monitor_sweeps_stale_export_staging_files() {
     assert!(fresh.exists(), "a file within its ticket lifetime stays");
     rt.block_on(app.shutdown());
 }
+
+/// Staging that holds each `stage` call until a second attempt is staging too (at most
+/// 1.5 s): with a single claimant the gate times out and nothing else ever stages.
+struct Gate {
+    inner: Arc<DiagnosticExports>,
+    entered: std::sync::Mutex<usize>,
+    changed: std::sync::Condvar,
+}
+impl Gate {
+    fn wait_entered(&self, n: usize) {
+        let entered = self.entered.lock().unwrap();
+        let _ = self
+            .changed
+            .wait_timeout_while(entered, Duration::from_secs(30), |e| *e < n)
+            .unwrap();
+    }
+}
+impl devworks_core::ports::diagnostics::ExportStaging for Gate {
+    fn stage(
+        &self,
+        ctx: &InvocationContext,
+        file_name: &str,
+        bytes: &[u8],
+    ) -> Result<
+        devworks_core::protocol::data::ArtifactSource,
+        devworks_core::ports::diagnostics::ExportRefused,
+    > {
+        {
+            let mut entered = self.entered.lock().unwrap();
+            *entered += 1;
+            self.changed.notify_all();
+            let _ = self
+                .changed
+                .wait_timeout_while(entered, Duration::from_millis(1_500), |e| *e < 2)
+                .unwrap();
+        }
+        self.inner.stage(ctx, file_name, bytes)
+    }
+    fn release(&self, source: &devworks_core::protocol::data::ArtifactSource) {
+        self.inner.release(source)
+    }
+    fn sweep(&self) -> usize {
+        self.inner.sweep()
+    }
+}
+
+#[test]
+fn overlapping_exports_of_one_request_key_have_one_claimant_and_one_command() {
+    let h = Harness::new();
+    let rt = runtime();
+    drop(h.open());
+    seed_root(&h, "root-a");
+    let (composition, parts) = compose(&h, Vec::new());
+    let app = rt.block_on(boot(composition)).expect("boot");
+    let gate = Arc::new(Gate {
+        inner: parts.exports.clone(),
+        entered: std::sync::Mutex::new(0),
+        changed: std::sync::Condvar::new(),
+    });
+    parts.diagnostics.set_export_staging(gate.clone());
+    let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
+        Some(ProjectId(id("project-a"))),
+        None,
+        None,
+    );
+    let (first, second) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| {
+            app.export_diagnostics(&user, &LogQuery::default(), "export-race")
+                .expect("exported")
+        });
+        // The first attempt is staging; the second starts while it is.
+        gate.wait_entered(1);
+        let b = scope.spawn(|| {
+            app.export_diagnostics(&user, &LogQuery::default(), "export-race")
+                .expect("exported")
+        });
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    assert_eq!(*gate.entered.lock().unwrap(), 1, "only the claimant staged");
+    let (a, a_replayed) = saved_artifact(first);
+    let (b, b_replayed) = saved_artifact(second);
+    assert_eq!(a.version_id, b.version_id, "one save");
+    assert!(a_replayed != b_replayed, "one decided, one replayed");
+    // The durable intent holds the command whose receipt was recorded: later retries replay.
+    let (later, replayed) = saved_artifact(
+        app.export_diagnostics(&user, &LogQuery::default(), "export-race")
+            .expect("exported"),
+    );
+    assert!(replayed);
+    assert_eq!(later.version_id, a.version_id);
+    assert!(staged_files(&h).is_empty(), "{:?}", staged_files(&h));
+    rt.block_on(app.shutdown());
+}
+
+#[test]
+fn a_quarantined_corrupt_artifact_at_boot_needs_attention() {
+    let h = Harness::new();
+    let rt = runtime();
+    drop(h.open());
+    seed_root(&h, "root-a");
+    let (composition, parts) = compose(&h, Vec::new());
+    let app = rt.block_on(boot(composition)).expect("boot");
+    let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
+        Some(ProjectId(id("project-a"))),
+        None,
+        None,
+    );
+    let dir = h.root.with_extension("upload");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notes.txt");
+    std::fs::write(&file, b"notes to keep").unwrap();
+    let ticket = parts.sources.mint_upload(&user, &file, 60_000).unwrap();
+    let frame = json!({"protocol": "1.0-draft.1", "requestKey": "notes-1", "command": {
+        "kind": "Save", "projectId": "project-a", "title": "Notes", "mediaType": "text/plain",
+        "source": {"kind": "Upload", "ticketId": ticket},
+        "expectedDigest": devworks_core::fingerprint::sha256_hex(b"notes to keep"),
+        "expectedBytes": "13"}});
+    let (artifact, _) =
+        saved_artifact(app.command(&user, "artifacts.save", frame.to_string().as_bytes()));
+    let digest = String::from(artifact.sha256.clone());
+    let blob = read(&*parts.sqlite, |s| s.artifacts().blob(&digest)).expect("blob");
+    rt.block_on(app.shutdown());
+    drop(app);
+    drop(parts);
+    // The managed file is corrupted while DevWorks is closed.
+    std::fs::write(h.root.join(&blob.relative_path), b"tampered bytes!").unwrap();
+    let (composition, parts) = compose(&h, Vec::new());
+    let app = rt.block_on(boot(composition)).expect("boot");
+    assert_eq!(app.report().artifacts.quarantined, vec![digest.clone()]);
+    let user = principal(&**app.store(), "user-a", PrincipalKind::Human);
+    let all = checks(&app, &user);
+    let recovery = check(&all, "boot.recovery");
+    assert_eq!(health(recovery), "Degraded", "{}", recovery.message.0);
+    assert!(
+        recovery.message.0.contains(&digest),
+        "{}",
+        recovery.message.0
+    );
+    assert!(recovery.message.0.contains("quarantined"));
+    assert!(text!(recovery.recovery.as_ref().unwrap()).contains("workspace.restore"));
+    let readiness = check(&all, "health.readiness");
+    assert_eq!(health(readiness), "Degraded");
+    let boot_record = logs(&app, &user, json!({"component": "boot"}))
+        .into_iter()
+        .rev()
+        .find(|e| e.code.0 == "recovered")
+        .expect("boot record");
+    assert_eq!(text!(&boot_record.outcome), "\"Partial\"");
+    assert!(boot_record.message.0.contains(&digest));
+    drop(parts);
+    rt.block_on(app.shutdown());
+}

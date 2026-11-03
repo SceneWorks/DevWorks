@@ -1400,7 +1400,16 @@ impl DiagnosticRepository for Unsupported {
     fn prune_diagnostics(&mut self, _: i64, _: i64) -> Result<PrunedDiagnostics, StorageError> {
         nope()
     }
-    fn put_export_intent(&mut self, _: &ExportIntent) -> Result<(), StorageError> {
+    fn claim_export_intent(&mut self, _: &ExportIntent) -> Result<ExportIntent, StorageError> {
+        nope()
+    }
+    fn complete_export_intent(&mut self, _: &ExportIntent, _: &str) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn take_over_export_intent(&mut self, _: &ExportIntent, _: &str) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn release_export_intent(&mut self, _: &ExportIntent) -> Result<bool, StorageError> {
         nope()
     }
 }
