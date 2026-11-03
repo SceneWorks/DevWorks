@@ -692,7 +692,13 @@ impl ControlService {
         let plan = self.scope.plan(tx.runs(), &root)?;
         let (digest, plan_revision) = match &new.scope_key {
             None => (None, plan.approved_revision()),
-            Some(key) => match plan.unit(key) {
+            Some(key) if !super::scope::valid_scope_key(key) => {
+                return Ok(Err(Fenced::Invalid(
+                    "a scope unit key is 1 to 256 characters; the feature-wide scope has none"
+                        .into(),
+                )));
+            }
+            Some(key) => match plan.unit(Some(key)) {
                 Some(u) => (Some(u.digest.clone()), plan.approved_revision()),
                 None => {
                     return Ok(Err(Fenced::Invalid(
@@ -701,7 +707,6 @@ impl ControlService {
                 }
             },
         };
-        let control = control_of(tx.runs(), &root.id)?;
         let execution = tx
             .runs()
             .live_activation(&root.id)?
@@ -722,7 +727,10 @@ impl ControlService {
             scope_key: new.scope_key.clone(),
             scope_digest: digest,
             plan_revision,
-            instruction_revision: control.instruction_revision,
+            // Bound to no redirect yet: a new or replacement coordinator binds instructions only
+            // through `acknowledge_instructions`, so one registered after a redirect is fenced
+            // until it has bound it into its context.
+            instruction_revision: 0,
             created_at_ms: tx.now_ms(),
         };
         match tx.runs().insert_assignment(&a) {
@@ -832,7 +840,7 @@ impl ControlService {
             };
             let mut after = a.clone();
             after.revision += 1;
-            match plan.unit(key) {
+            match plan.unit(Some(key)) {
                 Some(u) if a.scope_digest.as_deref() == Some(u.digest.as_str()) => {
                     after.plan_revision = Some(revision);
                     adoption.kept.push(a.id.clone());

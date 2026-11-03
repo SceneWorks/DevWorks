@@ -17,8 +17,12 @@ use crate::protocol::RootId;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
-/// The feature-wide scope key: the coordinator's own implementation scope.
-pub const FEATURE_WIDE: &str = "";
+/// Whether `key` is a valid named scope unit key: 1–256 characters, no NUL. The feature-wide
+/// scope (the coordinator's own) has no key: it is the absent key (`None`, stored as NULL), never
+/// a sentinel string.
+pub fn valid_scope_key(key: &str) -> bool {
+    (1..=256).contains(&key.chars().count()) && !key.contains('\0')
+}
 
 /// Readiness evidence of one approved scope unit (AD79). Only `Current` permits implementation
 /// dispatch of that unit.
@@ -74,11 +78,12 @@ pub enum PlanState {
     NotRequired,
     /// A feature without an active approved plan (initial planning has only a pending plan).
     Unapproved { pending_revision: Option<i64> },
-    /// The active approved plan. `units` maps scope keys ([`FEATURE_WIDE`] for the feature-wide
-    /// scope) to their approved content and readiness.
+    /// The active approved plan: the feature-wide scope (`feature`) and the named scope units
+    /// (`units`, keyed by [`valid_scope_key`] keys), with their approved content and readiness.
     Approved {
         revision: i64,
         pending_revision: Option<i64>,
+        feature: ScopeUnit,
         units: BTreeMap<String, ScopeUnit>,
     },
 }
@@ -98,9 +103,11 @@ impl PlanState {
             Self::NotRequired => None,
         }
     }
-    pub fn unit(&self, key: &str) -> Option<&ScopeUnit> {
-        match self {
-            Self::Approved { units, .. } => units.get(key),
+    /// The approved unit of `key` (`None`: the feature-wide scope).
+    pub fn unit(&self, key: Option<&str>) -> Option<&ScopeUnit> {
+        match (self, key) {
+            (Self::Approved { feature, .. }, None) => Some(feature),
+            (Self::Approved { units, .. }, Some(k)) => units.get(k),
             _ => None,
         }
     }
@@ -131,13 +138,11 @@ impl ExecutionScope for RecordedScope {
             Some(p) if p.approved => PlanState::Approved {
                 revision: p.revision,
                 pending_revision: p.pending_revision,
-                units: BTreeMap::from([(
-                    FEATURE_WIDE.to_owned(),
-                    ScopeUnit {
-                        digest: format!("plan-{}", p.revision),
-                        readiness: Readiness::Missing,
-                    },
-                )]),
+                feature: ScopeUnit {
+                    digest: format!("plan-{}", p.revision),
+                    readiness: Readiness::Missing,
+                },
+                units: BTreeMap::new(),
             },
             Some(p) => PlanState::Unapproved {
                 pending_revision: p.pending_revision,
@@ -166,13 +171,20 @@ impl ScriptedScope {
             .unwrap_or_else(|p| p.into_inner())
             .insert(root.clone(), plan);
     }
-    /// Scripts an approved plan whose units are all `Current` (assessment revision 1).
+    /// Scripts an approved plan whose feature-wide scope and named units are all `Current`
+    /// (assessment revision 1).
     pub fn approve(&self, root: &RootId, revision: i64, units: &[(&str, &str)]) {
         self.set(
             root,
             PlanState::Approved {
                 revision,
                 pending_revision: None,
+                feature: ScopeUnit {
+                    digest: format!("feature-{revision}"),
+                    readiness: Readiness::Current {
+                        assessment_revision: 1,
+                    },
+                },
                 units: units
                     .iter()
                     .map(|(k, d)| {
@@ -190,13 +202,17 @@ impl ScriptedScope {
             },
         );
     }
-    /// Changes one unit's readiness in the scripted approved plan.
-    pub fn set_readiness(&self, root: &RootId, key: &str, readiness: Readiness) {
+    /// Changes one unit's readiness (`None`: the feature-wide scope) in the scripted plan.
+    pub fn set_readiness(&self, root: &RootId, key: Option<&str>, readiness: Readiness) {
         let mut plans = self.plans.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(PlanState::Approved { units, .. }) = plans.get_mut(root)
-            && let Some(unit) = units.get_mut(key)
-        {
-            unit.readiness = readiness;
+        if let Some(PlanState::Approved { feature, units, .. }) = plans.get_mut(root) {
+            let unit = match key {
+                None => Some(feature),
+                Some(k) => units.get_mut(k),
+            };
+            if let Some(unit) = unit {
+                unit.readiness = readiness;
+            }
         }
     }
     /// Records a pending revision beside the active plan (it authorizes nothing).

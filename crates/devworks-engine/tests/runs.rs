@@ -1245,8 +1245,7 @@ fn redirect_is_received_acknowledged_and_incorporated_and_fences_only_incompatib
 #[test]
 fn a_result_from_an_earlier_activation_or_older_plan_is_not_current() {
     let fx = Fx::new();
-    fx.scope
-        .approve(&rid("root-f"), 1, &[("", "feature"), ("x", "dx")]);
+    fx.scope.approve(&rid("root-f"), 1, &[("x", "dx")]);
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     let coord = fx.assign("root-f", "root-f", None, None);
     let w = fx.assign("root-f", "task-f1", Some(&coord.id), Some("x"));
@@ -1276,8 +1275,7 @@ fn a_result_from_an_earlier_activation_or_older_plan_is_not_current() {
     ));
     assert_eq!(accept(claim(&new, Some(1))), ResultAcceptance::Current);
     // A compatible replacement plan rebinds the work; a result under the older plan is stale.
-    fx.scope
-        .approve(&rid("root-f"), 2, &[("", "feature"), ("x", "dx")]);
+    fx.scope.approve(&rid("root-f"), 2, &[("x", "dx")]);
     assert!(
         fx.dispatch(
             &new,
@@ -1300,8 +1298,7 @@ fn a_result_from_an_earlier_activation_or_older_plan_is_not_current() {
 fn eligibility_uses_the_active_plan_and_adoption_fences_only_incompatible_work() {
     let fx = Fx::new();
     let f = rid("root-f");
-    fx.scope
-        .approve(&f, 1, &[("", "feature-1"), ("x", "dx"), ("y", "dy")]);
+    fx.scope.approve(&f, 1, &[("x", "dx"), ("y", "dy")]);
     fx.scope.set_pending(&f, Some(2));
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     assert_eq!(
@@ -1342,8 +1339,7 @@ fn eligibility_uses_the_active_plan_and_adoption_fences_only_incompatible_work()
         .is_ok()
     );
     // The approved replacement changes y and keeps x: adopted at the next safe boundary.
-    fx.scope
-        .approve(&f, 3, &[("", "feature-3"), ("x", "dx"), ("y", "dy2")]);
+    fx.scope.approve(&f, 3, &[("x", "dx"), ("y", "dy2")]);
     assert!(
         fx.dispatch(
             &a,
@@ -1392,10 +1388,9 @@ fn eligibility_uses_the_active_plan_and_adoption_fences_only_incompatible_work()
 fn implementation_dispatch_requires_current_readiness_independently_of_approval() {
     let fx = Fx::new();
     let f = rid("root-f");
-    fx.scope
-        .approve(&f, 1, &[("", "feature"), ("x", "dx"), ("y", "dy")]);
-    fx.scope.set_readiness(&f, "", Readiness::Missing);
-    fx.scope.set_readiness(&f, "x", Readiness::Missing);
+    fx.scope.approve(&f, 1, &[("x", "dx"), ("y", "dy")]);
+    fx.scope.set_readiness(&f, None, Readiness::Missing);
+    fx.scope.set_readiness(&f, Some("x"), Readiness::Missing);
     // Start permits planning/assessment of an approved but unassessed feature.
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     assert_eq!(
@@ -1428,7 +1423,7 @@ fn implementation_dispatch_requires_current_readiness_independently_of_approval(
     // The assessment becomes current: implementation is admitted.
     fx.scope.set_readiness(
         &f,
-        "x",
+        Some("x"),
         Readiness::Current {
             assessment_revision: 2,
         },
@@ -1459,7 +1454,7 @@ fn implementation_dispatch_requires_current_readiness_independently_of_approval(
     // Changed evidence fences only the affected scope and clears no pause.
     fx.scope.set_readiness(
         &f,
-        "y",
+        Some("y"),
         Readiness::Stale {
             assessment_revision: 1,
         },
@@ -1529,13 +1524,13 @@ fn the_production_scope_fails_closed_without_recorded_readiness() {
 #[derive(Default)]
 struct FakeHost {
     /// Trees that ignore stop and kill (never verifiably gone).
-    stubborn: AtomicBool,
+    stubborn: Arc<AtomicBool>,
     stopped: Arc<AtomicUsize>,
 }
 struct FakeTree {
     identity: NativeIdentity,
     gone: bool,
-    stubborn: bool,
+    stubborn: Arc<AtomicBool>,
     stopped: Arc<AtomicUsize>,
 }
 impl ProcessTree for FakeTree {
@@ -1543,14 +1538,14 @@ impl ProcessTree for FakeTree {
         &self.identity
     }
     fn request_stop(&mut self) -> Result<bool, ProcessError> {
-        if !self.stubborn {
+        if !self.stubborn.load(Ordering::SeqCst) {
             self.gone = true;
             self.stopped.fetch_add(1, Ordering::SeqCst);
         }
         Ok(true)
     }
     fn kill(&mut self) -> Result<(), ProcessError> {
-        if !self.stubborn {
+        if !self.stubborn.load(Ordering::SeqCst) {
             self.gone = true;
         }
         Ok(())
@@ -1582,7 +1577,7 @@ impl ProcessHost for FakeHost {
                 group: Some(4242),
             },
             gone: false,
-            stubborn: self.stubborn.load(Ordering::SeqCst),
+            stubborn: self.stubborn.clone(),
             stopped: self.stopped.clone(),
         }))
     }
@@ -2573,4 +2568,240 @@ fn a_lost_acknowledgment_of_a_granted_continue_replays_for_agents_and_schedules(
         assert_eq!(fx.control("root-i").desired, DesiredExecution::Paused);
         applied(&fx.resume(&fx.user, "root-i"));
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes, round 2: stop after continue, verified stop, late coordinator, feature-wide scope
+
+#[test]
+fn a_stop_after_continue_reapplies_the_stop_and_cancels_the_reactivation() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    let launched = rt.block_on(sup.tick()).unwrap().launched;
+    let op = match decision(&fx.stop(&fx.user, "root-i")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("stop not accepted: {other:?}"),
+    };
+    // The coordinator is still stopping; the user continues, then stops again.
+    applied(&fx.resume(&fx.user, "root-i"));
+    let continued = fx.control("root-i");
+    assert_eq!(continued.desired, DesiredExecution::Enabled);
+    assert!(continued.reactivate, "a replacement waits for the stop");
+    let again = fx.stop(&fx.user, "root-i");
+    match decision(&again) {
+        DomainDecision::Accepted { operation_id } => assert_eq!(operation_id, &op),
+        other => panic!("the second stop was not reapplied: {other:?}"),
+    }
+    let stopped = fx.control("root-i");
+    assert_eq!(stopped.desired, DesiredExecution::Paused);
+    assert!(!stopped.reactivate);
+    assert!(
+        fx.holds("root-i")
+            .iter()
+            .any(|b| b.cause == HoldCause::HumanPause)
+    );
+    // The old coordinator finishes: no replacement is created, and the stop is observed.
+    launcher.release_all();
+    rt.block_on(within("the launch stops and records its outcome", async {
+        while launcher.dropped.load(Ordering::SeqCst) < 1 || sup.launches() > 0 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    assert_eq!(fx.activation(&launched[0]).phase, ActivationPhase::Stopped);
+    assert!(fx.live("root-i").is_none(), "the latest Stop wins");
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::ObservedComplete)]
+    );
+}
+
+#[test]
+fn a_stop_verified_later_clears_only_its_own_reconciliation_hold() {
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let host = Arc::new(FakeHost::default());
+    host.stubborn.store(true, Ordering::SeqCst);
+    let (sup, processes) = supervisor(&fx, host.clone(), None);
+    let mut sup = Arc::try_unwrap(sup).ok().expect("the only handle");
+    sup.stop_grace = Duration::from_millis(20);
+    sup.stop_bound = Duration::from_millis(100);
+    let sup = Arc::new(sup);
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    let unrelated = fx.hold(
+        "root-i",
+        Default::default(),
+        HoldCause::Dependency,
+        "task-x",
+    );
+    let _ = fx.stop(&fx.user, "root-i");
+    let rt = runtime();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::OutcomeUnknown)]
+    );
+    assert!(
+        fx.holds("root-i")
+            .iter()
+            .any(|b| b.cause == HoldCause::Reconciliation)
+    );
+    // The tree can be stopped after all: the next pass verifies it gone.
+    host.stubborn.store(false, Ordering::SeqCst);
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::ObservedComplete)]
+    );
+    let causes: Vec<HoldCause> = fx.holds("root-i").iter().map(|b| b.cause).collect();
+    assert!(
+        !causes.contains(&HoldCause::Reconciliation),
+        "the stop's own hold is cleared: {causes:?}"
+    );
+    assert!(causes.contains(&HoldCause::Dependency), "{causes:?}");
+    assert!(fx.holds("root-i").iter().any(|b| b.id == unrelated.id));
+}
+
+#[test]
+fn a_coordinator_registered_after_a_redirect_must_bind_it_first() {
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    // The redirect arrives before any coordinator exists.
+    applied(&fx.redirect(&fx.user, "root-i", "use the new layout"));
+    let a = fx.launch("supervisor-1");
+    let coord = fx.assign("root-i", "root-i", None, None);
+    assert_eq!(coord.instruction_revision, 0);
+    let fenced = blocked(fx.dispatch(
+        &a,
+        Target::Assignment(coord.id.clone()),
+        ActivationPurpose::Implementation,
+    ));
+    assert!(
+        fenced.iter().any(|(_, why)| why.contains("redirect")),
+        "{fenced:?}"
+    );
+    let (x, e) = (a.id.clone(), a.owner_epoch);
+    let x2 = x.clone();
+    fx.tx(move |svc, tx| svc.acknowledge_instructions(tx, &x2, e, 1))
+        .unwrap();
+    assert!(
+        fx.dispatch(
+            &a,
+            Target::Assignment(coord.id.clone()),
+            ActivationPurpose::Implementation
+        )
+        .is_ok()
+    );
+    // A replacement coordinator does not inherit the binding: it binds the redirect again.
+    let host = ActorId(id("host"));
+    let (cid, rev) = (
+        coord.id.clone(),
+        fx.tx({
+            let c = coord.id.clone();
+            move |_, tx| Ok(tx.runs().assignment(&c)?.unwrap().revision)
+        }),
+    );
+    fx.tx(move |svc, tx| {
+        svc.set_assignment_state(tx, &host, &cid, rev, AssignmentState::Completed, None)
+    })
+    .unwrap();
+    let next = fx.assign("root-i", "root-i", None, None);
+    assert!(
+        fx.dispatch(
+            &a,
+            Target::Assignment(next.id.clone()),
+            ActivationPurpose::Implementation
+        )
+        .is_err()
+    );
+    fx.tx(move |svc, tx| svc.acknowledge_instructions(tx, &x, e, 1))
+        .unwrap();
+    assert!(
+        fx.dispatch(
+            &a,
+            Target::Assignment(next.id.clone()),
+            ActivationPurpose::Implementation
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn the_feature_wide_scope_has_no_key_and_named_keys_are_validated() {
+    let fx = Fx::new();
+    let f = rid("root-f");
+    fx.scope.approve(&f, 1, &[("x", "dx")]);
+    fx.scope.set_readiness(&f, None, Readiness::Missing);
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    let a = fx.launch("supervisor-1");
+    // The coordinator's feature-wide scope is the absent key, and its readiness gates it.
+    let coord = fx.assign("root-f", "root-f", None, None);
+    assert_eq!(coord.scope_key, None);
+    let gate = blocked(fx.dispatch(
+        &a,
+        Target::Assignment(coord.id.clone()),
+        ActivationPurpose::Implementation,
+    ));
+    assert!(
+        gate.iter().any(|(_, why)| why.contains("readiness")),
+        "{gate:?}"
+    );
+    fx.scope.set_readiness(
+        &f,
+        None,
+        Readiness::Current {
+            assessment_revision: 3,
+        },
+    );
+    assert_eq!(
+        fx.dispatch(
+            &a,
+            Target::Assignment(coord.id.clone()),
+            ActivationPurpose::Implementation
+        )
+        .unwrap()
+        .readiness_revision,
+        Some(3)
+    );
+    // An empty key is refused as a request error, never reaching the store's constraint.
+    let empty = NewRunAssignment {
+        root: f.clone(),
+        work: rid("task-f1"),
+        parent: Some(coord.id.clone()),
+        session: fx.session("root-f"),
+        scope_key: Some(String::new()),
+    };
+    let r = fx.tx(move |svc, tx| {
+        let host = tx.store().host_actor.clone();
+        svc.register_assignment(tx, &host, empty)
+    });
+    assert!(matches!(r, Err(Fenced::Invalid(_))), "{r:?}");
+    let named = fx.assign("root-f", "task-f1", Some(&coord.id), Some("x"));
+    assert_eq!(named.scope_key.as_deref(), Some("x"));
+    // The production scope as well: an approved feature plan has a feature-wide scope but no
+    // empty-key unit, so the empty key is refused before the store.
+    let c = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute_batch(
+        "INSERT INTO actors VALUES('planner','human','Planner');
+         INSERT INTO feature_plans(feature_id,revision,approved_plan_json,approved_by,approved_at) VALUES('root-g',2,'{}','planner',1);",
+    )
+    .unwrap();
+    drop(c);
+    applied(&fx.start(&fx.user, "root-g", 1, 1));
+    let g_coord = NewRunAssignment {
+        root: rid("root-g"),
+        work: rid("root-g"),
+        parent: None,
+        session: fx.session("root-g"),
+        scope_key: Some(String::new()),
+    };
+    let r = fx.tx(move |svc, tx| {
+        let host = tx.store().host_actor.clone();
+        svc.register_assignment(tx, &host, g_coord)
+    });
+    assert!(matches!(r, Err(Fenced::Invalid(_))), "{r:?}");
 }

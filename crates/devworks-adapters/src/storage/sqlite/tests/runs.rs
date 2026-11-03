@@ -77,7 +77,7 @@ fn migration_11_adds_run_controls_to_a_version_10_store() {
         MIGRATION_0011_SHA256,
         "an applied migration was edited"
     );
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 9));
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 11));
     assert!(
         MIGRATIONS
             .iter()
@@ -112,7 +112,8 @@ fn migration_11_adds_run_controls_to_a_version_10_store() {
             report.minimum_reader,
             report.minimum_writer
         ),
-        (11, 8, 9)
+        (11, 8, 11),
+        "pre-gate builds may read this store but never write it"
     );
     let control = read_snapshot(&s, &ReadOptions::default(), |r| {
         r.runs().root_control(&root("root-a"))

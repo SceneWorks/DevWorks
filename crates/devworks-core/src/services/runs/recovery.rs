@@ -19,7 +19,8 @@
 use super::substrate::ActivationFailure;
 use super::{
     ACTIVATION_AGGREGATE, CONTROL_AGGREGATE, ControlService, HoldSubject, STOP_CAPABILITY,
-    active_blockers, ensure_control, raise_blocker, record, root_assignments, save_control,
+    active_blockers, clear_blocker, ensure_control, raise_blocker, record, root_assignments,
+    save_control,
 };
 use crate::ports::storage::{
     ActivationFilter, ActivationOutcome, ActivationPhase, AssignmentState, AttemptBinding,
@@ -433,6 +434,21 @@ impl ControlService {
         }
         let state = complete_stop_operation(tx, op, uncertain, "owned process trees stopped")?;
         let actor = tx.store().host_actor.clone();
+        if state == OperationState::ObservedComplete {
+            // The trees are verified stopped now: the reconciliation hold this stop raised (and
+            // only that one) is cleared with the observation.
+            for b in active_blockers(tx.runs(), &BlockerFilter::RootLevel(root_id.clone()))? {
+                if b.cause == HoldCause::Reconciliation && b.origin_id == op.0.as_str() {
+                    clear_blocker(
+                        tx,
+                        &actor,
+                        &root,
+                        &b,
+                        json!({"operationId": op.0.as_str(), "observed": "ObservedComplete"}),
+                    )?;
+                }
+            }
+        }
         if state == OperationState::OutcomeUnknown {
             let names: Vec<&str> = uncertain.iter().map(|(p, _)| p.as_str()).collect();
             raise_blocker(

@@ -77,7 +77,7 @@ use crate::protocol::{
     RootCommand, RootControl, RootId, Subject,
 };
 use crate::services::sessions::{Failure, Refusal, not_found, query_fault, rev};
-use scope::{ExecutionScope, FEATURE_WIDE, PlanState, RecordedScope, is_feature};
+use scope::{ExecutionScope, PlanState, RecordedScope, is_feature};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -611,14 +611,12 @@ impl ControlService {
                     "the feature has no approved plan; a pending revision cannot authorize implementation",
                 )),
                 PlanState::Approved { revision, .. } => {
-                    let key = assignment
-                        .as_ref()
-                        .and_then(|a| a.scope_key.clone())
-                        .unwrap_or_else(|| FEATURE_WIDE.to_owned());
+                    // No key: the coordinator's feature-wide scope.
+                    let key = assignment.as_ref().and_then(|a| a.scope_key.as_deref());
                     let subject = assignment
                         .as_ref()
                         .map_or(root_subject.clone(), |a| Subject::Assignment(a.id.clone()));
-                    match plan.unit(&key) {
+                    match plan.unit(key) {
                         None => c.push(derived(
                             "scope",
                             subject,
@@ -963,7 +961,7 @@ impl ControlService {
         let purpose = if !is_feature(&root) {
             ActivationPurpose::Implementation
         } else {
-            match plan.unit(FEATURE_WIDE) {
+            match plan.unit(None) {
                 Some(u) if u.readiness.is_current() => ActivationPurpose::Implementation,
                 // Start permits planning and readiness assessment; implementation stays gated.
                 _ => ActivationPurpose::Planning,
@@ -1497,15 +1495,51 @@ impl ControlService {
         let root = run_root(tx.sessions(), ctx, &input.root_id)?;
         let control = ensure_control(tx, &root.id)?;
         control_conflict(&control, input.expected_control_revision.get())?;
-        // A stop still in progress answers itself.
+        // A stop still in progress answers itself, but only while the root still carries its
+        // intent (paused, a human pause hold, no reactivation pending). A Continue since then
+        // is overridden: the stop is reapplied under the same journaled operation.
         if let Some(op) = &control.stop_operation_id
             && let Some(rec) = tx.operations().operation(op)?
         {
+            let paused_by_hold =
+                active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?
+                    .iter()
+                    .any(|b| b.cause == HoldCause::HumanPause);
+            let intent = control.desired == DesiredExecution::Paused
+                && !control.reactivate
+                && paused_by_hold;
+            if !is_terminal(rec.state) && !intent {
+                self.pause_root(
+                    tx,
+                    ctx.principal(),
+                    &root,
+                    &control,
+                    StopCause::Stop,
+                    "Stopped",
+                )?;
+                let cancelled = self.cancel_root_deliveries(tx, &root.id)?;
+                let after = control_of(tx.runs(), &root.id)?;
+                record(
+                    tx,
+                    ctx.principal(),
+                    &root,
+                    Some(op),
+                    CONTROL_AGGREGATE,
+                    root.id.0.as_str(),
+                    after.revision,
+                    "RootStopReapplied",
+                    json!({"stopEpoch": after.stop_epoch, "cancelledDeliveries": cancelled}),
+                )?;
+                return Ok(Decided {
+                    decision: DomainDecision::Accepted {
+                        operation_id: op.clone(),
+                    },
+                    operation_id: Some(op.clone()),
+                });
+            }
             let live = tx.runs().live_activation(&root.id)?;
             let nothing_live = live.is_none() && !self.root_has_work(tx, &root.id)?;
-            if !is_terminal(rec.state)
-                || (nothing_live && control.desired == DesiredExecution::Paused)
-            {
+            if !is_terminal(rec.state) || (nothing_live && intent) {
                 return Ok(Decided {
                     decision: DomainDecision::NoChange {
                         result: OperationResult::RunsStop {
@@ -1588,39 +1622,7 @@ impl ControlService {
         reason: &str,
     ) -> Result<(OperationId, bool), StorageError> {
         let (mut after, hold) = self.pause_root(tx, actor, root, control, cause, reason)?;
-        let mut cancelled = Vec::new();
-        let mut cursor: Option<Id> = None;
-        loop {
-            let page = tx.runs().root_deliveries(&root.id, cursor.as_ref(), PAGE)?;
-            let more = page.len() == usize::from(PAGE);
-            for id in &page {
-                let Some(e) = tx.queue().entry(id)? else {
-                    continue;
-                };
-                let dispatched = match &e.operation_id {
-                    Some(op) => tx
-                        .operations()
-                        .operation(op)?
-                        .is_some_and(|o| possibly_dispatched(o.state)),
-                    None => false,
-                };
-                let applies = cancellation_applies(tx.operations(), &e)?;
-                let cancel = match e.state {
-                    QueueState::Claimed => true,
-                    QueueState::Reconciling => dispatched || applies,
-                    QueueState::Ready => applies,
-                    _ => false,
-                };
-                if cancel {
-                    tx.queue().cancel(id)?;
-                    cancelled.push(id.as_str().to_owned());
-                }
-            }
-            cursor = page.last().cloned();
-            if !more {
-                break;
-            }
-        }
+        let cancelled = self.cancel_root_deliveries(tx, &root.id)?;
         let live = tx.runs().live_activation(&root.id)?;
         let op = OperationId(tx.new_id(IdKind::Operation));
         tx.operations().record_intent(NewOperation {
@@ -1670,6 +1672,48 @@ impl ControlService {
             }),
         )?;
         Ok((op, nothing_live))
+    }
+
+    /// Cancels the root's unsettled root-scoped deliveries: a claimed one gets the durable
+    /// cancellation marker; a held one is cancelled unless its operation has an outcome.
+    fn cancel_root_deliveries(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        root: &RootId,
+    ) -> Result<Vec<String>, StorageError> {
+        let mut cancelled = Vec::new();
+        let mut cursor: Option<Id> = None;
+        loop {
+            let page = tx.runs().root_deliveries(root, cursor.as_ref(), PAGE)?;
+            let more = page.len() == usize::from(PAGE);
+            for id in &page {
+                let Some(e) = tx.queue().entry(id)? else {
+                    continue;
+                };
+                let dispatched = match &e.operation_id {
+                    Some(op) => tx
+                        .operations()
+                        .operation(op)?
+                        .is_some_and(|o| possibly_dispatched(o.state)),
+                    None => false,
+                };
+                let applies = cancellation_applies(tx.operations(), &e)?;
+                let cancel = match e.state {
+                    QueueState::Claimed => true,
+                    QueueState::Reconciling => dispatched || applies,
+                    QueueState::Ready => applies,
+                    _ => false,
+                };
+                if cancel {
+                    tx.queue().cancel(id)?;
+                    cancelled.push(id.as_str().to_owned());
+                }
+            }
+            cursor = page.last().cloned();
+            if !more {
+                return Ok(cancelled);
+            }
+        }
     }
 
     fn inspect(
