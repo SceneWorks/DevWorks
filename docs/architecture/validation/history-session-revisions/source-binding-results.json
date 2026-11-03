@@ -7,7 +7,7 @@
   "sourceEntries": 558,
   "retainedEntries": 494,
   "excludedEntries": 64,
-  "qualifiedOperations": 353,
+  "qualifiedOperations": 354,
   "unboundOperationInputs": 0,
   "unboundOperationResults": 0,
   "files": [
@@ -10481,9 +10481,9 @@
   ],
   "inputSha256": {
     "docs/architecture/codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
-    "docs/architecture/contracts/family-coverage.json": "5b8b4bbf37933cfb0295411161e10ea33603cce5f9432758c72813836761511f",
-    "docs/architecture/implementation-plan.json": "fd5fe32681ceab4e580f5874a1a8d42d58dc98ac29841ab628c2f333cb6dab7f",
-    "docs/architecture/devworks-capability-catalog.json": "52be38907d23a6a800ca03072e0504cbef164f4a6d873dc27b6e714e8ec0476a"
+    "docs/architecture/contracts/family-coverage.json": "21e63e89a98f4d4af12425215186a270d5672ef496d2147d5b1f2621414ac889",
+    "docs/architecture/implementation-plan.json": "467cab56cfc0d845d9c21b0195d2aee68d25d144579c094abd4e05d0cd2cc128",
+    "docs/architecture/devworks-capability-catalog.json": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb"
   },
   "noInference": true,
   "allPassed": true

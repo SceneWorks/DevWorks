@@ -764,8 +764,22 @@ fn normalize_tags(tags: &mut Option<ArtifactTags>) {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ArtifactCommand {
+    /// A new artifact in exactly one owner scope: `projectId`, or from schema revision 3 the
+    /// workspace (`workspace: true`). Revisions 1 and 2 require `projectId`.
+    #[schemars(extend("oneOf" = [{"required": ["projectId"]}, {"required": ["workspace"], "x-since": 3}]))]
     Save {
-        project_id: ProjectId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "ProjectId")]
+        project_id: Option<ProjectId>,
+        /// Schema revision 3: save into the workspace scope (owned by the invoking principal)
+        /// instead of `projectId`; always `true` when present.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "super::support::gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3, "const" = true))]
+        workspace: Option<bool>,
         title: String,
         media_type: String,
         source: ArtifactSource,
@@ -833,8 +847,21 @@ pub struct ArtifactCommandRequest {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ArtifactQuery {
+    /// The artifacts of exactly one scope: `projectId`, or from schema revision 3 the workspace
+    /// (`workspace: true`). Revisions 1 and 2 require `projectId`.
+    #[schemars(extend("oneOf" = [{"required": ["projectId"]}, {"required": ["workspace"], "x-since": 3}]))]
     List {
-        project_id: ProjectId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "ProjectId")]
+        project_id: Option<ProjectId>,
+        /// Schema revision 3: list the workspace scope instead of `projectId`; always `true`.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "super::support::gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3, "const" = true))]
+        workspace: Option<bool>,
         /// Only artifacts carrying every listed tag (schema revision 2).
         #[serde(
             default,
@@ -884,6 +911,14 @@ impl ArtifactQueryRequest {
         }
         if let ArtifactQuery::ResolveCitation { citation } = &self.query {
             citation.validate()?;
+        }
+        if let ArtifactQuery::List {
+            project_id,
+            workspace,
+            ..
+        } = &self.query
+        {
+            one_scope(project_id, workspace)?;
         }
         Ok(())
     }
@@ -1362,8 +1397,23 @@ impl GraphPage {
         Ok(())
     }
 }
+/// Exactly one owner scope: a project, or (schema revision 3) the workspace spelled `true`.
+fn one_scope(project: &Option<ProjectId>, workspace: &Option<bool>) -> Result<(), &'static str> {
+    match (project, workspace) {
+        (Some(_), None) | (None, Some(true)) => Ok(()),
+        _ => Err("an artifact scope is exactly one of a project and the workspace"),
+    }
+}
 impl ArtifactCommandRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
+        if let ArtifactCommand::Save {
+            project_id,
+            workspace,
+            ..
+        } = &self.command
+        {
+            one_scope(project_id, workspace)?;
+        }
         if let ArtifactCommand::Save {
             title, media_type, ..
         } = &self.command
@@ -1393,19 +1443,31 @@ impl ArtifactQueryRequest {
 }
 impl super::support::Revisioned for ArtifactCommandRequest {
     fn retain_revision(&mut self, revision: u32) {
-        if let ArtifactCommand::Save { tags, .. } = &mut self.command
-            && revision < 2
+        if let ArtifactCommand::Save {
+            tags, workspace, ..
+        } = &mut self.command
         {
-            *tags = None;
+            if revision < 2 {
+                *tags = None;
+            }
+            if revision < 3 {
+                *workspace = None;
+            }
         }
     }
 }
 impl super::support::Revisioned for ArtifactQueryRequest {
     fn retain_revision(&mut self, revision: u32) {
-        if let ArtifactQuery::List { tags, .. } = &mut self.query
-            && revision < 2
+        if let ArtifactQuery::List {
+            tags, workspace, ..
+        } = &mut self.query
         {
-            *tags = None;
+            if revision < 2 {
+                *tags = None;
+            }
+            if revision < 3 {
+                *workspace = None;
+            }
         }
     }
 }

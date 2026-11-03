@@ -6317,6 +6317,19 @@
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Humans and agents share explicit set/clear feature membership, exactly one. Validate the same-project live feature and current task revision/access. Commit authoritative optional parent, queue revisions, coordinator responsibility, durable notification, future usage attribution, history and stale-dispatch fencing atomically. Linking authorizes delivery scope without plan reapproval. Existing agents continue on their branches/workspaces and notify the feature coordinator; absent agents are launched/resumed by it when eligible. Clear installs a durable issue pause requiring manual resume; set or direct transfer never clears holds. Direct transfers continue under new coordinator/budget. Preserve historical costs, assignments, workspace and PR evidence; never duplicate active task execution. The feature coordinator owns integration and final acceptance."
+    },
+    "artifacts.tag": {
+      "operation": "artifacts.tag",
+      "mode": "Command",
+      "fields": {
+        "artifact_id": "Id",
+        "expected_revision": "Revision",
+        "tags": "ArtifactTags"
+      },
+      "result": "MutationSummary",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Replaces the tag set (empty clears it) of a live, explicitly retained artifact the caller sees and whose owner scope its authorized scope covers, under the expected artifact revision; an equal set is NoChange. Receipt replies are never retagged."
     }
   },
   "earlierInputResults": {
@@ -6382,11 +6395,13 @@
   "schemaRevisions": {
     "artifacts.save": [
       1,
-      2
+      2,
+      3
     ],
     "artifacts.list": [
       1,
-      2
+      2,
+      3
     ],
     "history.events": [
       1,

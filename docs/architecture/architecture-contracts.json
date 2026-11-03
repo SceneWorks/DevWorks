@@ -1016,7 +1016,8 @@
         "preview",
         "export",
         "reference",
-        "delete"
+        "delete",
+        "tag"
       ],
       "effectAndAuthority": "Scoped file reads/writes; explicit deletion and surviving-reference checks",
       "status": "Proposed; exact command/tool schemas require review"

@@ -7847,7 +7847,7 @@
     },
     {
       "entry": "artifact-command-request",
-      "error": "unknown field `originActorId`, expected one of `projectId`, `title`, `mediaType`, `source`, `expectedDigest`, `expectedBytes`, `tags` at line 1 column 326",
+      "error": "unknown field `originActorId`, expected one of `projectId`, `workspace`, `title`, `mediaType`, `source`, `expectedDigest`, `expectedBytes`, `tags` at line 1 column 326",
       "expectedSchemaValid": false,
       "id": "reject-forged-artifact-origin",
       "normalized": null,
@@ -7856,7 +7856,7 @@
     },
     {
       "entry": "artifact-command-request",
-      "error": "unknown field `path`, expected one of `projectId`, `title`, `mediaType`, `source`, `expectedDigest`, `expectedBytes`, `tags` at line 1 column 326",
+      "error": "unknown field `path`, expected one of `projectId`, `workspace`, `title`, `mediaType`, `source`, `expectedDigest`, `expectedBytes`, `tags` at line 1 column 326",
       "expectedSchemaValid": false,
       "id": "reject-arbitrary-artifact-path",
       "normalized": null,
@@ -15269,6 +15269,27 @@
       "typedValid": true
     },
     {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "input-artifacts.tag-Command",
+      "normalized": {
+        "body": {
+          "artifactId": "id-a",
+          "expectedRevision": "1",
+          "kind": "artifacts.tag",
+          "tags": [
+            "evidence"
+          ]
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
       "entry": "operation-result",
       "error": null,
       "expectedSchemaValid": true,
@@ -21318,6 +21339,22 @@
       "entry": "operation-result",
       "error": null,
       "expectedSchemaValid": true,
+      "id": "result-artifacts.tag",
+      "normalized": {
+        "kind": "artifacts.tag",
+        "value": {
+          "changed": false,
+          "id": "id-a",
+          "revision": "1"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": null,
+      "expectedSchemaValid": true,
       "id": "result-runs.start",
       "normalized": {
         "kind": "runs.start",
@@ -23697,7 +23734,7 @@
     },
     {
       "entry": "domain-request",
-      "error": "unknown variant `agents.pause`, expected one of `projects.create`, `projects.edit`, `projects.membership`, `projects.archive`, `projects.restore`, `projects.delete`, `features.create`, `features.edit`, `issues.create`, `issues.edit`, `tasks.create`, `tasks.edit`, `features.prioritize`, `issues.prioritize`, `features.edit_plan`, `features.dependencies`, `features.request_plan_approval`, `issues.publish`, `issues.link`, `tasks.move`, `tasks.assign`, `tasks.dependency_links`, `tasks.acceptance_evidence`, `tasks.sync_plan`, `workflows.create_status`, `workflows.rename_status`, `workflows.order`, `workflows.reassign_and_remove`, `next_work.claim_project_queue`, `next_work.claim_feature_task`, `next_work.release_claim`, `runs.redirect`, `runs.stop`, `agents.delegate`, `agents.messages`, `agents.acknowledge`, `agents.checkpoint`, `sessions.start`, `sessions.end`, `indexing.index`, `indexing.reindex`, `indexing.retire_view`, `indexing.configure_sources`, `analysis.community_analysis`, `analysis.link_and_detect`, `analysis.process_batch`, `analysis.reanalyze`, `analysis.synthesize`, `schemas.index`, `schemas.refresh`, `schemas.remove_index`, `schemas.configure`, `database.execute_write`, `database.direct_schema_change`, `database.apply_migration`, `database.configure_sensitive_columns`, `knowledge.record`, `knowledge.revise`, `knowledge.relate`, `knowledge.tag`, `knowledge.verify`, `knowledge.retract`, `knowledge.challenge`, `knowledge.scope`, `knowledge.delete_by_source`, `knowledge.delete_selected`, `knowledge.import_user_data`, `knowledge.promote`, `dreaming.run`, `dreaming.settings`, `dreaming.instructions`, `dreaming.propose`, `dreaming.revert`, `dreaming.review`, `documents.import`, `documents.index`, `documents.retry`, `conventions.edit`, `conventions.applicability`, `conventions.retire`, `conventions.index`, `conventions.delete`, `conventions.delete_resource`, `conventions.import`, `conventions.move`, `skills.draft`, `skills.propose`, `skills.rollback`, `roles.draft`, `roles.propose`, `roles.rollback`, `approvals.propose`, `approvals.record_human_decision`, `notifications.acknowledge`, `notifications.settings`, `git.worktree`, `reviews.request`, `reviews.respond`, `reviews.adjudicate`, `github.account`, `github.issue_sync`, `resources.acquire`, `resources.renew`, `resources.release`, `browser.sessions`, `browser.navigate`, `browser.input`, `browser.upload`, `desktop.request_control`, `desktop.input`, `desktop.release_control`, `process.execute`, `process.cancel`, `process.install_project_dependencies`, `process.request_system_install`, `containers.build`, `containers.pull`, `containers.create`, `containers.start`, `containers.stop`, `containers.exec`, `jobs.create`, `jobs.edit`, `jobs.enable`, `jobs.disable`, `jobs.delete`, `jobs.run_now`, `jobs.cancel`, `settings.save_revision`, `router.route`, `router.pin`, `router.price_refresh`, `router.price_override`, `router.configure`, `router.decide`, `mcp.configure`, `mcp.connect`, `mcp.discover`, `mcp.select_tools`, `addons.configure`, `addons.propose`, `help.generate_capability_docs`, `workspace.record_diagnostic`, `workspace.backup`, `workspace.restore`, `workspace.migrate`, `workspace.approve_install`, `repositories.remove_index`, `queue.resolve`, `queue.retry`, `queue.reconcile`, `imports.configure`, `imports.apply`, `maintenance.prune_diagnostics`, `maintenance.prune_index_runs`, `maintenance.prune_messages`, `maintenance.prune_sessions`, `repository_docs.generate`, `mcp_server.configure`, `mcp_server.set_client_access`, `tasks.prioritize`, `tasks.set_feature`",
+      "error": "unknown variant `agents.pause`, expected one of `projects.create`, `projects.edit`, `projects.membership`, `projects.archive`, `projects.restore`, `projects.delete`, `features.create`, `features.edit`, `issues.create`, `issues.edit`, `tasks.create`, `tasks.edit`, `features.prioritize`, `issues.prioritize`, `features.edit_plan`, `features.dependencies`, `features.request_plan_approval`, `issues.publish`, `issues.link`, `tasks.move`, `tasks.assign`, `tasks.dependency_links`, `tasks.acceptance_evidence`, `tasks.sync_plan`, `workflows.create_status`, `workflows.rename_status`, `workflows.order`, `workflows.reassign_and_remove`, `next_work.claim_project_queue`, `next_work.claim_feature_task`, `next_work.release_claim`, `runs.redirect`, `runs.stop`, `agents.delegate`, `agents.messages`, `agents.acknowledge`, `agents.checkpoint`, `sessions.start`, `sessions.end`, `indexing.index`, `indexing.reindex`, `indexing.retire_view`, `indexing.configure_sources`, `analysis.community_analysis`, `analysis.link_and_detect`, `analysis.process_batch`, `analysis.reanalyze`, `analysis.synthesize`, `schemas.index`, `schemas.refresh`, `schemas.remove_index`, `schemas.configure`, `database.execute_write`, `database.direct_schema_change`, `database.apply_migration`, `database.configure_sensitive_columns`, `knowledge.record`, `knowledge.revise`, `knowledge.relate`, `knowledge.tag`, `knowledge.verify`, `knowledge.retract`, `knowledge.challenge`, `knowledge.scope`, `knowledge.delete_by_source`, `knowledge.delete_selected`, `knowledge.import_user_data`, `knowledge.promote`, `dreaming.run`, `dreaming.settings`, `dreaming.instructions`, `dreaming.propose`, `dreaming.revert`, `dreaming.review`, `documents.import`, `documents.index`, `documents.retry`, `conventions.edit`, `conventions.applicability`, `conventions.retire`, `conventions.index`, `conventions.delete`, `conventions.delete_resource`, `conventions.import`, `conventions.move`, `skills.draft`, `skills.propose`, `skills.rollback`, `roles.draft`, `roles.propose`, `roles.rollback`, `approvals.propose`, `approvals.record_human_decision`, `notifications.acknowledge`, `notifications.settings`, `git.worktree`, `reviews.request`, `reviews.respond`, `reviews.adjudicate`, `github.account`, `github.issue_sync`, `resources.acquire`, `resources.renew`, `resources.release`, `browser.sessions`, `browser.navigate`, `browser.input`, `browser.upload`, `desktop.request_control`, `desktop.input`, `desktop.release_control`, `process.execute`, `process.cancel`, `process.install_project_dependencies`, `process.request_system_install`, `containers.build`, `containers.pull`, `containers.create`, `containers.start`, `containers.stop`, `containers.exec`, `jobs.create`, `jobs.edit`, `jobs.enable`, `jobs.disable`, `jobs.delete`, `jobs.run_now`, `jobs.cancel`, `settings.save_revision`, `router.route`, `router.pin`, `router.price_refresh`, `router.price_override`, `router.configure`, `router.decide`, `mcp.configure`, `mcp.connect`, `mcp.discover`, `mcp.select_tools`, `addons.configure`, `addons.propose`, `help.generate_capability_docs`, `workspace.record_diagnostic`, `workspace.backup`, `workspace.restore`, `workspace.migrate`, `workspace.approve_install`, `repositories.remove_index`, `queue.resolve`, `queue.retry`, `queue.reconcile`, `imports.configure`, `imports.apply`, `maintenance.prune_diagnostics`, `maintenance.prune_index_runs`, `maintenance.prune_messages`, `maintenance.prune_sessions`, `repository_docs.generate`, `mcp_server.configure`, `mcp_server.set_client_access`, `tasks.prioritize`, `tasks.set_feature`, `artifacts.tag`",
       "expectedSchemaValid": false,
       "id": "reject-child-pause",
       "normalized": null,
@@ -26784,6 +26821,198 @@
       },
       "passed": true,
       "typedValid": true
+    },
+    {
+      "entry": "artifact-command-request.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-save-workspace",
+      "normalized": {
+        "command": {
+          "expectedBytes": "8",
+          "expectedDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "Save",
+          "mediaType": "text/plain",
+          "source": {
+            "kind": "Upload",
+            "ticketId": "upload-a"
+          },
+          "tags": [
+            "evidence"
+          ],
+          "title": "Report",
+          "workspace": true
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "artifact-command",
+        "schemaRevision": 3
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "artifact-command-request.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-save-project",
+      "normalized": {
+        "command": {
+          "expectedBytes": "8",
+          "expectedDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "Save",
+          "mediaType": "text/plain",
+          "projectId": "project-a",
+          "source": {
+            "kind": "Upload",
+            "ticketId": "upload-a"
+          },
+          "title": "Report"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "artifact-command",
+        "schemaRevision": 3
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "artifact-query-request.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-list-workspace",
+      "normalized": {
+        "limit": 100,
+        "protocol": "1.0-draft.1",
+        "query": {
+          "kind": "List",
+          "tags": [
+            "evidence"
+          ],
+          "workspace": true
+        },
+        "queryId": "query-artifact",
+        "schemaRevision": 3
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "artifact-query-request.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-list-project",
+      "normalized": {
+        "limit": 100,
+        "protocol": "1.0-draft.1",
+        "query": {
+          "kind": "List",
+          "projectId": "project-a"
+        },
+        "queryId": "query-artifact",
+        "schemaRevision": 3
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "artifact-command-request.r2",
+      "error": "a member introduced after schema revision 2 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-save-workspace",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "artifact-query-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-list-workspace",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "artifact-command-request.r3",
+      "error": "an artifact scope is exactly one of a project and the workspace",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-save-project-and-workspace",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "artifact-command-request.r3",
+      "error": "an artifact scope is exactly one of a project and the workspace",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-save-no-scope",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "artifact-command-request.r3",
+      "error": "an artifact scope is exactly one of a project and the workspace",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-save-workspace-false",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "artifact-query-request.r3",
+      "error": "a revision-gated member is omitted, never null at line 1 column 78",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-list-null-workspace",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "artifacts.tag-clears",
+      "normalized": {
+        "body": {
+          "artifactId": "id-a",
+          "expectedRevision": "1",
+          "kind": "artifacts.tag",
+          "tags": []
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": "duplicate artifact tag",
+      "expectedSchemaValid": false,
+      "id": "reject-artifacts.tag-duplicates",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request",
+      "error": "too many artifact tags",
+      "expectedSchemaValid": false,
+      "id": "reject-artifacts.tag-too-many",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request",
+      "error": "missing field `expectedRevision`",
+      "expectedSchemaValid": false,
+      "id": "reject-artifacts.tag-missing-revision",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
     }
   ],
   "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"

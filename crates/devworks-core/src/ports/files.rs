@@ -161,12 +161,13 @@ pub enum SourceRefusal {
 /// Host resolution of upload tickets, imported attachment handles and work-output file handles
 /// (production adapter: `devworks_adapters::fs::sources::HostArtifactSources`).
 pub trait ArtifactSources: Send + Sync {
-    /// Resolves `source` for a save into `project` by the invocation `ctx`. A handle bound to
-    /// a principal, project or work root resolves only for exactly that binding.
+    /// Resolves `source` for a save into `project` (`None`: the workspace scope) by the
+    /// invocation `ctx`. A handle bound to a principal, project or work root resolves only for
+    /// exactly that binding; a project-bound handle never resolves for the workspace.
     fn resolve(
         &self,
         ctx: &InvocationContext,
         source: &ArtifactSource,
-        project: &ProjectId,
+        project: Option<&ProjectId>,
     ) -> Result<ResolvedSource, SourceRefusal>;
 }

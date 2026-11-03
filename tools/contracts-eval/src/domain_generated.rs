@@ -8607,6 +8607,12 @@ pub enum DomainCommand {
         feature_id: Option<RootId>,
         clear_feature: bool,
     },
+    #[serde(rename = "artifacts.tag")]
+    ArtifactsTag {
+        artifact_id: Id,
+        expected_revision: Revision,
+        tags: ArtifactTags,
+    },
 }
 impl DomainCommand {
     pub fn operation(&self) -> &'static str {
@@ -8777,6 +8783,7 @@ impl DomainCommand {
             Self::McpServerSetClientAccess { .. } => "mcp_server.set_client_access",
             Self::TasksPrioritize { .. } => "tasks.prioritize",
             Self::TasksSetFeature { .. } => "tasks.set_feature",
+            Self::ArtifactsTag { .. } => "artifacts.tag",
         }
     }
 }
@@ -10437,6 +10444,15 @@ impl Check for DomainCommand {
                 feature_id.check()?;
                 clear_feature.check()?;
             }
+            Self::ArtifactsTag {
+                artifact_id,
+                expected_revision,
+                tags,
+            } => {
+                artifact_id.check()?;
+                expected_revision.check()?;
+                tags.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -11082,6 +11098,8 @@ pub enum OperationResult {
     TasksPrioritize { value: MutationSummary },
     #[serde(rename = "tasks.set_feature")]
     TasksSetFeature { value: WorkRecord },
+    #[serde(rename = "artifacts.tag")]
+    ArtifactsTag { value: MutationSummary },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -11501,6 +11519,7 @@ impl OperationResult {
             Self::McpServerSetClientAccess { .. } => "mcp_server.set_client_access",
             Self::TasksPrioritize { .. } => "tasks.prioritize",
             Self::TasksSetFeature { .. } => "tasks.set_feature",
+            Self::ArtifactsTag { .. } => "artifacts.tag",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -11860,6 +11879,7 @@ impl Check for OperationResult {
             Self::McpServerSetClientAccess { value } => value.check()?,
             Self::TasksPrioritize { value } => value.check()?,
             Self::TasksSetFeature { value } => value.check()?,
+            Self::ArtifactsTag { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,

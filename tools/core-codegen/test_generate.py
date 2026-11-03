@@ -33,7 +33,7 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual({n for n, s in carried.items() if s}, {
             'artifacts.save', 'artifacts.list', 'history.events', 'history.work_lineage',
             'history.git_links', 'history.evidence_links', 'history.tool_usage', 'sessions.briefing'})
-        self.assertEqual(carried['artifacts.save'], {2})
+        self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the
         # command aggregate or project scope of history.events.
@@ -68,6 +68,11 @@ class SchemaRevisionRules(unittest.TestCase):
     def test_a_shared_envelope_counts_only_the_branch_its_selector_picks(self):
         doc = json.loads((generate.CONTRACTS / 'artifact-command-request.r2.schema.json').read_text())
         self.assertEqual(generate.doc_since(doc, '/command/kind', 'Save'), {2})
+        # The revision-3 Save branch: tags (2) and the workspace scope alternative (3), whose
+        # own oneOf belongs to the branch rather than making it a union.
+        doc3 = json.loads((generate.CONTRACTS / 'artifact-command-request.r3.schema.json').read_text())
+        self.assertEqual(generate.doc_since(doc3, '/command/kind', 'Save'), {2, 3})
+        self.assertEqual(generate.doc_since(doc3, '/command/kind', 'Reference'), set())
         self.assertEqual(generate.doc_since(doc, '/command/kind', 'Reference'), set())
         self.assertEqual(generate.doc_since(doc), {2})
 

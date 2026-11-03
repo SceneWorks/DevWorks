@@ -8,7 +8,7 @@ def valid(entry):return json.loads(next(c['raw'] for c in ALL if c['entry']==ent
 ART={'artifactId':'artifact-a','versionId':'version-a','sha256':'a'*64,'byteLength':'8','mediaType':'text/plain'}
 STAMP={'storeId':'store-a','restoreEpoch':'0','sequence':'1','policyRevision':'1','scopeRevision':'1'}
 BASE={'Id':'id-a','Revision':'1','Counter':'0','ProjectId':'project-a','RootId':'root-a','ActorId':'actor-a','AssignmentId':'assignment-a','OperationId':'operation-a','QueryId':'query-a','RequestKey':'request-a','CommandId':'command-a','EventId':'event-a','StoreId':'store-a','ResourceId':'resource-a','CorrelationId':'correlation-a',
- 'Label':'fixture','Text':'fixture','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'DynamicJson':{'input':'fixture'},
+ 'Label':'fixture','Text':'fixture','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'ArtifactTags':['evidence'],'DynamicJson':{'input':'fixture'},
  'DataScope':{'kind':'Workspace'},'ViewSelection':{'kind':'Published','repositoryIds':['repo-a']},'Coverage':{'state':'Complete','gaps':[],'moreGaps':False},'Digest':'a'*64,'ArtifactRef':ART,'SchemaRef':{'schemaId':'fixture/object','revision':'1','sha256':'a'*64},'Attribution':{'kind':'Workspace','sessionId':'session-a'},'GitOid':{'format':'Sha1','hex':'a'*40},'ReadStamp':STAMP,'OperationState':'ObservedComplete',
  'RootControl':{'rootId':'root-a','revision':'1','desiredState':'Enabled'},'Blockers':{'items':[],'hasMore':False},'EligibilityTarget':{'kind':'root','id':'root-a'},'Purpose':'Planning',
  'DeliveryBarrier':valid('delivery-barrier'),'DeliverySnapshot':valid('delivery-snapshot'),'GraphPage':valid('graph-page'),'RetrievalPage':valid('retrieval-page'),'TranscriptPage':valid('transcript-page'),'Event':valid('event')}
@@ -337,5 +337,30 @@ case('reject-r2-briefing-parent-path','domain-request.r2',domain('sessions.brief
 case('reject-r2-briefing-duplicate-paths','domain-request.r2',domain('sessions.briefing',paths=['src','src']),False,True)
 case('reject-r2-briefing-null-item','domain-request.r2',domain('sessions.briefing',item=None),False,False)
 case('r2-result-sessions.briefing','operation-result.r2',{'kind':'sessions.briefing','value':{'items':[sample('ContextSource')],'hasMore':False}})
+# Schema revision 3 (artifacts): the workspace owner scope for saves and listings, and
+# artifacts.tag (a revision-1 operation) replacing an existing artifact's tag set.
+def scoped(base,path,revision,workspace=True,project=DELETE):
+ obj=copy.deepcopy(base)
+ if revision is not None:obj['schemaRevision']=revision
+ body=obj[path]
+ if project is DELETE:body.pop('projectId',None)
+ elif project is not None:body['projectId']=project
+ if workspace is not None:body['workspace']=workspace
+ return obj
+case('r3-save-workspace','artifact-command-request.r3',scoped(r2(save,'command',['evidence']),'command',3))
+case('r3-save-project','artifact-command-request.r3',scoped(save,'command',3,None,None))
+case('r3-list-workspace','artifact-query-request.r3',scoped(r2(listing,'query',['evidence']),'query',3))
+case('r3-list-project','artifact-query-request.r3',scoped(listing,'query',3,None,None))
+case('reject-r2-save-workspace','artifact-command-request.r2',scoped(save,'command',2),False,False)
+case('reject-r1-list-workspace','artifact-query-request',scoped(listing,'query',None),False,False)
+case('reject-r3-save-project-and-workspace','artifact-command-request.r3',scoped(save,'command',3,True,'project-a'),False,False)
+case('reject-r3-save-no-scope','artifact-command-request.r3',scoped(save,'command',3,None),False,False)
+case('reject-r3-save-workspace-false','artifact-command-request.r3',scoped(save,'command',3,False),False,False)
+case('reject-r3-list-null-workspace','artifact-query-request.r3',scoped(listing,'query',3,None)|{'query':{**scoped(listing,'query',3,None)['query'],'workspace':None}},False,False)
+tag=request('artifacts.tag','Command')
+case('artifacts.tag-clears','domain-request',{**tag,'body':{**tag['body'],'tags':[]}})
+case('reject-artifacts.tag-duplicates','domain-request',{**tag,'body':{**tag['body'],'tags':['a','a']}},False,False)
+case('reject-artifacts.tag-too-many','domain-request',{**tag,'body':{**tag['body'],'tags':['t'+str(i) for i in range(33)]}},False,False)
+case('reject-artifacts.tag-missing-revision','domain-request',{**tag,'body':{k:v for k,v in tag['body'].items() if k!='expectedRevision'}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

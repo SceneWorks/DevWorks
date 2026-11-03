@@ -375,6 +375,8 @@ pub enum OperationResult {
     ArtifactsReference { value: MutationSummary },
     #[serde(rename = "artifacts.delete")]
     ArtifactsDelete { value: MutationSummary },
+    #[serde(rename = "artifacts.tag")]
+    ArtifactsTag { value: MutationSummary },
     #[serde(rename = "conventions.list")]
     ConventionsList { value: Page<InstructionRecord> },
     #[serde(rename = "conventions.read")]
@@ -910,6 +912,7 @@ impl OperationResult {
             Self::ArtifactsExport { .. } => "artifacts.export",
             Self::ArtifactsReference { .. } => "artifacts.reference",
             Self::ArtifactsDelete { .. } => "artifacts.delete",
+            Self::ArtifactsTag { .. } => "artifacts.tag",
             Self::ConventionsList { .. } => "conventions.list",
             Self::ConventionsRead { .. } => "conventions.read",
             Self::ConventionsEdit { .. } => "conventions.edit",
@@ -1271,6 +1274,7 @@ impl Check for OperationResult {
             Self::ArtifactsExport { value } => value.check()?,
             Self::ArtifactsReference { value } => value.check()?,
             Self::ArtifactsDelete { value } => value.check()?,
+            Self::ArtifactsTag { value } => value.check()?,
             Self::ConventionsList { value } => value.check()?,
             Self::ConventionsRead { value } => value.check()?,
             Self::ConventionsEdit { value } => value.check()?,

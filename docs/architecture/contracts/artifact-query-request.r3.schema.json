@@ -1,0 +1,591 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactQuery": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The artifacts of exactly one scope: `projectId`, or from schema revision 3 the workspace\n(`workspace: true`). Revisions 1 and 2 require `projectId`.",
+          "oneOf": [
+            {
+              "required": [
+                "projectId"
+              ]
+            },
+            {
+              "required": [
+                "workspace"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "kind": {
+              "const": "List",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            },
+            "tags": {
+              "$ref": "#/$defs/ArtifactTags",
+              "description": "Only artifacts carrying every listed tag (schema revision 2).",
+              "x-since": 2
+            },
+            "workspace": {
+              "const": true,
+              "description": "Schema revision 3: list the workspace scope instead of `projectId`; always `true`.",
+              "type": "boolean",
+              "x-since": 3
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Read",
+              "type": "string"
+            },
+            "versionId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "versionId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Preview",
+              "type": "string"
+            },
+            "versionId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "versionId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Export",
+              "type": "string"
+            },
+            "versionId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "versionId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "citation": {
+              "$ref": "#/$defs/Citation"
+            },
+            "kind": {
+              "const": "ResolveCitation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "citation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "ArtifactTags": {
+      "items": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[^\\u0000]*$",
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "Citation": {
+      "additionalProperties": false,
+      "properties": {
+        "blockId": {
+          "$ref": "#/$defs/Id"
+        },
+        "contentDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "locator": {
+          "$ref": "#/$defs/Locator"
+        },
+        "source": {
+          "$ref": "#/$defs/CitationSource"
+        }
+      },
+      "required": [
+        "source",
+        "blockId",
+        "contentDigest",
+        "locator"
+      ],
+      "type": "object"
+    },
+    "CitationSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "DatabaseSchema",
+              "type": "string"
+            },
+            "schemaDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "snapshotId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "connectionId",
+            "snapshotId",
+            "schemaDigest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "extractionRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "Managed",
+              "type": "string"
+            },
+            "version": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "version",
+            "extractionRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Repository",
+              "type": "string"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/RepositorySnapshot"
+            },
+            "sourceDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "unitKey": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "snapshot",
+            "unitKey",
+            "sourceDigest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Knowledge",
+              "type": "string"
+            },
+            "revision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "entryId",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Convention",
+              "type": "string"
+            },
+            "version": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "version"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "GitOid": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/ObjectFormat"
+        },
+        "hex": {
+          "pattern": "^[a-f0-9]{40}([a-f0-9]{24})?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "hex"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Locator": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "SchemaObject",
+              "type": "string"
+            },
+            "objectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "objectId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firstLine": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "Text",
+              "type": "string"
+            },
+            "lastLine": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "firstLine",
+            "lastLine"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Pdf",
+              "type": "string"
+            },
+            "page": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "page"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Docx",
+              "type": "string"
+            },
+            "paragraph": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "part": {
+              "$ref": "#/$defs/Id"
+            },
+            "tableCell": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "part",
+            "paragraph"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firstLine": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "Code",
+              "type": "string"
+            },
+            "lastLine": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/RepositorySnapshot"
+            },
+            "unitKey": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "snapshot",
+            "unitKey",
+            "firstLine",
+            "lastLine"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Knowledge",
+              "type": "string"
+            },
+            "revision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "entryId",
+            "revision"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ObjectFormat": {
+      "enum": [
+        "Sha1",
+        "Sha256"
+      ],
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "RepositorySnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/GitOid"
+        },
+        "captureDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head": {
+          "$ref": "#/$defs/GitOid"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "worktreeId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "repositoryId",
+        "base",
+        "head"
+      ],
+      "type": "object"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:artifact-query-request.r3",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "format": "uint16",
+      "maximum": 500,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "query": {
+      "$ref": "#/$defs/ArtifactQuery"
+    },
+    "queryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "schemaRevision": {
+      "description": "Negotiated operation schema revision. Absent means 1. Only revisions the selected operation registers are admitted; any other is UnsupportedSchema before authority.",
+      "maximum": 65535,
+      "minimum": 3,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "protocol",
+    "queryId",
+    "query",
+    "limit",
+    "schemaRevision"
+  ],
+  "title": "ArtifactQueryRequest",
+  "type": "object"
+}

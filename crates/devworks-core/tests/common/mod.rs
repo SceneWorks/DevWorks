@@ -998,6 +998,15 @@ pub fn repo_file(path: &str) -> PathBuf {
 }
 
 impl ArtifactRead for Unsupported {
+    fn list_workspace(
+        &self,
+        _: Option<&ActorId>,
+        _: &[String],
+        _: Option<&ListPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        nope()
+    }
     fn workspace_usage(&self) -> Result<i64, StorageError> {
         nope()
     }

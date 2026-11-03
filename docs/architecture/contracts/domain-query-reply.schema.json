@@ -10066,6 +10066,23 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
+              "const": "artifacts.tag",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/MutationSummary"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
               "const": "runs.start",
               "type": "string"
             },

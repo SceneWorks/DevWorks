@@ -349,9 +349,13 @@ def doc_since(doc, pointer=None, equals=None):
         return out
 
     def alternatives(node):
+        # A union is a node without its own properties; an object's own `oneOf` (a choice of
+        # required members, such as exactly one scope) belongs to that object's branch.
         node = resolve(node)
         alts = node.get('oneOf') or node.get('anyOf')
-        return [b for a in alts for b in alternatives(a)] if alts else [node]
+        if alts and 'properties' not in node:
+            return [b for a in alts for b in alternatives(a)]
+        return [node]
 
     if pointer is None:
         return collect(doc, set())

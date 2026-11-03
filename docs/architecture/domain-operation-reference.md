@@ -315,13 +315,14 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/artifact-command-request.r2.schema.json)) | `ArtifactRecord` |
-| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/artifact-query-request.r2.schema.json)) | `Page<ArtifactRecord>` |
+| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/artifact-command-request.r3.schema.json)) | `ArtifactRecord` |
+| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/artifact-query-request.r3.schema.json)) | `Page<ArtifactRecord>` |
 | `artifacts.read` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Read'} | `ArtifactReadContent` |
 | `artifacts.preview` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Preview'} | `ArtifactPreview` |
 | `artifacts.export` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Export'} | `ArtifactExport` |
 | `artifacts.reference` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Reference'} | `MutationSummary` |
 | `artifacts.delete` | **Command**<br>[Existing input schema](contracts/artifact-deletion-request.schema.json)<br>None | `MutationSummary` |
+| `artifacts.tag` | **Command**<br>`artifactId`: `Id`<br>`expectedRevision`: `Revision`<br>`tags`: `ArtifactTags` | `MutationSummary` |
 
 ### Conventions
 

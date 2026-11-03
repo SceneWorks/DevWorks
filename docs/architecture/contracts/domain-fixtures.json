@@ -2100,6 +2100,13 @@
     "schemaValid": true
   },
   {
+    "id": "input-artifacts.tag-Command",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"artifacts.tag\",\"artifactId\":\"id-a\",\"expectedRevision\":\"1\",\"tags\":[\"evidence\"]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "result-projects.list",
     "entry": "operation-result",
     "raw": "{\"kind\":\"projects.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
@@ -4165,6 +4172,13 @@
     "schemaValid": true
   },
   {
+    "id": "result-artifacts.tag",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"artifacts.tag\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "result-runs.start",
     "entry": "operation-result",
     "raw": "{\"kind\":\"runs.start\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"1\",\"desiredState\":\"Enabled\"},\"blockers\":{\"items\":[],\"hasMore\":false}}}",
@@ -5885,5 +5899,103 @@
     "raw": "{\"kind\":\"sessions.briefing\",\"value\":{\"items\":[{\"id\":\"id-a\",\"kind\":\"fixture\",\"sourceRevision\":\"1\",\"tokenEstimate\":\"0\"}],\"hasMore\":false}}",
     "typedValid": true,
     "schemaValid": true
+  },
+  {
+    "id": "r3-save-workspace",
+    "entry": "artifact-command-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\",\"tags\":[\"evidence\"],\"workspace\":true},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-save-project",
+    "entry": "artifact-command-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"projectId\":\"project-a\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-list-workspace",
+    "entry": "artifact-query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"List\",\"tags\":[\"evidence\"],\"workspace\":true},\"limit\":100,\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-list-project",
+    "entry": "artifact-query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"List\",\"projectId\":\"project-a\"},\"limit\":100,\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-save-workspace",
+    "entry": "artifact-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\",\"workspace\":true},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-list-workspace",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"List\",\"workspace\":true},\"limit\":100}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-save-project-and-workspace",
+    "entry": "artifact-command-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"projectId\":\"project-a\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\",\"workspace\":true},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-save-no-scope",
+    "entry": "artifact-command-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\"},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-save-workspace-false",
+    "entry": "artifact-command-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\",\"workspace\":false},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-list-null-workspace",
+    "entry": "artifact-query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"List\",\"workspace\":null},\"limit\":100,\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "artifacts.tag-clears",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"artifacts.tag\",\"artifactId\":\"id-a\",\"expectedRevision\":\"1\",\"tags\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-artifacts.tag-duplicates",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"artifacts.tag\",\"artifactId\":\"id-a\",\"expectedRevision\":\"1\",\"tags\":[\"a\",\"a\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-artifacts.tag-too-many",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"artifacts.tag\",\"artifactId\":\"id-a\",\"expectedRevision\":\"1\",\"tags\":[\"t0\",\"t1\",\"t2\",\"t3\",\"t4\",\"t5\",\"t6\",\"t7\",\"t8\",\"t9\",\"t10\",\"t11\",\"t12\",\"t13\",\"t14\",\"t15\",\"t16\",\"t17\",\"t18\",\"t19\",\"t20\",\"t21\",\"t22\",\"t23\",\"t24\",\"t25\",\"t26\",\"t27\",\"t28\",\"t29\",\"t30\",\"t31\",\"t32\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-artifacts.tag-missing-revision",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"artifacts.tag\",\"artifactId\":\"id-a\",\"tags\":[\"evidence\"]}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

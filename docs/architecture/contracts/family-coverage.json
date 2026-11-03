@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-03",
-  "catalogSha256": "52be38907d23a6a800ca03072e0504cbef164f4a6d873dc27b6e714e8ec0476a",
+  "catalogSha256": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
   "familyCount": 48,
-  "operationCount": 353,
-  "concreteInputCandidates": 353,
+  "operationCount": 354,
+  "concreteInputCandidates": 354,
   "domainInputsPending": 0,
   "families": [
     {
@@ -8059,6 +8059,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -8109,6 +8117,14 @@
             {
               "revision": 2,
               "inputSchema": "artifact-query-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "artifact-query-request.r3.schema.json",
               "resultSchema": "operation-result.r2.schema.json",
               "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
@@ -8345,6 +8361,52 @@
           "authority": "Existing host authority contract",
           "effect": "Existing journaled command contract",
           "semanticRules": "Preserve existing concrete input/authority/receipt/recovery contract; selected result kind must match operation.",
+          "familyRules": "Existing immutable source/version/reference/deletion DTOs remain authoritative. Explicit deletion tombstones first, preserves surviving references, and never reactivates an old version.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "artifacts.tag",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "artifacts.tag",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "artifacts.tag"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "artifacts.tag"
+          },
+          "resultValueType": "MutationSummary",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.schema.json",
+              "completionSchema": "operation-completion.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Replaces the tag set (empty clears it) of a live, explicitly retained artifact the caller sees and whose owner scope its authorized scope covers, under the expected artifact revision; an equal set is NoChange. Receipt replies are never retagged.",
           "familyRules": "Existing immutable source/version/reference/deletion DTOs remain authoritative. Explicit deletion tombstones first, preserves surviving references, and never reactivates an old version.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

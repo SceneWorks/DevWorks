@@ -1075,12 +1075,12 @@
 </thead>
 <tbody><tr>
 <td><code>artifacts.save</code></td>
-<td><strong>Command</strong><br><a href="contracts/artifact-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Save&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/artifact-command-request.r2.schema.json">revision 2 input</a>)</td>
+<td><strong>Command</strong><br><a href="contracts/artifact-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Save&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/artifact-command-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>ArtifactRecord</code></td>
 </tr>
 <tr>
 <td><code>artifacts.list</code></td>
-<td><strong>Query</strong><br><a href="contracts/artifact-query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;List&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/artifact-query-request.r2.schema.json">revision 2 input</a>)</td>
+<td><strong>Query</strong><br><a href="contracts/artifact-query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;List&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/artifact-query-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>Page&lt;ArtifactRecord&gt;</code></td>
 </tr>
 <tr>
@@ -1106,6 +1106,11 @@
 <tr>
 <td><code>artifacts.delete</code></td>
 <td><strong>Command</strong><br><a href="contracts/artifact-deletion-request.schema.json">Existing input schema</a><br>None</td>
+<td><code>MutationSummary</code></td>
+</tr>
+<tr>
+<td><code>artifacts.tag</code></td>
+<td><strong>Command</strong><br><code>artifactId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>tags</code>: <code>ArtifactTags</code></td>
 <td><code>MutationSummary</code></td>
 </tr>
 </tbody></table>

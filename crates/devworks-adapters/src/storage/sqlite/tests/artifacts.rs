@@ -19,7 +19,7 @@ use devworks_core::ports::files::{
 };
 use devworks_core::ports::storage::*;
 use devworks_core::ports::{AuthorityPort, CommandHandler, Preparation, Prepared};
-use devworks_core::protocol::data::ArtifactSource;
+use devworks_core::protocol::data::{ArtifactSource, DataScope};
 use devworks_core::protocol::provider::{ArtifactRef, Digest};
 use devworks_core::protocol::records::{ArtifactReadContent, ArtifactRecord, MutationSummary};
 use devworks_core::protocol::results::{
@@ -73,7 +73,7 @@ impl ArtifactSources for Sources {
         &self,
         _: &InvocationContext,
         source: &ArtifactSource,
-        _: &ProjectId,
+        _: Option<&ProjectId>,
     ) -> Result<ResolvedSource, SourceRefusal> {
         let key = match source {
             ArtifactSource::Upload { ticket_id } => ticket_id,
@@ -813,7 +813,7 @@ fn versions_are_never_overwritten_and_exact_references_survive() {
         ticket_id: id("t3"),
     };
     let request = StageRequest {
-        project: &project("project-a"),
+        scope: &ArtifactScope::Project(project("project-a")),
         source: &source,
         expected_digest: &digest,
         expected_bytes: revised.len() as i64,
@@ -994,7 +994,7 @@ fn a_crash_at_any_publication_step_is_reconciled_without_visible_metadata() {
                         &env,
                         &user,
                         &StageRequest {
-                            project: &project("project-a"),
+                            scope: &ArtifactScope::Project(project("project-a")),
                             source: &source,
                             expected_digest: &expected,
                             expected_bytes: bytes.len() as i64,
@@ -2407,7 +2407,7 @@ fn staged_for(fx: &Fx, handle: &str, bytes: &[u8]) -> StagedFile {
             &env,
             &fx.user(),
             &StageRequest {
-                project: &project("project-a"),
+                scope: &ArtifactScope::Project(project("project-a")),
                 source: &source,
                 expected_digest: &digest,
                 expected_bytes: bytes.len() as i64,
@@ -3848,7 +3848,7 @@ fn tag_bounds_duplicates_and_unregistered_revisions_are_refused_without_receipts
         Rejection::InvalidRequest
     );
     // A revision the operation does not register is refused before authority.
-    frame["schemaRevision"] = json!(3);
+    frame["schemaRevision"] = json!(4);
     assert_eq!(
         rejected(fx.command(&fx.user(), "artifacts.save", frame)),
         Rejection::UnsupportedSchema
@@ -3979,4 +3979,292 @@ fn a_stored_receipt_under_an_unregistered_revision_is_a_visible_hold_on_sqlite()
     assert_eq!(fx.staging_ops_all().len(), staged);
     let (items, _) = fx.listed(&list_frame(Some(2), None, None, 50));
     assert_eq!(titles(&items), ["Held"]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Schema revision 3: the workspace scope, and artifacts.tag
+
+impl Fx {
+    /// Saves `bytes` under `handle` into the workspace at revision 3 (with `tags`).
+    fn save_workspace(
+        &self,
+        ctx: &InvocationContext,
+        handle: &str,
+        title: &str,
+        bytes: &[u8],
+        tags: Value,
+        revision: u64,
+    ) -> DomainCommandReply {
+        self.source(
+            handle,
+            &format!("{handle}.bin"),
+            bytes,
+            SourceOrigin::default(),
+        );
+        let mut frame = self.save_frame(
+            &self.key(),
+            "project-a",
+            title,
+            "text/plain",
+            json!({"kind": "Upload", "ticketId": handle}),
+            bytes,
+        );
+        frame["command"]
+            .as_object_mut()
+            .unwrap()
+            .remove("projectId");
+        frame["command"]["workspace"] = json!(true);
+        frame["command"]["tags"] = tags;
+        frame["schemaRevision"] = json!(revision);
+        self.command(ctx, "artifacts.save", frame)
+    }
+    fn workspace_list(
+        &self,
+        ctx: &InvocationContext,
+        tags: Option<Value>,
+        cursor: Option<&str>,
+        limit: u16,
+    ) -> DomainQueryReply {
+        let mut frame = list_frame(Some(3), tags, cursor, limit);
+        frame["query"].as_object_mut().unwrap().remove("projectId");
+        frame["query"]["workspace"] = json!(true);
+        self.query_frame(ctx, "artifacts.list", &frame)
+    }
+    fn retag(
+        &self,
+        ctx: &InvocationContext,
+        artifact: &Id,
+        expected: i64,
+        tags: Value,
+    ) -> DomainCommandReply {
+        self.command(
+            ctx,
+            "artifacts.tag",
+            json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": self.key(),
+                "body": {"kind": "artifacts.tag", "artifactId": artifact,
+                    "expectedRevision": expected.to_string(), "tags": tags}}),
+        )
+    }
+    /// A receipt's reply (system-owned, workspace-scoped, owned by `owner`).
+    fn receipt_reply(&self, artifact: &str, owner: &str) {
+        let (artifact, owner) = (id(artifact), actor(owner));
+        self.write(move |tx| {
+            tx.artifacts().insert_artifact(&StoredArtifact {
+                id: artifact,
+                origin_project_id: None,
+                origin_work_id: None,
+                title: "Reply".into(),
+                revision: 1,
+                scope: ArtifactScope::Workspace,
+                owner: Some(owner),
+                retention: ArtifactRetention::Receipt,
+                scope_revision: 1,
+                reference_revision: 1,
+                current_version_id: None,
+                state: ArtifactState::Live,
+                created_at_ms: T0,
+                provenance: json!({}),
+            })
+        });
+    }
+}
+fn tagged(reply: DomainCommandReply) -> MutationSummary {
+    match applied(reply) {
+        OperationResult::ArtifactsTag { value } => value,
+        other => panic!("{other:?}"),
+    }
+}
+fn listed_items(reply: DomainQueryReply) -> (Vec<Value>, Option<String>) {
+    let value = serde_json::to_value(result(reply)).unwrap()["value"].clone();
+    (
+        value["items"].as_array().unwrap().clone(),
+        value["nextCursor"].as_str().map(str::to_owned),
+    )
+}
+
+#[test]
+fn revision_three_saves_and_lists_workspace_artifacts_for_their_audience() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // An unconfined agent invoked from the workspace (no project, no work lineage).
+    let agent = fx.ctx("agent-a", PrincipalKind::Agent, None);
+    let mine = saved(fx.save_workspace(&user, "w-user", "Notes", b"user", json!(["home"]), 3));
+    assert!(matches!(mine.scope, DataScope::Workspace));
+    assert_eq!(mine.tags.as_ref().unwrap().0, ["home"]);
+    let stored = fx.artifact(&mine.artifact.artifact_id);
+    assert_eq!(
+        (
+            stored.scope.clone(),
+            stored.owner.clone(),
+            stored.origin_project_id.clone()
+        ),
+        (ArtifactScope::Workspace, Some(actor("user-a")), None)
+    );
+    let theirs = saved(fx.save_workspace(&agent, "w-agent", "Scratch", b"agent", json!([]), 3));
+    assert_eq!(
+        fx.artifact(&theirs.artifact.artifact_id).owner,
+        Some(actor("agent-a"))
+    );
+    fx.saved("p-1", "Project file", "text/plain", b"project");
+    fx.receipt_reply("reply-a", "user-a");
+    // The user sees every workspace artifact; the agent only its own. Receipt replies and
+    // project artifacts are never in the workspace listing, nor workspace artifacts in a
+    // project's.
+    let (all, _) = listed_items(fx.workspace_list(&user, None, None, 50));
+    assert_eq!(titles(&all), ["Scratch", "Notes"]);
+    let (own, _) = listed_items(fx.workspace_list(&agent, None, None, 50));
+    assert_eq!(titles(&own), ["Scratch"]);
+    let (homes, _) = listed_items(fx.workspace_list(&user, Some(json!(["home"])), None, 50));
+    assert_eq!(titles(&homes), ["Notes"]);
+    let (project_items, _) = fx.listed(&list_frame(Some(3), None, None, 50));
+    assert_eq!(titles(&project_items), ["Project file"]);
+    // Revision 3 lists a project exactly as revision 2 does.
+    assert_eq!(
+        fx.listed(&list_frame(Some(3), None, None, 50)).0,
+        fx.listed(&list_frame(Some(2), None, None, 50)).0
+    );
+    // The cursor is bound to the listing principal and the scope.
+    let (first, cursor) = listed_items(fx.workspace_list(&user, None, None, 1));
+    assert_eq!(titles(&first), ["Scratch"]);
+    let cursor = cursor.unwrap();
+    let (rest, _) = listed_items(fx.workspace_list(&user, None, Some(&cursor), 1));
+    assert_eq!(titles(&rest), ["Notes"]);
+    assert_eq!(
+        fault(fx.workspace_list(&agent, None, Some(&cursor), 1)).code,
+        DomainErrorCode::CursorExpired
+    );
+    assert_eq!(
+        fault(fx.query_frame(
+            &user,
+            "artifacts.list",
+            &list_frame(Some(3), None, Some(&cursor), 1)
+        ))
+        .code,
+        DomainErrorCode::CursorExpired
+    );
+    // A project-confined principal, or any project or work invocation, has no workspace scope.
+    let confined = fx.ctx("agent-p", PrincipalKind::Agent, Some("project-a"));
+    let in_project = fx.ctx("user-a", PrincipalKind::Human, Some("project-a"));
+    for ctx in [&confined, &in_project, &fx.worker("agent-a")] {
+        let f = fault(fx.workspace_list(ctx, None, None, 50));
+        assert_eq!(
+            (f.code, target(&f)),
+            (DomainErrorCode::PermissionDenied, "workspace_scope")
+        );
+        let f = refused(fx.save_workspace(ctx, "w-denied", "No", b"no", json!([]), 3));
+        assert_eq!(
+            (f.code, target(&f)),
+            (DomainErrorCode::PermissionDenied, "workspace_scope")
+        );
+    }
+    let (all_after, _) = listed_items(fx.workspace_list(&user, None, None, 50));
+    assert_eq!(all_after.len(), 2);
+    // Earlier revisions cannot name the workspace; a scope is exactly one of the two.
+    assert_eq!(
+        rejected(fx.save_workspace(&user, "w-r2", "R2", b"r2", json!([]), 2)),
+        Rejection::InvalidRequest
+    );
+    let mut r1 = list_frame(None, None, None, 50);
+    r1["query"]["workspace"] = json!(true);
+    r1["query"].as_object_mut().unwrap().remove("projectId");
+    assert_eq!(
+        fault(fx.query_frame(&user, "artifacts.list", &r1)).code,
+        DomainErrorCode::InvalidArgument
+    );
+    let mut both = list_frame(Some(3), None, None, 50);
+    both["query"]["workspace"] = json!(true);
+    assert_eq!(
+        fault(fx.query_frame(&user, "artifacts.list", &both)).code,
+        DomainErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        fault(fx.query_frame(
+            &user,
+            "artifacts.list",
+            &list_frame(Some(4), None, None, 50)
+        ))
+        .code,
+        DomainErrorCode::SchemaMismatch
+    );
+    // Workspace artifacts survive a restart with their owner.
+    let fx = fx.restart();
+    let (again, _) = listed_items(fx.workspace_list(&fx.user(), None, None, 50));
+    assert_eq!(titles(&again), ["Scratch", "Notes"]);
+}
+
+#[test]
+fn artifacts_tag_replaces_the_tag_set_under_the_artifact_revision() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let record = saved(fx.save_tagged("t-1", "Report", b"report", json!(["draft"])));
+    let aid = record.artifact.artifact_id.clone();
+    let before = fx.receipts();
+    // Unsorted input is the same set; the revision advances once per change.
+    let changed = tagged(fx.retag(&user, &aid, 1, json!(["release", "evidence"])));
+    assert!(changed.changed && changed.revision.get() == 2);
+    let (items, _) = fx.listed(&list_frame(Some(2), None, None, 50));
+    assert_eq!(items[0]["tags"], json!(["evidence", "release"]));
+    let (found, _) = fx.listed(&list_frame(Some(2), Some(json!(["release"])), None, 50));
+    assert_eq!(titles(&found), ["Report"]);
+    let same = tagged(fx.retag(&user, &aid, 2, json!(["evidence", "release"])));
+    assert!(!same.changed && same.revision.get() == 2);
+    // A stale revision conflicts and changes nothing.
+    let f = refused(fx.retag(&user, &aid, 1, json!(["other"])));
+    assert_eq!(f.code, DomainErrorCode::RevisionConflict);
+    assert_eq!(f.current_revision.unwrap().get(), 2);
+    // An empty set clears the tags.
+    assert!(tagged(fx.retag(&user, &aid, 2, json!([]))).changed);
+    let (items, _) = fx.listed(&list_frame(Some(2), None, None, 50));
+    assert_eq!(items[0]["tags"], json!([]));
+    let changes: Vec<_> = fx
+        .events()
+        .into_iter()
+        .filter(|e| e.kind == "ArtifactTagsChanged")
+        .collect();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0].payload["previous"], json!(["draft"]));
+    assert_eq!(changes[0].payload["tags"], json!(["evidence", "release"]));
+    assert_eq!(fx.artifact(&aid).revision, 3);
+    // A project-a worker owns project-a metadata; another project does not see it.
+    let confined = fx.ctx("agent-p", PrincipalKind::Agent, Some("project-a"));
+    assert!(tagged(fx.retag(&confined, &aid, 3, json!(["worker"]))).changed);
+    let outsider = fx.ctx("agent-b", PrincipalKind::Agent, Some("project-b"));
+    assert_eq!(
+        refused(fx.retag(&outsider, &aid, 4, json!(["x"]))).code,
+        DomainErrorCode::NotFound
+    );
+    // Workspace artifacts: only their audience may retag them; a confined principal never.
+    let ws = saved(fx.save_workspace(&user, "w-t", "Home", b"home", json!([]), 3));
+    let wid = ws.artifact.artifact_id.clone();
+    let agent = fx.ctx("agent-a", PrincipalKind::Agent, None);
+    for ctx in [&agent, &confined] {
+        assert_eq!(
+            refused(fx.retag(ctx, &wid, 1, json!(["x"]))).code,
+            DomainErrorCode::NotFound
+        );
+    }
+    assert!(tagged(fx.retag(&user, &wid, 1, json!(["home"]))).changed);
+    // A receipt's reply is never retagged.
+    fx.receipt_reply("reply-a", "user-a");
+    let f = refused(fx.retag(&user, &id("reply-a"), 1, json!(["x"])));
+    assert_eq!(
+        (f.code, target(&f)),
+        (DomainErrorCode::Conflict, "artifact_receipt_retained")
+    );
+    assert!(fx.read(|s| s.artifacts().tags(&id("reply-a"))).is_empty());
+    // The tag bounds of saves apply; a malformed request mints no receipt.
+    let after = fx.receipts();
+    for tags in [
+        json!(["a", "a"]),
+        json!((0..33).map(|i| format!("t{i}")).collect::<Vec<_>>()),
+        json!([""]),
+        json!(["x".repeat(65)]),
+    ] {
+        assert_eq!(
+            rejected(fx.retag(&user, &aid, 4, tags)),
+            Rejection::InvalidRequest
+        );
+    }
+    assert_eq!(fx.receipts(), after);
+    assert!(after > before);
 }
