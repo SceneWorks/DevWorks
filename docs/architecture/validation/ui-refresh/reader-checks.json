@@ -1,0 +1,41 @@
+{
+  "date": "2026-11-02",
+  "passed": true,
+  "reports": [
+    {
+      "path": "docs/planning/devworks-requirements.html",
+      "localTargetsChecked": 34,
+      "images": 3,
+      "pageErrors": [],
+      "desktopOverflow": false
+    },
+    {
+      "path": "docs/planning/ui-reference.html",
+      "localTargetsChecked": 5,
+      "images": 0,
+      "pageErrors": [],
+      "desktopOverflow": false
+    },
+    {
+      "path": "docs/planning/mockup-gallery.html",
+      "localTargetsChecked": 55,
+      "images": 47,
+      "pageErrors": [],
+      "desktopOverflow": false
+    },
+    {
+      "path": "docs/architecture/devworks-architecture.html",
+      "localTargetsChecked": 130,
+      "images": 44,
+      "pageErrors": [],
+      "desktopOverflow": false
+    },
+    {
+      "path": "docs/architecture/implementation-plan.html",
+      "localTargetsChecked": 68,
+      "images": 1,
+      "pageErrors": [],
+      "desktopOverflow": false
+    }
+  ]
+}

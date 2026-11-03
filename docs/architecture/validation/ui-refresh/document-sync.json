@@ -1,0 +1,45 @@
+{
+  "date": "2026-11-02",
+  "scope": "Approved UI document/tracker alignment only; no native implementation acceptance",
+  "passed": true,
+  "requirements": 356,
+  "sourceRequirementsMatched": 355,
+  "wordRequirementsMatched": 356,
+  "traceabilityAndPlanStatementsMatched": 356,
+  "nativeSlices": 63,
+  "unownedRequirements": 0,
+  "newConfirmedRequirements": [
+    "UI-14",
+    "UI-15",
+    "NOTIFY-05"
+  ],
+  "UI03Status": "Confirmed",
+  "nativeReadbackItems": [
+    "DW-10",
+    "DW-12",
+    "DW-14",
+    "DW-16"
+  ],
+  "nativeStatusesAndDependenciesPreserved": true,
+  "nativeAcceptancePerformed": false,
+  "currentEmbeddedUIFigures": 2,
+  "wordRender": {
+    "pages": 68,
+    "visualReview": "Full document flow reviewed; updated requirement/figure pages inspected at full size. Final revision-link edit compared against reviewed rendering.",
+    "updatedRequirementPages": [
+      24,
+      25,
+      27,
+      28,
+      31,
+      66
+    ],
+    "currentScreenshotPages": [
+      24,
+      26
+    ],
+    "finalRevisionLinkChangePages": [
+      "page-67.png"
+    ]
+  }
+}

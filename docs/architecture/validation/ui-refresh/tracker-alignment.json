@@ -1,0 +1,208 @@
+{
+  "date": "2026-11-02",
+  "scope": "Approved UI documentation synchronization; native acceptance not executed",
+  "features": [
+    {
+      "key": "DW-F4",
+      "version": 13,
+      "requirements": [
+        {
+          "id": "E1",
+          "text": "UI-01 [Confirmed]: Chat is the primary app-wide interface. Place existing navigation on the left, the active workspace coordinator conversation in the center, and a right sidebar with Current first and Chat History second. Current is selected initially. Overview remains specific to the selected project. Do not replace the sidebar with a conversation dropdown."
+        },
+        {
+          "id": "E2",
+          "text": "UI-02 [Confirmed]: The center conversation must support a persistent composer, readable messages and tool or result summaries, and links to the work being discussed. The initial state must invite a conversation with workspace-wide scope. Keep the integrated Workspace coordinator header; omit the redundant conversation-name row and Across your projects status strip because Current supplies that information. Align the plus attachment button, model/tier and effort controls with Send along the bottom of the workspace input. Below its border, show All projects followed by the pinned model on the left and the send keyboard hint on the right; omit redundant Workspace coordinator text. Preserve usable wrapping at narrower sizes. Every composer retains attachments under UI-08 and routing/effort under UI-10."
+        },
+        {
+          "id": "E3",
+          "text": "UI-03 [Confirmed]: The right sidebar must provide Current and Chat History tabs without disrupting the conversation. Current shows app-wide Needs you, Working and Recently completed, with project labels and direct links to affected work. Chat History shows prior workspace conversations, the active selection, search and useful date grouping. Keep New Chat in the persistent center header beside Coordinator instructions, available with either tab selected. Tab changes and navigation preserve the active session, per-chat draft, attachments and relevant scroll positions; session selection restores the correct transcript. Feature coordinator conversations remain attached to their features."
+        },
+        {
+          "id": "E4",
+          "text": "UI-04 [Confirmed]: The user must be able to leave chat to inspect a detailed screen and return without losing the conversation, its session selection, or its connection to ongoing work."
+        },
+        {
+          "id": "E5",
+          "text": "UI-05 [Proposed]: Coordinator role instructions, workspace scope, and relevant context must be inspectable. Detailed routing configuration must remain in Settings, while request attribution and cost may be inspected when useful."
+        },
+        {
+          "id": "E6",
+          "text": "UI-06 [Proposed]: Every long-running operation must expose current state, progress where meaningful, cancellation or pause where supported, and recoverable errors. Empty, loading, offline, partial-data, failed, and stale-data states must be designed rather than represented as fabricated success or zero values."
+        },
+        {
+          "id": "E7",
+          "text": "UI-07 [Proposed]: Keyboard navigation, readable focus states, screen-reader labels, text scaling, accessible status changes, and large histories must be supported. Resize behavior must preserve the conversation and essential controls. Theme customization and exact native pane sizing remain open; the shared visual direction follows UI-15."
+        },
+        {
+          "id": "E8",
+          "text": "UI-08 [Confirmed]: Every chat input must accept images and files through a selection dialog, drag-and-drop and paste. Apply this to workspace, feature, issue and every other interactive agent chat composer. Attachments must accompany the correct message and remain accessible from its conversation history; image inspection follows ROUTE-13. Use a plus-only attachment button with an accessible name and tooltip explaining that it attaches images or files."
+        },
+        {
+          "id": "E9",
+          "text": "UI-09 [Proposed]: Show pending attachments with filenames and image previews where supported; allow removal before sending and preserve them with per-chat drafts. Store durable copies and stable attachment references, retaining conversation and applicable project/feature/task provenance through the artifact system. Workspace attachments without a project retain their conversation scope until associated with work. Define file formats, size limits, clipboard handling and extraction; show unsupported or failed processing rather than pretending unread content was analyzed. Preserve original attachments through context compaction and provider changes."
+        },
+        {
+          "id": "E10",
+          "text": "UI-10 [Confirmed]: Every chat input must include a selector populated with configured router tiers and available named models under ROUTE-19, plus a separate effort selector under ROUTE-20. Tier Max, High, Mid and Low precede the named model group; Open Router Auto selects the OpenRouter automatic route directly. Selection and effort persist for the chat and are shared between Home and its sidebar. Tier allocation pins its resolved model until changed or replaced by eligible failover under ROUTE-14–15. All requests still pass through the router and respect permissions and required capabilities."
+        },
+        {
+          "id": "E22",
+          "text": "UI-11 [Confirmed]: Provide a chat icon in the top toolbar on every screen. Away from the Home chat screen, clicking it opens the application-level workspace coordinator in a right-hand sidebar beside the current workspace. Users must be able to continue chatting and coordinating without leaving the relevant screen. The sidebar is distinct from a feature or issue coordinator conversation and must not replace or reassign those conversations."
+        },
+        {
+          "id": "E23",
+          "text": "UI-12 [Confirmed]: The application-level sidebar must always show the current session selected on the Home chat screen. It is the same conversation and logical coordinator, not a newly created or screen-specific session. Messages, context notices, the active model selection/pin, attachments, drafts and history remain shared between Home and the sidebar. Sending from either surface must append to the same transcript. Selecting a different Home session determines which conversation the sidebar opens next; there is no separate sidebar session selector."
+        },
+        {
+          "id": "E24",
+          "text": "UI-13 [Confirmed]: Once opened, keep the workspace coordinator sidebar open across navigation to other screens, project changes and relevant workspace selections until the user explicitly closes it or returns to the Home chat page. Returning Home closes the sidebar and displays that same active conversation in the normal center pane, preserving the right-hand Current / Chat History tabs and their selection/state. Closing the sidebar preserves the session and its draft; subsequent navigation must not reopen it without the user choosing to do so. Preserve the existing left navigation and the page being inspected."
+        },
+        {
+          "id": "E25",
+          "text": "UI-14 [Confirmed]: Place the app-wide Approvals destination directly below Chat in the left navigation, with an all-project inbox and project filtering. Activity belongs inside the project-specific Overview as a section with filters and full history, rather than a separate left-navigation destination. Keep Intelligence navigation collapsible without losing access to its screens."
+        },
+        {
+          "id": "E26",
+          "text": "UI-15 [Confirmed]: Use the approved Workspace coordinator / Overview visual language across every page and secondary view: warm neutral surfaces, bordered content groups, consistent type, spacing and quieter secondary actions. Integrate each page header into its primary content pane, with one continuous outer border and a divider into the body; do not use a detached full-width header card. Secondary panes start alongside the header. Place inner sidebars on the right for Approvals, Knowledge entries/documents, Dreaming run history and Databases. Complete the same grouping and header treatment for Repositories, Agents, Artifacts, Knowledge, Dreaming and all Database states/views. Overview and Features summary values and labels sit inline with matching baseline, size and spacing directly beneath the integrated header. Left-align the version and update message at the bottom of the left sidebar. Preserve existing capabilities and navigation/selection/filter/scroll behavior."
+        }
+      ]
+    },
+    {
+      "key": "DW-F3",
+      "version": 5,
+      "requirements": [
+        {
+          "id": "E14",
+          "text": "NOTIFY-01 [Confirmed]: In-app notifications must surface required input and other meaningful work events, with direct links to their project, feature, session, review, or report. Notifications must be available from the main chat and detailed workspaces."
+        },
+        {
+          "id": "E15",
+          "text": "NOTIFY-02 [Proposed]: The global inbox must support read and unread state, category filtering, and duplicate suppression. Reading or dismissing a notification must not resolve its linked review item. Resolution and acknowledgment are separate operations."
+        },
+        {
+          "id": "E16",
+          "text": "NOTIFY-03 [Proposed]: Notification policy should cover decisions, failures, blocked work, significant completions, review changes, budget or authentication problems, and dreaming reports. Feature and issue completion presentation follows confirmed NOTIFY-05. Severity, quiet preferences, aggregation and OS alerts for other categories remain open; required-input OS alerts follow NOTIFY-04."
+        },
+        {
+          "id": "E17",
+          "text": "NOTIFY-04 [Confirmed]: When the app is not focused, items needing user input must also trigger native operating-system notifications where supported and permitted. Respect OS authorization and notification suppression. Keep the in-app notification and approval item available if OS alerts are denied, unavailable or suppressed. Displaying, reading or dismissing an OS notification must not resolve the decision. Native integration and per-platform behavior require validation."
+        },
+        {
+          "id": "E28",
+          "text": "NOTIFY-05 [Confirmed]: Verified feature and issue completions must produce highly visible in-app cards floating at the top center below the global toolbar on Chat and every other page. Cards must not reserve layout space, shift content, steal focus or obstruct essential controls. Stack new messages like playing cards, newest first, with access to expand and inspect every message. Keep each card until the user explicitly dismisses it, including across navigation and restart; opening or reading linked work must not dismiss it. Dismissal removes only that card from the stack and retains the notification in history. Provide direct links to completed work, avoid duplicate completion events, and preserve keyboard access, accessible status announcements and reduced-motion behavior. Dismissal or acknowledgment must not resolve approvals or resume work."
+        }
+      ]
+    }
+  ],
+  "items": [
+    {
+      "key": "DW-10",
+      "version": 5,
+      "status": "ready",
+      "blockedBy": [
+        "DW-1",
+        "DW-4"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "A1",
+          "text": "Pin matching egui/eframe and rendering stack. Native window, keyboard/focus/accessibility, incremental projections, row/variable-block virtualization, images/file handles, pane restoration and clean optional-runtime absence work. No WebView UI. Implement UI-14/15 shared navigation, integrated pane headers, aligned secondary panes/right inner sidebars, warm bordered surfaces, inline summary strips and left-aligned sidebar footer across all routes/subviews. Preserve form, filter, selection and scroll state, keyboard/accessibility and responsive layouts; use the approved UI reference.",
+          "state": "unmet"
+        },
+        {
+          "id": "A2",
+          "text": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status.",
+          "state": "unmet"
+        }
+      ],
+      "nativeAcceptancePerformed": false
+    },
+    {
+      "key": "DW-12",
+      "version": 6,
+      "status": "ready",
+      "blockedBy": [
+        "DW-7",
+        "DW-8",
+        "DW-10",
+        "DW-11"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "A1",
+          "text": "Multi-repository work, editable requirements/plans/acceptance, task dependencies/assignments and evidence links use revisions. Plan approval is scope-bound; clear standalone issues retain immediate implementation behavior. Native list/board/detail and tools share the same operations. Every task requires a project and accepts an optional feature relationship. Standalone tasks use the issue view of the same identity; task/issue entry points never duplicate work. Validate feature membership and existing standalone execution/accounting/delivery semantics. Plans belong to the feature: one active approved plan and one pending replacement. Draft edits, submission and rejection preserve active authority and eligible work; no plan-version management UI. Shared human/agent task and issue priority edits plus bulk task ordering commit revisioned history. Screens expose Blocked by/Blocks and editable same-project cross-feature/standalone links; reject invalid/self/duplicate/cyclic changes without partial writes. Human/agent tasks.set_feature and optional feature at issue creation share authoritative membership. Link authorizes delivery without revised-plan approval; clear pauses until manual resume. Preserve stable identity, active agent/workspace, history and holds; coordinator owns integration. Direct transfers retain holds without creating a pause. In project Overview, provide Activity filters and full history without a separate navigation destination. Use shared integrated headers and bordered panes throughout work views, align summary values/labels inline as on Features, and preserve existing navigation/selection/filter/scroll behavior under UI-14/15.",
+          "state": "unmet"
+        },
+        {
+          "id": "A2",
+          "text": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status.",
+          "state": "unmet"
+        },
+        {
+          "id": "A3",
+          "text": "Shared native work detail and agent tools retain revision-bound readiness assessments, requirement-linked findings, resolved decisions with confidence/evidence, investigation limits/dependent-work gates, attempted resolutions, specific questions/recommendations and closure evidence. Present remaining findings together; approval is visibly distinct from readiness. Reuse current evidence and invalidate only affected scope on material change.",
+          "state": "unmet"
+        }
+      ],
+      "nativeAcceptancePerformed": false
+    },
+    {
+      "key": "DW-14",
+      "version": 6,
+      "status": "ready",
+      "blockedBy": [
+        "DW-5",
+        "DW-9",
+        "DW-12"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "A1",
+          "text": "Approval proposals bind contents/target/revision, only host human interaction mints decisions, and approval wakeups re-admit saved operations without clearing pauses. Notifications and acknowledgment never resolve their linked decisions. Native OS denial retains in-app access. Feature-plan approval atomically promotes the exact pending draft with active scope/acceptance and history. Stale approval/edit races preserve the original plan; rejection leaves it approved. Approval never clears a pause. Expose app-wide Approvals directly below Chat with project filtering under UI-14. Implement NOTIFY-05 verified feature/issue completion cards as a top-center floating newest-first stack on every page, persistent until explicit individual dismissal across navigation/restart, expandable with work links and retained history. Prevent duplicates, layout shifts, focus theft and essential-control obstruction; reading/opening is not dismissal and grants no decision/resume authority.",
+          "state": "unmet"
+        },
+        {
+          "id": "A2",
+          "text": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status.",
+          "state": "unmet"
+        },
+        {
+          "id": "A3",
+          "text": "Generic plan approval or notification acknowledgment cannot close readiness findings. Finding-specific human risk acceptance binds the finding/scope/revision and rationale, preserves history and still requires actual prerequisites, enforced permissions and required verification; stale decisions cannot clear changed findings or make incomplete work complete.",
+          "state": "unmet"
+        }
+      ],
+      "nativeAcceptancePerformed": false
+    },
+    {
+      "key": "DW-16",
+      "version": 6,
+      "status": "ready",
+      "blockedBy": [
+        "DW-8",
+        "DW-10",
+        "DW-15",
+        "DW-17"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "A1",
+          "text": "Every native composer uses persisted route/effort and attachments. Home/sidebar share one session, draft, transcript and pin. Opening the workspace sidebar injects the current screen; meaningful navigation appends bounded host notices only while it remains open. Closed-sidebar browsing and return Home append none. Home/sidebar show only the latest screen notice while preserving prior transcript/provider entries unchanged and ordinary message order, with current Help/tool context and no extra inference or authority. Implement confirmed UI-01/03 Current and Chat History tabs (Current initially selected), app-wide attention/work/completion links and persistent center New Chat beside Coordinator instructions. Preserve tab/session drafts, attachments and scroll. Apply UI-02/08 plus-only composer actions aligned with Send and below-border scope/pin/shortcut metadata; omit redundant status/title/coordinator text.",
+          "state": "unmet"
+        },
+        {
+          "id": "A2",
+          "text": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status.",
+          "state": "unmet"
+        },
+        {
+          "id": "A3",
+          "text": "Verify context capture on opening and meaningful navigation while sidebar is open; no transcript events or queued replay from closed browsing/return Home. Display one latest notice per selected conversation in both surfaces, retaining ordinary message order and original context payloads/IDs/timestamps in append-only transcript/provider history. Unchanged repaint/reload does not duplicate; reopen captures current screen. No inference or permission changes.",
+          "state": "unmet"
+        }
+      ],
+      "nativeAcceptancePerformed": false
+    }
+  ]
+}

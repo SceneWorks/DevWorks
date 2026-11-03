@@ -1566,5 +1566,33 @@
     ],
     "publicationItem": "DW-64",
     "map": "docs/architecture/codegraph-work-map.json"
+  },
+  "user_corrections": [
+    {
+      "id": "screen_context_visibility_and_projection",
+      "source": "User request, 2 November 2026",
+      "decision": "The application-level coordinator receives host-authored screen context when its sidebar opens and when the viewed screen or meaningful selection changes while that sidebar is open. Opening injects the current screen without replaying navigation performed while closed. Closed-sidebar browsing and returning to Home chat must not append navigation notices. Do not create a new coordinator/session or duplicate a notice for an unchanged re-render. Home and sidebar views display only the most recent screen-context notice for the selected conversation; user, assistant and tool messages remain in order. Keep all recorded screen notices unchanged in the append-only transcript and provider history; consolidation is a display projection only, preserving the stable prompt prefix. Notices remain bounded and attributed, with local Help and relevant enabled-tool references under COORD-10."
+    }
+  ],
+  "approved_ui_refresh": {
+    "date": "2026-11-02",
+    "source": "User-directed UI revisions and explicit approval in this conversation",
+    "status": "Approved presentation; native implementation acceptance pending",
+    "reference": "ui-reference.md",
+    "changedRequirements": [
+      "UI-01",
+      "UI-02",
+      "UI-03",
+      "UI-07",
+      "UI-08",
+      "UI-13",
+      "NOTIFY-03"
+    ],
+    "newRequirements": [
+      "UI-14",
+      "UI-15",
+      "NOTIFY-05"
+    ],
+    "evidence": "ui-08/verification.json; browser prototype only"
   }
 }

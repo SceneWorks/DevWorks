@@ -16,14 +16,14 @@
     "documentId": "3ab2d98c-4bcf-4c3d-b415-df422cbf33e0",
     "statusesPreserved": true,
     "individuallyStructuredAcrossDeliveryFeatures": true,
-    "latestAmendment": "AGENT-12/18–20 and AD79: materiality-based readiness; autonomous resolution before escalation."
+    "latestAmendment": "AGENT-12/18\u201320 and AD79: materiality-based readiness; autonomous resolution before escalation."
   },
   "structuredSharedRequirements": 3,
   "nativeImplementationItems": 63,
   "publicationItem": "DW-64",
   "dependencyEdges": 250,
   "nativeInitialStatus": "backlog",
-  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, acceptance criteria and250 dependencies are preserved. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All353 source requirements are individually structured across related delivery features. Native implementation remains unstarted.",
+  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All356 source requirements are individually structured across related delivery features. Native implementation remains unstarted.",
   "items": [
     {
       "ref": "slice-contracts",
@@ -1042,7 +1042,7 @@
       "featureKey": "DW-F1"
     }
   ],
-  "structuredSourceRequirements": 353,
+  "structuredSourceRequirements": 356,
   "deliveryFeatures": [
     {
       "id": "11568b6e-16b6-48b5-b0c1-3f0c3b0cdf10",
@@ -1217,7 +1217,7 @@
     {
       "id": "92f9884f-37d7-49af-8a1c-bc7f8a6617f5",
       "key": "DW-F3",
-      "version": 4,
+      "version": 5,
       "title": "Execution controls and permissions",
       "items": [
         "DW-5",
@@ -1360,13 +1360,18 @@
           "id": "POWER-02",
           "codegraphRequirement": "E27",
           "status": "Proposed"
+        },
+        {
+          "id": "NOTIFY-05",
+          "codegraphRequirement": "E28",
+          "status": "Confirmed"
         }
       ]
     },
     {
       "id": "00fa7073-c1b4-4f02-8682-e84bb935d4d5",
       "key": "DW-F4",
-      "version": 1,
+      "version": 13,
       "title": "Workspace and project experience",
       "items": [
         "DW-4",
@@ -1388,7 +1393,7 @@
         {
           "id": "UI-03",
           "codegraphRequirement": "E3",
-          "status": "Proposed"
+          "status": "Confirmed"
         },
         {
           "id": "UI-04",
@@ -1493,6 +1498,16 @@
         {
           "id": "UI-13",
           "codegraphRequirement": "E24",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UI-14",
+          "codegraphRequirement": "E25",
+          "status": "Confirmed"
+        },
+        {
+          "id": "UI-15",
+          "codegraphRequirement": "E26",
           "status": "Confirmed"
         }
       ]
@@ -3007,5 +3022,18 @@
     ],
     "nativeImplementation": "Pending; documentation and plan amendment only",
     "dependenciesPreserved": true
+  },
+  "uiRefreshAmendment": {
+    "date": "2026-11-02",
+    "reference": "../planning/ui-reference.md",
+    "documentationItem": "DW-66",
+    "prototypeItem": "DW-65",
+    "nativeItems": [
+      "DW-10",
+      "DW-12",
+      "DW-14",
+      "DW-16"
+    ],
+    "nativeAcceptance": "Not performed; native statuses and dependencies retained"
   }
 }
