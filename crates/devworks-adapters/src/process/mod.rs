@@ -34,6 +34,16 @@ impl ProcessHost for NativeProcessHost {
     fn platform(&self) -> &'static str {
         if cfg!(windows) { "windows" } else { "unix" }
     }
+    fn environment(&self) -> Vec<(String, String)> {
+        std::env::vars_os()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.to_string_lossy().into_owned(),
+                )
+            })
+            .collect()
+    }
     fn spawn(&self, spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError> {
         #[cfg(unix)]
         {

@@ -36,7 +36,9 @@
 //! ([`ProcessSupervisor::confirm_stopped`]), and that is recorded as their statement.
 use crate::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use crate::authority::redact::Redactor;
-use crate::authority::shell::{CommandVerdict, preflight_command, record_verdict};
+use crate::authority::shell::{
+    ChildEnvironment, CommandVerdict, preflight_command_in, record_verdict,
+};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::ports::IdKind;
@@ -124,6 +126,41 @@ pub enum StopOutcome {
     },
     /// It could not be verified stopped within the bound; recorded `Uncertain`.
     Uncertain(String),
+}
+
+/// A stop whose native part ran but whose record (or reconciliation) could not be written.
+#[derive(Clone, Debug)]
+pub struct StopFailure {
+    /// What the native stop verified.
+    pub outcome: StopOutcome,
+    /// The first record write that failed.
+    pub error: StorageError,
+}
+/// One tree's stop: verified and recorded, or verified natively with the failed write.
+pub type StopResult = (Id, Result<StopOutcome, StopFailure>);
+
+/// What an orderly shutdown of owned trees did.
+#[derive(Clone, Debug)]
+pub struct ShutdownReport {
+    pub stopped: Vec<StopResult>,
+    /// The `Shutdown` reconciliation of resources.
+    pub reconciliation: Result<ReconcileReport, StorageError>,
+}
+
+impl ShutdownReport {
+    /// Every outcome when every record and the reconciliation were written; otherwise the first
+    /// failure (the native stops ran regardless).
+    pub fn into_result(self) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
+        let stopped = all_recorded(self.stopped)?;
+        self.reconciliation.map(|_| stopped)
+    }
+}
+/// Every outcome when every record was written; otherwise the first failure.
+pub fn all_recorded(results: Vec<StopResult>) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
+    results
+        .into_iter()
+        .map(|(id, r)| r.map(|o| (id, o)).map_err(|f| f.error))
+        .collect()
 }
 
 /// What recovery found.
@@ -215,12 +252,22 @@ impl ProcessSupervisor {
             .cwd
             .as_ref()
             .map(|c| c.to_string_lossy().into_owned());
-        let verdict = preflight_command(
+        // Destructive targets are resolved as the child will see them: its effective
+        // environment (what it inherits from the host unless cleared, plus what the launch sets)
+        // and its working directory, never the application's own environment.
+        let env = ChildEnvironment::effective(
+            &self.host.environment(),
+            request.spec.clear_env,
+            &request.spec.env,
+            self.host.platform() == "windows",
+        );
+        let verdict = preflight_command_in(
             policy.fs,
             policy.roots,
             &argv,
             cwd.as_deref(),
             policy.protected_branches,
+            &env,
         );
         let refusal = match &verdict {
             CommandVerdict::Blocked { .. } => Some(LaunchRefusal::Blocked(verdict.clone())),
@@ -396,26 +443,38 @@ impl ProcessSupervisor {
 
     /// Bounded cancellation: cooperative stop, at most `grace` to empty, then a forced kill of
     /// the whole tree, all within `bound`.
+    ///
+    /// The native stop never depends on the store: a record write that fails (`Stopping` before
+    /// the stop, `Reaped`/`Uncertain` after it) is reported in [`StopFailure`] together with what
+    /// the native stop verified, and the stop runs regardless. The stored record is then left
+    /// `Running` or `Stopping`, which this supervisor settles again on the next poll or cancel,
+    /// and boot recovery reconciles by native identity if the process ends first.
     pub fn cancel(
         &self,
         p: &OwnedProcess,
         grace: Duration,
         bound: Duration,
-    ) -> Result<StopOutcome, StorageError> {
+    ) -> Result<StopOutcome, StopFailure> {
         let start = Instant::now();
         let Some(entry) = self.entry(&p.id) else {
-            return self.settled_outcome(&p.id);
+            return self.settled_outcome(&p.id).map_err(|error| StopFailure {
+                outcome: StopOutcome::Uncertain("the stored record could not be read".into()),
+                error,
+            });
         };
         let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
         let mut record = live.record.clone();
+        let mut unrecorded = None;
         if record.phase == ProcessPhase::Running {
-            self.write_phase(
+            match self.write_phase(
                 &mut record,
                 ProcessPhase::Stopping,
                 "ProcessStopRequested",
                 json!({"graceMs": grace.as_millis() as u64}),
-            )?;
-            live.record = record.clone();
+            ) {
+                Ok(()) => live.record = record.clone(),
+                Err(e) => unrecorded = Some(e),
+            }
         }
         let mut observed = String::new();
         let mut graceful = true;
@@ -451,20 +510,20 @@ impl ProcessSupervisor {
             }
             std::thread::sleep(POLL);
         }
-        let outcome = match status {
-            Some(s) => {
+        let (outcome, recorded) = match status {
+            Some(s) => (
+                StopOutcome::Reaped {
+                    graceful,
+                    exit_code: s.exit_code,
+                },
                 self.settle(
                     &mut record,
                     ProcessPhase::Reaped,
                     s.exit_code,
                     None,
                     "ProcessReaped",
-                )?;
-                StopOutcome::Reaped {
-                    graceful,
-                    exit_code: s.exit_code,
-                }
-            }
+                ),
+            ),
             None => {
                 let detail = Redactor::new().redact_text(&format!(
                     "the tree was not verified empty within {} ms{}{}",
@@ -472,31 +531,37 @@ impl ProcessSupervisor {
                     if observed.is_empty() { "" } else { ": " },
                     observed
                 ));
-                self.settle(
+                let recorded = self.settle(
                     &mut record,
                     ProcessPhase::Uncertain,
                     None,
                     Some(detail.clone()),
                     "ProcessUncertain",
-                )?;
-                live.record = record;
-                return Ok(StopOutcome::Uncertain(detail));
+                );
+                (StopOutcome::Uncertain(detail), recorded)
             }
         };
+        if recorded.is_ok() {
+            live.record = record;
+        }
+        let settled = recorded.is_ok() && matches!(outcome, StopOutcome::Reaped { .. });
         drop(live);
-        self.forget(&p.id);
-        Ok(outcome)
+        // An unrecorded reaped tree stays owned (its tree is empty) so the next poll or cancel
+        // records it; an uncertain one stays owned so it can be stopped again.
+        if settled {
+            self.forget(&p.id);
+        }
+        match unrecorded.or(recorded.err()) {
+            None => Ok(outcome),
+            Some(error) => Err(StopFailure { outcome, error }),
+        }
     }
 
     /// Cancels every owned tree in `scope`, sharing one bound: the writer stop before Git
     /// cleanup of a work root (GIT-07), the immediate stop of an archived project, or the trees
-    /// serving one lease. Each outcome is recorded as for [`Self::cancel`].
-    pub fn stop(
-        &self,
-        scope: &StopScope,
-        grace: Duration,
-        bound: Duration,
-    ) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
+    /// serving one lease. Every matching tree is stopped natively even when recording an earlier
+    /// one failed; each result is reported as for [`Self::cancel`].
+    pub fn stop(&self, scope: &StopScope, grace: Duration, bound: Duration) -> Vec<StopResult> {
         let start = Instant::now();
         let matching: Vec<Id> = {
             let map = self.live.lock().unwrap_or_else(|p| p.into_inner());
@@ -529,24 +594,24 @@ impl ProcessSupervisor {
                 },
                 lease: None,
             };
-            out.push((id, self.cancel(&p, grace.min(remaining), remaining)?));
+            out.push((id, self.cancel(&p, grace.min(remaining), remaining)));
         }
-        Ok(out)
+        out
     }
 
     /// Cancels every tree this supervisor owns (application shutdown), sharing one bound, then
-    /// runs the shutdown reconciliation of resources.
-    pub fn shutdown(
-        &self,
-        grace: Duration,
-        bound: Duration,
-    ) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
-        let out = self.stop(&StopScope::All, grace, bound)?;
+    /// runs the shutdown reconciliation of resources. Every tree is stopped natively whatever
+    /// the store does; record and reconciliation failures are reported in the result.
+    pub fn shutdown(&self, grace: Duration, bound: Duration) -> ShutdownReport {
+        let stopped = self.stop(&StopScope::All, grace, bound);
         let resources = self.resources.clone();
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let reconciliation = run_write(&*self.store, WriteOptions::default(), move |tx| {
             resources.reconcile(tx, ReconcileCause::Shutdown)
-        })?;
-        Ok(out)
+        });
+        ShutdownReport {
+            stopped,
+            reconciliation,
+        }
     }
 
     /// Reconciles the trees of earlier boots, then the resources they served (boot recovery).

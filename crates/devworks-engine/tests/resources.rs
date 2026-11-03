@@ -118,6 +118,7 @@ fn boot_sweep_wake_and_shutdown_housekeeping() {
     assert_eq!(causes, ["Boot", "Sweep", "Wake"]);
     let stopped = rt
         .block_on(keeper.shutdown(Duration::from_millis(100), Duration::from_secs(1)))
+        .into_result()
         .unwrap();
     assert!(stopped.is_empty());
     assert_eq!(

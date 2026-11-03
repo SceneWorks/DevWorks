@@ -117,6 +117,9 @@ pub trait ProcessTree: Send {
 pub trait ProcessHost: Send + Sync {
     /// `unix` or `windows`.
     fn platform(&self) -> &'static str;
+    /// The environment a launched child inherits (unless its spec clears it): the safety
+    /// preflight resolves `~` and variable references against it plus the spec's own variables.
+    fn environment(&self) -> Vec<(String, String)>;
     /// Starts `spec` as an owned tree. On Windows the child is assigned to its job before it
     /// runs; on Unix it leads a new process group.
     fn spawn(&self, spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError>;

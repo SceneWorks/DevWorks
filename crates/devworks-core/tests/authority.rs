@@ -627,3 +627,25 @@ fn consequential_git_and_file_writers_are_refused_planned_or_held_never_residual
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn the_child_environment_overlays_and_substitutes_like_the_shell() {
+    use devworks_core::authority::shell::ChildEnvironment;
+    let kv = |k: &str, v: &str| (k.to_owned(), v.to_owned());
+    let inherited = [kv("HOME", "/home/app"), kv("PATH", "/bin")];
+    let env = ChildEnvironment::effective(&inherited, false, &[kv("HOME", "/tmp/projects")], false);
+    assert_eq!(env.home(), Some("/tmp/projects"), "the launch's value wins");
+    assert_eq!(env.get("PATH"), Some("/bin"), "inherited");
+    assert_eq!(
+        env.substitute("rm -rf $HOME/repo ${HOME}/x \"$UNSET/\" %HOME% %NOPE% $ 5$"),
+        "rm -rf /tmp/projects/repo /tmp/projects/x \"/\" /tmp/projects %NOPE% $ 5$"
+    );
+    let cleared = ChildEnvironment::effective(&inherited, true, &[], false);
+    assert_eq!((cleared.home(), cleared.get("PATH")), (None, None));
+    let windows = ChildEnvironment::effective(&[kv("UserProfile", "C:/Users/a")], false, &[], true);
+    assert_eq!(windows.home(), Some("C:/Users/a"));
+    assert_eq!(
+        windows.substitute("%USERPROFILE%\\repo"),
+        "C:/Users/a\\repo"
+    );
+}

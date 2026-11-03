@@ -21,7 +21,7 @@ use devworks_core::services::artifacts::lifecycle::{
 };
 use devworks_core::services::artifacts::replies::ReceiptReplies;
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
-use devworks_core::services::process::{ProcessSupervisor, StopOutcome};
+use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
 use devworks_core::services::resources::{MachineResource, ResourceService, desktop};
 use devworks_core::settings::view::Health;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -425,8 +425,9 @@ impl Runtime {
     /// loop, the collector, the housekeeper and every in-flight delivery to finish (an
     /// asynchronous handler gets its consumer's stop grace), then stops every owned process tree
     /// within [`RuntimeConfig::shutdown_bound`] (recording the `Shutdown` reconciliation of
-    /// resources) and releases the keep-awake request. Returns each owned tree's stop outcome.
-    pub async fn shutdown(&self) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
+    /// resources) and releases the keep-awake request. Every tree is stopped natively even when
+    /// the store refuses writes; the report carries each tree's outcome and any write failure.
+    pub async fn shutdown(&self) -> ShutdownReport {
         self.stop();
         let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
         for task in tasks {

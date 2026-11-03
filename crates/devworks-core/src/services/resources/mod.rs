@@ -923,11 +923,16 @@ impl ResourceService {
             .map(|c| binding.decode(&c.0))
             .transpose()?;
         let limit = i.page.limit.get() as usize;
-        let mut rows = read
+        // A full page probes for one more row separately: the store bounds a listing at
+        // `MAX_PAGE`, which is also the largest wire page, so it cannot over-fetch by one.
+        let rows = read
             .resources()
-            .resources(&filter, after.as_deref(), (limit + 1) as u16)?;
-        let has_more = rows.len() > limit;
-        rows.truncate(limit);
+            .resources(&filter, after.as_deref(), limit as u16)?;
+        let has_more = rows.len() == limit
+            && !read
+                .resources()
+                .resources(&filter, Some(&rows[limit - 1].canonical_key), 1)?
+                .is_empty();
         let next = has_more.then(|| BoundedText(binding.encode(&rows[limit - 1].canonical_key)));
         let items = rows
             .iter()

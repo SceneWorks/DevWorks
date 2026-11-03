@@ -41,54 +41,81 @@ pub enum KeepAwakeStatus {
     Unavailable(String),
 }
 
+/// The configured value, the held request and the last status, changed together.
+struct State {
+    enabled: bool,
+    held: Option<Box<dyn PowerAssertion>>,
+    status: KeepAwakeStatus,
+}
+
+/// The keep-awake controller. Every read and change runs under one lock, so a status check
+/// that re-acquires a lapsed request can never overtake a disable: a disable waits for it and
+/// then releases what it acquired.
 pub struct KeepAwake {
     port: Arc<dyn PowerPort>,
-    held: Mutex<Option<Box<dyn PowerAssertion>>>,
-    status: Mutex<KeepAwakeStatus>,
+    state: Mutex<State>,
 }
 
 impl KeepAwake {
     pub fn new(port: Arc<dyn PowerPort>) -> Self {
         Self {
             port,
-            held: Mutex::new(None),
-            status: Mutex::new(KeepAwakeStatus::Off),
+            state: Mutex::new(State {
+                enabled: false,
+                held: None,
+                status: KeepAwakeStatus::Off,
+            }),
         }
     }
 
-    /// Applies the effective setting: requests prevention of idle sleep when enabled (keeping an
-    /// existing request), releases it when disabled.
-    pub fn apply(&self, enabled: bool) -> KeepAwakeStatus {
-        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        let status = if !enabled {
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Makes the held request match the configured value: none when disabled; when enabled, the
+    /// held request if it still works, otherwise a new one.
+    fn settle(&self, st: &mut State) -> KeepAwakeStatus {
+        let status = if !st.enabled {
             // Dropping the assertion releases the OS request.
-            *held = None;
+            st.held = None;
             KeepAwakeStatus::Off
         } else {
-            if held.is_none() {
-                match self.port.prevent_idle_sleep() {
-                    Ok(a) => *held = Some(a),
-                    Err(e) => {
-                        let s = KeepAwakeStatus::Unavailable(e);
-                        *self.status.lock().unwrap_or_else(|p| p.into_inner()) = s.clone();
-                        return s;
-                    }
-                }
+            if let Some(PowerRequest::Effective { mechanism }) =
+                st.held.as_mut().map(|a| a.status())
+            {
+                return self.record(st, KeepAwakeStatus::Effective { mechanism });
             }
-            match held.as_mut().map(|a| a.status()) {
-                Some(PowerRequest::Effective { mechanism }) => {
-                    KeepAwakeStatus::Effective { mechanism }
+            // A request that stopped working is released and requested again.
+            st.held = None;
+            match self.port.prevent_idle_sleep() {
+                Ok(mut a) => {
+                    let s = match a.status() {
+                        PowerRequest::Effective { mechanism } => {
+                            KeepAwakeStatus::Effective { mechanism }
+                        }
+                        PowerRequest::Unavailable(e) => KeepAwakeStatus::Unavailable(e),
+                    };
+                    if matches!(s, KeepAwakeStatus::Effective { .. }) {
+                        st.held = Some(a);
+                    }
+                    s
                 }
-                Some(PowerRequest::Unavailable(e)) => {
-                    // A request that stopped working is released so the next apply retries.
-                    *held = None;
-                    KeepAwakeStatus::Unavailable(e)
-                }
-                None => KeepAwakeStatus::Unavailable("no request".into()),
+                Err(e) => KeepAwakeStatus::Unavailable(e),
             }
         };
-        *self.status.lock().unwrap_or_else(|p| p.into_inner()) = status.clone();
+        self.record(st, status)
+    }
+    fn record(&self, st: &mut State, status: KeepAwakeStatus) -> KeepAwakeStatus {
+        st.status = status.clone();
         status
+    }
+
+    /// Applies the effective setting: requests prevention of idle sleep when enabled (keeping a
+    /// working request), releases it when disabled.
+    pub fn apply(&self, enabled: bool) -> KeepAwakeStatus {
+        let mut st = self.lock();
+        st.enabled = enabled;
+        self.settle(&mut st)
     }
 
     /// Reads the effective setting and applies it.
@@ -96,17 +123,14 @@ impl KeepAwake {
         Ok(self.apply(keep_awake_enabled(read)?))
     }
 
-    /// The last applied status, re-checking a held request.
+    /// The current status, re-checking (and, while enabled, re-requesting) the OS request. It
+    /// never requests anything while the setting is off.
     pub fn status(&self) -> KeepAwakeStatus {
-        let current = self
-            .status
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        match current {
-            KeepAwakeStatus::Off => KeepAwakeStatus::Off,
-            _ => self.apply(true),
+        let mut st = self.lock();
+        if !st.enabled {
+            return KeepAwakeStatus::Off;
         }
+        self.settle(&mut st)
     }
 
     /// Runtime health for the Settings view (distinct from the configured value).

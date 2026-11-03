@@ -421,7 +421,7 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
         assert!(matches!(o.state, ReceiptLookupState::Recorded), "{o:?}");
         assert_eq!(o.command_id.as_ref(), Some(&receipt.command_id));
         assert!(o.reply_artifact.is_some() && o.reply_schema.is_some());
-        rt.block_on(app.shutdown()).unwrap();
+        rt.block_on(app.shutdown()).into_result().unwrap();
         drop(app);
         drop(rt);
         drop(store);
@@ -441,7 +441,7 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
         let claimed = rt.block_on(within("idle", app.dispatcher().run_until_idle()));
         assert_eq!(claimed.unwrap(), 0, "{crash:?}");
         assert_published_once(&h, &*store);
-        rt.block_on(app.shutdown()).unwrap();
+        rt.block_on(app.shutdown()).into_result().unwrap();
     }
 }
 
@@ -481,7 +481,7 @@ fn boot_registers_the_reply_consumer_and_a_caller_cannot_displace_it() {
         }
     }));
     observation(&app, &user, "start-1").check().unwrap();
-    rt.block_on(app.shutdown()).unwrap();
+    rt.block_on(app.shutdown()).into_result().unwrap();
 }
 
 fn applied(reply: DomainCommandReply) -> OperationResult {
@@ -579,5 +579,5 @@ fn an_applied_delete_starts_a_collection_pass_that_removes_the_released_file() {
             .state,
         BlobState::Unlinked
     );
-    rt.block_on(app.shutdown()).unwrap();
+    rt.block_on(app.shutdown()).into_result().unwrap();
 }

@@ -13,8 +13,7 @@
 use crate::store;
 use devworks_core::ports::Clock;
 use devworks_core::ports::storage::{ApplicationStore, StorageError, StoredResource};
-use devworks_core::protocol::Id;
-use devworks_core::services::process::{ProcessSupervisor, RecoveryReport, StopOutcome};
+use devworks_core::services::process::{ProcessSupervisor, RecoveryReport, ShutdownReport};
 use devworks_core::services::resources::{
     MachineResource, ReconcileCause, ReconcileReport, ResourceService, register_machine,
 };
@@ -124,16 +123,19 @@ impl Housekeeper {
         self.wake.notify_one();
     }
 
-    /// Cancels every owned tree within one bound and records the shutdown reconciliation.
-    pub async fn shutdown(
-        &self,
-        grace: Duration,
-        bound: Duration,
-    ) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
+    /// Cancels every owned tree within one bound and records the shutdown reconciliation. Trees
+    /// are stopped natively even when the store refuses writes; failures are in the report.
+    pub async fn shutdown(&self, grace: Duration, bound: Duration) -> ShutdownReport {
         self.stop();
         let supervisor = self.supervisor.clone();
         tokio::task::spawn_blocking(move || supervisor.shutdown(grace, bound))
             .await
-            .map_err(|_| StorageError::Cancelled)?
+            .unwrap_or_else(|_| ShutdownReport {
+                stopped: Vec::new(),
+                reconciliation: Err(StorageError::unavailable(
+                    devworks_core::ports::storage::Unavailable::HandlerPanicked,
+                    "process shutdown panicked",
+                )),
+            })
     }
 }

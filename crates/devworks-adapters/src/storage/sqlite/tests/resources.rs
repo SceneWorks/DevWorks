@@ -1213,3 +1213,146 @@ fn migration_10_adds_reservations_and_processes_to_a_version_9_store() {
     let old = SqliteStore::open_with(h.config(), &through(9)).unwrap();
     assert_eq!(old.info().access, AccessMode::ReadWrite);
 }
+
+#[test]
+fn the_largest_wire_page_lists_within_the_storage_bound() {
+    let fx = Fx::new();
+    // 501 resources: one full page of 500 and one more.
+    fx.write(|tx| {
+        for i in 0..501 {
+            tx.resources().insert_resource(NewResource {
+                id: id(&format!("res-{i:03}")),
+                name: format!("r{i:03}"),
+                scope: ResourceScopeKind::Machine,
+                project_id: None,
+                physical: false,
+                capacity: 1,
+                labels: vec![],
+            })?;
+        }
+        Ok(())
+    });
+    let user = fx.ctx("user-a", PrincipalKind::Human, None);
+    let list = |cursor: Option<String>| {
+        let mut page = json!({"limit": 500});
+        if let Some(c) = cursor {
+            page["cursor"] = json!(c);
+        }
+        match result(fx.query_at(
+            &user,
+            "resources.list",
+            json!({"scope": {"kind": "Workspace"}, "page": page}),
+            Some(2),
+        )) {
+            OperationResult::ResourcesList { value } => value,
+            other => panic!("{other:?}"),
+        }
+    };
+    let first = list(None);
+    assert_eq!((first.items.0.len(), first.has_more), (500, true));
+    let rest = list(first.next_cursor.map(|c| c.0));
+    assert_eq!((rest.items.0.len(), rest.has_more), (1, false));
+    assert_eq!(rest.items.0[0].id.0.as_str(), "r500");
+    // Holders and waiters accept the largest page too.
+    for op in ["resources.holders", "resources.waiters"] {
+        let reply = fx.query_at(
+            &user,
+            op,
+            json!({"resourceId": "r000", "page": {"limit": 500}}),
+            Some(2),
+        );
+        assert!(
+            matches!(reply, DomainQueryReply::Result { .. }),
+            "{op}: {reply:?}"
+        );
+    }
+}
+
+/// A power facility whose requests can lapse and whose next request can be held at a gate.
+#[derive(Default)]
+struct GatedPower {
+    held: Arc<AtomicUsize>,
+    lapsed: Arc<AtomicBool>,
+    #[allow(clippy::type_complexity)]
+    gate: std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+}
+struct GatedAssertion {
+    held: Arc<AtomicUsize>,
+    lapsed: Arc<AtomicBool>,
+}
+impl PowerAssertion for GatedAssertion {
+    fn status(&mut self) -> PowerRequest {
+        if self.lapsed.load(Ordering::SeqCst) {
+            PowerRequest::Unavailable("lapsed".into())
+        } else {
+            PowerRequest::Effective { mechanism: "gated" }
+        }
+    }
+}
+impl Drop for GatedAssertion {
+    fn drop(&mut self) {
+        self.held.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+impl PowerPort for GatedPower {
+    fn prevent_idle_sleep(&self) -> Result<Box<dyn PowerAssertion>, String> {
+        if let Some((entered, release)) = self.gate.lock().unwrap().take() {
+            entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
+        self.held.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(GatedAssertion {
+            held: self.held.clone(),
+            lapsed: self.lapsed.clone(),
+        }))
+    }
+}
+
+#[test]
+fn reading_keep_awake_health_never_undoes_a_disable() {
+    use std::sync::mpsc;
+    let port = Arc::new(GatedPower::default());
+    let keep = Arc::new(KeepAwake::new(port.clone()));
+    assert!(matches!(
+        keep.apply(true),
+        KeepAwakeStatus::Effective { .. }
+    ));
+    assert_eq!(port.held.load(Ordering::SeqCst), 1);
+    // The held request lapses; the next status check re-requests it and is held at the gate
+    // inside the OS call.
+    let (entered_tx, entered) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    *port.gate.lock().unwrap() = Some((entered_tx, release_rx));
+    port.lapsed.store(true, Ordering::SeqCst);
+    let reader = {
+        let keep = keep.clone();
+        std::thread::spawn(move || keep.health())
+    };
+    entered
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the status check re-requests the lapsed request");
+    port.lapsed.store(false, Ordering::SeqCst);
+    // The setting is turned off while that request is in flight.
+    let (done_tx, done) = mpsc::channel();
+    let disabler = {
+        let keep = keep.clone();
+        std::thread::spawn(move || {
+            let s = keep.apply(false);
+            done_tx.send(()).unwrap();
+            s
+        })
+    };
+    assert!(
+        done.recv_timeout(std::time::Duration::from_millis(100))
+            .is_err(),
+        "the disable waits for the in-flight check instead of interleaving with it"
+    );
+    release.send(()).unwrap();
+    reader.join().unwrap();
+    assert_eq!(disabler.join().unwrap(), KeepAwakeStatus::Off);
+    // The disable won: nothing is held, and reading health again requests nothing.
+    assert_eq!(port.held.load(Ordering::SeqCst), 0);
+    assert_eq!(keep.health(), Health::NotChecked);
+    assert_eq!(keep.status(), KeepAwakeStatus::Off);
+    assert_eq!(port.held.load(Ordering::SeqCst), 0);
+}

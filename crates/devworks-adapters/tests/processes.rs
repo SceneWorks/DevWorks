@@ -28,8 +28,8 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::process::{
-    ConfirmRefusal, LaunchPolicy, LaunchRefusal, LaunchRequest, LeaseClaim, ProcessSupervisor,
-    StopOutcome, StopScope,
+    ConfirmRefusal, LaunchPolicy, LaunchRefusal, LaunchRequest, LeaseClaim, OwnedProcess,
+    ProcessSupervisor, StopFailure, StopOutcome, StopScope, all_recorded,
 };
 use devworks_core::services::resources::{
     DispatchFailure, DispatchRefusal, MachineResource, ReconcileCause, ResourceService,
@@ -873,6 +873,7 @@ fn bounded_cancellation_reaps_the_tree_and_transfers_its_physical_lease() {
     // Shutdown with nothing owned only reconciles.
     assert!(
         sup.shutdown(Duration::from_millis(100), Duration::from_secs(1))
+            .into_result()
             .unwrap()
             .is_empty()
     );
@@ -916,13 +917,12 @@ fn shutdown_cancels_every_owned_tree_within_one_bound() {
             &policy,
         )
         .unwrap();
-    let stopped = sup
-        .stop(
-            &StopScope::Root(root("root-a")),
-            Duration::from_millis(500),
-            Duration::from_secs(10),
-        )
-        .unwrap();
+    let stopped = all_recorded(sup.stop(
+        &StopScope::Root(root("root-a")),
+        Duration::from_millis(500),
+        Duration::from_secs(10),
+    ))
+    .unwrap();
     assert_eq!(
         stopped.iter().map(|(i, _)| i.clone()).collect::<Vec<_>>(),
         vec![mine.id.clone()]
@@ -947,6 +947,7 @@ fn shutdown_cancels_every_owned_tree_within_one_bound() {
     let started = std::time::Instant::now();
     let out = sup
         .shutdown(Duration::from_millis(500), Duration::from_secs(10))
+        .into_result()
         .unwrap();
     assert!(started.elapsed() < Duration::from_secs(10));
     assert_eq!(
@@ -1070,4 +1071,176 @@ fn recovery_kills_trees_of_an_earlier_boot_and_holds_lost_launches_for_a_person(
         (again.killed, again.lost, again.reaped, again.uncertain),
         (0, 0, 0, 0)
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Native stops never depend on a successful store write
+
+/// The store, except that every write is refused while `refuse` is set (a full disk).
+struct Refusing {
+    inner: Arc<SqliteStore>,
+    refuse: Arc<std::sync::atomic::AtomicBool>,
+}
+impl ApplicationStore for Refusing {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(
+        &self,
+        options: WriteOptions,
+        job: Box<dyn WriteJob>,
+    ) -> Result<(), StorageError> {
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err(StorageError::unavailable(
+                Unavailable::DiskFull,
+                "disk full",
+            ));
+        }
+        self.inner.submit_write(options, job)
+    }
+    fn read(
+        &self,
+        options: &ReadOptions,
+        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(options, work)
+    }
+}
+
+#[test]
+fn a_refused_record_write_never_skips_the_native_stop() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let refuse = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let store: Arc<dyn ApplicationStore> = Arc::new(Refusing {
+        inner: fx.store.clone(),
+        refuse: refuse.clone(),
+    });
+    let sup = ProcessSupervisor::new(store, Arc::new(NativeProcessHost), fx.svc.clone());
+    let (fs, roots) = policy_parts();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &roots,
+        protected_branches: &[],
+    };
+    let a = fx.agent("agent-a", "project-a", "s-a");
+    let launch = || {
+        sup.launch(
+            &a,
+            LaunchRequest {
+                spec: sleeping_tree(30),
+                operation_id: None,
+                lease: None,
+                approved_hold: false,
+            },
+            &policy,
+        )
+        .unwrap()
+    };
+    let (first, second) = (launch(), launch());
+    refuse.store(true, Ordering::SeqCst);
+    // The `Stopping` write fails: the tree is still stopped, and the failure is reported with
+    // what the native stop verified.
+    match sup.cancel(&first, Duration::from_millis(500), Duration::from_secs(10)) {
+        Err(StopFailure {
+            outcome: StopOutcome::Reaped { .. },
+            error: StorageError::StorageUnavailable { .. },
+        }) => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(NativeProcessHost.probe(&first.identity), Probe::Gone);
+    // Shutdown stops every tree although each record write fails, and reports each.
+    let report = sup.shutdown(Duration::from_millis(500), Duration::from_secs(10));
+    assert_eq!(report.stopped.len(), 2, "the unrecorded tree stays owned");
+    assert!(
+        report.stopped.iter().all(|(_, r)| matches!(
+            r,
+            Err(StopFailure {
+                outcome: StopOutcome::Reaped { .. },
+                ..
+            })
+        )),
+        "{:?}",
+        report.stopped
+    );
+    assert!(report.reconciliation.is_err());
+    assert_eq!(NativeProcessHost.probe(&second.identity), Probe::Gone);
+    // The records were left where they can still be reconciled: once writes succeed, the
+    // retained trees are recorded `Reaped`.
+    let read = |p: &OwnedProcess| {
+        let id = p.id.clone();
+        fx.read(move |r| r.resources().process(&id)).unwrap().phase
+    };
+    assert_eq!(read(&first), ProcessPhase::Running);
+    assert_eq!(read(&second), ProcessPhase::Running);
+    refuse.store(false, Ordering::SeqCst);
+    let report = sup.shutdown(Duration::from_millis(100), Duration::from_secs(5));
+    assert_eq!(report.into_result().unwrap().len(), 2);
+    assert_eq!(
+        (read(&first), read(&second)),
+        (ProcessPhase::Reaped, ProcessPhase::Reaped)
+    );
+    assert!(sup.owned().is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Preflight in the child's environment
+
+#[cfg(unix)]
+#[test]
+fn launch_preflight_resolves_targets_in_the_childs_environment() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let sup = fx.supervisor();
+    // A registered primary repository under a directory that is the child's home, not ours.
+    let scratch = Scratch::new("child-home");
+    let projects = scratch.path("projects");
+    let repo = format!("{projects}/repo");
+    std::fs::create_dir_all(format!("{repo}/.git")).unwrap();
+    fx.h.sql_with(
+        "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-a',?1,1)",
+        &repo,
+    );
+    let fs = NativeFilesystem::default();
+    let roots = ProtectedRoots::read(&*fx.store, Vec::new(), None).unwrap();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &roots,
+        protected_branches: &[],
+    };
+    let a = fx.agent("agent-a", "project-a", "s-a");
+    for (script, var) in [
+        ("rm -rf ~/repo", "HOME"),
+        ("rm -rf \"$HOME/repo\"", "HOME"),
+        ("rm -rf \"$TARGET_ROOT\"/repo", "TARGET_ROOT"),
+        ("rm -rf ${TARGET_ROOT}/repo", "TARGET_ROOT"),
+    ] {
+        for approved in [false, true] {
+            let mut spec = shell(script);
+            spec.env = vec![(var.to_owned(), projects.clone())];
+            let refusal = sup
+                .launch(
+                    &a,
+                    LaunchRequest {
+                        spec,
+                        operation_id: None,
+                        lease: None,
+                        approved_hold: approved,
+                    },
+                    &policy,
+                )
+                .err();
+            assert!(
+                matches!(refusal, Some(LaunchRefusal::Blocked(_))),
+                "{script} with {var} set (approved {approved}): {refusal:?}"
+            );
+        }
+    }
+    assert!(
+        std::path::Path::new(&repo).join(".git").exists(),
+        "the repository survived"
+    );
+    // Nothing was launched or recorded.
+    let none = fx.read(|r| r.resources().processes(&ProcessFilter::Unsettled, None, 10));
+    assert!(none.is_empty());
 }

@@ -339,7 +339,7 @@ fn boot_recovers_processes_and_leases_before_admission_and_shutdown_releases_the
         )
         .expect("launched");
     assert_eq!(NativeProcessHost.probe(&owned.identity), Probe::Alive);
-    let stopped = rt.block_on(app.shutdown()).unwrap();
+    let stopped = rt.block_on(app.shutdown()).into_result().unwrap();
     assert_eq!(stopped.len(), 1);
     assert!(
         matches!(stopped[0].1, StopOutcome::Reaped { .. }),
