@@ -401,11 +401,23 @@ impl Fx {
     fn blob(&self, digest: &str) -> Option<BlobRecord> {
         self.read(|s| s.artifacts().blob(digest))
     }
+    /// The file of the generation the blob row names; without a row, any generation of the
+    /// digest on disk (or a path that does not exist).
     fn blob_file(&self, digest: &str) -> PathBuf {
-        self.h
-            .root
-            .0
-            .join(format!("artifacts/sha256/{}/{digest}", &digest[..2]))
+        let relative = match self.blob(digest) {
+            Some(b) => b.relative_path,
+            None => self
+                .files
+                .stored_files()
+                .unwrap()
+                .into_iter()
+                .find(|(d, _)| d == digest)
+                .map_or_else(
+                    || "artifacts/none".to_owned(),
+                    |(d, g)| self.files.managed_path(&d, &g).unwrap(),
+                ),
+        };
+        self.h.root.0.join(relative)
     }
     fn events(&self) -> Vec<EventRecord> {
         self.read(|s| {
@@ -1432,7 +1444,7 @@ fn source_links_escapes_and_changed_content_are_refused_before_staging() {
         (DomainErrorCode::InvalidArgument, "artifact_file_limit")
     );
     assert!(fx.staging_ops().is_empty());
-    assert!(fx.files.stored_digests().unwrap().is_empty());
+    assert!(fx.files.stored_files().unwrap().is_empty());
 }
 
 #[test]
@@ -1759,13 +1771,14 @@ fn a_save_refused_after_staging_resolves_its_staging_without_a_restart() {
 // ---------------------------------------------------------------------------------------------
 // Review regressions: claims, concurrent recovery, preparation limits, integrity, sources.
 
-/// The real file adapter with hooks at the interleaving points the review probed.
+/// The real file adapter with hooks at the interleaving points the reviews probed.
 struct HookFiles {
     inner: Arc<NativeArtifactFiles>,
     before_publish: Mutex<Option<OnResolve>>,
     during_publish: Mutex<Option<OnResolve>>,
     after_publish: Mutex<Option<OnResolve>>,
     on_unlink: Mutex<Option<OnResolve>>,
+    after_unlink: Mutex<Option<OnResolve>>,
     read_ranges: AtomicU64,
 }
 impl HookFiles {
@@ -1776,6 +1789,7 @@ impl HookFiles {
             during_publish: Mutex::new(None),
             after_publish: Mutex::new(None),
             on_unlink: Mutex::new(None),
+            after_unlink: Mutex::new(None),
             read_ranges: AtomicU64::new(0),
         })
     }
@@ -1806,9 +1820,10 @@ impl ArtifactFiles for HookFiles {
         &self,
         s: &str,
         source: &mut dyn Read,
-        max: u64,
         d: &str,
         n: u64,
+        reuse: Option<&str>,
+        generation: &str,
     ) -> Result<devworks_core::ports::files::PublishedBlob, FileFault> {
         Self::fire(&self.before_publish);
         let hook = self.during_publish.lock().unwrap().take();
@@ -1816,35 +1831,34 @@ impl ArtifactFiles for HookFiles {
             inner: source,
             hook,
         };
-        let published = self.inner.publish(s, &mut reader, max, d, n);
+        let published = self.inner.publish(s, &mut reader, d, n, reuse, generation);
         Self::fire(&self.after_publish);
         published
     }
-    fn managed_path(&self, d: &str) -> Result<String, FileFault> {
-        self.inner.managed_path(d)
+    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
+        self.inner.managed_path(d, g)
     }
-    fn present(&self, d: &str, n: u64) -> Result<bool, FileFault> {
-        self.inner.present(d, n)
+    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
+        self.inner.present(d, g, n)
     }
-    fn inspect(&self, d: &str) -> Result<Option<u64>, FileFault> {
-        self.inner.inspect(d)
+    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
+        self.inner.inspect(d, g)
     }
-    fn read_range(&self, d: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
+    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
         self.read_ranges.fetch_add(1, Ordering::SeqCst);
-        self.inner.read_range(d, n, o, m)
+        self.inner.read_range(d, g, n, o, m)
     }
-    fn verify(&self, d: &str, n: u64) -> Result<(), FileFault> {
-        self.inner.verify(d, n)
+    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
+        self.inner.open(d, g, n)
     }
-    fn open(&self, d: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        self.inner.open(d, n)
-    }
-    fn unlink(&self, d: &str) -> Result<(), FileFault> {
+    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
         Self::fire(&self.on_unlink);
-        self.inner.unlink(d)
+        let removed = self.inner.unlink(d, g);
+        Self::fire(&self.after_unlink);
+        removed
     }
-    fn quarantine(&self, d: &str) -> Result<(), FileFault> {
-        self.inner.quarantine(d)
+    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
+        self.inner.quarantine(d, g)
     }
     fn staged(&self) -> Result<Vec<String>, FileFault> {
         self.inner.staged()
@@ -1852,8 +1866,8 @@ impl ArtifactFiles for HookFiles {
     fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
         self.inner.remove_staged(n)
     }
-    fn stored_digests(&self) -> Result<Vec<String>, FileFault> {
-        self.inner.stored_digests()
+    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
+        self.inner.stored_files()
     }
     fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
         self.inner.write_derived(k, b)
@@ -1864,8 +1878,15 @@ impl ArtifactFiles for HookFiles {
     fn collect_derived(&self) -> Result<u64, FileFault> {
         self.inner.collect_derived()
     }
-    fn export(&self, d: &str, n: u64, p: &std::path::Path, o: bool) -> Result<(), FileFault> {
-        self.inner.export(d, n, p, o)
+    fn export(
+        &self,
+        d: &str,
+        g: &str,
+        n: u64,
+        p: &std::path::Path,
+        o: bool,
+    ) -> Result<(), FileFault> {
+        self.inner.export(d, g, n, p, o)
     }
 }
 
@@ -2006,13 +2027,12 @@ fn abandoning_a_staged_file_never_unlinks_bytes_a_concurrent_save_committed() {
         .unwrap()
         .take()
         .expect("B ran during A's removal");
-    assert_eq!(rejected(b), Rejection::StorageUnavailable);
-    fx.assert_present_blobs_have_files();
-    assert!(list(&fx, &fx.user(), "project-a").is_empty());
-    // B's retry stages the bytes again and is readable.
-    let r = saved(fx.save(&fx.user(), "project-a", "B", "text/plain", "t2", bytes)).artifact;
+    // B published its own generation and committed; A removed only its own generation.
+    let r = saved(b).artifact;
     assert_eq!(hex(&r.sha256), digest);
     assert_eq!(read_text(&fx, &fx.user(), &r).as_bytes(), bytes);
+    let row = fx.blob(&digest).unwrap();
+    assert_eq!(fx.generations(&digest), vec![row.generation]);
     fx.assert_present_blobs_have_files();
 }
 
@@ -2216,21 +2236,22 @@ fn recovery_pages_through_every_unresolved_staging_operation() {
     let fx = fx.restart();
     // In flight in this boot: its digest file must survive recovery.
     let bytes = b"named by the last operation";
+    let live = journal_in(&fx, &digest);
     fx.files
         .publish(
             "live.part",
             &mut &bytes[..],
-            64,
             &digest,
             bytes.len() as u64,
+            None,
+            live.0.as_str(),
         )
         .unwrap();
-    journal_in(&fx, &digest);
     let report = fx.svc.recover(&*fx.store).unwrap();
     assert_eq!(report.failed.len(), 600);
     assert!(fx.blob_file(&digest).exists(), "{report:?}");
 }
-fn journal_in(fx: &Fx, d: &str) {
+fn journal_in(fx: &Fx, d: &str) -> devworks_core::protocol::OperationId {
     let d = d.to_owned();
     fx.write(move |tx| {
         let id = devworks_core::protocol::OperationId(
@@ -2255,8 +2276,8 @@ fn journal_in(fx: &Fx, d: &str) {
             OperationState::Dispatching,
             None,
         )?;
-        Ok(())
-    });
+        Ok(id)
+    })
 }
 
 /// Authority that can only replay receipts.
@@ -2420,7 +2441,7 @@ fn unknown_commit_outcomes_and_unwritable_resolutions_resolve_within_the_boot() 
     let st = s.clone();
     fx.write(move |tx| {
         tx.artifacts()
-            .put_blob(&st.digest, st.byte_count, &st.relative_path)?;
+            .put_blob(&st.digest, st.byte_count, &st.generation, &st.relative_path)?;
         let artifact = StoredArtifact {
             id: id("artifact-x"),
             origin_project_id: project("project-a"),
@@ -2442,6 +2463,7 @@ fn unknown_commit_outcomes_and_unwritable_resolutions_resolve_within_the_boot() 
             version_no: 1,
             blob_digest: st.digest.clone(),
             byte_count: st.byte_count,
+            blob_generation: st.generation.clone(),
             media_type: "text/plain".into(),
             created_at_ms: T0,
             deleted_at_ms: None,
@@ -2492,12 +2514,19 @@ fn a_corrupt_existing_file_is_an_integrity_refusal_and_recovery_quarantines_it()
         (
             DomainErrorCode::StorageUnavailable,
             INTEGRITY_TARGET,
-            devworks_core::protocol::RetryAdvice::Never
+            devworks_core::protocol::RetryAdvice::RefreshAndNewRequest
         )
     );
-    let report = fx.svc.recover(&*fx.store).unwrap();
-    assert_eq!(report.quarantined, vec![d.clone()]);
+    // The corrupt generation is kept as evidence in quarantine, never unlinked.
     assert!(!fx.blob_file(&d).exists());
+    assert_eq!(
+        std::fs::read_dir(fx.h.root.0.join("quarantine"))
+            .unwrap()
+            .count(),
+        1
+    );
+    let report = fx.svc.recover(&*fx.store).unwrap();
+    assert_eq!(report.missing, vec![d.clone()]);
     assert_eq!(
         fx.blob(&d).unwrap().state,
         BlobState::Present,
@@ -2679,6 +2708,13 @@ fn host_issued_sources_resolve_only_for_their_binding() {
             Err(IssueRefusal::NotAFile)
         );
     }
+    // A ticket is always bound to a project.
+    assert_eq!(
+        sources.mint_upload(&fx.user(), &file, 60_000),
+        Err(IssueRefusal::Invalid(
+            "an upload ticket is bound to a project"
+        ))
+    );
     let ticket = sources.mint_upload(&in_a, &file, 60_000).unwrap();
     let upload = json!({"kind": "Upload", "ticketId": ticket});
     // Another principal, another project and an expired ticket are refused.
@@ -2763,9 +2799,46 @@ fn host_issued_sources_resolve_only_for_their_binding() {
         "abc123"
     );
     assert_eq!(
-        refused(save(&fx.worker("agent-p"), "project-a", output)).code,
+        refused(save(&fx.worker("agent-p"), "project-a", output.clone())).code,
         DomainErrorCode::NotFound
     );
+    // A root-bound handle needs exactly that root: an invocation without one does not qualify.
+    let rootless = fx.ctx("agent-a", PrincipalKind::Agent, Some("project-a"));
+    assert_eq!(
+        refused(save(&rootless, "project-a", output)).code,
+        DomainErrorCode::PermissionDenied
+    );
+    // A registration never overwrites an existing handle of its kind; kinds are separate.
+    assert_eq!(
+        sources.register_work_output(
+            &host,
+            &id("out-1"),
+            &actor("agent-p"),
+            &project("project-a"),
+            None,
+            &dir,
+            "picked.txt",
+            SourceOrigin::default(),
+        ),
+        Err(IssueRefusal::Duplicate)
+    );
+    sources
+        .register_work_output(
+            &host,
+            &id("att-1"),
+            &actor("agent-a"),
+            &project("project-a"),
+            Some(RootId(id("root-a"))),
+            &dir,
+            "picked.txt",
+            SourceOrigin::default(),
+        )
+        .unwrap();
+    saved(save(
+        &worker,
+        "project-a",
+        json!({"kind": "WorkOutput", "fileHandle": "att-1"}),
+    ));
     assert_eq!(
         refused(save(
             &fx.user(),
@@ -2776,4 +2849,418 @@ fn host_issued_sources_resolve_only_for_their_binding() {
         DomainErrorCode::NotFound
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Generation-qualified blob files: no stale remover can reach a newer incarnation.
+
+/// A store that runs a hook before admitting its next write.
+struct HookStore {
+    inner: Arc<SqliteStore>,
+    before_write: Mutex<Option<OnResolve>>,
+}
+impl ApplicationStore for HookStore {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(
+        &self,
+        options: WriteOptions,
+        job: Box<dyn WriteJob>,
+    ) -> Result<(), StorageError> {
+        HookFiles::fire(&self.before_write);
+        self.inner.submit_write(options, job)
+    }
+    fn read(
+        &self,
+        options: &ReadOptions,
+        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(options, work)
+    }
+}
+
+impl Fx {
+    /// Every file generation of `digest` on disk.
+    fn generations(&self, digest: &str) -> Vec<String> {
+        self.files
+            .stored_files()
+            .unwrap()
+            .into_iter()
+            .filter(|(d, _)| d == digest)
+            .map(|(_, g)| g)
+            .collect()
+    }
+    /// Saves and then deletes `bytes`, leaving its generation `UnlinkPending`.
+    fn deleted(&self, handle: &str, bytes: &[u8]) -> BlobRecord {
+        let r = self.saved(handle, "Deleted", "text/plain", bytes).artifact;
+        let a = self.artifact(&r.artifact_id);
+        summary(self.delete(
+            &self.user(),
+            delete_version(&r, a.revision, a.reference_revision),
+        ));
+        let b = self.blob(&hex(&r.sha256)).unwrap();
+        assert_eq!(b.state, BlobState::UnlinkPending);
+        b
+    }
+    /// Claims an `UnlinkPending` generation as `owner` (a claimant that then stops).
+    fn claim(&self, b: &BlobRecord, owner: &str) {
+        let (d, g, o) = (b.digest.clone(), b.generation.clone(), owner.to_owned());
+        assert!(self.write(move |tx| tx.artifacts().claim_blob(&d, &g, &o)));
+    }
+}
+
+#[test]
+fn a_stale_claim_finished_meanwhile_never_removes_the_newer_generation() {
+    // The review's ABA: recovery lists a claim; its owner finishes it; a save publishes and
+    // commits a fresh incarnation; recovery's stale step must not reach the new file.
+    let fx = Fx::new();
+    let bytes = b"probe bytes for the stale claim";
+    let old = fx.deleted("t1", bytes);
+    fx.claim(&old, "earlier-boot.claimant");
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let slot = Arc::new(Mutex::new(None));
+    let save = save_into(&fx, "t2", bytes, slot.clone());
+    let (files, store, b) = (fx.files.clone(), fx.store.clone(), old.clone());
+    let hooked = HookStore {
+        inner: fx.store.clone(),
+        before_write: Mutex::new(Some(Box::new(move || {
+            // Between recovery's listing and its adoption: the owner finishes, then the save.
+            files.unlink(&b.digest, &b.generation).unwrap();
+            let (d, g) = (b.digest.clone(), b.generation.clone());
+            run_write(&*store, WriteOptions::default(), move |tx| {
+                tx.artifacts()
+                    .finish_claim(&d, &g, "earlier-boot.claimant", None)
+            })
+            .unwrap();
+            save();
+        }))),
+    };
+    let report = fx.svc.recover(&hooked).unwrap();
+    let new = saved(slot.lock().unwrap().take().expect("save ran")).artifact;
+    assert!(report.finished_unlinks.is_empty(), "{report:?}");
+    let row = fx.blob(&old.digest).unwrap();
+    assert_eq!(row.state, BlobState::Present);
+    assert_ne!(row.generation, old.generation, "a fresh generation");
+    assert_eq!(read_text(&fx, &fx.user(), &new).as_bytes(), bytes);
+    assert_eq!(fx.generations(&old.digest), vec![row.generation]);
+    fx.assert_present_blobs_have_files();
+}
+
+#[test]
+fn a_stale_remover_mid_unlink_never_reaches_the_newer_generation() {
+    // Recovery has adopted the claim and is removing the file when a second recovery adopts
+    // it, finishes it and a save commits a fresh generation; the first remover's removal is of
+    // its exact (old) generation only.
+    let fx = Fx::new();
+    let bytes = b"mid-unlink bytes";
+    let old = fx.deleted("t1", bytes);
+    fx.claim(&old, "earlier-boot.claimant");
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let hook = HookFiles::new(fx.files.clone());
+    let (r1, _) = fx.service_with(hook.clone(), fx.sources.clone());
+    let slot = Arc::new(Mutex::new(None));
+    let save = save_into(&fx, "t2", bytes, slot.clone());
+    let second = Arc::new(Mutex::new(None));
+    let (svc, store, out) = (fx.svc.clone(), fx.store.clone(), second.clone());
+    *hook.on_unlink.lock().unwrap() = Some(Box::new(move || {
+        *out.lock().unwrap() = Some(svc.recover(&*store).unwrap());
+        save();
+    }));
+    let first = r1.recover(&*fx.store).unwrap();
+    let second = second.lock().unwrap().take().unwrap();
+    // Exactly one holder finished the claim (adoption is a compare-and-set).
+    assert_eq!(
+        first.finished_unlinks.len() + second.finished_unlinks.len(),
+        1,
+        "{first:?} {second:?}"
+    );
+    let new = saved(slot.lock().unwrap().take().unwrap()).artifact;
+    assert_eq!(read_text(&fx, &fx.user(), &new).as_bytes(), bytes);
+    let row = fx.blob(&old.digest).unwrap();
+    assert_eq!(fx.generations(&old.digest), vec![row.generation]);
+    fx.assert_present_blobs_have_files();
+}
+
+#[test]
+fn a_stale_adopter_never_takes_over_a_newer_claim() {
+    let fx = Fx::new();
+    let bytes = b"stale adopter";
+    let old = fx.deleted("t1", bytes);
+    fx.claim(&old, "earlier-boot.claimant");
+    let (svc, store, sources, files) = (
+        fx.svc.clone(),
+        fx.store.clone(),
+        fx.sources.clone(),
+        fx.files.clone(),
+    );
+    let cases = fx.cases.clone();
+    let (ids, clock, user) = (fx.h.ids.clone(), fx.h.clock.clone(), fx.user());
+    let frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "Again",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t2"}),
+        bytes,
+    );
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let newer = Arc::new(Mutex::new(None));
+    let out = newer.clone();
+    let hooked = HookStore {
+        inner: fx.store.clone(),
+        before_write: Mutex::new(Some(Box::new(move || {
+            let _ = (&sources, &files);
+            // Before the stale adopter's compare-and-set: another recovery finishes the old
+            // claim, the bytes are saved again (new generation), deleted again, and a live
+            // collector claims the new generation.
+            svc.recover(&*store).unwrap();
+            let authority = HostAuthority {
+                store: &*store,
+                clock: &*clock,
+                protected_branches: &[],
+            };
+            let gateway = Gateway {
+                authority: &authority,
+                store: &*store,
+                ids: &*ids,
+            };
+            let reply = cases
+                .command(
+                    &gateway,
+                    &user,
+                    "artifacts.save",
+                    frame.to_string().as_bytes(),
+                )
+                .unwrap();
+            let r = saved(reply).artifact;
+            let (aid, vid) = (r.artifact_id.clone(), r.version_id.clone());
+            let d = String::from(r.sha256.clone());
+            let row = run_write(&*store, WriteOptions::default(), move |tx| {
+                let now = tx.now_ms();
+                tx.artifacts().tombstone_version(&vid, now)?;
+                tx.artifacts().set_blob_state(
+                    &d,
+                    BlobState::Present,
+                    BlobState::UnlinkPending,
+                    None,
+                )?;
+                let b = tx.artifacts().blob(&d)?.unwrap();
+                assert!(
+                    tx.artifacts()
+                        .claim_blob(&d, &b.generation, "live.collector")?
+                );
+                let _ = aid;
+                Ok(b)
+            })
+            .unwrap();
+            *out.lock().unwrap() = Some(row);
+        }))),
+    };
+    let report = fx.svc.recover(&hooked).unwrap();
+    let newer = newer.lock().unwrap().take().unwrap();
+    assert!(report.finished_unlinks.is_empty(), "{report:?}");
+    let row = fx.blob(&old.digest).unwrap();
+    assert_ne!(newer.generation, old.generation);
+    assert_eq!(
+        (
+            row.state,
+            row.generation.as_str(),
+            row.claim_owner.as_deref()
+        ),
+        (
+            BlobState::Unlinking,
+            newer.generation.as_str(),
+            Some("live.collector")
+        ),
+        "the live claim is untouched"
+    );
+    assert_eq!(fx.generations(&old.digest), vec![newer.generation]);
+}
+
+#[test]
+fn abandon_recovery_and_a_save_of_the_same_bytes_interleave_safely() {
+    let fx = Fx::new();
+    let bytes = b"abandoned, recovered, saved";
+    fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let hook = HookFiles::new(fx.files.clone());
+    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let slot = Arc::new(Mutex::new(None));
+    let save = save_into(&fx, "t2", bytes, slot.clone());
+    let (svc, store) = (fx.svc.clone(), fx.store.clone());
+    // While save A's abandon removes its own generation: recovery runs and save B commits.
+    *hook.on_unlink.lock().unwrap() = Some(Box::new(move || {
+        svc.recover(&*store).unwrap();
+        save();
+    }));
+    let frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "A",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t1"}),
+        bytes,
+    );
+    let authority = fx.authority();
+    let f = refused(fx.command_via(
+        &cases,
+        &authority,
+        &refused_after_staging(&fx),
+        &frame,
+        WriteOptions::default(),
+    ));
+    assert_eq!(target(&f), "origin_work");
+    let b = saved(slot.lock().unwrap().take().unwrap()).artifact;
+    assert_eq!(read_text(&fx, &fx.user(), &b).as_bytes(), bytes);
+    let row = fx.blob(&hex(&b.sha256)).unwrap();
+    assert_eq!(fx.generations(&row.digest), vec![row.generation]);
+    fx.assert_present_blobs_have_files();
+}
+
+#[test]
+fn collection_recovery_and_a_save_of_the_same_bytes_interleave_safely() {
+    let fx = Fx::new();
+    let bytes = b"collected, recovered, saved";
+    let old = fx.deleted("t1", bytes);
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let hook = HookFiles::new(fx.files.clone());
+    let (collector, _) = fx.service_with(hook.clone(), fx.sources.clone());
+    let slot = Arc::new(Mutex::new(None));
+    let save = save_into(&fx, "t2", bytes, slot.clone());
+    let (svc, store) = (fx.svc.clone(), fx.store.clone());
+    // While the collector removes the old generation: recovery adopts and finishes its claim,
+    // then a save of the same bytes commits a fresh generation.
+    *hook.on_unlink.lock().unwrap() = Some(Box::new(move || {
+        svc.recover(&*store).unwrap();
+        save();
+    }));
+    let report = collector.collect(&*fx.store).unwrap();
+    assert!(report.unlinked.is_empty(), "adopted meanwhile: {report:?}");
+    let new = saved(slot.lock().unwrap().take().unwrap()).artifact;
+    assert_eq!(read_text(&fx, &fx.user(), &new).as_bytes(), bytes);
+    let row = fx.blob(&old.digest).unwrap();
+    assert_eq!(row.state, BlobState::Present);
+    assert_ne!(row.generation, old.generation);
+    assert_eq!(fx.generations(&old.digest), vec![row.generation]);
+}
+
+#[test]
+fn a_crash_between_claim_and_removal_is_finished_by_recovery() {
+    for after_unlink in [false, true] {
+        let fx = Fx::new();
+        let bytes = format!("crash around removal {after_unlink}").into_bytes();
+        let old = fx.deleted("t1", &bytes);
+        let hook = HookFiles::new(fx.files.clone());
+        let (collector, _) = fx.service_with(hook.clone(), fx.sources.clone());
+        let slot = if after_unlink {
+            &hook.after_unlink
+        } else {
+            &hook.on_unlink
+        };
+        *slot.lock().unwrap() = Some(Box::new(|| panic!("simulated crash")));
+        let crashed = catch_unwind(AssertUnwindSafe(|| collector.collect(&*fx.store)));
+        assert!(crashed.is_err());
+        drop((collector, hook));
+        let row = fx.blob(&old.digest).unwrap();
+        assert_eq!(row.state, BlobState::Unlinking, "the claim committed");
+        assert_eq!(fx.generations(&old.digest).is_empty(), after_unlink);
+        let fx = fx.restart();
+        let report = fx.svc.recover(&*fx.store).unwrap();
+        assert_eq!(
+            report.finished_unlinks,
+            vec![old.digest.clone()],
+            "{report:?}"
+        );
+        let row = fx.blob(&old.digest).unwrap();
+        assert_eq!((row.state, row.claim_owner), (BlobState::Unlinked, None));
+        assert!(fx.generations(&old.digest).is_empty());
+        // The bytes can be saved again as a new generation.
+        let r = fx.saved("t2", "Again", "text/plain", &bytes).artifact;
+        assert_eq!(read_text(&fx, &fx.user(), &r).as_bytes(), &bytes[..]);
+    }
+}
+
+#[test]
+fn an_orphaned_claim_of_this_boot_is_finished_by_the_next_collection() {
+    let fx = Fx::new();
+    let bytes = b"orphaned claim";
+    let old = fx.deleted("t1", bytes);
+    fx.claim(&old, "this-boot.stopped-claimant");
+    // A save meanwhile is refused as retryable instead of waiting for a restart.
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    assert_eq!(
+        rejected(fx.save(&fx.user(), "project-a", "Busy", "text/plain", "t2", bytes)),
+        Rejection::StorageUnavailable
+    );
+    let report = fx.svc.collect(&*fx.store).unwrap();
+    assert_eq!(report.unlinked, vec![old.digest.clone()]);
+    assert_eq!(fx.blob(&old.digest).unwrap().state, BlobState::Unlinked);
+    let r = saved(fx.save(&fx.user(), "project-a", "Again", "text/plain", "t2", bytes)).artifact;
+    assert_eq!(read_text(&fx, &fx.user(), &r).as_bytes(), bytes);
+}
+
+#[test]
+fn claims_beyond_one_page_are_all_finished() {
+    let fx = Fx::new();
+    // 501 claims left by an earlier boot.
+    let rows: Vec<BlobRecord> = (0..501)
+        .map(|i| {
+            let bytes = format!("claim page {i}").into_bytes();
+            let digest = sha256_hex(&bytes);
+            let generation = format!("gen-{i}");
+            fx.files
+                .publish(
+                    &format!("p{i}.part"),
+                    &mut &bytes[..],
+                    &digest,
+                    bytes.len() as u64,
+                    None,
+                    &generation,
+                )
+                .unwrap();
+            let path = fx.files.managed_path(&digest, &generation).unwrap();
+            let n = bytes.len() as i64;
+            let (d, g) = (digest.clone(), generation.clone());
+            fx.write(move |tx| {
+                tx.artifacts().put_blob(&d, n, &g, &path)?;
+                tx.artifacts().set_blob_state(
+                    &d,
+                    BlobState::Present,
+                    BlobState::UnlinkPending,
+                    None,
+                )?;
+                assert!(tx.artifacts().claim_blob(&d, &g, "earlier-boot.claimant")?);
+                tx.artifacts().blob(&d).map(Option::unwrap)
+            })
+        })
+        .collect();
+    let report = fx.svc.recover(&*fx.store).unwrap();
+    assert_eq!(report.finished_unlinks.len(), 501);
+    for b in rows {
+        assert_eq!(fx.blob(&b.digest).unwrap().state, BlobState::Unlinked);
+    }
+    assert!(fx.files.stored_files().unwrap().is_empty());
+}
+
+#[test]
+fn recovery_quarantines_a_corrupt_present_generation_and_a_save_heals_it() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let bytes = b"bit rot after first verification";
+    let r = fx.saved("t1", "Rot", "text/plain", bytes).artifact;
+    let d = hex(&r.sha256);
+    let before = fx.blob(&d).unwrap();
+    std::fs::write(fx.blob_file(&d), b"BIT ROT AFTER FIRST VERIFICATION").unwrap();
+    let report = fx.svc.recover(&*fx.store).unwrap();
+    assert_eq!(report.quarantined, vec![d.clone()]);
+    assert_eq!(fx.blob(&d).unwrap(), before, "metadata unchanged");
+    assert_eq!(
+        fault(fx.query(&user, "artifacts.read", version_query("Read", &r), None)).code,
+        DomainErrorCode::NotFound
+    );
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    saved(fx.save(&user, "project-a", "Heal", "text/plain", "t2", bytes));
+    assert_ne!(fx.blob(&d).unwrap().generation, before.generation, "healed");
+    assert_eq!(read_text(&fx, &user, &r).as_bytes(), bytes);
 }

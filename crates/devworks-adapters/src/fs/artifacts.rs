@@ -3,42 +3,53 @@
 //! Layout (all paths constructed here, never from caller input):
 //!
 //! * `staging/<operation>.part` — in-flight bytes of one journaled staging operation;
-//! * `artifacts/sha256/<first two hex>/<digest>` — immutable content-addressed blobs;
-//! * `quarantine/<digest>.<n>` — corrupt digest files kept as evidence, never served;
+//! * `artifacts/sha256/<first two hex>/<digest>.<generation>` — immutable blob generations;
+//! * `quarantine/<digest>.<generation>.<n>` — corrupt generations kept as evidence;
 //! * `<cache root>/artifact-previews/<preview id>` — disposable derived previews.
 //!
-//! **Publication** streams the source in 64 KiB chunks into the staging file while hashing it
-//! (memory stays bounded whatever the file size), refuses a source above the byte bound or with
-//! another length/digest, flushes the file, then renames it into place. Every directory it
-//! creates is flushed into its parent, and the destination directory is flushed after the
-//! rename. An existing digest file is re-verified before reuse; a mismatch is corruption and is
-//! never overwritten or served.
+//! **Generations.** A blob file is one immutable incarnation of a digest. The staging operation
+//! that publishes new bytes names the generation (its own ID), so a generation's file is
+//! written exactly once and every removal names an exact `(digest, generation)`: a stale
+//! remover can never delete a newer incarnation of the same bytes.
 //!
-//! **Reads** verify the whole file's digest once before serving any range of it and remember
-//! the verification against the file's length, modification time and (Unix) inode/change time,
-//! so a file changed afterwards is verified again before another byte is served.
+//! **Publication** streams the source in 64 KiB chunks into the staging file while hashing it
+//! (bounded memory, at most the expected length plus one byte read), refuses another length or
+//! digest, flushes the file, and then either reuses the verified existing generation or renames
+//! the staged file into place as the new one. Every directory created is flushed into its
+//! parent, and the destination directory after the rename.
+//!
+//! **Reads** verify the generation's digest on the open handle before serving any range of it,
+//! and remember the verification against the handle's identity, length and timestamps (Unix:
+//! device/inode, size, mtime, ctime; Windows: volume serial, file index, size, last write and
+//! change time). A file whose timestamps fall within [`RACY_WINDOW`] of the verification is not
+//! remembered (the racy-timestamp rule: a change within the timestamp granularity could
+//! otherwise go unnoticed). Because generations are immutable, the remembered verification is
+//! not repeated on every read: **bit rot after the first verification is caught by recovery**
+//! (`ArtifactService::recover` re-hashes every Present generation) or an integrity check, and a
+//! changed file is re-verified as soon as its metadata changes. Opening a stream hashes the
+//! handle it then serves; export hashes while copying and refuses a mismatch before the
+//! destination is touched.
 //!
 //! **Durability by platform.**
 //! * Unix: `fsync` on the file, on each new directory's parent and on the destination
 //!   directory after the rename.
-//! * Windows: `FlushFileBuffers` on the file (`sync_all`), and the rename uses
+//! * Windows: `FlushFileBuffers` on the file (`sync_all`), and renames use
 //!   `MoveFileExW(MOVEFILE_WRITE_THROUGH)`, which returns only after the move is flushed. std
 //!   offers no directory-handle flush; NTFS journals directory metadata (creation and rename
 //!   are atomic and survive a crash once its log is flushed, which write-through forces for the
 //!   rename), but a newly created directory's own entry is not separately forced to disk.
-//!
-//! Export copies through a flushed temporary file (bounded name) in the destination directory
-//! and publishes it with a no-clobber hard link (or `create_new` where the volume has no hard
-//! links), or a write-through atomic replace when overwrite was explicitly requested.
 use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
 use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
-use std::fs::{File, Metadata, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
+
+/// Timestamp granularity margin of the racy-timestamp rule (covers 2 s FAT granularity).
+pub const RACY_WINDOW: Duration = Duration::from_secs(2);
 
 /// Publication steps a test can crash at.
 #[cfg(test)]
@@ -52,28 +63,127 @@ pub(crate) enum Step {
     Renamed,
 }
 
-/// What a verification was made against: a file changed since is verified again.
+/// What a verification was made against: identity, length and timestamps of the open handle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stamp {
+    identity: (u64, u64),
     len: u64,
     modified: Option<SystemTime>,
-    extra: (u64, i64, i64),
+    changed: Option<SystemTime>,
 }
+
 #[cfg(unix)]
-fn stamp(m: &Metadata) -> Stamp {
+fn stamp(f: &File) -> io::Result<Stamp> {
     use std::os::unix::fs::MetadataExt;
-    Stamp {
+    let m = f.metadata()?;
+    let changed = u64::try_from(m.ctime()).ok().map(|s| {
+        SystemTime::UNIX_EPOCH
+            + Duration::from_secs(s)
+            + Duration::from_nanos(m.ctime_nsec().max(0) as u64)
+    });
+    Ok(Stamp {
+        identity: (m.dev(), m.ino()),
         len: m.len(),
         modified: m.modified().ok(),
-        extra: (m.ino(), m.ctime(), m.ctime_nsec()),
-    }
+        changed,
+    })
 }
-#[cfg(not(unix))]
-fn stamp(m: &Metadata) -> Stamp {
-    Stamp {
+
+#[cfg(windows)]
+fn stamp(f: &File) -> io::Result<Stamp> {
+    use std::os::windows::io::AsRawHandle;
+    /// `BY_HANDLE_FILE_INFORMATION` (fileapi.h).
+    #[repr(C)]
+    #[derive(Default)]
+    struct HandleInformation {
+        attributes: u32,
+        times: [u32; 6],
+        volume_serial: u32,
+        size_high: u32,
+        size_low: u32,
+        links: u32,
+        index_high: u32,
+        index_low: u32,
+    }
+    /// `FILE_BASIC_INFO` (winbase.h): 100 ns ticks since 1601.
+    #[repr(C)]
+    #[derive(Default)]
+    struct BasicInformation {
+        creation: i64,
+        last_access: i64,
+        last_write: i64,
+        change: i64,
+        attributes: u32,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut core::ffi::c_void,
+            info: *mut HandleInformation,
+        ) -> i32;
+        fn GetFileInformationByHandleEx(
+            file: *mut core::ffi::c_void,
+            class: i32,
+            info: *mut core::ffi::c_void,
+            size: u32,
+        ) -> i32;
+    }
+    const FILE_BASIC_INFO_CLASS: i32 = 0;
+    let handle = f.as_raw_handle().cast();
+    let mut info = HandleInformation::default();
+    let mut basic = BasicInformation::default();
+    // SAFETY: a live handle owned by `f` and valid, correctly laid out out pointers.
+    unsafe {
+        if GetFileInformationByHandle(handle, &mut info) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if GetFileInformationByHandleEx(
+            handle,
+            FILE_BASIC_INFO_CLASS,
+            (&mut basic as *mut BasicInformation).cast(),
+            std::mem::size_of::<BasicInformation>() as u32,
+        ) == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    let ticks = |t: i64| {
+        // 1601-01-01 to 1970-01-01 in 100 ns ticks.
+        let unix = t.checked_sub(116_444_736_000_000_000)?;
+        Some(SystemTime::UNIX_EPOCH + Duration::from_nanos(u64::try_from(unix).ok()? * 100))
+    };
+    Ok(Stamp {
+        identity: (
+            u64::from(info.volume_serial),
+            (u64::from(info.index_high) << 32) | u64::from(info.index_low),
+        ),
+        len: (u64::from(info.size_high) << 32) | u64::from(info.size_low),
+        modified: ticks(basic.last_write),
+        changed: ticks(basic.change),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn stamp(f: &File) -> io::Result<Stamp> {
+    let m = f.metadata()?;
+    Ok(Stamp {
+        identity: (0, 0),
         len: m.len(),
         modified: m.modified().ok(),
-        extra: (0, 0, 0),
+        changed: None,
+    })
+}
+
+impl Stamp {
+    /// The racy-timestamp rule: a stamp is only trusted when both timestamps are known and lie
+    /// clearly before the verification.
+    fn settled(&self, verified_at: SystemTime) -> bool {
+        let Some(cutoff) = verified_at.checked_sub(RACY_WINDOW) else {
+            return false;
+        };
+        [self.modified, self.changed]
+            .iter()
+            .all(|t| t.is_some_and(|t| t < cutoff))
     }
 }
 
@@ -81,7 +191,7 @@ pub struct NativeArtifactFiles {
     data_root: PathBuf,
     cache_root: PathBuf,
     serial: AtomicU64,
-    verified: Mutex<HashMap<String, Stamp>>,
+    verified: Mutex<HashMap<(String, String), Stamp>>,
     #[cfg(test)]
     pub(crate) crash_at: Mutex<Option<Step>>,
     /// Directories flushed, in order (durability tests).
@@ -107,14 +217,22 @@ fn valid_digest(d: &str) -> Result<(), FileFault> {
         Err(FileFault::Unsupported("not a SHA-256 digest".into()))
     }
 }
+fn valid_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+fn valid_generation(g: &str) -> Result<(), FileFault> {
+    if valid_id(g) {
+        Ok(())
+    } else {
+        Err(FileFault::Unsupported("not a blob generation".into()))
+    }
+}
 fn valid_name(n: &str) -> Result<(), FileFault> {
     let stem = n.strip_suffix(".part").unwrap_or(n);
-    if !stem.is_empty()
-        && n.len() <= 160
-        && stem
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    {
+    if valid_id(stem) {
         Ok(())
     } else {
         Err(FileFault::Unsupported("not a managed file name".into()))
@@ -137,6 +255,11 @@ fn hash_reader(r: &mut dyn Read) -> io::Result<(String, u64)> {
         n += k as u64;
     }
     Ok((hex(h), n))
+}
+fn corrupt(digest: &str) -> FileFault {
+    FileFault::Corrupt(format!(
+        "managed file {digest} does not match its recorded identity"
+    ))
 }
 
 #[cfg(windows)]
@@ -190,12 +313,13 @@ impl NativeArtifactFiles {
     fn staging(&self) -> PathBuf {
         self.data_root.join("staging")
     }
-    fn relative(digest: &str) -> String {
-        format!("artifacts/sha256/{}/{digest}", &digest[..2])
+    fn relative(digest: &str, generation: &str) -> String {
+        format!("artifacts/sha256/{}/{digest}.{generation}", &digest[..2])
     }
-    fn blob_path(&self, digest: &str) -> Result<PathBuf, FileFault> {
+    fn blob_path(&self, digest: &str, generation: &str) -> Result<PathBuf, FileFault> {
         valid_digest(digest)?;
-        Ok(self.data_root.join(Self::relative(digest)))
+        valid_generation(generation)?;
+        Ok(self.data_root.join(Self::relative(digest, generation)))
     }
     fn previews(&self) -> PathBuf {
         self.cache_root.join("artifact-previews")
@@ -255,36 +379,67 @@ impl NativeArtifactFiles {
         }
         #[cfg(not(windows))]
         {
-            // Unix `rename` replaces; callers that must not replace checked the destination and
-            // only ever replace an identical, verified blob.
+            // Unix `rename` replaces; callers that must not replace use a fresh, never-used
+            // destination name (a new generation) or the no-clobber link.
             let _ = replace;
             std::fs::rename(from, to)
         }
     }
 
-    fn verify_path(path: &Path, digest: &str, byte_count: u64) -> Result<(), FileFault> {
-        let (d, n) = hash_reader(&mut File::open(path).map_err(fault)?).map_err(fault)?;
-        if n != byte_count || d != digest {
-            return Err(FileFault::Corrupt(format!(
-                "managed file {digest} does not match its recorded identity"
-            )));
-        }
-        Ok(())
-    }
-
-    fn forget(&self, digest: &str) {
+    fn forget(&self, digest: &str, generation: &str) {
         self.verified
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .remove(digest);
+            .remove(&(digest.to_owned(), generation.to_owned()));
     }
 
-    /// Streams `source` into `staged`, returning its digest and length.
+    /// Opens a generation and verifies its digest on that handle unless the same handle state
+    /// was verified before; returns the handle positioned at the start.
+    fn open_verified(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+    ) -> Result<File, FileFault> {
+        let mut f = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
+        let before = stamp(&f).map_err(fault)?;
+        if before.len != byte_count {
+            return Err(corrupt(digest));
+        }
+        let key = (digest.to_owned(), generation.to_owned());
+        let known = self
+            .verified
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+            .copied();
+        if known != Some(before) {
+            let (d, n) = hash_reader(&mut f).map_err(fault)?;
+            if d != digest || n != byte_count {
+                self.forget(digest, generation);
+                return Err(corrupt(digest));
+            }
+            // Remember it only if the handle did not change while it was hashed and its
+            // timestamps are settled (racy-timestamp rule).
+            let after = stamp(&f).map_err(fault)?;
+            if after == before && before.settled(SystemTime::now()) {
+                self.verified
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(key, before);
+            }
+            f.seek(SeekFrom::Start(0)).map_err(fault)?;
+        }
+        Ok(f)
+    }
+
+    /// Streams at most `expected_bytes + 1` bytes of `source` into `staged`, returning its
+    /// digest and length.
     fn stage(
         &self,
         staged: &Path,
         source: &mut dyn Read,
-        max_bytes: u64,
+        expected_bytes: u64,
     ) -> Result<(String, u64), FileFault> {
         let mut f = OpenOptions::new()
             .write(true)
@@ -296,7 +451,12 @@ impl NativeArtifactFiles {
         let mut buf = vec![0u8; 64 * 1024];
         let mut n = 0u64;
         loop {
-            let k = match source.read(&mut buf) {
+            let room = expected_bytes.saturating_add(1).saturating_sub(n);
+            if room == 0 {
+                return Err(FileFault::Mismatch);
+            }
+            let want = buf.len().min(usize::try_from(room).unwrap_or(usize::MAX));
+            let k = match source.read(&mut buf[..want]) {
                 Ok(k) => k,
                 Err(e) => return Err(FileFault::Source(e.to_string())),
             };
@@ -304,8 +464,8 @@ impl NativeArtifactFiles {
                 break;
             }
             n += k as u64;
-            if n > max_bytes {
-                return Err(FileFault::TooLarge);
+            if n > expected_bytes {
+                return Err(FileFault::Mismatch);
             }
             h.update(&buf[..k]);
             f.write_all(&buf[..k]).map_err(fault)?;
@@ -320,40 +480,46 @@ impl NativeArtifactFiles {
         &self,
         staged: &Path,
         source: &mut dyn Read,
-        max_bytes: u64,
         digest: &str,
         expected_bytes: u64,
+        reuse: Option<&str>,
+        generation: &str,
     ) -> Result<PublishedBlob, FileFault> {
-        let dest = self.blob_path(digest)?;
-        let (d, n) = self.stage(staged, source, max_bytes)?;
+        let (d, n) = self.stage(staged, source, expected_bytes)?;
         if d != digest || n != expected_bytes {
             return Err(FileFault::Mismatch);
         }
         #[cfg(test)]
         self.step(Step::Flushed);
+        if let Some(existing) = reuse {
+            match self.open_verified(digest, existing, expected_bytes) {
+                Ok(_) => {
+                    std::fs::remove_file(staged).map_err(fault)?;
+                    return Ok(PublishedBlob {
+                        generation: existing.to_owned(),
+                        relative_path: Self::relative(digest, existing),
+                        reused: true,
+                    });
+                }
+                // A missing generation is not reused: the bytes are published anew.
+                Err(FileFault::NotFound) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        let dest = self.blob_path(digest, generation)?;
         let dir = dest.parent().expect("digest directory");
         self.ensure_dir(dir).map_err(fault)?;
-        let reuse = || -> Result<PublishedBlob, FileFault> {
-            Self::verify_path(&dest, digest, expected_bytes)?;
-            std::fs::remove_file(staged).map_err(fault)?;
-            Ok(PublishedBlob {
-                relative_path: Self::relative(digest),
-                reused: true,
-            })
-        };
-        if dest.exists() {
-            return reuse();
+        // A generation name is used once: an existing destination is never replaced.
+        if std::fs::symlink_metadata(&dest).is_ok() {
+            return Err(FileFault::Exists);
         }
-        match self.rename(staged, &dest, false) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return reuse(),
-            Err(e) => return Err(fault(e)),
-        }
+        self.rename(staged, &dest, false).map_err(fault)?;
         self.sync_dir(dir).map_err(fault)?;
         #[cfg(test)]
         self.step(Step::Renamed);
         Ok(PublishedBlob {
-            relative_path: Self::relative(digest),
+            generation: generation.to_owned(),
+            relative_path: Self::relative(digest, generation),
             reused: false,
         })
     }
@@ -364,38 +530,50 @@ impl ArtifactFiles for NativeArtifactFiles {
         &self,
         staging_name: &str,
         source: &mut dyn Read,
-        max_bytes: u64,
         expected_digest: &str,
         expected_bytes: u64,
+        reuse: Option<&str>,
+        generation: &str,
     ) -> Result<PublishedBlob, FileFault> {
         valid_name(staging_name)?;
         valid_digest(expected_digest)?;
+        valid_generation(generation)?;
+        if let Some(r) = reuse {
+            valid_generation(r)?;
+        }
         let staging_dir = self.staging();
         self.ensure_dir(&staging_dir).map_err(fault)?;
         let staged = staging_dir.join(staging_name);
-        let published =
-            self.publish_staged(&staged, source, max_bytes, expected_digest, expected_bytes);
+        let published = self.publish_staged(
+            &staged,
+            source,
+            expected_digest,
+            expected_bytes,
+            reuse,
+            generation,
+        );
         if published.is_err() {
             let _ = std::fs::remove_file(&staged);
         }
         published
     }
 
-    fn managed_path(&self, digest: &str) -> Result<String, FileFault> {
+    fn managed_path(&self, digest: &str, generation: &str) -> Result<String, FileFault> {
         valid_digest(digest)?;
-        Ok(Self::relative(digest))
+        valid_generation(generation)?;
+        Ok(Self::relative(digest, generation))
     }
 
-    fn present(&self, digest: &str, byte_count: u64) -> Result<bool, FileFault> {
-        match std::fs::symlink_metadata(self.blob_path(digest)?) {
+    fn present(&self, digest: &str, generation: &str, byte_count: u64) -> Result<bool, FileFault> {
+        match std::fs::symlink_metadata(self.blob_path(digest, generation)?) {
             Ok(m) => Ok(m.is_file() && m.len() == byte_count),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(fault(e)),
         }
     }
 
-    fn inspect(&self, digest: &str) -> Result<Option<u64>, FileFault> {
-        let path = self.blob_path(digest)?;
+    fn inspect(&self, digest: &str, generation: &str) -> Result<Option<u64>, FileFault> {
+        let path = self.blob_path(digest, generation)?;
         let mut f = match File::open(&path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -403,9 +581,8 @@ impl ArtifactFiles for NativeArtifactFiles {
         };
         let (d, n) = hash_reader(&mut f).map_err(fault)?;
         if d != digest {
-            return Err(FileFault::Corrupt(format!(
-                "managed file {digest} does not hash to its name"
-            )));
+            self.forget(digest, generation);
+            return Err(corrupt(digest));
         }
         Ok(Some(n))
     }
@@ -413,72 +590,51 @@ impl ArtifactFiles for NativeArtifactFiles {
     fn read_range(
         &self,
         digest: &str,
+        generation: &str,
         byte_count: u64,
         offset: u64,
         max: usize,
     ) -> Result<Vec<u8>, FileFault> {
-        let mut f = File::open(self.blob_path(digest)?).map_err(fault)?;
-        let meta = f.metadata().map_err(fault)?;
-        if meta.len() != byte_count {
-            return Err(FileFault::Corrupt(format!(
-                "managed file {digest} has the wrong length"
-            )));
-        }
-        let now = stamp(&meta);
-        let known = self
-            .verified
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(digest)
-            .copied();
-        if known != Some(now) {
-            let (d, n) = hash_reader(&mut f).map_err(fault)?;
-            if d != digest || n != byte_count {
-                self.forget(digest);
-                return Err(FileFault::Corrupt(format!(
-                    "managed file {digest} does not match its recorded identity"
-                )));
-            }
-            // Remember the verification only if the file did not change while it was hashed.
-            if f.metadata().map(|m| stamp(&m)).ok() == Some(now) {
-                self.verified
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .insert(digest.to_owned(), now);
-            }
-        }
+        let mut f = self.open_verified(digest, generation, byte_count)?;
         f.seek(SeekFrom::Start(offset)).map_err(fault)?;
         let mut out = Vec::with_capacity(max.min(byte_count.saturating_sub(offset) as usize));
         f.take(max as u64).read_to_end(&mut out).map_err(fault)?;
         Ok(out)
     }
 
-    fn verify(&self, digest: &str, byte_count: u64) -> Result<(), FileFault> {
-        Self::verify_path(&self.blob_path(digest)?, digest, byte_count)
+    fn open(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+    ) -> Result<Box<dyn Read + Send>, FileFault> {
+        // Verified on, and served from, the same handle.
+        let mut f = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
+        let (d, n) = hash_reader(&mut f).map_err(fault)?;
+        if d != digest || n != byte_count {
+            self.forget(digest, generation);
+            return Err(corrupt(digest));
+        }
+        f.seek(SeekFrom::Start(0)).map_err(fault)?;
+        Ok(Box::new(f.take(byte_count)))
     }
 
-    fn open(&self, digest: &str, byte_count: u64) -> Result<Box<dyn Read + Send>, FileFault> {
-        let path = self.blob_path(digest)?;
-        Self::verify_path(&path, digest, byte_count)?;
-        Ok(Box::new(File::open(path).map_err(fault)?))
-    }
-
-    fn unlink(&self, digest: &str) -> Result<(), FileFault> {
-        self.forget(digest);
-        match std::fs::remove_file(self.blob_path(digest)?) {
+    fn unlink(&self, digest: &str, generation: &str) -> Result<(), FileFault> {
+        self.forget(digest, generation);
+        match std::fs::remove_file(self.blob_path(digest, generation)?) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(fault(e)),
         }
     }
 
-    fn quarantine(&self, digest: &str) -> Result<(), FileFault> {
-        let path = self.blob_path(digest)?;
-        self.forget(digest);
+    fn quarantine(&self, digest: &str, generation: &str) -> Result<(), FileFault> {
+        let path = self.blob_path(digest, generation)?;
+        self.forget(digest, generation);
         let dir = self.data_root.join("quarantine");
         self.ensure_dir(&dir).map_err(fault)?;
         let n = self.serial.fetch_add(1, Ordering::Relaxed);
-        let target = dir.join(format!("{digest}.{}-{n}", std::process::id()));
+        let target = dir.join(format!("{digest}.{generation}.{}-{n}", std::process::id()));
         match self.rename(&path, &target, false) {
             Ok(()) => self.sync_dir(&dir).map_err(fault),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -510,7 +666,7 @@ impl ArtifactFiles for NativeArtifactFiles {
         }
     }
 
-    fn stored_digests(&self) -> Result<Vec<String>, FileFault> {
+    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
         let root = self.data_root.join("artifacts/sha256");
         let shards = match std::fs::read_dir(&root) {
             Ok(e) => e,
@@ -525,8 +681,11 @@ impl ArtifactFiles for NativeArtifactFiles {
             }
             for f in std::fs::read_dir(shard.path()).map_err(fault)? {
                 let name = f.map_err(fault)?.file_name().to_string_lossy().into_owned();
-                if valid_digest(&name).is_ok() {
-                    out.push(name);
+                if let Some((d, g)) = name.split_once('.')
+                    && valid_digest(d).is_ok()
+                    && valid_id(g)
+                {
+                    out.push((d.to_owned(), g.to_owned()));
                 }
             }
         }
@@ -577,12 +736,12 @@ impl ArtifactFiles for NativeArtifactFiles {
     fn export(
         &self,
         digest: &str,
+        generation: &str,
         byte_count: u64,
         destination: &Path,
         overwrite: bool,
     ) -> Result<(), FileFault> {
-        let source = self.blob_path(digest)?;
-        Self::verify_path(&source, digest, byte_count)?;
+        let mut source = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
         let (Some(dir), Some(name)) = (destination.parent(), destination.file_name()) else {
             return Err(FileFault::Unsupported(
                 "destination has no file name".into(),
@@ -597,13 +756,28 @@ impl ArtifactFiles for NativeArtifactFiles {
             &hex(h)[..16],
             std::process::id()
         ));
-        let copy = || -> Result<(), FileFault> {
+        // Copy from one open handle while hashing; a mismatch never reaches the destination.
+        let mut copy = || -> Result<(), FileFault> {
             let mut out = OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&tmp)
                 .map_err(fault)?;
-            io::copy(&mut File::open(&source).map_err(fault)?, &mut out).map_err(fault)?;
+            let mut h = Sha256::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut total = 0u64;
+            loop {
+                let k = source.read(&mut buf).map_err(fault)?;
+                if k == 0 {
+                    break;
+                }
+                total += k as u64;
+                h.update(&buf[..k]);
+                out.write_all(&buf[..k]).map_err(fault)?;
+            }
+            if total != byte_count || hex(h) != digest {
+                return Err(corrupt(digest));
+            }
             out.sync_all().map_err(fault)
         };
         if let Err(e) = copy() {
@@ -660,7 +834,7 @@ mod tests {
         let bytes = b"durable";
         let d = digest(bytes);
         files
-            .publish("op-1.part", &mut &bytes[..], 64, &d, bytes.len() as u64)
+            .publish("op-1.part", &mut &bytes[..], &d, 7, None, "op-1")
             .unwrap();
         let synced = files.synced.lock().unwrap().clone();
         let shard = data.join(format!("artifacts/sha256/{}", &d[..2]));
@@ -678,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_streams_and_refuses_bounds_and_mismatches_without_leftovers() {
+    fn publication_streams_bounded_by_the_expected_length() {
         let data = root("stream");
         let files = NativeArtifactFiles::new(&data, data.join("cache"));
         let big = vec![7u8; 300 * 1024];
@@ -687,49 +861,118 @@ mod tests {
             .publish(
                 "op-1.part",
                 &mut &big[..],
-                big.len() as u64,
                 &d,
                 big.len() as u64,
+                None,
+                "op-1",
             )
             .unwrap();
         assert!(!published.reused);
-        assert_eq!(files.inspect(&d).unwrap(), Some(big.len() as u64));
+        assert_eq!(files.inspect(&d, "op-1").unwrap(), Some(big.len() as u64));
+        // A longer source is a mismatch after at most one byte beyond the expected length.
+        struct Endless(u64);
+        impl Read for Endless {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                self.0 += buf.len() as u64;
+                buf.fill(7);
+                Ok(buf.len())
+            }
+        }
+        let mut endless = Endless(0);
         assert_eq!(
-            files.publish("op-2.part", &mut &big[..], 1024, &d, big.len() as u64),
-            Err(FileFault::TooLarge)
-        );
-        assert_eq!(
-            files.publish("op-3.part", &mut &b"other"[..], 64, &d, 5),
+            files.publish("op-2.part", &mut endless, &d, 1024, None, "op-2"),
             Err(FileFault::Mismatch)
+        );
+        assert!(endless.0 <= 1025, "read {} bytes", endless.0);
+        assert_eq!(
+            files.publish("op-3.part", &mut &b"other"[..], &d, 5, None, "op-3"),
+            Err(FileFault::Mismatch)
+        );
+        // Reuse keeps the existing generation; a new generation never replaces a file.
+        let again = files
+            .publish(
+                "op-4.part",
+                &mut &big[..],
+                &d,
+                big.len() as u64,
+                Some("op-1"),
+                "op-4",
+            )
+            .unwrap();
+        assert_eq!((again.generation.as_str(), again.reused), ("op-1", true));
+        assert_eq!(
+            files.publish(
+                "op-5.part",
+                &mut &big[..],
+                &d,
+                big.len() as u64,
+                None,
+                "op-1"
+            ),
+            Err(FileFault::Exists)
         );
         assert!(files.staged().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
-    fn ranges_are_never_served_from_a_corrupt_file() {
+    fn ranges_are_never_served_from_a_corrupt_generation() {
         let data = root("verify");
         let files = NativeArtifactFiles::new(&data, data.join("cache"));
         let bytes = b"0123456789";
         let d = digest(bytes);
         files
-            .publish("op-1.part", &mut &bytes[..], 64, &d, 10)
+            .publish("op-1.part", &mut &bytes[..], &d, 10, None, "op-1")
             .unwrap();
-        assert_eq!(files.read_range(&d, 10, 2, 3).unwrap(), b"234");
+        assert_eq!(files.read_range(&d, "op-1", 10, 2, 3).unwrap(), b"234");
         // Same length, different content: verified again because the file changed.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(data.join(NativeArtifactFiles::relative(&d)), b"9876543210").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(
+            data.join(NativeArtifactFiles::relative(&d, "op-1")),
+            b"9876543210",
+        )
+        .unwrap();
         assert!(matches!(
-            files.read_range(&d, 10, 2, 3),
+            files.read_range(&d, "op-1", 10, 2, 3),
             Err(FileFault::Corrupt(_))
         ));
-        assert!(matches!(files.inspect(&d), Err(FileFault::Corrupt(_))));
-        files.quarantine(&d).unwrap();
-        assert_eq!(files.inspect(&d).unwrap(), None);
+        assert!(files.open(&d, "op-1", 10).is_err());
+        assert!(matches!(
+            files.inspect(&d, "op-1"),
+            Err(FileFault::Corrupt(_))
+        ));
+        files.quarantine(&d, "op-1").unwrap();
+        assert_eq!(files.inspect(&d, "op-1").unwrap(), None);
         assert_eq!(
             std::fs::read_dir(data.join("quarantine")).unwrap().count(),
             1
         );
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn racy_timestamps_are_not_remembered() {
+        let data = root("racy");
+        let files = NativeArtifactFiles::new(&data, data.join("cache"));
+        let bytes = b"just written";
+        let d = digest(bytes);
+        files
+            .publish("op-1.part", &mut &bytes[..], &d, 12, None, "op-1")
+            .unwrap();
+        files.read_range(&d, "op-1", 12, 0, 4).unwrap();
+        // Written moments ago: the verification is not cached, so the next read hashes again.
+        assert!(files.verified.lock().unwrap().is_empty());
+        let now = SystemTime::now();
+        let old = now - Duration::from_secs(60);
+        let stamp = |m, c| Stamp {
+            identity: (1, 1),
+            len: 1,
+            modified: Some(m),
+            changed: Some(c),
+        };
+        assert!(stamp(old, old).settled(now));
+        assert!(!stamp(old, now).settled(now));
+        assert!(!stamp(now, old).settled(now));
         let _ = std::fs::remove_dir_all(&data);
     }
 
@@ -740,13 +983,30 @@ mod tests {
         let bytes = b"export";
         let d = digest(bytes);
         files
-            .publish("op-1.part", &mut &bytes[..], 64, &d, 6)
+            .publish("op-1.part", &mut &bytes[..], &d, 6, None, "op-1")
             .unwrap();
         let out = data.join("out");
         std::fs::create_dir_all(&out).unwrap();
         let long = out.join(format!("{}.txt", "n".repeat(250)));
-        files.export(&d, 6, &long, false).unwrap();
+        files.export(&d, "op-1", 6, &long, false).unwrap();
         assert_eq!(std::fs::read(&long).unwrap(), bytes);
+        // A corrupt generation never reaches the destination.
+        std::fs::write(
+            data.join(NativeArtifactFiles::relative(&d, "op-1")),
+            b"EXPORT",
+        )
+        .unwrap();
+        let other = out.join("other.txt");
+        assert!(matches!(
+            files.export(&d, "op-1", 6, &other, false),
+            Err(FileFault::Corrupt(_))
+        ));
+        assert!(!other.exists());
+        assert_eq!(
+            std::fs::read_dir(&out).unwrap().count(),
+            1,
+            "no temporary left"
+        );
         let _ = std::fs::remove_dir_all(&data);
     }
 }

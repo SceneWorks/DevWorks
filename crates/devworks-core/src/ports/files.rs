@@ -29,8 +29,6 @@ pub enum FileFault {
     /// The staged source did not have the expected length and digest (the source changed, or
     /// the caller's expectation was wrong); nothing was published.
     Mismatch,
-    /// The source exceeded the byte bound; nothing was published.
-    TooLarge,
     /// Reading the source failed; nothing was published.
     Source(String),
     /// The volume is full; nothing previously published is affected.
@@ -44,75 +42,88 @@ pub enum FileFault {
 /// A blob that is durably in place at its content-addressed managed path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublishedBlob {
-    /// Data-root-relative managed path.
+    /// The generation whose file now holds the bytes: the requested new generation, or the
+    /// reused one.
+    pub generation: String,
+    /// Data-root-relative managed path of that generation.
     pub relative_path: String,
-    /// An identical, verified file was already in place; the staged copy was discarded.
+    /// The existing generation was verified and reused; the staged copy was discarded.
     pub reused: bool,
 }
 
 /// Managed artifact files (adapter: `devworks_adapters::fs::artifacts`).
 ///
-/// Removing a digest file ([`Self::unlink`]) is a physical step only: the artifact service
-/// first claims the digest in the store (blob state `Unlinking`), so a concurrent save can never
-/// commit metadata for a file that is about to disappear.
+/// Every managed blob file is one immutable **generation** of a digest:
+/// `<digest>.<generation>`. A generation is written once (by the staging operation whose ID it
+/// is) and never rewritten, so every read, open, removal and quarantine names an exact
+/// `(digest, generation)` and can never affect another incarnation of the same bytes.
 pub trait ArtifactFiles: Send + Sync {
     /// Streams `source` in bounded chunks into the staging file `staging_name` while hashing
-    /// it. More than `max_bytes` is [`FileFault::TooLarge`]; a length or digest other than
-    /// expected is [`FileFault::Mismatch`]. The staged file is flushed, atomically renamed to
-    /// the digest location, and every directory created or changed on the way is flushed. An
-    /// existing digest file is verified before reuse; a corrupt one blocks publication with
-    /// [`FileFault::Corrupt`]. On every failure the staging file is removed.
+    /// it, reading at most `expected_bytes + 1` bytes; any other length or digest is
+    /// [`FileFault::Mismatch`]. Then either reuses `reuse` (an existing generation, verified
+    /// first: a corrupt one is [`FileFault::Corrupt`] and nothing is published) or publishes the
+    /// staged file as the new `generation`: flushed, atomically renamed, and every directory
+    /// created or changed on the way flushed. On every failure the staging file is removed.
     fn publish(
         &self,
         staging_name: &str,
         source: &mut dyn Read,
-        max_bytes: u64,
         expected_digest: &str,
         expected_bytes: u64,
+        reuse: Option<&str>,
+        generation: &str,
     ) -> Result<PublishedBlob, FileFault>;
-    /// The data-root-relative managed path of a digest (recorded on its blob row).
-    fn managed_path(&self, digest: &str) -> Result<String, FileFault>;
-    /// Whether the digest file exists with exactly `byte_count` bytes (metadata only).
-    fn present(&self, digest: &str, byte_count: u64) -> Result<bool, FileFault>;
-    /// The verified length of the digest file: `None` when it is missing,
+    /// The data-root-relative managed path of one generation (recorded on its blob row).
+    fn managed_path(&self, digest: &str, generation: &str) -> Result<String, FileFault>;
+    /// Whether the generation's file exists with exactly `byte_count` bytes (metadata only).
+    fn present(&self, digest: &str, generation: &str, byte_count: u64) -> Result<bool, FileFault>;
+    /// The verified length of a generation's file: `None` when it is missing,
     /// [`FileFault::Corrupt`] when its content does not hash to `digest`.
-    fn inspect(&self, digest: &str) -> Result<Option<u64>, FileFault>;
-    /// At most `max` bytes from `offset` of a blob whose length must be `byte_count`. The whole
-    /// file's digest is verified before its first range is served and again whenever the file
-    /// changed since; corrupt bytes are never returned.
+    fn inspect(&self, digest: &str, generation: &str) -> Result<Option<u64>, FileFault>;
+    /// At most `max` bytes from `offset` of a generation whose length must be `byte_count`.
+    /// The file's digest is verified (on the same open handle) before its first range is served
+    /// and again whenever the file's identity or timestamps changed; corrupt bytes are never
+    /// returned.
     fn read_range(
         &self,
         digest: &str,
+        generation: &str,
         byte_count: u64,
         offset: u64,
         max: usize,
     ) -> Result<Vec<u8>, FileFault>;
-    /// Re-hashes the whole blob against its digest and length.
-    fn verify(&self, digest: &str, byte_count: u64) -> Result<(), FileFault>;
-    /// Opens a verified blob for streaming.
-    fn open(&self, digest: &str, byte_count: u64) -> Result<Box<dyn Read + Send>, FileFault>;
-    /// Removes the digest file; an already missing file is success. Only for a digest the store
-    /// has claimed.
-    fn unlink(&self, digest: &str) -> Result<(), FileFault>;
-    /// Moves a corrupt digest file aside into quarantine (kept as evidence, never served).
-    fn quarantine(&self, digest: &str) -> Result<(), FileFault>;
+    /// Opens a generation, verifies its digest on that handle and returns the same handle,
+    /// rewound, for streaming.
+    fn open(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+    ) -> Result<Box<dyn Read + Send>, FileFault>;
+    /// Removes exactly one generation's file; an already missing file is success.
+    fn unlink(&self, digest: &str, generation: &str) -> Result<(), FileFault>;
+    /// Moves a corrupt generation aside into quarantine (kept as evidence, never served).
+    fn quarantine(&self, digest: &str, generation: &str) -> Result<(), FileFault>;
     /// Names of files currently in staging.
     fn staged(&self) -> Result<Vec<String>, FileFault>;
     fn remove_staged(&self, name: &str) -> Result<(), FileFault>;
-    /// Digests of every blob file on disk (with or without metadata).
-    fn stored_digests(&self) -> Result<Vec<String>, FileFault>;
+    /// Every blob file on disk as `(digest, generation)`, with or without metadata.
+    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault>;
     /// Stores a derived, rebuildable payload (previews) in the disposable cache class.
     fn write_derived(&self, key: &str, bytes: &[u8]) -> Result<(), FileFault>;
     /// A derived payload of at most `max` bytes, if still cached.
     fn read_derived(&self, key: &str, max: usize) -> Result<Option<Vec<u8>>, FileFault>;
     /// Removes every derived payload (they are rebuilt on demand); returns how many.
     fn collect_derived(&self) -> Result<u64, FileFault>;
-    /// Copies a verified blob to `destination` through a flushed temporary file in the same
-    /// directory. Without `overwrite` an existing destination is [`FileFault::Exists`]
-    /// (no-clobber link); with it the destination is replaced atomically.
+    /// Copies a generation to `destination` through a flushed temporary file in the same
+    /// directory, hashing the bytes as they are copied from one open handle and refusing a
+    /// mismatch before the destination is touched. Without `overwrite` an existing destination
+    /// is [`FileFault::Exists`] (no-clobber link); with it the destination is replaced
+    /// atomically.
     fn export(
         &self,
         digest: &str,
+        generation: &str,
         byte_count: u64,
         destination: &Path,
         overwrite: bool,

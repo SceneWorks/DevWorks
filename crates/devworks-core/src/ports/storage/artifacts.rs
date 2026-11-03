@@ -57,9 +57,16 @@ pub struct BlobRecord {
     /// Lower-case hex SHA-256 of the content.
     pub digest: String,
     pub byte_count: i64,
-    /// Data-root-relative managed path, constructed by the file adapter (never caller input).
+    /// The file incarnation this row names. Every publication of new bytes uses a generation
+    /// never used before (the publishing staging operation's ID), so the managed file
+    /// `<digest>.<generation>` is written once and removing it can never remove another
+    /// incarnation of the same digest.
+    pub generation: String,
+    /// Data-root-relative managed path of that generation, constructed by the file adapter.
     pub relative_path: String,
     pub state: BlobState,
+    /// Holder of the `Unlinking` claim on `generation`, when there is one.
+    pub claim_owner: Option<String>,
     /// Most recent physical removal failure; visible and retryable.
     pub last_error: Option<String>,
 }
@@ -123,6 +130,8 @@ pub struct StoredVersion {
     pub blob_digest: String,
     /// Byte length of the blob (read from the blob row).
     pub byte_count: i64,
+    /// The file generation the blob row currently names (read from the blob row).
+    pub blob_generation: String,
     pub media_type: String,
     pub created_at_ms: i64,
     /// Set once by explicit deletion (tombstone); the row and its provenance stay.
@@ -259,13 +268,6 @@ pub trait ArtifactRead {
     ) -> Result<Vec<BlobRecord>, StorageError>;
     /// Bytes of distinct blobs named by live versions of artifacts `project` owns.
     fn project_usage(&self, project: &ProjectId) -> Result<i64, StorageError>;
-    /// Whether an unresolved staging operation (other than `except`) names `digest`. Answered
-    /// from the durable journal (indexed), never from a bounded in-memory set.
-    fn staging_names_digest(
-        &self,
-        digest: &str,
-        except: Option<&OperationId>,
-    ) -> Result<bool, StorageError>;
     /// Unresolved staging operations in ID order after `after`, at most `limit` (1..=500).
     fn unresolved_staging(
         &self,
@@ -275,13 +277,15 @@ pub trait ArtifactRead {
 }
 
 pub trait ArtifactRepository: ArtifactRead {
-    /// Records a published blob as `Present`, or makes an existing row `Present` again (its file
-    /// was just republished and verified). A different byte count for the same digest is
+    /// Makes the row `Present` naming `generation` (inserting it when absent, clearing any
+    /// claim). The caller decided, inside the same transaction, that `generation`'s file is the
+    /// one to name. A different byte count for the same digest is
     /// [`StorageError::InvalidRecord`].
     fn put_blob(
         &mut self,
         digest: &str,
         byte_count: i64,
+        generation: &str,
         relative_path: &str,
     ) -> Result<BlobRecord, StorageError>;
     /// Compare-and-set of a blob's state; a different current state is
@@ -313,17 +317,32 @@ pub trait ArtifactRepository: ArtifactRead {
     fn pin(&mut self, holder: &Id, digest: &str) -> Result<(), StorageError>;
     /// Releases every pin `holder` holds; returns how many were released.
     fn release_pins(&mut self, holder: &Id) -> Result<i64, StorageError>;
-    /// Claims an unreferenced digest file for removal: when no blob row names the digest (or
-    /// its row is `Unlinked`) and no unresolved staging other than `except` names it, the row
-    /// becomes `Unlinking` (inserted with `byte_count`/`relative_path` when absent) and `true`
-    /// is returned. Any other state leaves everything unchanged and returns `false`. A save
-    /// that finds the row `Unlinking` refuses as `Busy`, so the file can be removed after this
-    /// commits without racing a publication.
-    fn claim_unreferenced(
+    /// Claims `generation` of an `UnlinkPending` blob for removal: compare-and-set on
+    /// (state `UnlinkPending`, `generation`) to `Unlinking` held by `owner`. `false` when the row
+    /// is in any other state or names another generation.
+    fn claim_blob(
         &mut self,
         digest: &str,
-        byte_count: i64,
-        relative_path: &str,
-        except: Option<&OperationId>,
+        generation: &str,
+        owner: &str,
+    ) -> Result<bool, StorageError>;
+    /// Adopts a claim another holder left: compare-and-set on (`Unlinking`, `generation`,
+    /// `from_owner`) to `to_owner`. `false` when the claim changed since it was read.
+    fn adopt_claim(
+        &mut self,
+        digest: &str,
+        generation: &str,
+        from_owner: &str,
+        to_owner: &str,
+    ) -> Result<bool, StorageError>;
+    /// Finishes a held claim: compare-and-set on (`Unlinking`, `generation`, `owner`) to
+    /// `Unlinked`, or with `error` back to `UnlinkPending` with the visible error. `false` when
+    /// the holder no longer owns it (it was adopted).
+    fn finish_claim(
+        &mut self,
+        digest: &str,
+        generation: &str,
+        owner: &str,
+        error: Option<&str>,
     ) -> Result<bool, StorageError>;
 }

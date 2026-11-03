@@ -77,7 +77,7 @@ fn artifact_of(raw: ArtifactRaw) -> Result<StoredArtifact, StorageError> {
     })
 }
 
-const VERSION_COLUMNS: &str = "v.id,v.artifact_id,v.version_no,v.blob_digest,b.byte_count,v.media_type,v.created_at,v.deleted_at,v.source_json";
+const VERSION_COLUMNS: &str = "v.id,v.artifact_id,v.version_no,v.blob_digest,b.byte_count,v.media_type,v.created_at,v.deleted_at,v.source_json,b.generation";
 type VersionRaw = (
     String,
     String,
@@ -87,6 +87,7 @@ type VersionRaw = (
     String,
     i64,
     Option<i64>,
+    String,
     String,
 );
 fn version_row(r: &Row<'_>) -> rusqlite::Result<VersionRaw> {
@@ -100,16 +101,18 @@ fn version_row(r: &Row<'_>) -> rusqlite::Result<VersionRaw> {
         r.get(6)?,
         r.get(7)?,
         r.get(8)?,
+        r.get(9)?,
     ))
 }
 fn version_of(raw: VersionRaw) -> Result<StoredVersion, StorageError> {
-    let (id, artifact, no, digest, bytes, media, at, deleted, source) = raw;
+    let (id, artifact, no, digest, bytes, media, at, deleted, source, generation) = raw;
     Ok(StoredVersion {
         id: id_of(id)?,
         artifact_id: id_of(artifact)?,
         version_no: no,
         blob_digest: digest,
         byte_count: bytes,
+        blob_generation: generation,
         media_type: media,
         created_at_ms: at,
         deleted_at_ms: deleted,
@@ -117,17 +120,38 @@ fn version_of(raw: VersionRaw) -> Result<StoredVersion, StorageError> {
     })
 }
 
-fn blob_row(r: &Row<'_>) -> rusqlite::Result<(String, i64, String, String, Option<String>)> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+const BLOB_COLUMNS: &str =
+    "digest,byte_count,generation,relative_path,state,claim_owner,last_error";
+type BlobRaw = (
+    String,
+    i64,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
+fn blob_row(r: &Row<'_>) -> rusqlite::Result<BlobRaw> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+    ))
 }
-fn blob_of(raw: (String, i64, String, String, Option<String>)) -> Result<BlobRecord, StorageError> {
-    let (digest, byte_count, relative_path, state, last_error) = raw;
+fn blob_of(raw: BlobRaw) -> Result<BlobRecord, StorageError> {
+    let (digest, byte_count, generation, relative_path, state, claim_owner, last_error) = raw;
     Ok(BlobRecord {
         digest,
         byte_count,
+        generation,
         relative_path,
         state: BlobState::parse(&state)
             .ok_or_else(|| corrupt(format!("stored blob state {state}")))?,
+        claim_owner,
         last_error,
     })
 }
@@ -251,11 +275,11 @@ fn linked_to(conn: &Connection, subject: &SubjectKey) -> Result<Vec<ArtifactLink
     rows.into_iter().map(link_of).collect()
 }
 fn blob(conn: &Connection, digest: &str) -> Result<Option<BlobRecord>, StorageError> {
-    db(db(conn.prepare_cached(
-        "SELECT digest,byte_count,relative_path,state,last_error FROM blobs WHERE digest=?1",
-    ))?
-    .query_row([digest], blob_row)
-    .optional())?
+    db(
+        db(conn.prepare_cached(&format!("SELECT {BLOB_COLUMNS} FROM blobs WHERE digest=?1")))?
+            .query_row([digest], blob_row)
+            .optional(),
+    )?
     .map(blob_of)
     .transpose()
 }
@@ -266,10 +290,9 @@ fn blobs_in(
     limit: u16,
 ) -> Result<Vec<BlobRecord>, StorageError> {
     let limit = bounded(limit)?;
-    let mut s = db(conn.prepare_cached(
-        "SELECT digest,byte_count,relative_path,state,last_error FROM blobs
-         WHERE state=?1 AND digest>?2 ORDER BY digest LIMIT ?3",
-    ))?;
+    let mut s = db(conn.prepare_cached(&format!(
+        "SELECT {BLOB_COLUMNS} FROM blobs WHERE state=?1 AND digest>?2 ORDER BY digest LIMIT ?3"
+    )))?;
     let rows = db(db(s.query_map(
         params![state.as_str(), after.unwrap_or(""), limit],
         blob_row,
@@ -391,13 +414,6 @@ macro_rules! artifact_reads {
                     [project.0.as_str()],
                 )
             }
-            fn staging_names_digest(
-                &self,
-                digest: &str,
-                except: Option<&OperationId>,
-            ) -> Result<bool, StorageError> {
-                staging_names_digest(self.conn, digest, except)
-            }
             fn unresolved_staging(
                 &self,
                 after: Option<&OperationId>,
@@ -424,22 +440,6 @@ macro_rules! artifact_reads {
 /// Terminal operation states (an unresolved staging operation is in none of them).
 const TERMINAL: &str = "'ObservedComplete','Failed','CancelledBeforeDispatch'";
 
-fn staging_names_digest(
-    conn: &Connection,
-    digest: &str,
-    except: Option<&OperationId>,
-) -> Result<bool, StorageError> {
-    // Matches the partial expression index of migration 6 (`staging_digest`).
-    exists(
-        conn,
-        &format!(
-            "SELECT 1 FROM operations WHERE capability='{STAGE_CAPABILITY}'
-             AND json_extract(payload_json,'$.digest')=?1 AND state NOT IN ({TERMINAL})
-             AND id<>?2 LIMIT 1"
-        ),
-        params![digest, except.map_or("", |e| e.0.as_str())],
-    )
-}
 artifact_reads!(Snapshot<'_>);
 artifact_reads!(Unit<'_>);
 
@@ -448,8 +448,12 @@ impl ArtifactRepository for Unit<'_> {
         &mut self,
         digest: &str,
         byte_count: i64,
+        generation: &str,
         relative_path: &str,
     ) -> Result<BlobRecord, StorageError> {
+        if Id::new(generation).is_err() {
+            return Err(invalid("blob generation must be an opaque identifier"));
+        }
         if digest.len() != 64
             || !digest
                 .bytes()
@@ -466,15 +470,15 @@ impl ArtifactRepository for Unit<'_> {
             }
             Some(_) => {
                 db(db(self.conn.prepare_cached(
-                    "UPDATE blobs SET state='Present',last_error=NULL WHERE digest=?1",
+                    "UPDATE blobs SET state='Present',generation=?2,relative_path=?3,claim_owner=NULL,last_error=NULL WHERE digest=?1",
                 ))?
-                .execute([digest]))?;
+                .execute(params![digest, generation, relative_path]))?;
             }
             None => {
                 db(db(self.conn.prepare_cached(
-                    "INSERT INTO blobs(digest,byte_count,relative_path,state) VALUES(?1,?2,?3,'Present')",
+                    "INSERT INTO blobs(digest,byte_count,generation,relative_path,state) VALUES(?1,?2,?3,?4,'Present')",
                 ))?
-                .execute(params![digest, byte_count, relative_path]))?;
+                .execute(params![digest, byte_count, generation, relative_path]))?;
             }
         }
         blob(self.conn, digest)?.ok_or_else(|| corrupt("blob vanished inside its transaction"))
@@ -667,36 +671,50 @@ impl ArtifactRepository for Unit<'_> {
         Ok(())
     }
 
-    fn claim_unreferenced(
+    fn claim_blob(
         &mut self,
         digest: &str,
-        byte_count: i64,
-        relative_path: &str,
-        except: Option<&OperationId>,
+        generation: &str,
+        owner: &str,
     ) -> Result<bool, StorageError> {
-        if staging_names_digest(self.conn, digest, except)? {
-            return Ok(false);
-        }
-        match blob(self.conn, digest)? {
-            Some(b) if b.state != BlobState::Unlinked => Ok(false),
-            Some(_) => {
-                db(db(self.conn.prepare_cached(
-                    "UPDATE blobs SET state='Unlinking',last_error=NULL WHERE digest=?1 AND state='Unlinked'",
-                ))?
-                .execute([digest]))?;
-                Ok(true)
-            }
-            None => {
-                if byte_count < 0 {
-                    return Err(invalid("blob byte count must be non-negative"));
-                }
-                db(db(self.conn.prepare_cached(
-                    "INSERT INTO blobs(digest,byte_count,relative_path,state) VALUES(?1,?2,?3,'Unlinking')",
-                ))?
-                .execute(params![digest, byte_count, relative_path]))?;
-                Ok(true)
-            }
-        }
+        let n = db(db(self.conn.prepare_cached(
+            "UPDATE blobs SET state='Unlinking',claim_owner=?3 WHERE digest=?1 AND generation=?2 AND state='UnlinkPending'",
+        ))?
+        .execute(params![digest, generation, owner]))?;
+        Ok(n == 1)
+    }
+
+    fn adopt_claim(
+        &mut self,
+        digest: &str,
+        generation: &str,
+        from_owner: &str,
+        to_owner: &str,
+    ) -> Result<bool, StorageError> {
+        let n = db(db(self.conn.prepare_cached(
+            "UPDATE blobs SET claim_owner=?4 WHERE digest=?1 AND generation=?2 AND state='Unlinking' AND claim_owner=?3",
+        ))?
+        .execute(params![digest, generation, from_owner, to_owner]))?;
+        Ok(n == 1)
+    }
+
+    fn finish_claim(
+        &mut self,
+        digest: &str,
+        generation: &str,
+        owner: &str,
+        error: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        let to = if error.is_some() {
+            "UnlinkPending"
+        } else {
+            "Unlinked"
+        };
+        let n = db(db(self.conn.prepare_cached(
+            "UPDATE blobs SET state=?4,claim_owner=NULL,last_error=?5 WHERE digest=?1 AND generation=?2 AND state='Unlinking' AND claim_owner=?3",
+        ))?
+        .execute(params![digest, generation, owner, to, error]))?;
+        Ok(n == 1)
     }
 
     fn release_pins(&mut self, holder: &Id) -> Result<i64, StorageError> {

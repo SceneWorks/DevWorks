@@ -908,9 +908,6 @@ impl ArtifactRead for Unsupported {
     fn project_usage(&self, _: &ProjectId) -> Result<i64, StorageError> {
         nope()
     }
-    fn staging_names_digest(&self, _: &str, _: Option<&OperationId>) -> Result<bool, StorageError> {
-        nope()
-    }
     fn unresolved_staging(
         &self,
         _: Option<&OperationId>,
@@ -920,7 +917,7 @@ impl ArtifactRead for Unsupported {
     }
 }
 impl ArtifactRepository for Unsupported {
-    fn put_blob(&mut self, _: &str, _: i64, _: &str) -> Result<BlobRecord, StorageError> {
+    fn put_blob(&mut self, _: &str, _: i64, _: &str, _: &str) -> Result<BlobRecord, StorageError> {
         nope()
     }
     fn set_blob_state(
@@ -959,12 +956,18 @@ impl ArtifactRepository for Unsupported {
     fn release_pins(&mut self, _: &Id) -> Result<i64, StorageError> {
         nope()
     }
-    fn claim_unreferenced(
+    fn claim_blob(&mut self, _: &str, _: &str, _: &str) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn adopt_claim(&mut self, _: &str, _: &str, _: &str, _: &str) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn finish_claim(
         &mut self,
         _: &str,
-        _: i64,
         _: &str,
-        _: Option<&OperationId>,
+        _: &str,
+        _: Option<&str>,
     ) -> Result<bool, StorageError> {
         nope()
     }

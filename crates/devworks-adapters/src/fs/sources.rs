@@ -6,7 +6,7 @@
 //!
 //! * **Upload ticket** — minted by [`HostArtifactSources::mint_upload`] at user ingress for a
 //!   file the user picked (the trusted local input path); bound to that user, the invocation's
-//!   project and work root, and an expiry. An agent, package, MCP client or schedule can never
+//!   project (required) and work root, and an expiry. Expired tickets are evicted. An agent, package, MCP client or schedule can never
 //!   mint one.
 //! * **Attachment** — registered by the host for the imported attachment record that owns it
 //!   ([`HostArtifactSources::register_attachment`]), bound to that record's project. The
@@ -19,6 +19,7 @@
 //! Resolution returns the registered read root (with the identity recorded when the handle was
 //! issued) and relative path; the artifact service then opens the file through the verified
 //! no-follow reader, so a root replaced or a component swapped for a link since is refused.
+//! Each kind has its own namespace; registering an ID twice is refused, never overwritten.
 //! Handles live in process memory: they are short-lived and never survive a restart.
 use super::identity_of;
 use devworks_core::authority::reads::ReadRoot;
@@ -34,7 +35,7 @@ use std::sync::{Arc, Mutex};
 /// Longest lifetime of an upload ticket.
 pub const MAX_UPLOAD_LIFETIME_MS: i64 = 24 * 60 * 60 * 1000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Kind {
     Upload,
     Attachment,
@@ -43,7 +44,6 @@ enum Kind {
 
 #[derive(Clone, Debug)]
 struct Handle {
-    kind: Kind,
     root: ReadRoot,
     relative: String,
     principal: Option<ActorId>,
@@ -62,6 +62,8 @@ pub enum IssueRefusal {
     HostOnly,
     /// The picked path is not a regular file (directories, links and devices are refused).
     NotAFile,
+    /// A handle with this ID is already registered for its kind (never overwritten).
+    Duplicate,
     Invalid(&'static str),
 }
 
@@ -69,7 +71,8 @@ pub enum IssueRefusal {
 pub struct HostArtifactSources {
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdSource>,
-    handles: Mutex<HashMap<String, Handle>>,
+    /// One map per kind: an ID registered as one kind never resolves as another.
+    handles: Mutex<HashMap<Kind, HashMap<String, Handle>>>,
 }
 
 /// A read root for `dir` with the identity it has now (Unix); Windows reads use held
@@ -95,11 +98,17 @@ impl HostArtifactSources {
         }
     }
 
-    fn insert(&self, id: &Id, handle: Handle) {
-        self.handles
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(id.as_str().to_owned(), handle);
+    /// Registers a handle, refusing a duplicate ID of the same kind, and evicts expired ones.
+    fn insert(&self, kind: Kind, id: &Id, handle: Handle) -> Result<(), IssueRefusal> {
+        let now = self.clock.now_ms().get();
+        let mut all = self.handles.lock().unwrap_or_else(|p| p.into_inner());
+        let map = all.entry(kind).or_default();
+        map.retain(|_, h| h.expires_at_ms.is_none_or(|t| t > now));
+        if map.contains_key(id.as_str()) {
+            return Err(IssueRefusal::Duplicate);
+        }
+        map.insert(id.as_str().to_owned(), handle);
+        Ok(())
     }
 
     /// Mints an upload ticket for `file`, which the user picked through the app's own file
@@ -114,6 +123,11 @@ impl HostArtifactSources {
         if ctx.principal_kind() != PrincipalKind::Human {
             return Err(IssueRefusal::HumanOnly);
         }
+        let Some(project) = ctx.project_id().cloned() else {
+            return Err(IssueRefusal::Invalid(
+                "an upload ticket is bound to a project",
+            ));
+        };
         if !(1..=MAX_UPLOAD_LIFETIME_MS).contains(&lifetime_ms) {
             return Err(IssueRefusal::Invalid("ticket lifetime out of bounds"));
         }
@@ -127,13 +141,13 @@ impl HostArtifactSources {
         };
         let id = self.ids.next_id(IdKind::SourceHandle);
         self.insert(
+            Kind::Upload,
             &id,
             Handle {
-                kind: Kind::Upload,
                 root: root_of(dir)?,
                 relative: name.to_owned(),
                 principal: Some(ctx.principal().clone()),
-                project: ctx.project_id().cloned(),
+                project: Some(project),
                 work_root: ctx.root_id().cloned(),
                 expires_at_ms: Some(self.clock.now_ms().get().saturating_add(lifetime_ms)),
                 origin: SourceOrigin {
@@ -141,7 +155,7 @@ impl HostArtifactSources {
                     ..SourceOrigin::default()
                 },
             },
-        );
+        )?;
         Ok(id)
     }
 
@@ -160,9 +174,9 @@ impl HostArtifactSources {
             return Err(IssueRefusal::HostOnly);
         }
         self.insert(
+            Kind::Attachment,
             attachment_id,
             Handle {
-                kind: Kind::Attachment,
                 root: root_of(root)?,
                 relative: relative.to_owned(),
                 principal: None,
@@ -174,8 +188,7 @@ impl HostArtifactSources {
                     ..SourceOrigin::default()
                 },
             },
-        );
-        Ok(())
+        )
     }
 
     /// Registers a file an assignment produced in its managed worktree (host only), bound to
@@ -197,9 +210,9 @@ impl HostArtifactSources {
             return Err(IssueRefusal::HostOnly);
         }
         self.insert(
+            Kind::WorkOutput,
             handle,
             Handle {
-                kind: Kind::WorkOutput,
                 root: root_of(worktree)?,
                 relative: relative.to_owned(),
                 principal: Some(producer.clone()),
@@ -208,16 +221,19 @@ impl HostArtifactSources {
                 expires_at_ms: None,
                 origin,
             },
-        );
-        Ok(())
+        )
     }
 
-    /// Withdraws a handle (its owning record went away).
+    /// Withdraws a handle of every kind with this ID (its owning record went away).
     pub fn revoke(&self, handle: &Id) {
-        self.handles
+        for map in self
+            .handles
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .remove(handle.as_str());
+            .values_mut()
+        {
+            map.remove(handle.as_str());
+        }
     }
 }
 
@@ -233,32 +249,30 @@ impl ArtifactSources for HostArtifactSources {
             ArtifactSource::Attachment { attachment_id } => (Kind::Attachment, attachment_id),
             ArtifactSource::WorkOutput { file_handle } => (Kind::WorkOutput, file_handle),
         };
-        let handle = self
-            .handles
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(id.as_str())
-            .cloned()
-            .ok_or(SourceRefusal::NotFound)?;
-        // Another kind's handle, another principal's handle and an expired ticket are unknown
-        // to this caller.
-        if handle.kind != kind
-            || handle
-                .principal
-                .as_ref()
-                .is_some_and(|p| p != ctx.principal())
-            || handle
-                .expires_at_ms
-                .is_some_and(|t| self.clock.now_ms().get() >= t)
+        let now = self.clock.now_ms().get();
+        let handle = {
+            let mut all = self.handles.lock().unwrap_or_else(|p| p.into_inner());
+            let map = all.entry(kind).or_default();
+            map.retain(|_, h| h.expires_at_ms.is_none_or(|t| t > now));
+            map.get(id.as_str()).cloned()
+        }
+        .ok_or(SourceRefusal::NotFound)?;
+        // Another principal's handle is unknown to this caller.
+        if handle
+            .principal
+            .as_ref()
+            .is_some_and(|p| p != ctx.principal())
         {
             return Err(SourceRefusal::NotFound);
         }
+        // A binding is satisfied only by exactly the bound project and work root: an invocation
+        // without a root does not satisfy a root-bound handle.
         let foreign_project = handle.project.as_ref().is_some_and(|p| p != project)
             || ctx.project_id().is_some_and(|p| p != project);
         let foreign_root = handle
             .work_root
             .as_ref()
-            .is_some_and(|r| ctx.root_id().is_some_and(|c| c != r));
+            .is_some_and(|r| ctx.root_id() != Some(r));
         if foreign_project || foreign_root {
             return Err(SourceRefusal::PermissionDenied);
         }

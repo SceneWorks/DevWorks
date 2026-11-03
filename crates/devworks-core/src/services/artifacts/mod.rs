@@ -29,13 +29,23 @@
 //! ([`ArtifactService::abandon`]); a resolution that cannot be written is retried later in the
 //! same boot, and nothing is resolved twice.
 //!
-//! **Removing an unreferenced file is always claimed first.** In one write transaction the
-//! digest must have no live blob row and no unresolved staging operation may name it; the row
-//! becomes `Unlinking`. Only after that commits is the file removed and marked `Unlinked`. A save
-//! that finds the digest `Unlinking` (or a non-`Present` row, or no row, without its file in
-//! place) refuses as `Busy` and retries, so a concurrent save can never commit metadata for a
-//! file that is being removed. Collection, abandonment and recovery all use this claim, which is
-//! what makes recovery safe to run while commands are admitted.
+//! **Generations make removal exact.** Every publication of new bytes writes a generation file
+//! `<digest>.<staging operation ID>` that is never written again; the blob row names the one
+//! generation readers use, and reuse keeps an existing generation. Every removal names an exact
+//! `(digest, generation)`, so a stale remover can never delete a newer incarnation:
+//!
+//! * a pending removal is claimed as a compare-and-set on (state, generation) recording its owner,
+//!   the file of that generation is removed, and the outcome is recorded under the same owner;
+//!   a claim another holder left (a crash, or an outcome that could not be written) is adopted by
+//!   compare-and-set on (generation, owner) by the next collection or recovery;
+//! * a staging operation's own generation is removed only once the operation is resolved and the
+//!   row does not name it — from then on nothing can ever bind it (an operation binds its
+//!   generation only in the transaction that resolves it);
+//! * a save that finds its digest claimed, or a reused generation changed since it was verified,
+//!   refuses as `Busy` and a retry publishes a fresh generation.
+//!
+//! This is what makes recovery safe to run while commands are admitted and concurrently with
+//! itself, collection and abandonment.
 //!
 //! # Versions, references and deletion (AD 59)
 //!
@@ -214,7 +224,6 @@ fn file_failure(f: FileFault) -> StorageError {
             StorageError::unavailable(Unavailable::Io, e)
         }
         FileFault::Mismatch => StorageError::unavailable(Unavailable::Io, "source changed"),
-        FileFault::TooLarge => StorageError::unavailable(Unavailable::Io, "source too large"),
     }
 }
 
@@ -486,6 +495,10 @@ pub struct StagedFile {
     pub operation_id: OperationId,
     pub digest: String,
     pub byte_count: i64,
+    /// The generation holding the bytes: this operation's own new generation (its ID), or the
+    /// existing generation it verified and reused.
+    pub generation: String,
+    pub reused: bool,
     pub relative_path: String,
     pub origin: SourceOrigin,
     /// The resolved source handle (provenance).
@@ -504,7 +517,8 @@ impl StagedFile {
     }
 }
 
-/// What resolving a journaled staging operation needs.
+/// What resolving a journaled staging operation needs. The only file a staging operation can
+/// own is its own generation `<digest>.<operation ID>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StagingRef {
     pub operation_id: OperationId,
@@ -531,8 +545,8 @@ impl std::io::Read for Stoppable<'_> {
     }
 }
 
-/// Fault target kind of a save refused because the existing managed file for its digest is
-/// corrupt: an integrity problem that retrying cannot fix (recovery quarantines the file).
+/// Fault target kind of a save refused because the existing managed file generation for its
+/// digest is corrupt. The file is quarantined; a new request publishes a fresh generation.
 pub const INTEGRITY_TARGET: &str = "artifact_blob_corrupt";
 
 fn source_json(source: &ArtifactSource) -> Value {
@@ -630,11 +644,17 @@ impl ArtifactService {
         let limits = env.read(|s| {
             let max = setting_i64(s.configuration(), None, ARTIFACT_MAX_FILE_KEY);
             let quota = setting_i64(s.configuration(), Some(project), ARTIFACT_QUOTA_KEY);
-            let new_bytes = s.artifacts().blob(&digest)?.is_none();
+            let row = s.artifacts().blob(&digest)?;
             let usage = s.artifacts().project_usage(project)?;
-            Ok((max, quota, new_bytes, usage))
+            Ok((max, quota, row, usage))
         })?;
-        let (max, quota, new_bytes, usage) = limits;
+        let (max, quota, row, usage) = limits;
+        let new_bytes = row.is_none();
+        // An existing Present (or pending-removal) generation is reused after verification; any
+        // other state publishes a new generation.
+        let reuse = row
+            .filter(|b| matches!(b.state, BlobState::Present | BlobState::UnlinkPending))
+            .map(|b| b.generation);
         let (max, quota) = match (max, quota) {
             (Ok(m), Ok(q)) => (m, q),
             (Err(Failure::Refused(r)), _) | (_, Err(Failure::Refused(r))) => {
@@ -733,9 +753,10 @@ impl ArtifactService {
             self.files.publish(
                 &staging_name,
                 &mut source,
-                max as u64,
                 &digest,
                 expected_bytes as u64,
+                reuse.as_deref(),
+                operation.0.as_str(),
             )
         };
         let published = match published {
@@ -750,12 +771,25 @@ impl ArtifactService {
                         Refusal::new(DomainErrorCode::SourceChanged, "artifact_source", None)
                             .retry(RetryAdvice::RefreshAndNewRequest),
                     )),
-                    FileFault::TooLarge => Ok(Staging::Refused(too_large())),
-                    FileFault::Corrupt(_) => Ok(Staging::Refused(Refusal::new(
-                        DomainErrorCode::StorageUnavailable,
-                        INTEGRITY_TARGET,
-                        Id::new(digest.clone()).ok(),
-                    ))),
+                    FileFault::Corrupt(_) => {
+                        // The reused generation is corrupt: keep it as evidence in quarantine
+                        // (never claimed or unlinked). A new request then publishes a fresh
+                        // generation; if the file cannot even be moved aside, retrying cannot
+                        // succeed.
+                        let retry =
+                            match reuse.as_deref().map(|g| self.files.quarantine(&digest, g)) {
+                                Some(Ok(())) => RetryAdvice::RefreshAndNewRequest,
+                                _ => RetryAdvice::Never,
+                            };
+                        Ok(Staging::Refused(
+                            Refusal::new(
+                                DomainErrorCode::StorageUnavailable,
+                                INTEGRITY_TARGET,
+                                Id::new(digest.clone()).ok(),
+                            )
+                            .retry(retry),
+                        ))
+                    }
                     f => Err(file_failure(f)),
                 };
             }
@@ -768,6 +802,8 @@ impl ArtifactService {
             operation_id: operation,
             digest,
             byte_count: expected_bytes,
+            generation: published.generation,
+            reused: published.reused,
             relative_path: published.relative_path,
             origin: resolved.origin,
             source: source_json(source),
@@ -830,31 +866,55 @@ fn complete_operation(
     Ok(())
 }
 
-/// Records a staged blob's metadata, refusing a blob the collector is removing (retry) or whose
-/// file is no longer in place.
+/// Binds a staged generation in the blob row, inside the publishing transaction. A generation
+/// is bound only when the row names it already (reuse, revival of a pending removal) or names
+/// none that is still in place (first publication, after removal, or healing a generation whose
+/// file is gone). A claim in progress, or a reused generation that changed or was removed since
+/// it was verified, refuses as `Busy` (retry publishes a fresh generation).
 fn put_staged_blob(
     tx: &mut dyn WriteTransaction,
     files: &dyn ArtifactFiles,
     staged: &StagedFile,
-) -> Result<(), StorageError> {
-    if let Some(b) = tx.artifacts().blob(&staged.digest)? {
-        let in_place = files
-            .present(&staged.digest, staged.byte_count as u64)
+) -> Result<String, StorageError> {
+    let (digest, ours, n) = (&staged.digest, &staged.generation, staged.byte_count);
+    let bind = |tx: &mut dyn WriteTransaction, generation: &str| {
+        let path = files
+            .managed_path(digest, generation)
             .map_err(file_failure)?;
-        if b.state == BlobState::Unlinking || (b.state != BlobState::Present && !in_place) {
-            return Err(StorageError::Busy);
+        tx.artifacts()
+            .put_blob(digest, n, generation, &path)
+            .map(|b| b.generation)
+    };
+    match tx.artifacts().blob(digest)? {
+        None if staged.reused => Err(StorageError::Busy),
+        None => bind(tx, ours),
+        Some(b) if b.state == BlobState::Unlinking => Err(StorageError::Busy),
+        Some(b) if &b.generation == ours => match b.state {
+            BlobState::Present | BlobState::UnlinkPending => bind(tx, ours),
+            _ => Err(StorageError::Busy),
+        },
+        Some(b) if b.state == BlobState::Unlinked => {
+            if staged.reused {
+                Err(StorageError::Busy)
+            } else {
+                bind(tx, ours)
+            }
         }
-    } else if !files
-        .present(&staged.digest, staged.byte_count as u64)
-        .map_err(file_failure)?
-    {
-        // Another abandoned staging of the same bytes removed the unreferenced file after this
-        // one reused it: never record metadata for a file that is not in place (retry).
-        return Err(StorageError::Busy);
+        Some(b) => {
+            // The row names another generation (a concurrent save published its own).
+            let theirs = files
+                .present(digest, &b.generation, n as u64)
+                .map_err(file_failure)?;
+            match (theirs, staged.reused) {
+                // Keep theirs (reviving a pending removal); our own generation is an orphan
+                // removed once this operation is resolved.
+                (true, _) => bind(tx, &b.generation),
+                // Theirs is gone: heal the row with our verified generation.
+                (false, false) => bind(tx, ours),
+                (false, true) => Err(StorageError::Busy),
+            }
+        }
     }
-    tx.artifacts()
-        .put_blob(&staged.digest, staged.byte_count, &staged.relative_path)?;
-    Ok(())
 }
 
 /// Origin links of a new version from the host lineage of the invocation.
@@ -887,6 +947,7 @@ fn new_version(
     version_no: i64,
     media_type: &str,
     staged: &StagedFile,
+    generation: String,
 ) -> StoredVersion {
     StoredVersion {
         id: tx.new_id(IdKind::ArtifactVersion),
@@ -894,6 +955,7 @@ fn new_version(
         version_no,
         blob_digest: staged.digest.clone(),
         byte_count: staged.byte_count,
+        blob_generation: generation,
         media_type: media_type.to_owned(),
         created_at_ms: tx.now_ms(),
         deleted_at_ms: None,
@@ -962,7 +1024,7 @@ impl ArtifactService {
                 );
             }
         };
-        put_staged_blob(tx, &*self.files, &staged)?;
+        let generation = put_staged_blob(tx, &*self.files, &staged)?;
         let now = tx.now_ms();
         let artifact_id = tx.new_id(IdKind::Artifact);
         let mut artifact = StoredArtifact {
@@ -990,7 +1052,7 @@ impl ArtifactService {
             }),
         };
         tx.artifacts().insert_artifact(&artifact)?;
-        let version = new_version(tx, ctx, &artifact_id, 1, media_type, &staged);
+        let version = new_version(tx, ctx, &artifact_id, 1, media_type, &staged, generation);
         tx.artifacts().insert_version(&version)?;
         artifact.current_version_id = Some(version.id.clone());
         tx.artifacts().update_artifact(&artifact)?;
@@ -1462,7 +1524,13 @@ impl ArtifactService {
     /// GetAttachment behavior: an unreadable stored file is reported as not found).
     fn blob_range(&self, v: &StoredVersion, offset: u64, max: usize) -> Result<Vec<u8>, Failure> {
         self.files
-            .read_range(&v.blob_digest, v.byte_count as u64, offset, max)
+            .read_range(
+                &v.blob_digest,
+                &v.blob_generation,
+                v.byte_count as u64,
+                offset,
+                max,
+            )
             .map_err(|_| not_found("artifact_file", &v.id).into())
     }
 
@@ -1552,7 +1620,11 @@ impl ArtifactService {
         // while the stored file is in place.
         if !self
             .files
-            .present(&version.blob_digest, version.byte_count as u64)
+            .present(
+                &version.blob_digest,
+                &version.blob_generation,
+                version.byte_count as u64,
+            )
             .unwrap_or(false)
         {
             return Err(not_found("artifact_file", &version.id).into());
@@ -1631,7 +1703,11 @@ impl ArtifactService {
         }
         if !self
             .files
-            .present(&version.blob_digest, version.byte_count as u64)
+            .present(
+                &version.blob_digest,
+                &version.blob_generation,
+                version.byte_count as u64,
+            )
             .unwrap_or(false)
         {
             return Err(not_found("artifact_file", &version.id).into());
@@ -1798,7 +1874,23 @@ impl CommandHandler for ArtifactService {
             }) => !replayed && !matches!(receipt.decision, DomainDecision::Refused { .. }),
             _ => false,
         };
-        if !committed {
+        if committed {
+            // A concurrent save's generation was kept: ours is an orphan of a now resolved
+            // operation and can be removed (no one can ever bind it).
+            if !staged.reused {
+                let (digest, own) = (staged.digest.clone(), staged.operation_id.clone());
+                let bound = env.read(|s| {
+                    Ok(s.artifacts()
+                        .blob(&digest)?
+                        .is_some_and(|b| b.generation == own.0.as_str()))
+                });
+                if matches!(bound, Ok(false)) {
+                    let _ = self.files.unlink(&staged.digest, own.0.as_str());
+                }
+            }
+            return;
+        }
+        {
             // An unknown commit outcome is settled the same way: the resolution re-reads the
             // durable record under the fence, completing the operation when its version did
             // commit and failing it otherwise. A resolution that cannot be written is retried
