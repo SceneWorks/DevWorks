@@ -4268,3 +4268,78 @@ fn artifacts_tag_replaces_the_tag_set_under_the_artifact_revision() {
     assert_eq!(fx.receipts(), after);
     assert!(after > before);
 }
+
+impl Fx {
+    /// Shares `artifact` with `target` as the user (the documents share path).
+    fn share_with(&self, artifact: &Id, target: &str) {
+        let (svc, aid, ctx, target) = (
+            self.svc.clone(),
+            artifact.clone(),
+            self.user(),
+            project(target),
+        );
+        let revision = self.artifact(artifact).scope_revision;
+        let shared = self.write(move |tx| {
+            as_failure(svc.share(tx, &ctx, &aid, &target, &Revision::new(revision).unwrap()))
+        });
+        assert!(shared.changed);
+    }
+}
+
+#[test]
+fn seeing_an_artifact_through_a_share_never_allows_retagging_it() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let unconfined = |p: Option<&str>| fx.ctx("agent-a", PrincipalKind::Agent, p);
+    let confined_a = fx.ctx("agent-p", PrincipalKind::Agent, Some("project-a"));
+    let confined_b = fx.ctx("agent-b", PrincipalKind::Agent, Some("project-b"));
+    let user_in = |p: &str| fx.ctx("user-a", PrincipalKind::Human, Some(p));
+    let code = |reply| refused(reply).code;
+    let rev = |a: &Id| fx.artifact(a).revision;
+    // The user's workspace artifact, shared with project-a.
+    let w = saved(fx.save_workspace(&user, "w-s", "Home", b"home", json!([]), 3))
+        .artifact
+        .artifact_id;
+    fx.share_with(&w, "project-a");
+    // Through the share an unconfined non-owner and a confined principal see it, never own it.
+    for ctx in [&unconfined(Some("project-a")), &confined_a] {
+        assert_eq!(
+            code(fx.retag(ctx, &w, rev(&w), json!(["hijack"]))),
+            DomainErrorCode::PermissionDenied
+        );
+    }
+    // From the workspace the non-owner is not in its audience at all.
+    assert_eq!(
+        code(fx.retag(&unconfined(None), &w, rev(&w), json!(["x"]))),
+        DomainErrorCode::NotFound
+    );
+    assert!(fx.read(|s| s.artifacts().tags(&w)).is_empty());
+    // Its audience may: the owner (the user) here.
+    assert!(tagged(fx.retag(&user, &w, rev(&w), json!(["home"]))).changed);
+    // A workspace artifact an agent owns: the owner retags it from the workspace.
+    let mine = saved(fx.save_workspace(&unconfined(None), "w-o", "Mine", b"mine", json!([]), 3))
+        .artifact
+        .artifact_id;
+    assert!(tagged(fx.retag(&unconfined(None), &mine, 1, json!(["own"]))).changed);
+    // A project-a artifact shared with project-b: nobody acting from project-b owns it.
+    let p = fx
+        .saved("p-s", "Plan", "text/plain", b"plan")
+        .artifact
+        .artifact_id;
+    fx.share_with(&p, "project-b");
+    for ctx in [
+        &confined_b,
+        &unconfined(Some("project-b")),
+        &user_in("project-b"),
+    ] {
+        assert_eq!(
+            code(fx.retag(ctx, &p, rev(&p), json!(["hijack"]))),
+            DomainErrorCode::PermissionDenied
+        );
+    }
+    assert!(fx.read(|s| s.artifacts().tags(&p)).is_empty());
+    // The owner project, or the workspace, may.
+    assert!(tagged(fx.retag(&unconfined(Some("project-a")), &p, rev(&p), json!(["a"]))).changed);
+    assert!(tagged(fx.retag(&confined_a, &p, rev(&p), json!(["b"]))).changed);
+    assert!(tagged(fx.retag(&user, &p, rev(&p), json!(["c"]))).changed);
+}

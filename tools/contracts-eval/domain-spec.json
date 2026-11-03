@@ -1035,7 +1035,8 @@
       "since": {
         "actor_id": 2,
         "occurred_at_ms": 2
-      }
+      },
+      "earlierName": "GitLink"
     },
     "ReleaseRecord": {
       "kind": "record",
@@ -1507,6 +1508,7 @@
     "ToolInvocation": {
       "kind": "record",
       "fields": {
+        "sequence": "Revision",
         "call_id": "Id",
         "session_id": "Id",
         "tool_name": "Label",
@@ -1525,12 +1527,15 @@
         "next_cursor": "?Cursor",
         "has_more": "bool",
         "checkpoint": "?Cursor",
+        "item_sequences": "?Rows<Revision>",
         "tool_invocations": "?Rows<ToolInvocation>"
       },
       "since": {
         "checkpoint": 2,
+        "item_sequences": 2,
         "tool_invocations": 2
-      }
+      },
+      "schemaName": "Page"
     },
     "UsageReport": {
       "kind": "record",
@@ -3110,7 +3115,7 @@
         "session_id": "Id",
         "expected_context_epoch": "Counter",
         "item": "?RootId",
-        "paths": "?NonEmpty<RelativePath>",
+        "paths": "?PathSet",
         "budget_tokens": "?TokenBudget"
       },
       "result": "Page<ContextSource>",
@@ -3210,13 +3215,29 @@
       "operation": "history.tool_usage",
       "mode": "Query",
       "fields": {
-        "root_id": "RootId",
+        "root_id": "?RootId",
+        "project_id": "?ProjectId",
+        "workspace": "?bool",
         "page": "PageRequest"
       },
       "result": "UsagePage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Schema revision 2: tool invocations (one per durable initial tool response) are interleaved with inference usage in committed-sequence order, and every page carries a continuation checkpoint."
+      "rules": "Exactly one of rootId, projectId (revision 2) and workspace: true (revision 2). Schema revision 2: tool invocations (one per durable initial tool response of any session in the scope) are interleaved with inference usage in committed-sequence order, each list carries its committed sequences, and every page carries a continuation checkpoint.",
+      "since": {
+        "project_id": 2,
+        "workspace": 2
+      },
+      "exactlyOne": [
+        "root_id",
+        "project_id",
+        "workspace"
+      ],
+      "fieldSchema": {
+        "workspace": {
+          "const": true
+        }
+      }
     },
     "indexing.discover": {
       "operation": "indexing.discover",

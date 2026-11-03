@@ -6453,7 +6453,7 @@
               "type": "string"
             },
             "paths": {
-              "$ref": "#/$defs/List_RelativePath_1_128",
+              "$ref": "#/$defs/PathSet",
               "x-since": 2
             },
             "sessionId": {
@@ -6570,6 +6570,31 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "kind",
+                "rootId",
+                "page"
+              ]
+            },
+            {
+              "required": [
+                "kind",
+                "projectId",
+                "page"
+              ],
+              "x-since": 2
+            },
+            {
+              "required": [
+                "kind",
+                "workspace",
+                "page"
+              ],
+              "x-since": 2
+            }
+          ],
           "properties": {
             "kind": {
               "const": "history.tool_usage",
@@ -6578,13 +6603,21 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "projectId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
+            },
             "rootId": {
               "$ref": "#/$defs/Id"
+            },
+            "workspace": {
+              "const": true,
+              "type": "boolean",
+              "x-since": 2
             }
           },
           "required": [
             "kind",
-            "rootId",
             "page"
           ],
           "type": "object"
@@ -10517,14 +10550,6 @@
       "minItems": 0,
       "type": "array"
     },
-    "List_RelativePath_1_128": {
-      "items": {
-        "$ref": "#/$defs/RelativePath"
-      },
-      "maxItems": 128,
-      "minItems": 1,
-      "type": "array"
-    },
     "List_RequirementItem_0_128": {
       "items": {
         "$ref": "#/$defs/RequirementItem"
@@ -10962,6 +10987,15 @@
       ],
       "type": "object"
     },
+    "PathSet": {
+      "items": {
+        "$ref": "#/$defs/RelativePath"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
     "PlanDraft": {
       "additionalProperties": false,
       "properties": {
@@ -11190,7 +11224,7 @@
     "RelativePath": {
       "maxLength": 4096,
       "minLength": 1,
-      "pattern": "^(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+)(?:/(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+))*$",
+      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+)(?:[/\\\\](?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+))*$",
       "type": "string"
     },
     "RepositoryDelivery": {

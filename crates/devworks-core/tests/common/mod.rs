@@ -1242,10 +1242,9 @@ impl SessionRead for Unsupported {
     ) -> Result<Vec<EventRecord>, StorageError> {
         nope()
     }
-    fn scope_events(
+    fn decisions(
         &self,
         _: &HistoryScope,
-        _: &[&str],
         _: i64,
         _: u16,
     ) -> Result<Vec<EventRecord>, StorageError> {
@@ -1256,7 +1255,7 @@ impl SessionRead for Unsupported {
     }
     fn usage_facts(
         &self,
-        _: &RootId,
+        _: &HistoryScope,
         _: Option<&SequenceKey>,
         _: u16,
     ) -> Result<Vec<UsageFact>, StorageError> {
@@ -1292,6 +1291,9 @@ impl SessionRepository for Unsupported {
         nope()
     }
     fn insert_usage(&mut self, _: &StoredUsage) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_invocation(&mut self, _: &StoredInvocation) -> Result<(), StorageError> {
         nope()
     }
     fn insert_link(&mut self, _: &StoredLink) -> Result<(), StorageError> {

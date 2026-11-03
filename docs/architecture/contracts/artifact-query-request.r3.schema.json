@@ -5,15 +5,16 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "The artifacts of exactly one scope: `projectId`, or from schema revision 3 the workspace\n(`workspace: true`). Revisions 1 and 2 require `projectId`.",
           "oneOf": [
             {
               "required": [
+                "kind",
                 "projectId"
               ]
             },
             {
               "required": [
+                "kind",
                 "workspace"
               ],
               "x-since": 3

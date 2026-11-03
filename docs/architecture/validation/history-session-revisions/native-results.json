@@ -26466,6 +26466,9 @@
         "value": {
           "checkpoint": "cursor-a",
           "hasMore": false,
+          "itemSequences": [
+            "5"
+          ],
           "items": [
             {
               "amountUsd": "0",
@@ -26489,6 +26492,7 @@
               "errorCode": "conflict",
               "occurredAtMs": "1793570000000",
               "outcome": "Failed",
+              "sequence": "4",
               "sessionId": "session-a",
               "toolName": "tasks.edit"
             },
@@ -26498,6 +26502,7 @@
               "occurredAtMs": "1793570000000",
               "operationId": "operation-a",
               "outcome": "ApprovalRequired",
+              "sequence": "4",
               "sessionId": "session-a",
               "toolName": "releases.publish"
             }
@@ -26506,6 +26511,33 @@
       },
       "passed": true,
       "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "every usage item has its committed sequence",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-usage-sequence-count",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-usage-sequences",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "missing field `sequence`",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-tool-invocation-without-sequence",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
     },
     {
       "entry": "operation-result",
@@ -26757,7 +26789,7 @@
     },
     {
       "entry": "domain-request.r2",
-      "error": "list length outside contract",
+      "error": "path set length outside contract",
       "expectedSchemaValid": false,
       "id": "reject-r2-briefing-empty-paths",
       "normalized": null,
@@ -26784,9 +26816,210 @@
     },
     {
       "entry": "domain-request.r2",
-      "error": "duplicate briefing path",
-      "expectedSchemaValid": true,
+      "error": "duplicate path",
+      "expectedSchemaValid": false,
       "id": "reject-r2-briefing-duplicate-paths",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-0",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-1",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-2",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-3",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-4",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-5",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-6",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-7",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-8",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-9",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid RelativePath",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-briefing-platform-path-10",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-briefing-literal-separators-in-names",
+      "normalized": {
+        "body": {
+          "expectedContextEpoch": "0",
+          "kind": "sessions.briefing",
+          "paths": [
+            "src/name:part.rs",
+            "docs/a..b",
+            "x."
+          ],
+          "sessionId": "id-a"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-history.tool_usage-project",
+      "normalized": {
+        "body": {
+          "kind": "history.tool_usage",
+          "page": {
+            "limit": 20
+          },
+          "projectId": "project-a"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-history.tool_usage-workspace",
+      "normalized": {
+        "body": {
+          "kind": "history.tool_usage",
+          "page": {
+            "limit": 20
+          },
+          "workspace": true
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-tool_usage-project",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "usage names exactly one of a root, a project and the workspace",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-tool_usage-root-and-project",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "usage names exactly one of a root, a project and the workspace",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-tool_usage-no-scope",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "usage names exactly one of a root, a project and the workspace",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-tool_usage-workspace-false",
       "normalized": null,
       "passed": true,
       "typedValid": false

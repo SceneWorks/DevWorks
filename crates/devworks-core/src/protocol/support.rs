@@ -135,13 +135,13 @@ impl<T: Check> Check for Page<T> {
         Ok(())
     }
 }
-/// A page of committed history (`history.events`, `.work_lineage`, `.git_links`,
-/// `.evidence_links`). Revision 1 is exactly the recorded [`Page`]: `nextCursor` is present
-/// exactly when `hasMore`. Schema revision 2 adds `checkpoint`, the continuation after the last
-/// fact this page covers, returned on every page including the current tail (an empty page keeps
-/// the position it was asked from), so a poller resumes without replaying the history. While
-/// `hasMore`, the checkpoint is the `nextCursor`. It keeps the recorded `Page` schema name, so
-/// revision-1 documents are unchanged.
+// A page of committed history (`history.events`, `.work_lineage`, `.git_links`,
+// `.evidence_links`). Revision 1 is exactly the recorded [`Page`]: `nextCursor` is present
+// exactly when `hasMore`. Schema revision 2 adds `checkpoint`, the continuation after the last
+// fact this page covers, returned on every page including the current tail (an empty page keeps
+// the position it was asked from), so a poller resumes without replaying the history. While
+// `hasMore`, the checkpoint is the `nextCursor`. It keeps the recorded `Page` schema name, so
+// revision-1 documents are unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schemars(rename = "Page")]
@@ -253,14 +253,50 @@ text_rule!(Url, "^https?://[^\\s]+$", |s: &str| s.len() <= 4096
     && !s.chars().any(char::is_whitespace)
     && s.split("://").nth(1).is_some_and(|x| !x.is_empty())
     && !s.contains('\0'));
+// A repository-relative path. Both `/` and `\` separate segments, so no platform reads it as
+// absolute or as escaping its root: no leading separator (`/x`, `\x`, `\\server`), no drive
+// form (`C:`, `C:x`, `C:\x`), no empty, `.` or `..` segment (either separator), no NUL.
 text_rule!(
     RelativePath,
-    r"^(?:(?!\.{1,2}(?:/|$))[^/\u0000]+)(?:/(?:(?!\.{1,2}(?:/|$))[^/\u0000]+))*$",
+    r"^(?![A-Za-z]:)(?:(?!\.{1,2}(?:[/\\]|$))[^/\\\u0000]+)(?:[/\\](?:(?!\.{1,2}(?:[/\\]|$))[^/\\\u0000]+))*$",
     |s: &str| s.len() <= 4096
-        && !s.starts_with('/')
         && !s.contains('\0')
-        && s.split('/').all(|x| !x.is_empty() && x != "." && x != "..")
+        && !s.starts_with(['/', '\\'])
+        && !(s.len() >= 2 && s.as_bytes()[1] == b':' && s.as_bytes()[0].is_ascii_alphabetic())
+        && s.split(['/', '\\'])
+            .all(|x| !x.is_empty() && x != "." && x != "..")
 );
+/// Distinct repository-relative paths, 1-128 of them (a set: decoding refuses a duplicate).
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+pub struct PathSet(pub Vec<RelativePath>);
+impl<'de> Deserialize<'de> for PathSet {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Vec::<RelativePath>::deserialize(d)?;
+        if v.is_empty() || v.len() > 128 {
+            return Err(D::Error::custom("path set length outside contract"));
+        }
+        let mut seen = std::collections::HashSet::new();
+        if !v.iter().all(|p| seen.insert(p.0.clone())) {
+            return Err(D::Error::custom("duplicate path"));
+        }
+        Ok(Self(v))
+    }
+}
+impl JsonSchema for PathSet {
+    fn schema_name() -> Cow<'static, str> {
+        "PathSet".into()
+    }
+    fn json_schema(g: &mut SchemaGenerator) -> Schema {
+        let item = g.subschema_for::<RelativePath>();
+        json_schema!({"type":"array","items":item,"minItems":1,"maxItems":128,"uniqueItems":true})
+    }
+}
+impl Check for PathSet {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
 text_rule!(
     Money,
     "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,12})?$",

@@ -35,8 +35,9 @@
 //! `history.work_lineage` instead. From revision 2 the aggregate may be the command itself
 //! (`EventSubject::Command`, revision kind `Command`, revision 1), so a root's feed has every
 //! decision attached to it and `projectId` selects the project change feed: every command decided
-//! in that project, in committed-sequence order, visible to the principals that may see the
-//! project.
+//! in that project (the gateway attaches a workspace command naming a visible project to it), in
+//! committed-sequence order, visible to the principals that may see the project. The gateway
+//! refuses to publish a command aggregate below revision 2.
 //!
 //! From revision 2, every history page (`HistoryPage`, `UsagePage`) carries `checkpoint`, the
 //! continuation after the last fact it covers, including at the current tail (an empty page keeps
@@ -48,9 +49,11 @@
 //! revision. A related work item records no creator, so its actor is absent; its time is its
 //! creation. Facts with no repository (sessions, commands, artifacts, evidence) have none.
 //!
-//! `history.tool_usage` revision 2 interleaves tool invocations with the inference usage
-//! observations, in committed-sequence order: one `ToolInvocation` per durable initial tool
-//! response (`tool_response` link) — the tool (capability) name, outcome, the call and session,
+//! `history.tool_usage` revision 2 names a root, a project or the workspace (Home sessions; only a
+//! workspace invocation of a principal authorized for the workspace) and interleaves tool
+//! invocations with the inference usage observations, in committed-sequence order, each list with
+//! its committed sequences: one `ToolInvocation` per completed invocation recorded for any session
+//! (`tool_invocations`, with or without a root) — the tool (capability) name, outcome, the call and session,
 //! the operation a wait or unknown outcome is linked to, the actor and time of the response, the
 //! interval between the durable call and response records (`durationMs`; 0 when one batch carries
 //! both) and, for a failure, its error code after redaction. Tool arguments and results are never
@@ -78,12 +81,12 @@ use crate::context::{InvocationContext, ReceiptIdentity};
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, history as ops};
 use crate::ports::storage::{
-    HistoryScope, LedgerEntry, LineageRow, NewEvent, ReadSnapshot, SequenceKey, SessionRead,
-    StorageError, StoredLink, UsageFact, WorkRoot, WriteTransaction,
+    HistoryScope, LedgerEntry, LineageRow, NewEvent, ReadSnapshot, SequenceKey, StorageError,
+    StoredInvocation, StoredLink, UsageFact, WorkRoot, WriteTransaction,
 };
 use crate::ports::{IdKind, IdSource, QueryAnswer, QueryHandler};
 use crate::protocol::data::GitOid;
-use crate::protocol::provider::{ArtifactRef, ToolOutcome, TranscriptBody};
+use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     AttributedGitLink, EvidenceLink, LineageRecord, OperationRef, ReceiptLookupState,
     ReceiptObservation, ToolInvocation, ToolInvocationOutcome, UsageItem, UsagePage,
@@ -378,16 +381,6 @@ struct GitBody {
     head: GitOid,
 }
 
-/// The facts a `tool_response` link records (the transcript entries hold the rest).
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResponseBody {
-    session_id: Id,
-    sequence: i64,
-    call_sequence: i64,
-    operation_id: Option<OperationId>,
-}
-
 fn stored(what: &str) -> Failure {
     StorageError::IncompatibleSchema(format!("stored {what}")).into()
 }
@@ -565,7 +558,7 @@ impl HistoryService {
                 HistoryScope::Root(root) if revision.0 < 2 => {
                     read.root_events(root, &["CommandDecided"], from, n)?
                 }
-                scope => read.scope_events(scope, &["CommandDecided"], from, n)?,
+                scope => read.decisions(scope, from, n)?,
             };
             rows.into_iter()
                 .map(|e| {
@@ -931,62 +924,25 @@ fn evidence_link(_: &WorkRoot, l: StoredLink) -> Result<EvidenceLink, Failure> {
     })
 }
 
-/// The transcript entry of `session` at `sequence`.
-fn entry_at(
-    read: &dyn SessionRead,
-    session: &Id,
-    sequence: i64,
-) -> Result<crate::ports::storage::StoredEntry, Failure> {
-    read.entries(session, sequence - 1, 1)?
-        .into_iter()
-        .next()
-        .filter(|e| e.sequence == sequence)
-        .ok_or_else(|| stored("tool transcript entry"))
-}
-
-/// The invocation a durable initial tool response completes (revision-2 `history.tool_usage`).
-/// Only identities, the outcome and the redacted error code leave the transcript: arguments and
-/// results stay in their restricted artifacts.
-fn tool_invocation(
-    read: &dyn SessionRead,
-    redactor: &Redactor,
-    link: StoredLink,
-) -> Result<ToolInvocation, Failure> {
-    let body: ResponseBody =
-        serde_json::from_value(link.body).map_err(|_| stored("tool response link"))?;
-    let response = entry_at(read, &body.session_id, body.sequence)?;
-    let call = entry_at(read, &body.session_id, body.call_sequence)?;
-    let outcome = match serde_json::from_value::<TranscriptBody>(response.body) {
-        Ok(TranscriptBody::ToolResponseRecorded { outcome, .. }) => outcome,
-        _ => return Err(stored("tool response entry")),
-    };
-    let tool = match serde_json::from_value::<TranscriptBody>(call.body) {
-        Ok(TranscriptBody::ToolCallRecorded { tool_call }) => tool_call.capability_id,
-        _ => return Err(stored("tool call entry")),
-    };
-    let (kind, error_code) = match &outcome {
-        ToolOutcome::Completed { .. } => (ToolInvocationOutcome::Completed, None),
-        ToolOutcome::Failed { code } => (
-            ToolInvocationOutcome::Failed,
-            Some(label(&redactor.redact_text(code.as_str()), "redacted")),
-        ),
-        ToolOutcome::ApprovalRequired { .. } => (ToolInvocationOutcome::ApprovalRequired, None),
-        ToolOutcome::DependencyBlocked { .. } => (ToolInvocationOutcome::DependencyBlocked, None),
-        ToolOutcome::CancelledBeforeDispatch => {
-            (ToolInvocationOutcome::CancelledBeforeDispatch, None)
-        }
-        ToolOutcome::OutcomeUnknown { .. } => (ToolInvocationOutcome::OutcomeUnknown, None),
-    };
+/// The wire form of a completed tool invocation (revision-2 `history.tool_usage`). Only
+/// identities, the outcome and the redacted error code are recorded: arguments and results stay
+/// in their restricted artifacts.
+fn tool_invocation(redactor: &Redactor, v: StoredInvocation) -> Result<ToolInvocation, Failure> {
+    let outcome = serde_json::from_value::<ToolInvocationOutcome>(json!(v.outcome))
+        .map_err(|_| stored("tool outcome"))?;
     Ok(ToolInvocation {
-        call_id: call.entry_id,
-        session_id: body.session_id,
-        tool_name: label(tool.as_str(), "tool"),
-        outcome: kind,
-        duration_ms: Some(counter(response.created_at_ms - call.created_at_ms)),
-        error_code,
-        operation_id: body.operation_id,
-        actor_id: link.actor,
-        occurred_at_ms: counter(link.created_at_ms),
+        sequence: rev(v.committed_sequence),
+        call_id: v.call_entry_id,
+        session_id: v.session_id,
+        tool_name: label(&v.capability_id, "tool"),
+        outcome,
+        duration_ms: Some(counter(v.responded_at_ms - v.called_at_ms)),
+        error_code: v
+            .error_code
+            .map(|code| label(&redactor.redact_text(&code), "redacted")),
+        operation_id: v.operation_id,
+        actor_id: v.actor,
+        occurred_at_ms: counter(v.responded_at_ms),
     })
 }
 
@@ -1086,9 +1042,7 @@ impl QueryHandler for HistoryService {
                     root_scope(&i.root_id),
                 )
             }),
-            ops::Input::ToolUsage(i) => self
-                .tool_usage(snapshot, ctx, i, revision)
-                .map(|r| (r, root_scope(&i.root_id))),
+            ops::Input::ToolUsage(i) => self.tool_usage(snapshot, ctx, i, revision),
         };
         let (result, scope_revision) =
             answered.map_err(|f| query_fault(f, "history", self.correlation()))?;
@@ -1101,68 +1055,139 @@ impl QueryHandler for HistoryService {
     }
 }
 
-/// One fact of a `history.tool_usage` page.
+/// One fact of a `history.tool_usage` page, with its committed sequence.
 enum Usage {
-    Inference(UsageItem),
+    Inference(i64, UsageItem),
     Tool(ToolInvocation),
 }
 
+/// Fault target kind of a workspace usage read outside the caller's authorized scope.
+pub const WORKSPACE_SCOPE: &str = "workspace_scope";
+
 impl HistoryService {
+    /// The scope of a `history.tool_usage` page, its cursor binding and scope revision.
+    /// Revision 1 names a root; revision 2 also a project (visible to the invocation, like the
+    /// project change feed) or the workspace itself (its Home sessions), which only a workspace
+    /// invocation of a principal whose authorized scope is the workspace reads.
+    fn usage_scope(
+        snapshot: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        input: &ops::ToolUsageInput,
+        revision: SchemaRevision,
+    ) -> Result<(HistoryScope, CursorBinding, i64), Failure> {
+        let read = snapshot.sessions();
+        let op = "history.tool_usage";
+        match (&input.root_id, &input.project_id, input.workspace) {
+            (Some(root_id), None, None) => {
+                let root = visible_root(read, ctx, root_id)?;
+                Ok((
+                    HistoryScope::Root(root.id.clone()),
+                    Self::binding(ctx, op, &root, revision),
+                    root.scope_revision,
+                ))
+            }
+            (None, Some(project), None) => {
+                let scope_revision = match read.project_scope_revision(project)? {
+                    Some(r) if project_visible(ctx, Some(project)) => r,
+                    _ => return Err(not_found("project", &project.0).into()),
+                };
+                Ok((
+                    HistoryScope::Project(project.clone()),
+                    Self::bind(
+                        ctx,
+                        op,
+                        &["project", project.0.as_str()],
+                        scope_revision,
+                        revision,
+                    ),
+                    scope_revision,
+                ))
+            }
+            (None, None, Some(true)) => {
+                let authorized =
+                    crate::services::artifacts::authorized_scope(snapshot.authority(), ctx)?;
+                if ctx.project_id().is_some()
+                    || authorized != crate::services::artifacts::AuthorizedScope::Workspace
+                {
+                    return Err(Refusal::new(
+                        DomainErrorCode::PermissionDenied,
+                        WORKSPACE_SCOPE,
+                        None,
+                    )
+                    .into());
+                }
+                Ok((
+                    HistoryScope::Workspace,
+                    Self::bind(ctx, op, &["workspace"], 1, revision),
+                    1,
+                ))
+            }
+            // Admission admits exactly one scope.
+            _ => Err(Refusal::new(DomainErrorCode::InvalidArgument, "scope", None).into()),
+        }
+    }
+
     fn tool_usage(
         &self,
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         input: &ops::ToolUsageInput,
         revision: SchemaRevision,
-    ) -> Result<OperationResult, Failure> {
+    ) -> Result<(OperationResult, i64), Failure> {
         let read = snapshot.sessions();
-        let root = visible_root(read, ctx, &input.root_id)?;
-        let binding = Self::binding(ctx, "history.tool_usage", &root, revision);
+        let (scope, binding, scope_revision) = Self::usage_scope(snapshot, ctx, input, revision)?;
         let inference = |u: crate::ports::storage::StoredUsage| {
-            serde_json::from_value::<UsageItem>(u.item).map_err(|_| stored("usage"))
+            let sequence = u.committed_sequence;
+            serde_json::from_value::<UsageItem>(u.item)
+                .map(|item| Usage::Inference(sequence, item))
+                .map_err(|_| stored("usage"))
         };
         let redactor = Redactor::new();
         let paged = Self::page(
             &binding,
             input.page.cursor.as_ref().map(|c| c.0.as_str()),
             input.page.limit.get() as u16,
-            |after, n| {
-                if revision.0 < 2 {
-                    // Revision 1: the inference usage observations only.
-                    return read
-                        .usage(&root.id, after, n)?
-                        .into_iter()
-                        .map(|(k, u)| Ok((k, Usage::Inference(inference(u)?))))
-                        .collect();
-                }
-                read.usage_facts(&root.id, after, n)?
+            |after, n| match &scope {
+                // Revision 1: the root's inference usage observations only.
+                HistoryScope::Root(root) if revision.0 < 2 => read
+                    .usage(root, after, n)?
+                    .into_iter()
+                    .map(|(k, u)| Ok((k, inference(u)?)))
+                    .collect(),
+                scope => read
+                    .usage_facts(scope, after, n)?
                     .into_iter()
                     .map(|f| match f {
-                        UsageFact::Inference { key, usage } => {
-                            Ok((key, Usage::Inference(inference(usage)?)))
-                        }
-                        UsageFact::ToolResponse { key, link } => {
-                            Ok((key, Usage::Tool(tool_invocation(read, &redactor, link)?)))
+                        UsageFact::Inference { key, usage } => Ok((key, inference(usage)?)),
+                        UsageFact::Tool { key, invocation } => {
+                            Ok((key, Usage::Tool(tool_invocation(&redactor, invocation)?)))
                         }
                     })
-                    .collect()
+                    .collect(),
             },
         )?;
-        let (mut items, mut tools) = (Vec::new(), Vec::new());
+        let (mut items, mut sequences, mut tools) = (Vec::new(), Vec::new(), Vec::new());
         for fact in paged.items {
             match fact {
-                Usage::Inference(u) => items.push(u),
+                Usage::Inference(sequence, u) => {
+                    items.push(u);
+                    sequences.push(rev(sequence));
+                }
                 Usage::Tool(t) => tools.push(t),
             }
         }
-        Ok(OperationResult::HistoryToolUsage {
-            value: UsagePage {
-                items: BoundedList(items),
-                has_more: paged.next.is_some(),
-                next_cursor: paged.next.map(BoundedText),
-                checkpoint: Some(BoundedText(paged.checkpoint)),
-                tool_invocations: Some(BoundedList(tools)),
+        Ok((
+            OperationResult::HistoryToolUsage {
+                value: UsagePage {
+                    items: BoundedList(items),
+                    has_more: paged.next.is_some(),
+                    next_cursor: paged.next.map(BoundedText),
+                    checkpoint: Some(BoundedText(paged.checkpoint)),
+                    item_sequences: Some(BoundedList(sequences)),
+                    tool_invocations: Some(BoundedList(tools)),
+                },
             },
-        })
+            scope_revision,
+        ))
     }
 }

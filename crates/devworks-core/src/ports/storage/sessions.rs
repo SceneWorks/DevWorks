@@ -234,25 +234,54 @@ pub enum HistoryScope {
     Root(RootId),
     /// Every fact of one project.
     Project(ProjectId),
+    /// The facts of the workspace itself (no project): Home sessions and workspace commands.
+    Workspace,
 }
 
-/// One usage fact of a root in committed-sequence order: an attributed inference observation
-/// (key source 3) or a durable initial tool response (a `tool_response` link, key source 1).
+/// One completed tool invocation: a durable call and its single initial response, recorded with
+/// the response for every session (with or without a project or work root).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredInvocation {
+    pub session_id: Id,
+    /// Transcript sequence of the response entry (unique per session).
+    pub response_sequence: i64,
+    pub call_sequence: i64,
+    /// Committed sequence of the batch that recorded the response.
+    pub committed_sequence: i64,
+    pub project_id: Option<ProjectId>,
+    pub root_id: Option<RootId>,
+    /// Transcript entry ID of the call.
+    pub call_entry_id: Id,
+    pub capability_id: String,
+    /// Outcome variant of the response (`Completed`, `Failed`, ...).
+    pub outcome: String,
+    /// The `Failed` response's code, as recorded (redacted when served).
+    pub error_code: Option<String>,
+    pub operation_id: Option<OperationId>,
+    /// The principal the response batch was attributed to.
+    pub actor: ActorId,
+    pub called_at_ms: i64,
+    pub responded_at_ms: i64,
+}
+
+/// One usage fact of a scope in committed-sequence order: an attributed inference observation
+/// (key source 3, ID the zero-padded ordinal) or a completed tool invocation (key source 1, ID the
+/// zero-padded response sequence).
 #[derive(Clone, Debug, PartialEq)]
 pub enum UsageFact {
     Inference {
         key: SequenceKey,
         usage: StoredUsage,
     },
-    ToolResponse {
+    Tool {
         key: SequenceKey,
-        link: StoredLink,
+        invocation: StoredInvocation,
     },
 }
 impl UsageFact {
     pub fn key(&self) -> &SequenceKey {
         match self {
-            Self::Inference { key, .. } | Self::ToolResponse { key, .. } => key,
+            Self::Inference { key, .. } | Self::Tool { key, .. } => key,
         }
     }
 }
@@ -359,11 +388,11 @@ pub trait SessionRead {
         after: Option<&SequenceKey>,
         limit: u16,
     ) -> Result<Vec<(SequenceKey, StoredUsage)>, StorageError>;
-    /// The root's usage facts — its usage observations and its `tool_response` links — in
+    /// The usage facts of `scope` — its usage observations and completed tool invocations — in
     /// committed-sequence order `(sequence, source, id)` after `after`, at most `limit`.
     fn usage_facts(
         &self,
-        root: &RootId,
+        scope: &HistoryScope,
         after: Option<&SequenceKey>,
         limit: u16,
     ) -> Result<Vec<UsageFact>, StorageError>;
@@ -400,12 +429,11 @@ pub trait SessionRead {
         after: i64,
         limit: u16,
     ) -> Result<Vec<EventRecord>, StorageError>;
-    /// History events of `scope` whose kind is in `kinds`, whether or not they name a subject,
-    /// sequence greater than `after`, at most `limit`.
-    fn scope_events(
+    /// The `CommandDecided` events of `scope`, whether or not they name a subject, sequence
+    /// greater than `after`, at most `limit`.
+    fn decisions(
         &self,
         scope: &HistoryScope,
-        kinds: &[&str],
         after: i64,
         limit: u16,
     ) -> Result<Vec<EventRecord>, StorageError>;
@@ -431,6 +459,8 @@ pub trait SessionRepository: SessionRead {
     fn insert_context_source(&mut self, source: &StoredContextSource) -> Result<(), StorageError>;
     fn insert_checkpoint(&mut self, checkpoint: &StoredCheckpoint) -> Result<(), StorageError>;
     fn insert_usage(&mut self, usage: &StoredUsage) -> Result<(), StorageError>;
+    /// Records a completed invocation; `(session, response sequence)` is unique.
+    fn insert_invocation(&mut self, invocation: &StoredInvocation) -> Result<(), StorageError>;
     /// Adds a link; its ID is unique and a superseded or parent link must exist.
     fn insert_link(&mut self, link: &StoredLink) -> Result<(), StorageError>;
 }

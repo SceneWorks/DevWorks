@@ -764,9 +764,9 @@ fn normalize_tags(tags: &mut Option<ArtifactTags>) {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ArtifactCommand {
-    /// A new artifact in exactly one owner scope: `projectId`, or from schema revision 3 the
-    /// workspace (`workspace: true`). Revisions 1 and 2 require `projectId`.
-    #[schemars(extend("oneOf" = [{"required": ["projectId"]}, {"required": ["workspace"], "x-since": 3}]))]
+    // A new artifact in exactly one owner scope: `projectId`, or from schema revision 3 the
+    // workspace (`workspace: true`). Revisions 1 and 2 require `projectId`.
+    #[schemars(extend("oneOf" = [{"required": ["kind", "projectId", "title", "mediaType", "source", "expectedDigest", "expectedBytes"]}, {"required": ["kind", "workspace", "title", "mediaType", "source", "expectedDigest", "expectedBytes"], "x-since": 3}]))]
     Save {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(with = "ProjectId")]
@@ -847,9 +847,9 @@ pub struct ArtifactCommandRequest {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ArtifactQuery {
-    /// The artifacts of exactly one scope: `projectId`, or from schema revision 3 the workspace
-    /// (`workspace: true`). Revisions 1 and 2 require `projectId`.
-    #[schemars(extend("oneOf" = [{"required": ["projectId"]}, {"required": ["workspace"], "x-since": 3}]))]
+    // The artifacts of exactly one scope: `projectId`, or from schema revision 3 the workspace
+    // (`workspace: true`). Revisions 1 and 2 require `projectId`.
+    #[schemars(extend("oneOf" = [{"required": ["kind", "projectId"]}, {"required": ["kind", "workspace"], "x-since": 3}]))]
     List {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(with = "ProjectId")]

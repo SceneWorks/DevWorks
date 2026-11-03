@@ -5,14 +5,6 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "A new artifact in exactly one owner scope: `projectId`, or from schema revision 3 the\nworkspace (`workspace: true`). Revisions 1 and 2 require `projectId`.",
-          "oneOf": [
-            {
-              "required": [
-                "projectId"
-              ]
-            }
-          ],
           "properties": {
             "expectedBytes": {
               "$ref": "#/$defs/Counter"
@@ -39,6 +31,7 @@
           },
           "required": [
             "kind",
+            "projectId",
             "title",
             "mediaType",
             "source",

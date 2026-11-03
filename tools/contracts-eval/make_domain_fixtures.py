@@ -8,7 +8,7 @@ def valid(entry):return json.loads(next(c['raw'] for c in ALL if c['entry']==ent
 ART={'artifactId':'artifact-a','versionId':'version-a','sha256':'a'*64,'byteLength':'8','mediaType':'text/plain'}
 STAMP={'storeId':'store-a','restoreEpoch':'0','sequence':'1','policyRevision':'1','scopeRevision':'1'}
 BASE={'Id':'id-a','Revision':'1','Counter':'0','ProjectId':'project-a','RootId':'root-a','ActorId':'actor-a','AssignmentId':'assignment-a','OperationId':'operation-a','QueryId':'query-a','RequestKey':'request-a','CommandId':'command-a','EventId':'event-a','StoreId':'store-a','ResourceId':'resource-a','CorrelationId':'correlation-a',
- 'Label':'fixture','Text':'fixture','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'ArtifactTags':['evidence'],'DynamicJson':{'input':'fixture'},
+ 'Label':'fixture','Text':'fixture','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'ArtifactTags':['evidence'],'PathSet':['src/lib.rs'],'DynamicJson':{'input':'fixture'},
  'DataScope':{'kind':'Workspace'},'ViewSelection':{'kind':'Published','repositoryIds':['repo-a']},'Coverage':{'state':'Complete','gaps':[],'moreGaps':False},'Digest':'a'*64,'ArtifactRef':ART,'SchemaRef':{'schemaId':'fixture/object','revision':'1','sha256':'a'*64},'Attribution':{'kind':'Workspace','sessionId':'session-a'},'GitOid':{'format':'Sha1','hex':'a'*40},'ReadStamp':STAMP,'OperationState':'ObservedComplete',
  'RootControl':{'rootId':'root-a','revision':'1','desiredState':'Enabled'},'Blockers':{'items':[],'hasMore':False},'EligibilityTarget':{'kind':'root','id':'root-a'},'Purpose':'Planning',
  'DeliveryBarrier':valid('delivery-barrier'),'DeliverySnapshot':valid('delivery-snapshot'),'GraphPage':valid('graph-page'),'RetrievalPage':valid('retrieval-page'),'TranscriptPage':valid('transcript-page'),'Event':valid('event')}
@@ -37,6 +37,7 @@ def sample(t):
 def request(name,mode):
  d=OPS[name];fs=d[mode.lower()+'Fields'] if d['mode']=='Hybrid' else d['fields']
  body={'kind':name,**{camel(n):sample(t) for n,t in fs.items() if not t.startswith('?')}}
+ if d.get('exactlyOne'):m=d['exactlyOne'][0];body[camel(m)]=sample(fs[m][1:])
  if name=='git.diff':body['paths']=['src/name:part\\literal.rs']
  if name=='tasks.create':body['parentId']='feature-a'
  if name=='tasks.assign':body['clearAssignment']=True
@@ -310,9 +311,12 @@ case('reject-r1-lineage-attribution','operation-result',{'kind':'history.work_li
 case('reject-r1-vcs-link-actor','operation-result',{'kind':'history.git_links','value':page([{**vcs,'actorId':'actor-a'}],None)},False,False)
 case('reject-r2-vcs-link-revision-member','operation-result.r2',{'kind':'history.git_links','value':page([{**vcs,'revision':'a'*40}])},False,False)
 usage=sample('UsageItem')
-tool={'callId':'entry-call-a','sessionId':'session-a','toolName':'tasks.edit','outcome':'Failed','durationMs':'120','errorCode':'conflict','actorId':'actor-a','occurredAtMs':'1793570000000'}
-waiting={'callId':'entry-call-b','sessionId':'session-a','toolName':'releases.publish','outcome':'ApprovalRequired','operationId':'operation-a','actorId':'actor-a','occurredAtMs':'1793570000000'}
-case('r2-result-history.tool_usage','operation-result.r2',{'kind':'history.tool_usage','value':{**page([usage]),'toolInvocations':[tool,waiting]}})
+tool={'sequence':'4','callId':'entry-call-a','sessionId':'session-a','toolName':'tasks.edit','outcome':'Failed','durationMs':'120','errorCode':'conflict','actorId':'actor-a','occurredAtMs':'1793570000000'}
+waiting={'sequence':'4','callId':'entry-call-b','sessionId':'session-a','toolName':'releases.publish','outcome':'ApprovalRequired','operationId':'operation-a','actorId':'actor-a','occurredAtMs':'1793570000000'}
+case('r2-result-history.tool_usage','operation-result.r2',{'kind':'history.tool_usage','value':{**page([usage]),'itemSequences':['5'],'toolInvocations':[tool,waiting]}})
+case('reject-r2-usage-sequence-count','operation-result.r2',{'kind':'history.tool_usage','value':{**page([usage]),'itemSequences':[],'toolInvocations':[]}},False,True)
+case('reject-r1-usage-sequences','operation-result',{'kind':'history.tool_usage','value':{**page([usage],None),'itemSequences':['5']}},False,False)
+case('reject-r2-tool-invocation-without-sequence','operation-result.r2',{'kind':'history.tool_usage','value':{**page([]),'toolInvocations':[{k:v for k,v in tool.items() if k!='sequence'}]}},False,False)
 case('r1-result-history.tool_usage-usage','operation-result',{'kind':'history.tool_usage','value':page([usage],None)})
 case('reject-r1-tool-invocations','operation-result',{'kind':'history.tool_usage','value':{**page([usage],None),'toolInvocations':[tool]}},False,False)
 case('reject-r2-tool-invocation-outcome','operation-result.r2',{'kind':'history.tool_usage','value':{**page([]),'toolInvocations':[{**tool,'outcome':'Succeeded'}]}},False,False)
@@ -334,7 +338,19 @@ case('reject-r2-briefing-budget-above-bound','domain-request.r2',domain('session
 case('reject-r2-briefing-empty-paths','domain-request.r2',domain('sessions.briefing',paths=[]),False,False)
 case('reject-r2-briefing-absolute-path','domain-request.r2',domain('sessions.briefing',paths=['/etc/passwd']),False,False)
 case('reject-r2-briefing-parent-path','domain-request.r2',domain('sessions.briefing',paths=['src/../secrets']),False,False)
-case('reject-r2-briefing-duplicate-paths','domain-request.r2',domain('sessions.briefing',paths=['src','src']),False,True)
+case('reject-r2-briefing-duplicate-paths','domain-request.r2',domain('sessions.briefing',paths=['src','src']),False,False)
+for i,bad in enumerate(['C:/Windows','c:relative','C:\\Windows','\\root','\\\\server\\share','src\\..\\secrets','..\\up','a\\.\\b','a\\\\b','a/\\b','nul\u0000byte']):
+ case(f'reject-r2-briefing-platform-path-{i}','domain-request.r2',domain('sessions.briefing',paths=[bad]),False,False)
+case('r2-briefing-literal-separators-in-names','domain-request.r2',domain('sessions.briefing',paths=['src/name:part.rs','docs/a..b','x.']))
+usage_scope=lambda **kw:domain('history.tool_usage',**kw)
+def unrooted(**kw):
+ obj=usage_scope(**kw);obj['body'].pop('rootId');return obj
+case('r2-input-history.tool_usage-project','domain-request.r2',unrooted(projectId='project-a'))
+case('r2-input-history.tool_usage-workspace','domain-request.r2',unrooted(workspace=True))
+case('reject-r1-tool_usage-project','domain-request',{**unrooted(projectId='project-a'),'schemaRevision':1},False,False)
+case('reject-r2-tool_usage-root-and-project','domain-request.r2',usage_scope(projectId='project-a'),False,False)
+case('reject-r2-tool_usage-no-scope','domain-request.r2',unrooted(),False,False)
+case('reject-r2-tool_usage-workspace-false','domain-request.r2',unrooted(workspace=False),False,False)
 case('reject-r2-briefing-null-item','domain-request.r2',domain('sessions.briefing',item=None),False,False)
 case('r2-result-sessions.briefing','operation-result.r2',{'kind':'sessions.briefing','value':{'items':[sample('ContextSource')],'hasMore':False}})
 # Schema revision 3 (artifacts): the workspace owner scope for saves and listings, and

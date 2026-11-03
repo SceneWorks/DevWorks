@@ -109,6 +109,7 @@ pub struct AdmittedCommand {
     action: Option<&'static str>,
     prepared: Option<Prepared>,
     targets: Vec<Id>,
+    project_targets: Vec<crate::protocol::ProjectId>,
 }
 impl AdmittedCommand {
     pub fn descriptor(&self) -> &'static OperationDescriptor {
@@ -316,6 +317,21 @@ impl Gateway<'_> {
                 // Published under the negotiated revision's projection only.
                 let mut result = answer.result;
                 result.retain_revision(admitted.revision.0);
+                // A union alternative introduced later (an event's command aggregate) cannot be
+                // projected away: a result carrying one below its revision is a handler fault.
+                if let crate::protocol::results::OperationResult::HistoryEvents { value } = &result
+                    && let Some(Err(e)) = value
+                        .items
+                        .0
+                        .iter()
+                        .map(|e| e.validate_revision(admitted.revision.0))
+                        .find(Result::is_err)
+                {
+                    return Err(GatewayFailure::HandlerContract(format!(
+                        "history.events result at schema revision {}: {e}",
+                        admitted.revision.0
+                    )));
+                }
                 DomainQueryReply::Result {
                     protocol: Protocol::Draft1,
                     query_id: admitted.query_id,
@@ -411,6 +427,7 @@ impl Gateway<'_> {
             action: decoded.action,
             prepared: None,
             targets: decoded.targets,
+            project_targets: decoded.project_targets,
         };
         // Preparation runs only for an admitted, currently authorized command and before its unit
         // of work; it never records a receipt, so a failure here is retryable with the same key.
@@ -824,7 +841,13 @@ fn unit_of_work(
         .map_err(|_| StorageError::InvalidRecord("transaction clock before epoch".into()))?;
     // The decision is attached to the work it acted on (HISTORY-02), so a work item's history
     // shows every command decided on it, from the UI or an agent alike.
-    let scope = decision_scope(tx, ctx, &command.targets, decided.operation_id.as_ref())?;
+    let scope = decision_scope(
+        tx,
+        ctx,
+        &command.targets,
+        &command.project_targets,
+        decided.operation_id.as_ref(),
+    )?;
     let sequence = tx.history().append(NewEvent {
         id: event_id.clone(),
         actor: ctx.principal().clone(),
@@ -892,8 +915,11 @@ struct DecisionScope {
 ///    the decision's subject is that work item at its current work revision;
 /// 2. otherwise the invocation's host-resolved lineage root, if it exists in that project — the
 ///    decision is attached to it, with no claimed subject;
-/// 3. the project is the root's, or else the invocation's project when it exists; a missing
-///    root never drops a resolvable project.
+/// 3. the project is the root's; else the first project the input names
+///    ([`admission::project_targets`]) that exists and lies in the invocation's project (any
+///    project for a workspace invocation), so a workspace command naming a project belongs to
+///    that project's history; else the invocation's project when it exists. A missing root never
+///    drops a resolvable project.
 ///
 /// A decision with a durable operation names that operation and its revision as its subject
 /// when no work target exists.
@@ -901,6 +927,7 @@ fn decision_scope(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     targets: &[Id],
+    project_targets: &[crate::protocol::ProjectId],
     operation: Option<&crate::protocol::OperationId>,
 ) -> Result<DecisionScope, StorageError> {
     let in_scope = |p: &crate::protocol::ProjectId| ctx.project_id().is_none_or(|c| c == p);
@@ -936,8 +963,16 @@ fn decision_scope(
             subject,
         });
     }
-    let project = match ctx.project_id() {
-        Some(p) if tx.sessions().project_exists(p)? => Some(p.clone()),
+    let mut project = None;
+    for p in project_targets {
+        if in_scope(p) && tx.sessions().project_exists(p)? {
+            project = Some(p.clone());
+            break;
+        }
+    }
+    let project = match (project, ctx.project_id()) {
+        (Some(p), _) => Some(p),
+        (None, Some(p)) if tx.sessions().project_exists(p)? => Some(p.clone()),
         _ => None,
     };
     Ok(DecisionScope {

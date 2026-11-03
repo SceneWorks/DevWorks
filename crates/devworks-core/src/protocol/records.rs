@@ -2263,6 +2263,7 @@ impl Check for GitLink {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "GitLink", "before": 2}))]
 pub struct AttributedGitLink {
     pub repository_id: Id,
     pub work_id: Id,
@@ -3406,6 +3407,7 @@ impl Check for ToolInvocationOutcome {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolInvocation {
+    pub sequence: Revision,
     pub call_id: Id,
     pub session_id: Id,
     pub tool_name: Label,
@@ -3421,6 +3423,7 @@ pub struct ToolInvocation {
 }
 impl Check for ToolInvocation {
     fn check(&self) -> Result<(), String> {
+        self.sequence.check()?;
         self.call_id.check()?;
         self.session_id.check()?;
         self.tool_name.check()?;
@@ -3440,6 +3443,7 @@ impl Check for ToolInvocation {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(rename = "Page")]
 pub struct UsagePage {
     pub items: Rows<UsageItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3457,6 +3461,13 @@ pub struct UsagePage {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
+    #[schemars(with = "Rows<Revision>", extend("x-since" = 2))]
+    pub item_sequences: Option<Rows<Revision>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
     #[schemars(with = "Rows<ToolInvocation>", extend("x-since" = 2))]
     pub tool_invocations: Option<Rows<ToolInvocation>>,
 }
@@ -3466,6 +3477,7 @@ impl Check for UsagePage {
         self.next_cursor.check()?;
         self.has_more.check()?;
         self.checkpoint.check()?;
+        self.item_sequences.check()?;
         self.tool_invocations.check()?;
         crate::protocol::rules::record(
             "UsagePage",
@@ -3479,6 +3491,9 @@ impl Revisioned for UsagePage {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 2 {
             self.checkpoint = None;
+        }
+        if revision < 2 {
+            self.item_sequences = None;
         }
         if revision < 2 {
             self.tool_invocations = None;

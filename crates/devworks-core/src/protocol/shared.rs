@@ -198,6 +198,7 @@ pub enum Subject {
     rename_all = "camelCase",
     deny_unknown_fields
 )]
+#[schemars(extend("x-earlier" = {"name": "Subject", "before": 2}))]
 pub enum EventSubject {
     Root(RootId),
     Assignment(AssignmentId),
@@ -267,6 +268,7 @@ pub enum RevisionKind {
 /// Separate from [`RevisionKind`] so that revision conflicts, which never concern a command, keep
 /// their recorded shape at every revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("x-earlier" = {"name": "RevisionKind", "before": 2}))]
 pub enum EventRevisionKind {
     Work,
     Control,
@@ -415,10 +417,11 @@ pub enum Query {
     Operation { operation_id: OperationId },
     #[serde(rename = "history.command_receipt")]
     Receipt { request_key: RequestKey },
-    /// The committed history of one work root or, from schema revision 2, of one project: exactly
-    /// one of `rootId` and `projectId`. Revision 1 requires `rootId`.
+    // The committed history of one work root or, from schema revision 2, of one project:
+    // exactly one of `rootId` and `projectId`. Revision 1 requires `rootId` (its document folds
+    // the choice back into the recorded required list).
     #[serde(rename = "history.events")]
-    #[schemars(extend("oneOf" = [{"required": ["rootId"]}, {"required": ["projectId"], "x-since": 2}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "rootId", "limit"]}, {"required": ["kind", "projectId", "limit"], "x-since": 2}]))]
     Events {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(with = "RootId")]

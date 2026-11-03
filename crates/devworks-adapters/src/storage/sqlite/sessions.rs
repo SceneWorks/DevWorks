@@ -768,9 +768,37 @@ fn root_events(
         .collect()
 }
 
+/// The column and value a scope selects (`IS`, so the workspace scope is the NULL project).
+fn scope_column(scope: &HistoryScope) -> (&'static str, Option<&str>) {
+    match scope {
+        HistoryScope::Root(r) => ("root_id", Some(r.0.as_str())),
+        HistoryScope::Project(p) => ("project_id", Some(p.0.as_str())),
+        HistoryScope::Workspace => ("project_id", None),
+    }
+}
+
+/// One source's page of usage facts after the keyset position `(?2 sequence, ?3 source, ?4 id)`;
+/// `src` is the source's key and `id` its key ID expression. The `>=` term lets the per-scope
+/// index seek to the position.
+fn after_key(seq: &str, src: u8, id: &str) -> String {
+    format!("{seq}>=?2 AND ({seq}>?2 OR ({src}>?3 OR ({src}=?3 AND {id}>?4)))")
+}
+
+/// The completed tool invocations of a scope after a keyset position, in committed order (one
+/// statement over the indexed `tool_invocations`).
+pub(crate) fn invocations_sql(column: &str) -> String {
+    format!(
+        "SELECT session_id,response_seq,call_seq,committed_seq,project_id,root_id,call_entry_id,
+         capability_id,outcome,error_code,operation_id,actor_id,called_at,responded_at
+         FROM tool_invocations WHERE {column} IS ?1 AND {}
+         ORDER BY committed_seq,response_seq LIMIT ?5",
+        after_key("committed_seq", 1, "printf('%012d',response_seq)")
+    )
+}
+
 fn usage_facts(
     conn: &Connection,
-    root: &RootId,
+    scope: &HistoryScope,
     after: Option<&SequenceKey>,
     limit: u16,
 ) -> Result<Vec<UsageFact>, StorageError> {
@@ -780,74 +808,157 @@ fn usage_facts(
         source: 0,
         id: String::new(),
     });
-    // One keyset over the root's tool responses (source 1, keyed by link ID) and its usage
-    // observations (source 3, keyed by the zero-padded ordinal as in `usage`).
-    let mut stmt = db(conn.prepare_cached(
-        "SELECT seq,src,id FROM (
-           SELECT seq,1 AS src,id FROM history_links WHERE root_id=?1 AND kind='tool_response'
-           UNION ALL SELECT committed_seq,3,printf('%06d',ordinal) FROM session_usage WHERE root_id=?1
-         ) WHERE seq>?2 OR (seq=?2 AND (src>?3 OR (src=?3 AND id>?4)))
-         ORDER BY seq,src,id LIMIT ?5",
-    ))?;
-    let rows = db(stmt.query_map(
-        params![root.0.as_str(), key.sequence, key.source as i64, key.id, n],
-        |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        },
-    ))?;
-    let keys: Vec<(i64, i64, String)> = db(rows.collect())?;
-    let mut out = Vec::with_capacity(keys.len());
-    for (seq, src, id) in keys {
-        let key = SequenceKey {
-            sequence: seq,
-            source: src as u8,
-            id: id.clone(),
-        };
-        if src == 1 {
-            let link = link(conn, &id_of(id)?)?.ok_or_else(|| corrupt("tool response vanished"))?;
-            out.push(UsageFact::ToolResponse { key, link });
-        } else {
-            // The usage row at exactly this key: the observation before it, then one row.
-            let before = SequenceKey {
-                sequence: seq,
-                source: 3,
-                id: format!(
-                    "{:06}",
-                    id.parse::<i64>().map_err(|_| corrupt("usage ordinal"))? - 1
-                ),
-            };
-            let (_, usage) = usage(conn, root, Some(&before), 1)?
-                .into_iter()
-                .next()
-                .filter(|(k, _)| *k == key)
-                .ok_or_else(|| corrupt("usage observation vanished"))?;
-            out.push(UsageFact::Inference { key, usage });
-        }
+    let (column, value) = scope_column(scope);
+    let keyed = params![value, key.sequence, key.source as i64, key.id, n];
+    // Each source pages itself in key order; the merged page keeps the first `limit` keys.
+    let mut out = Vec::new();
+    let mut tools = db(conn.prepare_cached(&invocations_sql(column)))?;
+    type ToolRaw = (
+        String,
+        i64,
+        i64,
+        i64,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        i64,
+        i64,
+    );
+    let rows = db(tools.query_map(keyed, |r| {
+        Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            r.get(3)?,
+            r.get(4)?,
+            r.get(5)?,
+            r.get(6)?,
+            r.get(7)?,
+            r.get(8)?,
+            r.get(9)?,
+            r.get(10)?,
+            r.get(11)?,
+            r.get(12)?,
+            r.get(13)?,
+        ))
+    }))?;
+    let raw: Vec<ToolRaw> = db(rows.collect())?;
+    for (
+        session,
+        response,
+        call,
+        committed,
+        project,
+        root,
+        entry,
+        capability,
+        outcome,
+        code,
+        op,
+        actor,
+        called,
+        responded,
+    ) in raw
+    {
+        out.push(UsageFact::Tool {
+            key: SequenceKey {
+                sequence: committed,
+                source: 1,
+                id: format!("{response:012}"),
+            },
+            invocation: StoredInvocation {
+                session_id: id_of(session)?,
+                response_sequence: response,
+                call_sequence: call,
+                committed_sequence: committed,
+                project_id: opt_id(project)?.map(ProjectId),
+                root_id: opt_id(root)?.map(RootId),
+                call_entry_id: id_of(entry)?,
+                capability_id: capability,
+                outcome,
+                error_code: code,
+                operation_id: opt_id(op)?.map(OperationId),
+                actor: ActorId(id_of(actor)?),
+                called_at_ms: called,
+                responded_at_ms: responded,
+            },
+        });
     }
+    type UsageRaw = (
+        String,
+        i64,
+        String,
+        Option<String>,
+        Option<String>,
+        i64,
+        String,
+    );
+    let mut usage = db(conn.prepare_cached(&format!(
+        "SELECT batch_id,ordinal,session_id,project_id,root_id,committed_seq,item_json
+         FROM session_usage WHERE {column} IS ?1 AND {}
+         ORDER BY committed_seq,ordinal LIMIT ?5",
+        after_key("committed_seq", 3, "printf('%06d',ordinal)")
+    )))?;
+    let rows = db(usage.query_map(keyed, |r| {
+        Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            r.get(3)?,
+            r.get(4)?,
+            r.get(5)?,
+            r.get(6)?,
+        ))
+    }))?;
+    let raw: Vec<UsageRaw> = db(rows.collect())?;
+    for (b, o, s, p, r, c, item) in raw {
+        out.push(UsageFact::Inference {
+            key: SequenceKey {
+                sequence: c,
+                source: 3,
+                id: format!("{o:06}"),
+            },
+            usage: StoredUsage {
+                session_id: id_of(s)?,
+                batch_id: id_of(b)?,
+                ordinal: o,
+                project_id: opt_id(p)?.map(ProjectId),
+                root_id: opt_id(r)?.map(RootId),
+                committed_sequence: c,
+                item: json_of(&item)?,
+            },
+        });
+    }
+    out.sort_by(|a, b| a.key().cmp(b.key()));
+    out.truncate(n as usize);
     Ok(out)
 }
 
-fn scope_events(
+/// The `CommandDecided` events of a scope after a sequence, in committed order. The literal
+/// kind selects the partial per-project index (`event_project_decisions`); a root's decisions
+/// use the per-root index.
+pub(crate) fn decisions_sql(column: &str) -> String {
+    format!(
+        "SELECT {EVENT_COLUMNS} FROM events WHERE {column} IS ?1 AND kind='CommandDecided'
+         AND seq>?2 ORDER BY seq LIMIT ?3"
+    )
+}
+
+fn decisions(
     conn: &Connection,
     scope: &HistoryScope,
-    kinds: &[&str],
     after: i64,
     limit: u16,
 ) -> Result<Vec<EventRecord>, StorageError> {
     let n = bounded(limit)?;
-    let (column, value) = match scope {
-        HistoryScope::Root(r) => ("root_id", r.0.as_str()),
-        HistoryScope::Project(p) => ("project_id", p.0.as_str()),
-    };
-    let mut stmt = db(conn.prepare_cached(&format!(
-        "SELECT {EVENT_COLUMNS} FROM events WHERE {column}=?1 AND seq>?2
-         AND kind IN (SELECT value FROM json_each(?3)) ORDER BY seq LIMIT ?4"
-    )))?;
-    let rows = db(stmt.query_map(params![value, after, kinds_json(kinds), n], event_row))?;
+    let (column, value) = scope_column(scope);
+    let mut stmt = db(conn.prepare_cached(&decisions_sql(column)))?;
+    let rows = db(stmt.query_map(params![value, after, n], event_row))?;
     db(rows.collect::<rusqlite::Result<Vec<_>>>())?
         .into_iter()
         .map(event_of)
@@ -1022,11 +1133,11 @@ macro_rules! session_reads {
             }
             fn usage_facts(
                 &self,
-                root: &RootId,
+                scope: &HistoryScope,
                 after: Option<&SequenceKey>,
                 limit: u16,
             ) -> Result<Vec<UsageFact>, StorageError> {
-                usage_facts(self.conn, root, after, limit)
+                usage_facts(self.conn, scope, after, limit)
             }
             fn link(&self, id: &Id) -> Result<Option<StoredLink>, StorageError> {
                 link(self.conn, id)
@@ -1065,14 +1176,13 @@ macro_rules! session_reads {
             ) -> Result<Vec<EventRecord>, StorageError> {
                 root_events(self.conn, root, kinds, after, limit)
             }
-            fn scope_events(
+            fn decisions(
                 &self,
                 scope: &HistoryScope,
-                kinds: &[&str],
                 after: i64,
                 limit: u16,
             ) -> Result<Vec<EventRecord>, StorageError> {
-                scope_events(self.conn, scope, kinds, after, limit)
+                decisions(self.conn, scope, after, limit)
             }
         }
     };
@@ -1369,6 +1479,32 @@ impl SessionRepository for Unit<'_> {
             u.root_id.as_ref().map(|r| r.0.as_str()),
             u.committed_sequence,
             json_text(&u.item)
+        ]))?;
+        Ok(())
+    }
+
+    fn insert_invocation(&mut self, v: &StoredInvocation) -> Result<(), StorageError> {
+        text("tool capability", &v.capability_id, 1024)?;
+        db(db(self.conn.prepare_cached(
+            "INSERT INTO tool_invocations(session_id,response_seq,call_seq,committed_seq,project_id,
+             root_id,call_entry_id,capability_id,outcome,error_code,operation_id,actor_id,called_at,
+             responded_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+        ))?
+        .execute(params![
+            v.session_id.as_str(),
+            v.response_sequence,
+            v.call_sequence,
+            v.committed_sequence,
+            v.project_id.as_ref().map(|p| p.0.as_str()),
+            v.root_id.as_ref().map(|r| r.0.as_str()),
+            v.call_entry_id.as_str(),
+            v.capability_id,
+            v.outcome,
+            v.error_code,
+            v.operation_id.as_ref().map(|o| o.0.as_str()),
+            v.actor.0.as_str(),
+            v.called_at_ms,
+            v.responded_at_ms
         ]))?;
         Ok(())
     }

@@ -1468,8 +1468,10 @@ impl ArtifactService {
 
     /// `artifacts.tag`: replaces the tag set of an existing artifact (ART-02), reusing the tag
     /// bounds and set normalization of saves (an empty set clears it). The caller must see the
-    /// artifact and its authorized scope must cover the artifact's owner scope: a project that
-    /// only has it shared sees it but does not own its metadata. The expected artifact revision
+    /// artifact and act for its owner scope: for a project artifact, a principal authorized for
+    /// that project invoked from it (or from the workspace); for a workspace artifact, a member of
+    /// its audience with the workspace as its authorized scope. Seeing an artifact through a
+    /// share never grants it: a project it is only shared with does not own its metadata. The expected artifact revision
     /// guards concurrent edits; a changed set advances it and records `ArtifactTagsChanged`, an
     /// equal set is `NoChange`. A receipt's reply is never retagged (`Conflict`): it is an
     /// immutable correctness record, never listed, so tags would neither find it nor belong to
@@ -1483,11 +1485,22 @@ impl ArtifactService {
         let viewer = Viewer::resolve(tx.authority(), ctx)?;
         let mut artifact = visible_artifact(tx.artifacts(), &viewer, &input.artifact_id)?;
         require_explicit(&artifact)?;
-        if !viewer
-            .authorized
-            .as_ref()
-            .is_some_and(|a| a.covers_scope(&artifact.scope))
-        {
+        // Only the owner scope edits metadata; seeing an artifact through a share never does.
+        let owns = match &artifact.scope {
+            // A workspace artifact: a member of its audience (its owner, the user, the host, the
+            // unconfined coordinator) acting with the workspace as its authorized scope.
+            ArtifactScope::Workspace => {
+                viewer.authorized == Some(AuthorizedScope::Workspace)
+                    && viewer.sees_owned(artifact.owner.as_ref())
+            }
+            // A project artifact: a principal authorized for the owner project, invoked from it
+            // or from the workspace (never from a project it is only shared with).
+            ArtifactScope::Project(owner) => {
+                viewer.authorized.as_ref().is_some_and(|a| a.covers(owner))
+                    && ctx.project_id().is_none_or(|p| p == owner)
+            }
+        };
+        if !owns {
             return Err(Refusal::new(
                 DomainErrorCode::PermissionDenied,
                 "artifact",

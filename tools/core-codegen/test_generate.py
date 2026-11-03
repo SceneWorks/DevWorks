@@ -76,6 +76,18 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(generate.doc_since(doc, '/command/kind', 'Reference'), set())
         self.assertEqual(generate.doc_since(doc), {2})
 
+    def test_an_exactly_one_choice_lists_each_alternatives_full_required_set(self):
+        # The revision-1 alternative is the recorded required list, so an earlier revision
+        # document folds back to exactly that list; later members carry their x-since.
+        op = generate.DOMAIN_OPS['history.tool_usage']
+        attr = generate.choice(op['fields'], op['exactlyOne'], op['since'])
+        self.assertIn('{"required": ["rootId", "page"]}', attr)
+        self.assertIn('{"required": ["projectId", "page"], "x-since": 2}', attr)
+        self.assertIn('{"required": ["workspace", "page"], "x-since": 2}', attr)
+        record = generate.record_attrs(generate.TYPES['AttributedGitLink'])
+        self.assertIn('"x-earlier" = {"name": "GitLink", "before": 2}', record)
+        self.assertIn('rename = "Page"', generate.record_attrs(generate.TYPES['UsagePage']))
+
 
 if __name__ == '__main__':
     unittest.main()

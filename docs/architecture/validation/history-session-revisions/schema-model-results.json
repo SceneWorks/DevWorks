@@ -28,10 +28,10 @@
     "github.account",
     "browser.sessions"
   ],
-  "allMessageFixtures": 1186,
-  "newMessageFixtures": 857,
-  "newPositiveFixtures": 730,
-  "newNegativeFixtures": 127,
+  "allMessageFixtures": 1207,
+  "newMessageFixtures": 878,
+  "newPositiveFixtures": 733,
+  "newNegativeFixtures": 145,
   "coreAndPriorMessagesRerun": 329,
   "historicalHelperFramesReplayed": 55,
   "newHelperExecutionClaimed": false,
@@ -1081,7 +1081,8 @@
       "resultSchema": "operation-result.r2.schema.json",
       "inputFixtureIds": [
         "r2-input-sessions.briefing",
-        "r2-input-sessions.briefing-plain"
+        "r2-input-sessions.briefing-plain",
+        "r2-briefing-literal-separators-in-names"
       ],
       "resultFixtureIds": [
         "r2-result-sessions.briefing"
@@ -1359,7 +1360,9 @@
       "inputSchema": "domain-request.r2.schema.json",
       "resultSchema": "operation-result.r2.schema.json",
       "inputFixtureIds": [
-        "r2-input-history.tool_usage"
+        "r2-input-history.tool_usage",
+        "r2-input-history.tool_usage-project",
+        "r2-input-history.tool_usage-workspace"
       ],
       "resultFixtureIds": [
         "r2-result-history.tool_usage"
@@ -14361,6 +14364,27 @@
       "passed": true
     },
     {
+      "id": "reject-r2-usage-sequence-count",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-usage-sequences",
+      "entry": "operation-result",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-tool-invocation-without-sequence",
+      "entry": "operation-result.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
       "id": "r1-result-history.tool_usage-usage",
       "entry": "operation-result",
       "schemaValid": true,
@@ -14496,7 +14520,133 @@
     {
       "id": "reject-r2-briefing-duplicate-paths",
       "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-0",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-1",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-2",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-3",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-4",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-5",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-6",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-7",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-8",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-9",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-briefing-platform-path-10",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "r2-briefing-literal-separators-in-names",
+      "entry": "domain-request.r2",
       "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-history.tool_usage-project",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-history.tool_usage-workspace",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-tool_usage-project",
+      "entry": "domain-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-tool_usage-root-and-project",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-tool_usage-no-scope",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-tool_usage-workspace-false",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
       "typedValid": false,
       "passed": true
     },
@@ -14622,61 +14772,61 @@
     "docs/architecture/contracts/provider-package-fixtures.json": "2646790fe630e1a84514bb48e49d787fcd056e093bcd8a46f92a943dda821b97",
     "docs/architecture/validation/provider-package-contracts/actual-frame-fixtures.json": "a8e38cbf3a4ccf3b957a32b2733b3db1e98ae9ee12b97d339447d51f73ab729e",
     "docs/architecture/contracts/data-delivery-fixtures.json": "54fc2fac8841b1591c0f2653f7548dbf5a79a16b4e4958b194be739d277083b6",
-    "docs/architecture/contracts/domain-fixtures.json": "d1499562dd604f0ecf6d676f6a40489d5e189b399bfce90100f5eba0d4b33afb",
-    "docs/architecture/contracts/family-coverage.json": "21e63e89a98f4d4af12425215186a270d5672ef496d2147d5b1f2621414ac889",
-    "docs/architecture/contracts/manifest.json": "5b5558cb94c2e5797dc5924cf462de8dbbdb7fc2cc71809c2cfc910698d3d1b8",
+    "docs/architecture/contracts/domain-fixtures.json": "d5bc23253aa4446ef87014ec4edaf488978d1ecc8646b534a6d56db1f68ae574",
+    "docs/architecture/contracts/family-coverage.json": "9916c6ed250587a7169691381140a04ef105ade99839f6f53df53d2574164ef2",
+    "docs/architecture/contracts/manifest.json": "b4253a09a6ad4d872bbeb49cb2d8198951c2c08243d4d6cb3dbfa7b4d27fbb2c",
     "docs/architecture/devworks-capability-catalog.json": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
     "tools/contracts-eval/Cargo.lock": "cfb646cd5e037f4a97b1686830e7a582228b29c4ff3ba0ebcbc559b69786b34b",
     "tools/contracts-eval/domain_spec.py": "47e2e840854e19020b5f67066b128778d09b4b1a1c8670b0ba6f7351e3dc3d8f",
-    "tools/contracts-eval/domain-spec.json": "f137a7a1fd3b56c2446581bd91ed91a4100793e89284f5ff3b24069397c87f8b",
-    "tools/contracts-eval/build_domain_contracts.py": "3b2701f81c11ed17b4d9f42dc5277a5427223d3ba5f854e4272b2c5fdffcad62",
+    "tools/contracts-eval/domain-spec.json": "b72067fb824efa3389018cb2567cc0d33c0974c270194c74898420ae58080827",
+    "tools/contracts-eval/build_domain_contracts.py": "a4fc1eea7f7992744ff5f615bea538c80ed7505673e1696afaeb7037db9071b7",
     "tools/contracts-eval/build_register.py": "bab0f304b09de7a66b5f646fbc47cd08e43466e374d70dc71e62c8fa4dd65667",
     "tools/contracts-eval/build_domain_reference.py": "3e68b03c0124fc8744050889db7153903bb3b4f6e42b01c6caa8e0f5d939da5f",
-    "tools/contracts-eval/make_domain_fixtures.py": "06cb2f69d7aa5c48432186f21a68d7925e36b6a9d477ee74dd9ee25c338df31c",
+    "tools/contracts-eval/make_domain_fixtures.py": "2f347d983045167900c5fa5bf5cfd4ce0db6bae4b7cc759eeac18745dd4c85a6",
     "tools/contracts-eval/verify_domain_contracts.py": "03d811606ca9d92e6e61eb45b2b2c5d9c7b1ba9a038598121a861d43b554cec9",
-    "tools/contracts-eval/src/data_delivery.rs": "78117c37579fcd7ef9d29593ed4bbf9be2818f4ace4189ae1d0fd0aa1dffdbc8",
-    "tools/contracts-eval/src/domain_generated.rs": "65a532d36889729010526a6380ecd39eda3576a3b4b7c1d8270a3a8561d8b883",
-    "tools/contracts-eval/src/domain_rules.rs": "342b9ef06face075a31c9a52a70e872ea057bb15298ebc9dbca62ec6d059023c",
-    "tools/contracts-eval/src/domain_support.rs": "91ea20a554a4de9ae00894b59307aae83b989c247ede28586acfeb0cec149b6b",
-    "tools/contracts-eval/src/lib.rs": "e4fb2ab02af3d6cf960ba4118a304047d3271677912f3a662762d8acdb59c98f",
-    "tools/contracts-eval/src/main.rs": "08d85645a0d5c33f1be3bc2259c3dad88b04c9d38ae0bf73e080bae1837d6f62",
+    "tools/contracts-eval/src/data_delivery.rs": "f62c3062a84633fba38a16dc699a1cc58d131f6899757c76acd3e00a0c3d0d68",
+    "tools/contracts-eval/src/domain_generated.rs": "90a563969f6ec31e45e6b767ece827d1375fdd1aada3b88819497a80496d3b0d",
+    "tools/contracts-eval/src/domain_rules.rs": "f72a2efb2e31953debb36e010e08f44b1809a8ac4d67bacb4801412812c04df5",
+    "tools/contracts-eval/src/domain_support.rs": "4082061615ab8dfd7fb53c09c00e786cbae372df26f55c93634aaa56a49d123e",
+    "tools/contracts-eval/src/lib.rs": "bee52b2eda05d91b44088ebfc8680245d5d33f7d84041be381eaa3a3a07d69b8",
+    "tools/contracts-eval/src/main.rs": "7bea60e773983c7af03744945a2eaa679c0d0ee58cc6c9c3690236cfd37e3409",
     "tools/contracts-eval/src/package.rs": "4ba7fec57f9430618570cd64c21a5f4291fd4e2aa5fff872b295c993155a8c8e",
     "tools/contracts-eval/src/package_probe.rs": "0573c4ffc5aee215526e2145e4c796f13a47320dc33730e57c5569bb8a21b7c9",
     "tools/contracts-eval/src/provider.rs": "a8ae01d15b7adb8011e41ba33941a7cddeb79a81848acfd261634eb27075a5c0",
     "docs/architecture/contracts/addon-command-reply.schema.json": "637eee3780cc14573e10702b4aadbc09db930094e920f21e4aebf3380952085a",
     "docs/architecture/contracts/addon-command-request.schema.json": "76bba13007c24561a3ce613e4df1f8a943f9610203e5a7d256488fc8511572b2",
     "docs/architecture/contracts/artifact-command-reply.schema.json": "b206db3d40608fdc2e641e69504865691d273ba03c9206413b6b61931ba96f2c",
-    "docs/architecture/contracts/artifact-command-request.r2.schema.json": "8e9be97da8d30ff26e727e6e7bc34edf2fd5a4de53e06a5f974668f70c2edd3e",
-    "docs/architecture/contracts/artifact-command-request.r3.schema.json": "bded0d64ae9ef8d4631c0c5e81198609e381e94ecbf4aca2b69bb6ed7d35819d",
-    "docs/architecture/contracts/artifact-command-request.schema.json": "7dc43819ec24105f09cd94899dc19f436d958f631ea66727847d2790ad14d7f0",
+    "docs/architecture/contracts/artifact-command-request.r2.schema.json": "f9fe6e9d49ee6515a1c5f1c1e01e3a0ecb563f02df31d32513b0ac6fa8668af1",
+    "docs/architecture/contracts/artifact-command-request.r3.schema.json": "3840d288fc4dbefa515c58a10de5e281cab4d1efc3e9e0b27f1ba30ad482e1aa",
+    "docs/architecture/contracts/artifact-command-request.schema.json": "525b9cc1962457686ca410addf6fecfe2dd0e1366ebbc9b574700bbcc5343848",
     "docs/architecture/contracts/artifact-deletion-request.schema.json": "cd68c9debdab547eeed3998d3929a939d4e22a8b2e44d2ef01ce741a3ea3c312",
-    "docs/architecture/contracts/artifact-query-request.r2.schema.json": "1c3013a5c828fdd641768680d48ac4199f97ad1aff9263aa7d6b022081a177a4",
-    "docs/architecture/contracts/artifact-query-request.r3.schema.json": "a1807aa468f1d20157f0f7df789ae4b8829aa273ea656d29bb4aee8a73f5aeb2",
-    "docs/architecture/contracts/artifact-query-request.schema.json": "9ee11565cb99abf02ea13951f68d21967c664633b1eeaf3a034f69eb702bfaa7",
+    "docs/architecture/contracts/artifact-query-request.r2.schema.json": "eb002d13227f904a2dbdd577731ccf48d1a906e4ebb135e29d72ccb3f5f4ff0e",
+    "docs/architecture/contracts/artifact-query-request.r3.schema.json": "5ddda5382b55b23d399515cfbbd04b7e66c86cbf7b5ecbcb9005795f2cb6a9f5",
+    "docs/architecture/contracts/artifact-query-request.schema.json": "b3b808feaa9f97f6f243c6c222e455bff5af1998368c8de96d9c13f27db8da5c",
     "docs/architecture/contracts/attempt-envelope.schema.json": "fc2fa155875ecc3910b6d98e1b78184b79299b7987f713e9a7b8bfe158d948b7",
     "docs/architecture/contracts/capability-snapshot.schema.json": "311cff64bfa457b12d1d13671d66528e5176823e012dc3d9bf6d000516a4d649",
     "docs/architecture/contracts/command-reply.schema.json": "c718d37915e0029d7c98e1b33980e633f9d35923f98ab470be9fc9cd3ba84627",
     "docs/architecture/contracts/command-request.schema.json": "8e821e7c0f306e8870a698537f1cb86b1108679ac07d442650a7e818e67f880f",
     "docs/architecture/contracts/delivery-barrier.schema.json": "25aaa75a46cef7a0e3d055b8dff1a76fc25325f0a2efe5202abd80e3c28a72c2",
     "docs/architecture/contracts/delivery-snapshot.schema.json": "a5b59fd9d7dbed631c1445dbbda361b53a7c799f98717b9f9d131d6fee42806b",
-    "docs/architecture/contracts/domain-command-reply.r2.schema.json": "681216fd268112a6ed48f406694e806977fefd60d24188971b86b8feafac16d9",
-    "docs/architecture/contracts/domain-command-reply.schema.json": "b86acea58763161e04c04d1045719351cc709d27b7ec98e6d2fdafa3d4414da3",
-    "docs/architecture/contracts/domain-query-reply.r2.schema.json": "1bc1515150b4122e276d95e01b4e194c0848d2d0563931efbbd9935f759ab168",
-    "docs/architecture/contracts/domain-query-reply.schema.json": "46727f133a676fb2b0b512af24837a015827ac3305c04134006f905bc8e7324b",
-    "docs/architecture/contracts/domain-request.r2.schema.json": "771dc2da87b18cef0bc0ebe7e81f39425c1b93cae4eb9ff9efbcd0931542a100",
-    "docs/architecture/contracts/domain-request.schema.json": "d455316d8e37f815f3d57eb0f92041e23f03b766985d83798235c9874939d779",
+    "docs/architecture/contracts/domain-command-reply.r2.schema.json": "16d00d008de246346e595cab9304b371a2099d44781c3fbc8dffb22c94912989",
+    "docs/architecture/contracts/domain-command-reply.schema.json": "e04158c2b557d3d51a76fbb16530c736c9ee38163693bdde7aaf2e235ab8d9ed",
+    "docs/architecture/contracts/domain-query-reply.r2.schema.json": "b90acc7d56ed2cdc21ffc3f786657689f7871fe68baf364a4b5e6a83dfe82463",
+    "docs/architecture/contracts/domain-query-reply.schema.json": "c28423264a36d66d72f867b88360cec8d6f013c48e2bcb1114ea91a7baa0a03f",
+    "docs/architecture/contracts/domain-request.r2.schema.json": "cc0e8fabdb80a5e49ad4afd6df89c9148024fb0f056cae54dd01c899c907d90d",
+    "docs/architecture/contracts/domain-request.schema.json": "20fc9c1487c441454a04ba4e25835e662b85196914157e703efbfac2ec6da5bb",
     "docs/architecture/contracts/event.r2.schema.json": "ce845cc2bfb0d1adcf2f89dd76f6a08d6f8798d7026c1ab75146c0daffd2290a",
-    "docs/architecture/contracts/event.schema.json": "a06e0011a6a2e0fe54beac004fba1cfab555511d65f6a7501be7502a13c4f678",
+    "docs/architecture/contracts/event.schema.json": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc",
     "docs/architecture/contracts/git-command-request.schema.json": "a1718e29fbd02c1c30c9ccd8155f2f98fedb60cb3a00b299d5b08d27fb14fa74",
     "docs/architecture/contracts/graph-page.schema.json": "aca9af7d0e3c8615e00434eadc5556085108c08ee2a4edc2c8279a14c6439231",
     "docs/architecture/contracts/graph-read-request.schema.json": "1eece9e6fd9260c3af95fe787623839c7bfa72ade43ab97bf7337121b5bf133c",
     "docs/architecture/contracts/index-command-request.schema.json": "eb2bfdf772de716567bb0a6aaf11a1e0810a9cefa2d147a44b461d5045092845",
     "docs/architecture/contracts/inference-request.schema.json": "303b3a3d4bd49a39c44148658c2bc6320a4e77453960b75f07cfeb2051da8211",
     "docs/architecture/contracts/inference-spec.schema.json": "e4734b6a32933313adcdf74f07ada57c2a20f7d911eb676c7c63d44f1225d516",
-    "docs/architecture/contracts/operation-completion.r2.schema.json": "58f26cd059c886c8e56363178a3beba737eae267fd5670e66b39763b277722cc",
-    "docs/architecture/contracts/operation-completion.schema.json": "3dee90d50067420ac25e9e959890f9471043c7c966a7af903f32a2e935256862",
-    "docs/architecture/contracts/operation-result.r2.schema.json": "c9437d2a02a28325f76f5fffd49b49d4a2483f65ea20dc9705513bf7316c9138",
-    "docs/architecture/contracts/operation-result.schema.json": "a0ce1af08dfb4be2e4130405b6adc0f27f7b84686de5d9302041b922230f765b",
+    "docs/architecture/contracts/operation-completion.r2.schema.json": "8a2f41d368d4a0def636ad04579e050fd00877597d5dfa3424d886f16011b23b",
+    "docs/architecture/contracts/operation-completion.schema.json": "71dac8f2d36375ec018002888c64bf4cac3aeeb66c3905f02e35ba05300057fb",
+    "docs/architecture/contracts/operation-result.r2.schema.json": "e30c197dd3f2ed3b63e92475ef10acdff62eb4c9a2b14eb57cf4a5e53eba30c1",
+    "docs/architecture/contracts/operation-result.schema.json": "6101efc5b26328981e7a4a6bee9fbea94284632ab2d7a34bf0d6b505536d876b",
     "docs/architecture/contracts/package-host-request.schema.json": "190beae90c974720523774ca4cb366033ba74ba104dc46dbcdd780b30811f5b9",
     "docs/architecture/contracts/package-manifest.schema.json": "7f5989387bc31c599cb97ffe0b43dc52227aa2e36c075c54be55e69d6edd8b21",
     "docs/architecture/contracts/package-notification.schema.json": "d19320d2683b3bb226c9e65c88c83842d60702c8d6de6d4df889b05aa0d29a9d",
@@ -14686,9 +14836,9 @@
     "docs/architecture/contracts/provider-event.schema.json": "de1ac95963613ec2144471a56c55f6b88d1f1091a58e1839e153b07065c2a9c8",
     "docs/architecture/contracts/publication-request.schema.json": "416f189e19c7926c05f6fe4d979478036ce586336e59550b2577629e2944008c",
     "docs/architecture/contracts/query-reply.r2.schema.json": "02cd76a4658303d9d02570b1356b23297d6302bd13ebb16e8352da19c7e7735b",
-    "docs/architecture/contracts/query-reply.schema.json": "3797b2dae8503138e333b8f6d4e18fd666c6928a2d46087ae71a287bbfc1374e",
-    "docs/architecture/contracts/query-request.r2.schema.json": "db765bb2b8c7721e02330fd954d677f6b6bad3e2559fcd66545373637ff0d401",
-    "docs/architecture/contracts/query-request.schema.json": "408ed9235d52d4d255fc15d9e62d27f5cb8c77454d853e40dea3769120ad1471",
+    "docs/architecture/contracts/query-reply.schema.json": "5e62392bbd693563a8dc1de57fe40e9a3025ae9d5cde4b3fe87c438a05ec802f",
+    "docs/architecture/contracts/query-request.r2.schema.json": "23e6f52a416448dfa7c1e5496652fe2c518159471e4bb64fdfb39a89f25500d7",
+    "docs/architecture/contracts/query-request.schema.json": "737647f75b83d06f768f00d5788e71ea7bf99b9c153dc9fed43c99ac20adbeb3",
     "docs/architecture/contracts/release-command-request.schema.json": "1f05af1440d9dc931c0cc26281b09f7616001a0d626f950265e71ee51402f815",
     "docs/architecture/contracts/resolved-view-set.schema.json": "38585a4d25f0dfdc6d03012c2d6f0e048c3f88729712dd63233b67ca1796d17e",
     "docs/architecture/contracts/retrieval-page.schema.json": "c54381130a251caccfcdd675820894a03073cf72915e2bff330b82f64c85b4da",

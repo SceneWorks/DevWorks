@@ -88,6 +88,12 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
                 "page continuation mismatch",
             )?;
             require(
+                !present(v, "itemSequences")
+                    || v["itemSequences"].as_array().map(Vec::len)
+                        == v["items"].as_array().map(Vec::len),
+                "every usage item has its committed sequence",
+            )?;
+            require(
                 !present(v, "nextCursor")
                     || !present(v, "checkpoint")
                     || v["nextCursor"] == v["checkpoint"],
@@ -135,8 +141,16 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
     ] {
         require(unique(v, k), "duplicate identity in set")?
     }
-    if op == "sessions.briefing" {
-        require(unique(v, "paths"), "duplicate briefing path")?
+    if op == "history.tool_usage" {
+        // Exactly one scope: a root, or (revision 2) a project or the workspace spelled `true`.
+        let named = ["rootId", "projectId", "workspace"]
+            .iter()
+            .filter(|k| present(v, k))
+            .count();
+        require(
+            named == 1 && (!present(v, "workspace") || v["workspace"] == true),
+            "usage names exactly one of a root, a project and the workspace",
+        )?
     }
     if op.ends_with(".configure") || op.ends_with(".draft") {
         let key = if present(v, "serverId") {

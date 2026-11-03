@@ -2261,6 +2261,7 @@ impl Check for GitLink {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "GitLink", "before": 2}))]
 pub struct AttributedGitLink {
     pub repository_id: Id,
     pub work_id: Id,
@@ -3404,6 +3405,7 @@ impl Check for ToolInvocationOutcome {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolInvocation {
+    pub sequence: Revision,
     pub call_id: Id,
     pub session_id: Id,
     pub tool_name: Label,
@@ -3419,6 +3421,7 @@ pub struct ToolInvocation {
 }
 impl Check for ToolInvocation {
     fn check(&self) -> Result<(), String> {
+        self.sequence.check()?;
         self.call_id.check()?;
         self.session_id.check()?;
         self.tool_name.check()?;
@@ -3438,6 +3441,7 @@ impl Check for ToolInvocation {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(rename = "Page")]
 pub struct UsagePage {
     pub items: Rows<UsageItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3455,6 +3459,13 @@ pub struct UsagePage {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
+    #[schemars(with = "Rows<Revision>", extend("x-since" = 2))]
+    pub item_sequences: Option<Rows<Revision>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
     #[schemars(with = "Rows<ToolInvocation>", extend("x-since" = 2))]
     pub tool_invocations: Option<Rows<ToolInvocation>>,
 }
@@ -3464,6 +3475,7 @@ impl Check for UsagePage {
         self.next_cursor.check()?;
         self.has_more.check()?;
         self.checkpoint.check()?;
+        self.item_sequences.check()?;
         self.tool_invocations.check()?;
         super::domain_rules::record(
             "UsagePage",
@@ -3477,6 +3489,9 @@ impl Revisioned for UsagePage {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 2 {
             self.checkpoint = None;
+        }
+        if revision < 2 {
+            self.item_sequences = None;
         }
         if revision < 2 {
             self.tool_invocations = None;
@@ -5715,8 +5730,8 @@ pub enum DomainQuery {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "NonEmpty<RelativePath>", extend("x-since" = 2))]
-        paths: Option<NonEmpty<RelativePath>>,
+        #[schemars(with = "PathSet", extend("x-since" = 2))]
+        paths: Option<PathSet>,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
@@ -5740,7 +5755,27 @@ pub enum DomainQuery {
     #[serde(rename = "history.evidence_links")]
     HistoryEvidenceLinks { root_id: RootId, page: PageRequest },
     #[serde(rename = "history.tool_usage")]
-    HistoryToolUsage { root_id: RootId, page: PageRequest },
+    #[schemars(extend("oneOf" = [{"required": ["kind", "rootId", "page"]}, {"required": ["kind", "projectId", "page"], "x-since": 2}, {"required": ["kind", "workspace", "page"], "x-since": 2}]))]
+    HistoryToolUsage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "RootId")]
+        root_id: Option<RootId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ProjectId", extend("x-since" = 2))]
+        project_id: Option<ProjectId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 2, "const" = true))]
+        workspace: Option<bool>,
+        page: PageRequest,
+    },
     #[serde(rename = "indexing.discover")]
     IndexingDiscover {
         scope: DataScope,
@@ -6637,8 +6672,15 @@ impl Check for DomainQuery {
                 root_id.check()?;
                 page.check()?;
             }
-            Self::HistoryToolUsage { root_id, page } => {
+            Self::HistoryToolUsage {
+                root_id,
+                project_id,
+                workspace,
+                page,
+            } => {
                 root_id.check()?;
+                project_id.check()?;
+                workspace.check()?;
                 page.check()?;
             }
             Self::IndexingDiscover { scope, roots, page } => {
@@ -7464,6 +7506,18 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *budget_tokens = None;
+                }
+            }
+            Self::HistoryToolUsage {
+                project_id,
+                workspace,
+                ..
+            } => {
+                if revision < 2 {
+                    *project_id = None;
+                }
+                if revision < 2 {
+                    *workspace = None;
                 }
             }
             _ => {}

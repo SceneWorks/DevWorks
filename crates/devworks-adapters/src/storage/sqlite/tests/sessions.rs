@@ -3183,6 +3183,12 @@ fn revision_two_tool_usage_serves_redacted_tool_invocations_in_commit_order() {
     assert_eq!(wait.actor_id, actor("agent-a"));
     assert!(matches!(failed.outcome, ToolInvocationOutcome::Failed));
     assert_eq!(failed.call_id, id("c-a"));
+    // Both lists carry committed sequences, so a client rebuilds the commit order: the first
+    // batch recorded the usage and the waiting call, the later one the failure.
+    let sequences = &value.item_sequences.as_ref().unwrap().0;
+    assert_eq!(sequences.len(), 1);
+    assert_eq!(wait.sequence.get(), sequences[0].get());
+    assert!(failed.sequence.get() > sequences[0].get());
     assert_eq!(failed.duration_ms.as_ref().unwrap().get(), 250);
     // The credential-shaped error code never leaves the store; arguments are never included.
     let code = failed.error_code.as_ref().unwrap().0.clone();
@@ -3204,6 +3210,7 @@ fn revision_two_tool_usage_serves_redacted_tool_invocations_in_commit_order() {
         if let OperationResult::HistoryToolUsage { value } = &mut only {
             value.tool_invocations = None;
             value.checkpoint = None;
+            value.item_sequences = None;
         }
         wire(&only)
     });
@@ -3359,4 +3366,312 @@ fn revision_two_briefings_take_an_item_paths_and_a_token_budget() {
         fault(brief(json!({}), Some(3))).code,
         DomainErrorCode::SchemaMismatch
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review regressions: rootless tool invocations, indexed feeds, workspace project targets
+
+impl Fx {
+    /// A session `id` of `agent` in `project` (`None`: a Home session) without a work root.
+    fn seed_rootless(&self, session: &str, agent: &str, project: Option<&str>) {
+        let (session, agent, project) = (id(session), actor(agent), project.map(self::project));
+        self.write(move |tx| {
+            tx.sessions().insert_session(&StoredSession {
+                conversation_id: id(&format!("conversation-{}", session.as_str())),
+                id: session,
+                agent_id: agent.clone(),
+                project_id: project,
+                root_id: None,
+                title: "Seeded".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: agent,
+                created_at_ms: T0,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })
+        });
+    }
+    fn usage_at(
+        &self,
+        ctx: &InvocationContext,
+        scope: Value,
+        cursor: Option<&str>,
+        limit: u32,
+        r: Option<u32>,
+    ) -> DomainQueryReply {
+        let mut body = scope;
+        body["page"] = json!({"limit": limit});
+        if let Some(c) = cursor {
+            body["page"]["cursor"] = json!(c);
+        }
+        self.at(ctx, "history.tool_usage", body, r)
+    }
+}
+fn usage_page(reply: DomainQueryReply) -> devworks_core::protocol::records::UsagePage {
+    match result(reply) {
+        OperationResult::HistoryToolUsage { value } => value,
+        other => panic!("{other:?}"),
+    }
+}
+fn calls_of(page: &devworks_core::protocol::records::UsagePage) -> Vec<(String, String)> {
+    page.tool_invocations
+        .as_ref()
+        .unwrap()
+        .0
+        .iter()
+        .map(|t| {
+            (
+                t.session_id.as_str().to_owned(),
+                t.call_id.as_str().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn rootless_sessions_record_tool_invocations_served_under_their_project_and_workspace_scopes() {
+    let fx = Fx::new();
+    // A Home session (no project) and a project-only session (no work root).
+    fx.seed_rootless("session-h", "agent-a", None);
+    fx.seed_rootless("session-p", "agent-a", Some("project-a"));
+    let home = fx
+        .ctx("agent-a", PrincipalKind::Agent, None)
+        .with_session(id("session-h"));
+    let in_project = fx
+        .ctx("agent-a", PrincipalKind::Agent, Some("project-a"))
+        .with_session(id("session-p"));
+    // A Home session's call completes (no operation of a project to wait on).
+    let mut h = SessionBatch::entries(tbatch(
+        "batch-home",
+        "session-h",
+        0,
+        1,
+        vec![
+            entry(
+                "c-b",
+                1,
+                json!({"kind": "ToolCallRecorded", "toolCall": call("call:b", 0)}),
+            ),
+            entry(
+                "r-b",
+                2,
+                json!({"kind": "ToolResponseRecorded", "call": key("call:b", 0),
+                    "outcome": {"kind": "Completed", "artifacts": []}}),
+            ),
+        ],
+    ));
+    h.usage = vec![usage("request-h")];
+    accepted(fx.append(&home, h));
+    accepted(fx.append(
+        &in_project,
+        SessionBatch::entries(calls_and_response("session-p")),
+    ));
+    // Every completed invocation is a durable fact, with or without a root.
+    let recorded: i64 = fx
+        .store
+        .with_writer_connection(|c| {
+            super::super::conn::db(
+                c.query_row("SELECT COUNT(*) FROM tool_invocations", [], |r| r.get(0)),
+            )
+        })
+        .unwrap();
+    assert_eq!(recorded, 2);
+    let user = fx.user();
+    let project =
+        usage_page(fx.usage_at(&user, json!({"projectId": "project-a"}), None, 50, Some(2)));
+    assert_eq!(calls_of(&project), [("session-p".into(), "c-b".into())]);
+    assert!(project.items.0.is_empty());
+    let workspace = usage_page(fx.usage_at(&user, json!({"workspace": true}), None, 50, Some(2)));
+    assert_eq!(calls_of(&workspace), [("session-h".into(), "c-b".into())]);
+    assert_eq!(workspace.items.0[0].request_id.as_str(), "request-h");
+    // No root saw them.
+    let root = usage_page(fx.usage_at(&user, json!({"rootId": "root-a"}), None, 50, Some(2)));
+    assert!(calls_of(&root).is_empty());
+    // Out of scope: another project's principal does not learn of project-a; the workspace is
+    // read only from a workspace invocation of a principal authorized for it.
+    let outsider = fx.ctx("agent-b", PrincipalKind::Agent, Some("project-b"));
+    let f = fault(fx.usage_at(
+        &outsider,
+        json!({"projectId": "project-a"}),
+        None,
+        50,
+        Some(2),
+    ));
+    assert_eq!(
+        (f.code, kind_of(&f)),
+        (DomainErrorCode::NotFound, "project")
+    );
+    for ctx in [
+        fx.ctx("agent-p", PrincipalKind::Agent, Some("project-a")),
+        fx.ctx("user-a", PrincipalKind::Human, Some("project-a")),
+    ] {
+        let f = fault(fx.usage_at(&ctx, json!({"workspace": true}), None, 50, Some(2)));
+        assert_eq!(
+            (f.code, kind_of(&f)),
+            (DomainErrorCode::PermissionDenied, "workspace_scope")
+        );
+    }
+    // Cursors bind the scope and the principal.
+    let first = usage_page(fx.usage_at(&user, json!({"workspace": true}), None, 1, Some(2)));
+    let c = first.next_cursor.unwrap().0;
+    for (who, scope) in [
+        (fx.user(), json!({"projectId": "project-a"})),
+        (
+            fx.ctx("agent-a", PrincipalKind::Agent, None),
+            json!({"workspace": true}),
+        ),
+    ] {
+        assert_eq!(
+            fault(fx.usage_at(&who, scope, Some(&c), 1, Some(2))).code,
+            DomainErrorCode::CursorExpired
+        );
+    }
+    let rest = usage_page(fx.usage_at(&user, json!({"workspace": true}), Some(&c), 1, Some(2)));
+    assert_eq!(rest.item_sequences.unwrap().0.len(), rest.items.0.len());
+    // Revision 1 names only a root.
+    for scope in [
+        json!({"projectId": "project-a"}),
+        json!({"workspace": true}),
+    ] {
+        assert_eq!(
+            fault(fx.usage_at(&user, scope, None, 50, None)).code,
+            DomainErrorCode::InvalidArgument
+        );
+    }
+}
+
+#[test]
+fn migration_9_indexes_the_feeds_and_backfills_invocations() {
+    let m = MIGRATIONS
+        .iter()
+        .find(|m| m.version == 9)
+        .expect("migration 9");
+    assert_eq!(m.checksum(), crate::storage::sqlite::MIGRATION_0009_SHA256);
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 9));
+    let earlier = MIGRATIONS.iter().filter(|e| e.version < 9);
+    assert!(
+        earlier
+            .clone()
+            .all(|e| e.minimum_reader <= m.minimum_reader)
+    );
+    assert!(
+        earlier
+            .clone()
+            .all(|e| e.minimum_writer <= m.minimum_writer)
+    );
+    assert!(!m.rebuilds_tables);
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    accepted(fx.append(
+        &fx.worker("agent-a", "session-a"),
+        SessionBatch::entries(calls_and_response("session-a")),
+    ));
+    // The project feed and its one-row has-more probe seek the partial decision index; the
+    // invocation pages seek their per-scope index.
+    let plan = |sql: String, args: Vec<Value>| -> String {
+        fx.store
+            .with_writer_connection(move |c| {
+                let mut s =
+                    super::super::conn::db(c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")))?;
+                let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+                let rows = super::super::conn::db(
+                    s.query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                        r.get::<_, String>(3)
+                    }),
+                )?;
+                super::super::conn::db(rows.collect::<Result<Vec<_>, _>>())
+            })
+            .unwrap()
+            .join("\n")
+    };
+    let decisions = plan(
+        super::super::sessions::decisions_sql("project_id"),
+        vec![json!("project-a"), json!(0), json!(1)],
+    );
+    assert!(
+        decisions.contains("USING INDEX event_project_decisions (project_id=? AND seq>?)"),
+        "{decisions}"
+    );
+    for (column, index) in [
+        ("project_id", "tool_invocation_project"),
+        ("root_id", "tool_invocation_root"),
+    ] {
+        let p = plan(
+            super::super::sessions::invocations_sql(column),
+            vec![json!("x"), json!(0), json!(0), json!(""), json!(1)],
+        );
+        assert!(p.contains(&format!("USING INDEX {index}")), "{p}");
+    }
+    // The backfill derives exactly the rows the writer records.
+    let sql = m.sql;
+    let start = sql.find("INSERT INTO tool_invocations").unwrap();
+    let backfill = &sql[start..start + sql[start..].find(';').unwrap() + 1];
+    let rows = |c: &rusqlite::Connection| -> Vec<String> {
+        let mut s = c
+            .prepare("SELECT json_array(session_id,response_seq,call_seq,committed_seq,project_id,root_id,call_entry_id,capability_id,outcome,error_code,operation_id,actor_id,called_at,responded_at) FROM tool_invocations ORDER BY session_id,response_seq")
+            .unwrap();
+        s.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let backfill = backfill.to_owned();
+    let (written, derived) = fx
+        .store
+        .with_writer_connection(move |c| {
+            let written = rows(c);
+            super::super::conn::db(
+                c.execute_batch(&format!("DELETE FROM tool_invocations; {backfill}")),
+            )?;
+            Ok((written, rows(c)))
+        })
+        .unwrap();
+    assert_eq!(written.len(), 1);
+    assert_eq!(written, derived);
+}
+
+#[test]
+fn a_workspace_command_naming_a_project_belongs_to_that_projects_feed() {
+    let fx = Fx::new();
+    // From the workspace (no lineage), a command whose only target is a project.
+    let start = fx.start(
+        &fx.user(),
+        json!({"kind": "Project", "projectId": "project-a"}),
+        None,
+    );
+    let feed = events_page(fx.feed(
+        &fx.user(),
+        json!({"projectId": "project-a"}),
+        None,
+        50,
+        Some(2),
+    ));
+    assert_eq!(feed.items.0.len(), 1);
+    assert_eq!(feed.items.0[0].project_id, Some(project("project-a")));
+    assert!(matches!(
+        feed.items.0[0].aggregate,
+        EventSubject::Command(_)
+    ));
+    // A named project outside the invocation's scope is never attached: a project-b invocation
+    // keeps its own project.
+    let b = fx
+        .user()
+        .with_lineage(Some(project("project-b")), None, None);
+    fx.command(
+        &b,
+        "sessions.start",
+        json!({"scope": {"kind": "Project", "projectId": "project-a"}, "title": "t"}),
+    );
+    let feed = events_page(fx.feed(
+        &fx.user(),
+        json!({"projectId": "project-a"}),
+        None,
+        50,
+        Some(2),
+    ));
+    assert_eq!(feed.items.0.len(), 1);
+    let _ = start;
 }

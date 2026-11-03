@@ -187,114 +187,6 @@
         }
       ]
     },
-    "EventRevisionKind": {
-      "description": "The revision dimension of an [`Event`]'s aggregate: the recorded [`RevisionKind`] values\nplus, from schema revision 2, `Command` for a command aggregate ([`EventSubject::Command`]).\nSeparate from [`RevisionKind`] so that revision conflicts, which never concern a command, keep\ntheir recorded shape at every revision.",
-      "oneOf": [
-        {
-          "enum": [
-            "Work",
-            "Control",
-            "Blocker",
-            "Operation",
-            "Policy",
-            "Scope",
-            "Plan",
-            "Authority"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "EventSubject": {
-      "description": "The aggregate an [`Event`] is about: the recorded [`Subject`] variants plus, from schema\nrevision 2, the command (receipt) itself, for a decision whose command names no existing work\nitem or durable operation. A separate union from [`Subject`] so that blockers and revision\nconflicts, which can never name a command, keep their recorded shape at every revision.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/Id"
-            },
-            "kind": {
-              "const": "root",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "id"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/Id"
-            },
-            "kind": {
-              "const": "assignment",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "id"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/Id"
-            },
-            "kind": {
-              "const": "operation",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "id"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/Id"
-            },
-            "kind": {
-              "const": "resource",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "id"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/Id"
-            },
-            "kind": {
-              "const": "blocker",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "id"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "Id": {
       "maxLength": 128,
       "minLength": 1,
@@ -331,6 +223,19 @@
     "Revision": {
       "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
       "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RevisionKind": {
+      "enum": [
+        "Work",
+        "Control",
+        "Blocker",
+        "Operation",
+        "Policy",
+        "Scope",
+        "Plan",
+        "Authority"
+      ],
       "type": "string"
     },
     "RootControl": {
@@ -451,13 +356,13 @@
       "$ref": "#/$defs/Id"
     },
     "aggregate": {
-      "$ref": "#/$defs/EventSubject"
+      "$ref": "#/$defs/Subject"
     },
     "aggregateRevision": {
       "$ref": "#/$defs/Revision"
     },
     "aggregateRevisionKind": {
-      "$ref": "#/$defs/EventRevisionKind"
+      "$ref": "#/$defs/RevisionKind"
     },
     "commandId": {
       "anyOf": [

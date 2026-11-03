@@ -73,8 +73,8 @@ pub struct BriefingInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "NonEmpty<RelativePath>", extend("x-since" = 2))]
-    pub paths: Option<NonEmpty<RelativePath>>,
+    #[schemars(with = "PathSet", extend("x-since" = 2))]
+    pub paths: Option<PathSet>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

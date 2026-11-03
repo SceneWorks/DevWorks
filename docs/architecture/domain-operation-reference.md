@@ -127,7 +127,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `sessions.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`closed`: `?bool` | `Page<SessionRecord>` |
 | `sessions.get` | **Query**<br>`sessionId`: `Id` | `SessionRecord` |
 | `sessions.transcript` | **Query**<br>[Existing input schema](contracts/session-query-request.schema.json)<br>None | `TranscriptPage` |
-| `sessions.briefing` | **Query**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`item`: `?RootId`<br>`paths`: `?NonEmpty<RelativePath>`<br>`budgetTokens`: `?TokenBudget`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ContextSource>` |
+| `sessions.briefing` | **Query**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`item`: `?RootId`<br>`paths`: `?PathSet`<br>`budgetTokens`: `?TokenBudget`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ContextSource>` |
 | `sessions.append_message` | **Command**<br>[Existing input schema](contracts/session-command-request.schema.json)<br>None | `SessionRecord` |
 | `sessions.context_sources` | **Query**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`page`: `PageRequest` | `Page<ContextSource>` |
 | `sessions.start` | **Command**<br>`scope`: `DataScope`<br>`rootId`: `?RootId`<br>`title`: `Label` | `SessionRecord` |
@@ -152,7 +152,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `history.git_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<AttributedGitLink>` |
 | `history.evidence_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<EvidenceLink>` |
 | `history.operation_status` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.operation_status'} | `OperationRef` |
-| `history.tool_usage` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `UsagePage` |
+| `history.tool_usage` | **Query**<br>`rootId`: `?RootId`<br>`projectId`: `?ProjectId`<br>`workspace`: `?bool`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `UsagePage` |
 | `history.command_receipt` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.command_receipt'} | `ReceiptObservation` |
 
 ### Code
@@ -1956,6 +1956,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 
 | Field | Type |
 | --- | --- |
+| `sequence` | `Revision` |
 | `callId` | `Id` |
 | `sessionId` | `Id` |
 | `toolName` | `Label` |
@@ -1974,6 +1975,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `nextCursor` | `?Cursor` |
 | `hasMore` | `bool` |
 | `checkpoint` | `?Cursor` · *revision 2+* |
+| `itemSequences` | `?Rows<Revision>` · *revision 2+* |
 | `toolInvocations` | `?Rows<ToolInvocation>` · *revision 2+* |
 
 ### UsageReport

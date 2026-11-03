@@ -681,10 +681,12 @@ fn incompatible_stores_are_refused_before_any_write() {
     // Newer reader requirement: not even opened.
     let h = Harness::new();
     drop(h.store());
+    // One past this build's schema version, whatever migrations it ships.
+    let newer = MIGRATIONS.last().unwrap().version + 1;
     h.raw()
         .execute(
-            "UPDATE store_meta SET schema_version=9,minimum_reader=9,minimum_writer=9",
-            [],
+            "UPDATE store_meta SET schema_version=?1,minimum_reader=?1,minimum_writer=?1",
+            [newer],
         )
         .unwrap();
     let digest = file_digest(&h);
@@ -701,8 +703,8 @@ fn incompatible_stores_are_refused_before_any_write() {
     drop(s);
     h.raw()
         .execute(
-            "UPDATE store_meta SET schema_version=9,minimum_writer=9",
-            [],
+            "UPDATE store_meta SET schema_version=?1,minimum_writer=?1",
+            [newer],
         )
         .unwrap();
     let before = boots(&h);
@@ -725,7 +727,7 @@ fn incompatible_stores_are_refused_before_any_write() {
     let h = Harness::new();
     drop(h.store());
     h.raw()
-        .execute("UPDATE store_meta SET schema_version=9", [])
+        .execute("UPDATE store_meta SET schema_version=?1", [newer])
         .unwrap();
     let s = h.store();
     assert_eq!(s.info().access, AccessMode::ReadWrite);

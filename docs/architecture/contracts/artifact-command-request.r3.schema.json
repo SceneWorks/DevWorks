@@ -5,16 +5,27 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "A new artifact in exactly one owner scope: `projectId`, or from schema revision 3 the\nworkspace (`workspace: true`). Revisions 1 and 2 require `projectId`.",
           "oneOf": [
             {
               "required": [
-                "projectId"
+                "kind",
+                "projectId",
+                "title",
+                "mediaType",
+                "source",
+                "expectedDigest",
+                "expectedBytes"
               ]
             },
             {
               "required": [
-                "workspace"
+                "kind",
+                "workspace",
+                "title",
+                "mediaType",
+                "source",
+                "expectedDigest",
+                "expectedBytes"
               ],
               "x-since": 3
             }

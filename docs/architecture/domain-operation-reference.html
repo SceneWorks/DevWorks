@@ -399,7 +399,7 @@
 </tr>
 <tr>
 <td><code>sessions.briefing</code></td>
-<td><strong>Query</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedContextEpoch</code>: <code>Counter</code><br><code>item</code>: <code>?RootId</code><br><code>paths</code>: <code>?NonEmpty&lt;RelativePath&gt;</code><br><code>budgetTokens</code>: <code>?TokenBudget</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><strong>Query</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedContextEpoch</code>: <code>Counter</code><br><code>item</code>: <code>?RootId</code><br><code>paths</code>: <code>?PathSet</code><br><code>budgetTokens</code>: <code>?TokenBudget</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;ContextSource&gt;</code></td>
 </tr>
 <tr>
@@ -476,7 +476,7 @@
 </tr>
 <tr>
 <td><code>history.tool_usage</code></td>
-<td><strong>Query</strong><br><code>rootId</code>: <code>RootId</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><strong>Query</strong><br><code>rootId</code>: <code>?RootId</code><br><code>projectId</code>: <code>?ProjectId</code><br><code>workspace</code>: <code>?bool</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>UsagePage</code></td>
 </tr>
 <tr>
@@ -5720,6 +5720,10 @@
 </tr>
 </thead>
 <tbody><tr>
+<td><code>sequence</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
 <td><code>callId</code></td>
 <td><code>Id</code></td>
 </tr>
@@ -5779,6 +5783,10 @@
 <tr>
 <td><code>checkpoint</code></td>
 <td><code>?Cursor</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>itemSequences</code></td>
+<td><code>?Rows&lt;Revision&gt;</code> · <em>revision 2+</em></td>
 </tr>
 <tr>
 <td><code>toolInvocations</code></td>

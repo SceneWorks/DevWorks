@@ -8,11 +8,11 @@
 //! Domain-envelope inputs are the `/body` members other than the `kind` discriminator; the
 //! registry decodes a body only into the input of the operation and mode the host selected.
 //! Specialized envelopes keep their recorded candidate shape and selector.
-use crate::protocol::RootId;
 #[allow(unused_imports)]
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
+use crate::protocol::{ProjectId, RootId};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -74,19 +74,45 @@ impl Revisioned for EvidenceLinksInput {
 /// `history.tool_usage` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["rootId", "page"]}, {"required": ["projectId", "page"], "x-since": 2}, {"required": ["workspace", "page"], "x-since": 2}]))]
 pub struct ToolUsageInput {
-    pub root_id: RootId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "RootId")]
+    pub root_id: Option<RootId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 2))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2, "const" = true))]
+    pub workspace: Option<bool>,
     pub page: PageRequest,
 }
 impl Check for ToolUsageInput {
     fn check(&self) -> Result<(), String> {
         self.root_id.check()?;
+        self.project_id.check()?;
+        self.workspace.check()?;
         self.page.check()?;
         Ok(())
     }
 }
 impl Revisioned for ToolUsageInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.project_id = None;
+        }
+        if revision < 2 {
+            self.workspace = None;
+        }
+    }
 }
 
 /// An admitted input of the `history` family, built only for the selected operation and mode.
