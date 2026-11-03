@@ -17,3 +17,5 @@ tokio = { version = "=1.54.1", default-features = false, features = ["sync", "ti
 # Integration tests compose the real SQLite adapter (STORE-11).
 [dev-dependencies]
 devworks-adapters = { path = "../devworks-adapters" }
+# Seeds rows the engine has no port for yet (projects and work items owning root-scoped work).
+rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }

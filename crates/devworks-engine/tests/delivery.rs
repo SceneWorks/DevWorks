@@ -1,5 +1,5 @@
 //! Durable delivery against the real SQLite adapter: claims, fences, ordering, retries, poison,
-//! wakeups, sleep/wake and restart recovery (DW-003 AC1, CAP-QUEUE).
+//! wakeups, sleep/wake and restart recovery (CAP-QUEUE).
 mod common;
 use common::*;
 use devworks_core::context::PrincipalKind;
@@ -434,61 +434,86 @@ fn at_least_once_redelivery_applies_idempotently() {
     ));
 }
 
+/// The supervised loop with an injected sweep timer: every wait the loop asks for and every
+/// sweep it takes is driven by the test, so no wall-clock bound decides the outcome. A delivery
+/// committed without a wakeup waits for the next sweep, the sweep wait is bounded by the sweep
+/// interval and shortened to the next saved ready time, and a wakeup needs no sweep.
 #[test]
 fn a_missing_wakeup_is_repaired_by_the_bounded_sweep() {
-    // Real time with short bounds: a delivery committed without any wakeup is found by the
-    // sweep; with a long sweep it is found promptly only when woken.
     let h = Harness::new();
     let s = h.open();
-    let swept = Recorder::ok();
-    let woken = Recorder::ok();
-    let sweeping = dispatcher_with(&h, s.clone(), vec![consumer("sweep", swept.clone())], |c| {
-        c.owner = id("sweeper");
-        c.sweep_interval = Duration::from_millis(100);
-    });
-    let sleeping = dispatcher_with(&h, s.clone(), vec![consumer("wake", woken.clone())], |c| {
-        c.owner = id("sleeper");
-        c.sweep_interval = Duration::from_secs(3_600);
-    });
+    let recorder = Recorder::ok();
+    let interval = Duration::from_secs(3_600);
+    let lease = Duration::from_secs(30);
+    let d = dispatcher_with(
+        &h,
+        s.clone(),
+        vec![consumer("work", recorder.clone())],
+        |c| {
+            c.sweep_interval = interval;
+            c.lease_ms = 30_000;
+        },
+    );
+    let (asked_tx, mut asked) = tokio::sync::mpsc::unbounded_channel::<Duration>();
+    let sweep = Arc::new(tokio::sync::Notify::new());
     runtime().block_on(async {
-        let loops: Vec<_> = [sweeping.clone(), sleeping.clone()]
-            .into_iter()
-            .map(|d| tokio::spawn(async move { d.run().await }))
-            .collect();
-        // Both loops have finished a pass over an empty queue; the next pass of the sleeping
-        // one needs a wakeup (its sweep is an hour away).
-        for d in [&sweeping, &sleeping] {
-            let d2 = d.clone();
-            until(d, move || d2.passes() >= 1).await;
-        }
-        let start = std::time::Instant::now();
-        enqueue(&*s, "sweep", None, json!({}));
-        let r = swept.clone();
-        until(&sweeping, move || r.seen().len() == 1).await;
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "bounded by the sweep"
-        );
-
-        enqueue(&*s, "wake", None, json!({}));
-        let quiet = tokio::time::timeout(Duration::from_millis(300), async {
-            let mut rx = sleeping.subscribe();
-            let _ = rx.changed().await;
+        let (tick, d2) = (sweep.clone(), d.clone());
+        let looping = tokio::spawn(async move {
+            d2.run_with_sweep(move |wait| {
+                let (asked_tx, tick) = (asked_tx.clone(), tick.clone());
+                async move {
+                    let _ = asked_tx.send(wait);
+                    tick.notified().await;
+                }
+            })
+            .await
+        });
+        // First pass over an empty queue: the loop waits one full sweep interval.
+        assert_eq!(asked.recv().await, Some(interval));
+        // A delivery due later, committed without a wakeup: the loop stays parked until the
+        // sweep; that pass sees nothing ready and shortens its next wait to the saved time.
+        let later = write(&*s, |tx| {
+            let event_id = event(tx, "Later")?;
+            let entry_id = tx.new_id(IdKind::QueueEntry);
+            let ready_at_ms = tx.now_ms() + 5_000;
+            tx.queue().enqueue(NewQueueEntry {
+                id: entry_id,
+                consumer: "work".into(),
+                event_id,
+                root_id: None,
+                operation_id: None,
+                partition: None,
+                priority: 0,
+                ready_at_ms,
+                payload: json!({}),
+            })
         })
-        .await;
-        assert!(
-            quiet.is_err() && woken.seen().is_empty(),
-            "no wakeup, long sweep: still waiting"
-        );
-        sleeping.wakeup().wake();
-        let r = woken.clone();
-        until(&sleeping, move || r.seen().len() == 1).await;
-        for d in [&sweeping, &sleeping] {
-            d.stop();
-        }
-        for l in loops {
-            l.await.unwrap();
-        }
+        .unwrap();
+        assert!(asked.is_empty() && recorder.seen().is_empty());
+        sweep.notify_one();
+        assert_eq!(asked.recv().await, Some(Duration::from_millis(5_000)));
+        // Time passes; without a sweep nothing is delivered. The sweep delivers it.
+        h.advance(5_000);
+        assert!(recorder.seen().is_empty());
+        sweep.notify_one();
+        // The pass that claimed it waits at most until the claim's lease would expire, if the
+        // claim was still live when the next due time was read.
+        let claimed_wait = |w: Option<Duration>| w == Some(interval) || w == Some(lease);
+        assert!(claimed_wait(asked.recv().await));
+        d.idle().await;
+        assert_eq!(recorder.seen().len(), 1);
+        assert_eq!(entry(&*s, &later.id).state, QueueState::Completed);
+        // The finished delivery freed capacity, which wakes exactly one further pass.
+        assert_eq!(asked.recv().await, Some(interval));
+        // A wakeup needs no sweep.
+        let woken = enqueue(&*s, "work", None, json!({}));
+        d.wakeup().wake();
+        assert!(claimed_wait(asked.recv().await));
+        d.idle().await;
+        assert_eq!(entry(&*s, &woken.id).state, QueueState::Completed);
+        assert_eq!(recorder.seen().len(), 2);
+        d.stop();
+        looping.await.unwrap();
     });
 }
 
@@ -564,7 +589,7 @@ fn sleep_and_wake_repairs_live_leases_before_recovering_abandoned_ones() {
 
 #[test]
 fn bounded_fan_out_under_saturation() {
-    // A bounded deterministic functional check (not the W08 measurement, owned by DW-061):
+    // A bounded deterministic functional check (not the W08 measurement, which is owned elsewhere):
     // 100 events fanned out to four consumers with 3% poison heads, plus 20 effects, through four
     // worker permits.
     let h = Harness::new();
@@ -839,4 +864,401 @@ fn cancelling_after_dispatch_reconciles_the_effect_instead_of_undoing_it() {
         assert_eq!(rt.block_on(d.run_until_idle()).unwrap(), 0);
         assert_eq!(fx.executed(), 1, "an effect was re-executed");
     }
+}
+
+/// One effect delivery for consumer `work`, gated, with a dispatcher over it.
+fn gated_effect(
+    h: &Harness,
+    s: &Arc<dyn ApplicationStore>,
+    result: EffectResult,
+) -> (
+    Effects,
+    tokio::sync::watch::Sender<bool>,
+    devworks_core::protocol::OperationId,
+    QueueEntry,
+    Dispatcher,
+) {
+    let fx = Effects::new(result);
+    let gate = fx.gated();
+    let mut c = consumer("work", Recorder::ok());
+    c.effect = Some(fx.executor());
+    let (op, queued) = write(&**s, |tx| {
+        let op = intent(tx)?;
+        let e = enqueue_tx(tx, "work", None, Some(op.clone()), json!({}))?;
+        Ok((op, e))
+    })
+    .unwrap();
+    let d = dispatcher(h, s.clone(), vec![c]);
+    (fx, gate, op, queued, d)
+}
+
+/// A cancellation admitted while an effect is dispatched, then `NotApplied`: the effect did not
+/// happen, so the operation is cancelled with the delivery. It is neither retried nor dispatched
+/// again, however long the dispatcher keeps running.
+#[test]
+fn cancel_during_dispatch_then_not_applied_cancels_instead_of_retrying() {
+    let h = Harness::new();
+    let s = h.open();
+    let (fx, gate, op, queued, d) = gated_effect(&h, &s, EffectResult::NotApplied("503".into()));
+    let rt = runtime();
+    rt.block_on(async {
+        assert_eq!(d.tick().await.unwrap().claimed, 1);
+        fx.started.notified().await;
+        let qid = queued.id.clone();
+        let asked = write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+        assert!(asked.cancel_requested && asked.state == QueueState::Claimed);
+        gate.send(true).unwrap();
+        d.idle().await;
+    });
+    h.advance(3_600_000);
+    rt.block_on(d.run_until_idle()).unwrap();
+    assert_eq!(fx.executed(), 1, "effect re-dispatched after cancellation");
+    assert_eq!(entry(&*s, &queued.id).state, QueueState::Cancelled);
+    assert_eq!(
+        read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+        OperationState::CancelledBeforeDispatch
+    );
+}
+
+/// The cancellation request survives a hold: an unknown outcome is held, observed later as
+/// `NotApplied`, and the operator's retry or reconcile then cancels the delivery and its
+/// operation instead of redelivering it. The request may arrive during dispatch or while held.
+#[test]
+fn a_cancel_request_survives_a_hold_and_wins_over_a_later_retry() {
+    for (cancel_while_held, resolution, operation) in [
+        (false, "Reconcile", "queue.reconcile"),
+        (true, "Retry", "queue.retry"),
+    ] {
+        let h = Harness::new();
+        let s = h.open();
+        let (fx, gate, op, queued, d) =
+            gated_effect(&h, &s, EffectResult::Unknown("response lost".into()));
+        let rt = runtime();
+        let cancel = |s: &Arc<dyn ApplicationStore>| {
+            let qid = queued.id.clone();
+            write(&**s, move |tx| tx.queue().cancel(&qid)).unwrap()
+        };
+        rt.block_on(async {
+            assert_eq!(d.tick().await.unwrap().claimed, 1);
+            fx.started.notified().await;
+            if !cancel_while_held {
+                cancel(&s);
+            }
+            gate.send(true).unwrap();
+            d.idle().await;
+        });
+        let held = entry(&*s, &queued.id);
+        assert_eq!(held.state, QueueState::Reconciling, "{resolution}");
+        if cancel_while_held {
+            // The outcome is unknown: the request is recorded; the delivery stays held.
+            let asked = cancel(&s);
+            assert_eq!(
+                (asked.state, asked.cancel_requested),
+                (QueueState::Reconciling, true)
+            );
+        }
+        *fx.observation.lock().unwrap() = EffectResult::NotApplied("not found".into());
+        assert_eq!(rt.block_on(d.observe_unknown()).unwrap(), 1);
+        let ctx = principal(&*s, "operator", PrincipalKind::Human);
+        let now = entry(&*s, &queued.id);
+        let reply = resolve_queue(&h, &*s, &ctx, operation, "r-1", &now, resolution);
+        assert!(
+            matches!(
+                reply,
+                CommandReply::Recorded {
+                    receipt: devworks_core::protocol::Receipt {
+                        decision: DomainDecision::Applied { .. },
+                        ..
+                    },
+                    ..
+                }
+            ),
+            "{reply:?}"
+        );
+        h.advance(3_600_000);
+        rt.block_on(d.run_until_idle()).unwrap();
+        assert_eq!(entry(&*s, &queued.id).state, QueueState::Cancelled);
+        assert_eq!(
+            read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+            OperationState::CancelledBeforeDispatch
+        );
+        assert_eq!(fx.executed(), 1, "effect re-dispatched after cancellation");
+    }
+}
+
+/// Fails the first write submitted after the effect started (the transaction recording its
+/// outcome), reporting a storage error to it; everything else passes through.
+struct FailOutcomeWrite {
+    inner: Arc<dyn ApplicationStore>,
+    effects: Effects,
+    failed: std::sync::atomic::AtomicBool,
+}
+struct FailingJob(Box<dyn WriteJob>);
+impl WriteJob for FailingJob {
+    fn run(&mut self, _: &mut dyn WriteTransaction) -> Result<(), StorageError> {
+        Err(StorageError::Busy)
+    }
+    fn finish(self: Box<Self>, r: Result<(), StorageError>) {
+        self.0.finish(r)
+    }
+}
+impl ApplicationStore for FailOutcomeWrite {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(&self, o: WriteOptions, job: Box<dyn WriteJob>) -> Result<(), StorageError> {
+        if self.effects.executed() >= 1 && !self.failed.swap(true, Ordering::SeqCst) {
+            return self.inner.submit_write(o, Box::new(FailingJob(job)));
+        }
+        self.inner.submit_write(o, job)
+    }
+    fn read(
+        &self,
+        o: &ReadOptions,
+        w: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(o, w)
+    }
+}
+
+/// The last allowed attempt dispatches and then its outcome cannot be recorded. The effect may
+/// have happened, so the delivery is held for reconciliation (never `Failed` poison) and its
+/// operation is marked `OutcomeUnknown`, which observation can then establish.
+#[test]
+fn a_possibly_dispatched_delivery_is_held_whatever_its_attempt_budget() {
+    let h = Harness::new();
+    let s = h.open();
+    let fx = Effects::new(EffectResult::Completed(json!({"ok": true})));
+    let recorder = Recorder::ok();
+    let mut c = consumer("work", recorder.clone());
+    c.retry.max_attempts = 1;
+    c.effect = Some(fx.executor());
+    let (op, queued) = write(&*s, |tx| {
+        let op = intent(tx)?;
+        let e = enqueue_tx(tx, "work", None, Some(op.clone()), json!({}))?;
+        Ok((op, e))
+    })
+    .unwrap();
+    let failing: Arc<dyn ApplicationStore> = Arc::new(FailOutcomeWrite {
+        inner: s.clone(),
+        effects: fx.clone(),
+        failed: Default::default(),
+    });
+    let d = dispatcher(&h, failing, vec![c]);
+    let rt = runtime();
+    rt.block_on(d.run_until_idle()).unwrap();
+    let held = entry(&*s, &queued.id);
+    assert_eq!(held.state, QueueState::Reconciling, "{:?}", held.last_error);
+    assert_eq!(
+        read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+        OperationState::OutcomeUnknown
+    );
+    *fx.observation.lock().unwrap() = EffectResult::Completed(json!({"seen": true}));
+    assert_eq!(rt.block_on(d.observe_unknown()).unwrap(), 1);
+    let qid = queued.id.clone();
+    write(&*s, move |tx| tx.queue().requeue(&qid, 0)).unwrap();
+    rt.block_on(d.run_until_idle()).unwrap();
+    assert_eq!(entry(&*s, &queued.id).state, QueueState::Completed);
+    assert_eq!(fx.executed(), 1, "the effect ran exactly once");
+    assert_eq!(recorder.seen().len(), 1);
+}
+
+/// A cancelled claim whose operation was already preflighted (an attempt started, the effect
+/// not yet dispatched) cancels the operation too instead of orphaning it.
+#[test]
+fn cancelling_a_claim_with_a_preflighted_operation_cancels_the_operation() {
+    let h = Harness::new();
+    let s = h.open();
+    let fx = Effects::new(EffectResult::Completed(json!({})));
+    let mut c = consumer("work", Recorder::ok());
+    c.effect = Some(fx.executor());
+    let (op, queued) = write(&*s, |tx| {
+        let op = intent(tx)?;
+        let e = enqueue_tx(tx, "work", None, Some(op.clone()), json!({}))?;
+        let rec = tx.operations().operation(&op)?.unwrap();
+        tx.operations()
+            .begin_attempt(&op, rec.revision, AttemptBinding::default())?;
+        Ok((op, e))
+    })
+    .unwrap();
+    assert_eq!(
+        read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+        OperationState::Preflighted
+    );
+    let interposer = Interposer::new(s.clone());
+    let d = dispatcher(&h, interposer.clone(), vec![c]);
+    let mut held = interposer.hold_while_claimed(&queued.id);
+    runtime().block_on(async {
+        assert_eq!(d.tick().await.unwrap().claimed, 1);
+        let (options, job) = held.recv().await.expect("the delivery's first transaction");
+        let qid = queued.id.clone();
+        write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+        s.submit_write(options, job).unwrap();
+        d.idle().await;
+    });
+    assert_eq!(entry(&*s, &queued.id).state, QueueState::Cancelled);
+    assert_eq!(
+        read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+        OperationState::CancelledBeforeDispatch
+    );
+    assert_eq!(fx.executed(), 0);
+}
+
+/// Unknown outcomes are observed across every page of held deliveries, not only the first.
+#[test]
+fn observing_unknown_outcomes_walks_every_page() {
+    let h = Harness::new();
+    let s = h.open();
+    let fx = Effects::new(EffectResult::Unknown("lost".into()));
+    let mut c = consumer("work", Recorder::ok());
+    c.effect = Some(fx.executor());
+    for _ in 0..5 {
+        write(&*s, |tx| {
+            let op = intent(tx)?;
+            enqueue_tx(tx, "work", None, Some(op), json!({}))
+        })
+        .unwrap();
+    }
+    let d = dispatcher_with(&h, s.clone(), vec![c], |c| c.recovery_batch = 2);
+    let rt = runtime();
+    rt.block_on(d.run_until_idle()).unwrap();
+    assert_eq!(read(&*s, |r| r.queue().status("work")).reconciling, 5);
+    *fx.observation.lock().unwrap() = EffectResult::Completed(json!({"seen": true}));
+    assert_eq!(rt.block_on(d.observe_unknown()).unwrap(), 5);
+    assert_eq!(fx.observed.load(Ordering::SeqCst), 5);
+}
+
+/// The root-control layer's view of which roots are held.
+struct Roots(Mutex<HashSet<String>>);
+impl devworks_engine::RootEligibility for Roots {
+    fn may_resume(
+        &self,
+        _: &mut dyn WriteTransaction,
+        e: &QueueEntry,
+    ) -> Result<bool, StorageError> {
+        let root = e.root_id.as_ref().expect("root-scoped").0.as_str();
+        Ok(!self.0.lock().unwrap().contains(root))
+    }
+}
+
+/// Root-scoped work claimed by a process that died is not continued automatically on the next
+/// boot: it is held awaiting root eligibility while root-less work proceeds. Without an
+/// eligibility port it stays held; with one, it resumes only once its root is no longer held.
+#[test]
+fn root_scoped_work_of_an_earlier_boot_waits_for_root_eligibility() {
+    let h = Harness::new();
+    let s = h.open();
+    seed_root(&h, "root-a");
+    let (rooted, free) = write(&*s, |tx| {
+        let event_id = event(tx, "Changed")?;
+        let rid = tx.new_id(IdKind::QueueEntry);
+        let rooted = tx.queue().enqueue(NewQueueEntry {
+            id: rid,
+            consumer: "work".into(),
+            event_id,
+            root_id: Some(devworks_core::protocol::RootId(id("root-a"))),
+            operation_id: None,
+            partition: None,
+            priority: 0,
+            ready_at_ms: 0,
+            payload: json!({}),
+        })?;
+        let free = enqueue_tx(tx, "work", None, None, json!({}))?;
+        Ok((rooted, free))
+    })
+    .unwrap();
+    let ghost = ClaimRequest {
+        consumer: "work".into(),
+        owner: id("ghost"),
+        lease_ms: 3_600_000,
+        limit: 10,
+    };
+    assert_eq!(
+        write(&*s, move |tx| tx.queue().claim_ready(&ghost))
+            .unwrap()
+            .len(),
+        2
+    );
+    drop(s);
+
+    // Next boot, no eligibility port: the safe default holds the root-scoped work.
+    let s = h.open();
+    let recorder = Recorder::ok();
+    let d = dispatcher(&h, s.clone(), vec![consumer("work", recorder.clone())]);
+    let rt = runtime();
+    let report = rt.block_on(d.recover()).unwrap();
+    assert_eq!(report.held, std::slice::from_ref(&rooted.id));
+    assert_eq!(report.requeued, std::slice::from_ref(&free.id));
+    rt.block_on(d.run_until_idle()).unwrap();
+    assert_eq!(entry(&*s, &free.id).state, QueueState::Completed);
+    let held = entry(&*s, &rooted.id);
+    assert_eq!(
+        (held.state, held.awaiting_eligibility),
+        (QueueState::Reconciling, true)
+    );
+    assert_eq!(recorder.seen().len(), 1);
+
+    // With the root-control layer's port: not while the root is held, then once released.
+    let roots = Arc::new(Roots(Mutex::new(HashSet::from(["root-a".to_owned()]))));
+    let mut c = consumer("work", recorder.clone());
+    c.eligibility = Some(roots.clone());
+    let d = dispatcher(&h, s.clone(), vec![c]);
+    rt.block_on(d.run_until_idle()).unwrap();
+    assert_eq!(entry(&*s, &rooted.id).state, QueueState::Reconciling);
+    assert_eq!(recorder.seen().len(), 1, "held root work was dispatched");
+    roots.0.lock().unwrap().clear();
+    let report = rt.block_on(d.tick()).unwrap();
+    assert_eq!(report.resumed, 1);
+    rt.block_on(async {
+        d.idle().await;
+        d.run_until_idle().await.unwrap();
+    });
+    assert_eq!(entry(&*s, &rooted.id).state, QueueState::Completed);
+    assert_eq!(recorder.seen().len(), 2);
+}
+
+/// A sleep the dispatcher cannot see (a monotonic clock that kept counting through suspend)
+/// falls back to expired-lease recovery: the live effect's delivery is held, the late result is
+/// recorded against the operation, and reconciliation completes it without re-executing.
+#[test]
+fn an_undetected_sleep_holds_the_live_effect_and_never_re_executes_it() {
+    let h = Harness::new();
+    let s = h.open();
+    let fx = Effects::new(EffectResult::Completed(json!({"ok": true})));
+    let gate = fx.gated();
+    let recorder = Recorder::ok();
+    let mut c = consumer("work", recorder.clone());
+    c.effect = Some(fx.executor());
+    let (op, queued) = write(&*s, |tx| {
+        let op = intent(tx)?;
+        let e = enqueue_tx(tx, "work", None, Some(op.clone()), json!({}))?;
+        Ok((op, e))
+    })
+    .unwrap();
+    // No wall-clock jump is ever treated as a sleep.
+    let d = dispatcher_with(&h, s.clone(), vec![c], |c| c.wake_jump_ms = i64::MAX);
+    let rt = runtime();
+    rt.block_on(async {
+        assert_eq!(d.tick().await.unwrap().claimed, 1);
+        fx.started.notified().await;
+        h.advance(3_600_000);
+        let report = d.tick().await.unwrap();
+        assert!(!report.woke);
+        assert_eq!(report.recovered.held, std::slice::from_ref(&queued.id));
+        gate.send(true).unwrap();
+        d.idle().await;
+    });
+    assert_eq!(entry(&*s, &queued.id).state, QueueState::Reconciling);
+    assert_eq!(
+        read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+        OperationState::ObservedComplete,
+        "the late result is recorded"
+    );
+    let ctx = principal(&*s, "operator", PrincipalKind::Human);
+    let held = entry(&*s, &queued.id);
+    resolve_queue(&h, &*s, &ctx, "queue.reconcile", "r-1", &held, "Reconcile");
+    rt.block_on(d.run_until_idle()).unwrap();
+    assert_eq!(entry(&*s, &queued.id).state, QueueState::Completed);
+    assert_eq!(fx.executed(), 1, "an effect was re-executed");
+    assert_eq!(recorder.seen().len(), 1);
 }

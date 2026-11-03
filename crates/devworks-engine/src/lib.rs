@@ -1,4 +1,4 @@
-//! DevWorks asynchronous engine: durable event delivery, supervision and recovery (DW-003).
+//! DevWorks asynchronous engine: durable event delivery, supervision and recovery.
 //!
 //! # Boundary rationale (architecture "Component and dependency structure")
 //!
@@ -25,11 +25,16 @@
 //! * **Recovery before admission.** [`Dispatcher::recover`] classifies interrupted operations and
 //!   reclaims prior-boot claims before the first claim of a new boot; sleep/wake is detected by
 //!   comparing the wall clock with Tokio's monotonic clock and repairs the running owner's leases
-//!   before any expired-claim recovery can reassign them.
+//!   before any expired-claim recovery can reassign them (see [`dispatch`] for per-platform
+//!   behaviour and the safe fallback when no jump is visible). Root-scoped work recovered from
+//!   an earlier boot is held until a consumer's [`RootEligibility`] confirms it may resume.
 //! * **Package event handlers.** [`package::commit_event`] is the host side of
 //!   `broker.commit_event`: state CAS, typed effect intents, the processing receipt and the
 //!   subscription checkpoint commit in one transaction, and an identical replay returns the
-//!   original receipt. The package process host itself is a later item.
+//!   original receipt. It refuses a stale or cancelled invocation (fence and cancellation
+//!   epoch) without writing. A package process reaches it through [`AsyncDeliveryHandler`]: the
+//!   dispatcher keeps the claim live with a renewed lease while the handler runs and signals a
+//!   cancellation request. The package process host itself is a later item.
 //!
 //! Nothing here establishes product acceptance: tests run the real SQLite adapter with injected
 //! clocks and scripted handlers, without inference, network or containers.
@@ -38,6 +43,7 @@ pub mod package;
 mod store;
 
 pub use dispatch::{
-    Consumer, Delivery, DeliveryHandler, Dispatcher, DispatcherConfig, EffectExecutor,
-    EffectFuture, EffectResult, Outcome, RecoveryReport, RetryPolicy, TickReport, Wakeup,
+    AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Consumer, Delivery,
+    DeliveryHandler, Dispatcher, DispatcherConfig, EffectExecutor, EffectFuture, EffectResult,
+    Outcome, RecoveryReport, RetryPolicy, RootEligibility, TickReport, Wakeup,
 };

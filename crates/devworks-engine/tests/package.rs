@@ -1,12 +1,17 @@
-//! Package event handler transactions (DW-003 AC1): state CAS, typed effect intents, the host
+//! Package event handler transactions: state CAS, typed effect intents, the host
 //! processing receipt and the subscription checkpoint commit together; crashes injected before
 //! and after the commit replay once without losing or duplicating state or effects.
 mod common;
 use common::*;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{Id, OperationId};
-use devworks_engine::package::{CommitOutcome, CommitRefusal, PackageInvocation, commit_event};
-use devworks_engine::{Delivery, DeliveryHandler, Outcome};
+use devworks_engine::package::{
+    CommitOutcome, CommitRefusal, PackageInvocation, commit_event, expected_checkpoint,
+};
+use devworks_engine::{
+    AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Delivery, DeliveryHandler,
+    Outcome,
+};
 use devworks_extension_protocol::package::{EventCommit, RpcResult};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -57,6 +62,7 @@ fn invocation(
         state_generation: 1,
         delivery_id: d.entry.id.clone(),
         fence: d.fence(),
+        cancellation_epoch: d.entry.cancellation_epoch,
         actor,
         broker_consumer: BROKER.into(),
     }
@@ -84,9 +90,7 @@ impl DeliveryHandler for DemoPackage {
     fn apply(&self, tx: &mut dyn WriteTransaction, d: &Delivery) -> Result<Outcome, StorageError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let state = tx.packages().package_state(PACKAGE)?.expect("activated");
-        let checkpoint = tx
-            .queue()
-            .checkpoint(&d.entry.consumer, d.entry.partition.as_deref())?;
+        let checkpoint = expected_checkpoint(&*tx.queue(), &d.entry)?;
         let commit = commit_for(&self.session, d, checkpoint, state.revision, "state-2");
         let actor = tx.store().host_actor.clone();
         let outcome = commit_event(tx, &invocation(&self.session, d, actor), &commit)?;
@@ -398,6 +402,15 @@ fn commits_are_validated_before_anything_is_written() {
             },
         ),
         (good.clone(), wrong_fence, CommitRefusal::StaleInvocation),
+        // An invocation started under an earlier cancellation epoch is refused.
+        (
+            good.clone(),
+            PackageInvocation {
+                cancellation_epoch: claimed.cancellation_epoch + 1,
+                ..invocation("s", &d, actor.clone())
+            },
+            CommitRefusal::Cancelled,
+        ),
         (
             commit_for("other-session", &d, 0, 1, "next"),
             invocation("s", &d, actor.clone()),
@@ -452,4 +465,263 @@ fn commits_are_validated_before_anything_is_written() {
         let rec = read(&*s, |r| r.operations().operation(&op)).unwrap();
         assert_eq!(rec.payload["packageId"], PACKAGE);
     }
+}
+
+/// An invocation whose delivery is cancelled while it is claimed cannot commit: the refusal
+/// writes nothing, and the delivery stays claimed for its owner to settle as cancelled.
+#[test]
+fn a_cancelled_invocation_is_refused_without_writes() {
+    let h = Harness::new();
+    let s = h.open();
+    activate(&*s);
+    let e = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
+    let claimed = write(&*s, |tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: CONSUMER.into(),
+            owner: id("host-invoker"),
+            lease_ms: 60_000,
+            limit: 1,
+        })
+    })
+    .unwrap()
+    .remove(0);
+    let event = read(&*s, |r| r.history().event(&e.event_id)).unwrap();
+    let d = Delivery {
+        entry: claimed.clone(),
+        event,
+    };
+    let inv = invocation("s", &d, s.info().host_actor.clone());
+    let qid = e.id.clone();
+    write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+    let commit = commit_for("s", &d, 0, 1, "next");
+    let outcome = write(&*s, move |tx| commit_event(tx, &inv, &commit)).unwrap();
+    assert!(
+        matches!(outcome, CommitOutcome::Refused(CommitRefusal::Cancelled)),
+        "{outcome:?}"
+    );
+    let c = counts(&*s, &e);
+    assert_eq!(
+        (
+            c.state_revision,
+            c.processed,
+            c.intents,
+            c.outbox,
+            c.checkpoint
+        ),
+        (1, false, 0, 0, 0)
+    );
+    assert_eq!(entry(&*s, &e.id).state, QueueState::Claimed);
+}
+
+/// Unordered subscriptions use a per-delivery checkpoint: two deliveries commit in either order
+/// with the same expected checkpoint, and each reply's checkpoint is its own event sequence. A
+/// consumer-wide watermark would refuse the second commit and lie below the first event.
+#[test]
+fn unordered_subscriptions_checkpoint_per_delivery() {
+    let h = Harness::new();
+    let s = h.open();
+    activate(&*s);
+    let first = enqueue(&*s, CONSUMER, None, json!({}));
+    let second = enqueue(&*s, CONSUMER, None, json!({}));
+    let claimed = write(&*s, |tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: CONSUMER.into(),
+            owner: id("host-invoker"),
+            lease_ms: 60_000,
+            limit: 2,
+        })
+    })
+    .unwrap();
+    assert_eq!(claimed.len(), 2);
+    let actor = s.info().host_actor.clone();
+    // The later event commits first, then the earlier one.
+    for (target, revision) in [(&second, 1), (&first, 2)] {
+        let claim = claimed.iter().find(|c| c.id == target.id).unwrap().clone();
+        let event = read(&*s, |r| r.history().event(&target.event_id)).unwrap();
+        let d = Delivery {
+            entry: claim,
+            event,
+        };
+        let expected = read(&*s, |r| expected_checkpoint(r.queue(), &d.entry));
+        assert_eq!(expected, 0);
+        let commit = commit_for("s", &d, expected, revision, &format!("state-{revision}"));
+        let inv = invocation("s", &d, actor.clone());
+        let outcome = write(&*s, move |tx| commit_event(tx, &inv, &commit)).unwrap();
+        let CommitOutcome::Accepted(RpcResult::EventCommitAccepted { checkpoint, .. }) = outcome
+        else {
+            panic!("{outcome:?}")
+        };
+        assert_eq!(String::from(checkpoint), target.event_sequence.to_string());
+    }
+    for e in [&first, &second] {
+        assert_eq!(entry(&*s, &e.id).state, QueueState::Completed);
+    }
+}
+
+/// A package process modelled as an asynchronous handler: it starts, signals, and commits only
+/// when the test opens its gate or the dispatcher signals a cancellation.
+struct ProcessPackage {
+    store: Arc<dyn ApplicationStore>,
+    started: Arc<tokio::sync::Notify>,
+    gate: tokio::sync::watch::Receiver<bool>,
+    outcome: Mutex<Option<CommitOutcome>>,
+    saw_cancel: AtomicBool,
+}
+struct Process(Arc<ProcessPackage>);
+impl AsyncDeliveryHandler for Process {
+    fn start(&self, delivery: AsyncDelivery) -> AsyncFuture {
+        let me = self.0.clone();
+        Box::pin(async move {
+            me.started.notify_one();
+            let mut gate = me.gate.clone();
+            let mut cancelled = delivery.cancelled.clone();
+            loop {
+                if *cancelled.borrow() {
+                    me.saw_cancel.store(true, Ordering::SeqCst);
+                    break;
+                }
+                if *gate.borrow() {
+                    break;
+                }
+                let mut g = std::pin::pin!(gate.changed());
+                let mut c = std::pin::pin!(cancelled.changed());
+                std::future::poll_fn(|cx| {
+                    use std::future::Future;
+                    if g.as_mut().poll(cx).is_ready() || c.as_mut().poll(cx).is_ready() {
+                        std::task::Poll::Ready(())
+                    } else {
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+            }
+            // The process commits through the host path even after a cancellation (a racing
+            // package cannot be trusted to stop): the host refuses it.
+            let d = delivery.delivery;
+            let state = read(&*me.store, |r| r.packages().package_state(PACKAGE))
+                .unwrap()
+                .revision;
+            let expected = read(&*me.store, |r| expected_checkpoint(r.queue(), &d.entry));
+            let commit = commit_for("session-p", &d, expected, state, "state-2");
+            let inv = invocation("session-p", &d, me.store.info().host_actor.clone());
+            let outcome = write(&*me.store, move |tx| commit_event(tx, &inv, &commit)).unwrap();
+            let result = match &outcome {
+                CommitOutcome::Accepted(_) | CommitOutcome::Replayed(_) => AsyncOutcome::Committed,
+                CommitOutcome::Refused(r) => AsyncOutcome::Retry(format!("{r:?}")),
+            };
+            *me.outcome.lock().unwrap() = Some(outcome);
+            result
+        })
+    }
+}
+
+fn process_package(
+    s: &Arc<dyn ApplicationStore>,
+) -> (Arc<ProcessPackage>, tokio::sync::watch::Sender<bool>) {
+    let (gate_tx, gate) = tokio::sync::watch::channel(false);
+    let pkg = Arc::new(ProcessPackage {
+        store: s.clone(),
+        started: Arc::new(tokio::sync::Notify::new()),
+        gate,
+        outcome: Mutex::new(None),
+        saw_cancel: AtomicBool::new(false),
+    });
+    (pkg, gate_tx)
+}
+
+/// The dispatcher keeps an asynchronous handler's claim live: its lease is renewed while the
+/// handler runs (here past the original expiry), and the handler then commits under the claim's
+/// fence and epoch.
+#[test]
+fn an_async_handler_keeps_a_renewed_claim_and_commits_under_its_fence() {
+    let h = Harness::new();
+    let s = h.open();
+    activate(&*s);
+    let e = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
+    let (pkg, gate) = process_package(&s);
+    let mut c = consumer(CONSUMER, Recorder::ok());
+    c.async_handler = Some(Arc::new(Process(pkg.clone())));
+    // Sleep/wake reassertion stays out of the way: only the handler supervisor renews.
+    let d = dispatcher_with(&h, s.clone(), vec![c], |c| c.wake_jump_ms = i64::MAX);
+    let rt = runtime();
+    rt.block_on(async {
+        assert_eq!(d.tick().await.unwrap().claimed, 1);
+        pkg.started.notified().await;
+        let original = entry(&*s, &e.id);
+        let lease = original.lease_until_ms.unwrap();
+        // 20 s later the supervisor renews when prompted.
+        h.advance(20_000);
+        let mut status = d.subscribe();
+        d.wakeup().wake();
+        let want = h.now() + 30_000;
+        while entry(&*s, &e.id).lease_until_ms != Some(want) {
+            status.changed().await.unwrap();
+        }
+        // Past the original expiry, recovery leaves the renewed claim alone.
+        h.advance(20_000);
+        assert!(h.now() > lease);
+        let report = d.tick().await.unwrap();
+        assert!(report.recovered.requeued.is_empty() && report.recovered.held.is_empty());
+        let still = entry(&*s, &e.id);
+        assert_eq!(
+            (still.state, still.generation),
+            (QueueState::Claimed, original.generation)
+        );
+        gate.send(true).unwrap();
+        d.idle().await;
+    });
+    assert!(matches!(
+        pkg.outcome.lock().unwrap().as_ref(),
+        Some(CommitOutcome::Accepted(_))
+    ));
+    let c = counts(&*s, &e);
+    assert_eq!(
+        (
+            c.state_revision,
+            c.processed,
+            c.intents,
+            c.outbox,
+            c.checkpoint
+        ),
+        (2, true, 2, 2, e.event_sequence)
+    );
+    assert_eq!(entry(&*s, &e.id).state, QueueState::Completed);
+}
+
+/// A cancellation requested while an asynchronous handler runs is observed by the supervisor
+/// and signalled to the handler; its commit is refused without writes and the delivery is
+/// settled `Cancelled`.
+#[test]
+fn an_async_handler_observes_cancellation_and_cannot_commit_after_it() {
+    let h = Harness::new();
+    let s = h.open();
+    activate(&*s);
+    let e = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
+    let (pkg, _gate) = process_package(&s);
+    let mut c = consumer(CONSUMER, Recorder::ok());
+    c.async_handler = Some(Arc::new(Process(pkg.clone())));
+    let d = dispatcher(&h, s.clone(), vec![c]);
+    let rt = runtime();
+    rt.block_on(async {
+        assert_eq!(d.tick().await.unwrap().claimed, 1);
+        pkg.started.notified().await;
+        let qid = e.id.clone();
+        write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+        d.wakeup().wake();
+        d.idle().await;
+    });
+    assert!(
+        pkg.saw_cancel.load(Ordering::SeqCst),
+        "cancellation not signalled"
+    );
+    assert!(matches!(
+        pkg.outcome.lock().unwrap().as_ref(),
+        Some(CommitOutcome::Refused(CommitRefusal::Cancelled))
+    ));
+    let c = counts(&*s, &e);
+    assert_eq!(
+        (c.state_revision, c.processed, c.intents, c.outbox),
+        (1, false, 0, 0)
+    );
+    assert_eq!(entry(&*s, &e.id).state, QueueState::Cancelled);
 }

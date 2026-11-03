@@ -38,7 +38,8 @@ macro_rules! store_contract_tests {
             concurrent_duplicates_decide_once, cancellation_and_deadlines, history_paging,
             actor_registry, operation_lifecycle_and_fencing, interrupted_work_after_restart,
             queue_claims_and_fencing, queue_retry_terminal_and_cancel,
-            queue_partitions_progress_and_dependents, queue_holds_dismissal_and_reassert,
+            queue_partitions_progress_and_dependents, partition_checkpoint_stays_contiguous,
+            queue_holds_dismissal_and_reassert,
             queue_inspection_order_and_paging, package_handler_ledger,
             refused_decisions_persist_only_receipt_and_history,
             nested_savepoint_conflict_is_a_durable_refusal,
@@ -1528,6 +1529,59 @@ pub fn queue_partitions_progress_and_dependents(h: &mut dyn StoreHarness) {
     );
     let prog = read(&*s, |r| r.queue().progress("ord"));
     assert_eq!(prog.watermark, after_uncertain.event_sequence);
+}
+
+/// A partition checkpoint is the contiguous settled prefix: cancelling a queued delivery behind
+/// the partition's head never moves the checkpoint past the unsettled head, and the head's
+/// settlement then advances it over everything settled behind it.
+pub fn partition_checkpoint_stays_contiguous(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let (head, second, third) = write(&*s, |tx| {
+        let head = enqueue_in(tx, "ord", Some("p"), None)?;
+        let second = enqueue_in(tx, "ord", Some("p"), None)?;
+        let third = enqueue_in(tx, "ord", Some("p"), None)?;
+        Ok((head, second, third))
+    })
+    .unwrap();
+    let below_unsettled = |s: &dyn ApplicationStore| {
+        read(s, |r| {
+            let cp = r.queue().checkpoint("ord", Some("p"))?;
+            let page = r.queue().deliveries(
+                &DeliveryFilter {
+                    consumer: Some("ord".into()),
+                    operation_id: None,
+                },
+                None,
+                500,
+            )?;
+            let lowest = page
+                .entries
+                .iter()
+                .filter(|e| e.partition.as_deref() == Some("p"))
+                .map(|e| e.event_sequence)
+                .min();
+            if let Some(low) = lowest {
+                assert!(cp < low, "checkpoint {cp} passed unsettled sequence {low}");
+            }
+            Ok(cp)
+        })
+    };
+    let (sid, tid) = (second.id.clone(), third.id.clone());
+    write(&*s, move |tx| {
+        tx.queue().cancel(&tid)?;
+        tx.queue().cancel(&sid)
+    })
+    .unwrap();
+    assert_eq!(below_unsettled(&*s), 0);
+    let claimed = claim(&*s, "ord", "w", 1_000, 10).unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, head.id);
+    let (hid, f) = (head.id.clone(), claimed[0].fence().unwrap());
+    write(&*s, move |tx| {
+        tx.queue().settle(&hid, &f, Settlement::Completed)
+    })
+    .unwrap();
+    assert_eq!(below_unsettled(&*s), third.event_sequence);
 }
 
 /// Failed deliveries are dismissed only by explicit acknowledgment; an explicit requeue restarts

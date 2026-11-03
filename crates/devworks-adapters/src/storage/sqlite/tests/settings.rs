@@ -235,6 +235,7 @@ fn write_actors(store: &SqliteStore) {
             ("user-b", PrincipalKind::Human),
             ("agent-a", PrincipalKind::Agent),
             ("reviewer-a", PrincipalKind::Agent),
+            ("agent-unknown", PrincipalKind::Agent),
             ("pkg-a", PrincipalKind::Package),
         ] {
             tx.actors().register(&ActorId(id(a)), k, a)?;
@@ -604,6 +605,29 @@ fn reviewers_cannot_write_and_policies_are_not_values() {
         f.read(|r| r.proposals(&ConfigScope::Workspace, "settings", None, None, 10))
             .is_empty()
     );
+    // An agent whose role cannot be resolved fails closed: neither a save nor a proposal.
+    let d = f.save(
+        "agent-unknown",
+        ws(),
+        1,
+        &[("roles.dreaming.instructions", json!("Dream more."))],
+    );
+    let fault = refused(&d);
+    assert!(matches!(fault.code, DomainErrorCode::PermissionDenied));
+    assert_eq!(target_kind(fault), "role_unresolved");
+    let proposal = f.propose(
+        "agent-unknown",
+        1,
+        &[("roles.dreaming.instructions", json!("Dream more."))],
+    );
+    assert!(
+        matches!(&proposal, Err(svc::Failure::Refused(r)) if r.code == DomainErrorCode::PermissionDenied && r.target_kind == "role_unresolved"),
+        "{proposal:?}"
+    );
+    assert!(
+        f.read(|r| r.proposals(&ConfigScope::Workspace, "settings", None, None, 10))
+            .is_empty()
+    );
 
     // Harness protections are refused for every principal, including the user.
     let d = f.save(
@@ -823,7 +847,14 @@ fn rejection_and_concurrent_edits_require_reconciliation() {
         r,
         Err(svc::Failure::Storage(StorageError::RevisionConflict(_)))
     ));
+    // The reconciler is now a content author: they cannot approve the content they rebound.
     let (p, user) = (pid.clone(), f.ctx("user-a"));
+    let own = f.write(move |tx| Ok(svc::approve_proposal(tx, &user, &p, 2).map(|_| ())));
+    assert!(
+        matches!(&own, Err(svc::Failure::Refused(r)) if r.code == DomainErrorCode::PermissionDenied),
+        "{own:?}"
+    );
+    let (p, user) = (pid.clone(), f.ctx("user-b"));
     f.write(move |tx| Ok(svc::approve_proposal(tx, &user, &p, 2)))
         .unwrap();
     assert_eq!(f.effective(ws(), key).value.value.0, json!("Dream more."));
@@ -866,11 +897,14 @@ fn credential_values_are_refused_and_never_stored() {
         "user-a",
         ws(),
         1,
-        &[("github.credential", json!({"secretRef": "secret-github-1"}))],
+        &[(
+            "github.credential",
+            json!({"secretRef": "dwsecret-7Hq2Lm9Xc4Vb8Nz1"}),
+        )],
     );
     assert_eq!(
         applied(&saved)[0].value.value.0,
-        json!({"secretRef": "secret-github-1"})
+        json!({"secretRef": "dwsecret-7Hq2Lm9Xc4Vb8Nz1"})
     );
 }
 
@@ -878,12 +912,43 @@ fn credential_values_are_refused_and_never_stored() {
 fn repository_base_directory_inherits_reports_and_never_moves_repositories() {
     let f = Fixture::new();
     let key = "repositories.baseDirectory";
+    // Registered repositories, one linked to the project, cloned under earlier defaults.
     f.h.raw()
-        .execute(
-            "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-1','/Users/me/Elsewhere/engine',1)",
-            [],
+        .execute_batch(
+            "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-1','/Users/me/Elsewhere/engine',3),('repo-2','/Users/me/DevWorks/Repositories/tools',1);
+             INSERT INTO project_repositories(project_id,repository_id) VALUES('project-a','repo-1');",
         )
         .unwrap();
+    type Repositories = Vec<(String, String, i64)>;
+    type Links = Vec<(String, String)>;
+    let records = |f: &Fixture| -> (Repositories, Links, i64) {
+        let c = f.h.raw();
+        let repos = c
+            .prepare("SELECT id,canonical_location,revision FROM repositories ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let links = c
+            .prepare("SELECT project_id,repository_id FROM project_repositories ORDER BY 1,2")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        // History that names a repository (a move or re-registration would).
+        let touched = c
+            .query_row(
+                "SELECT count(*) FROM events WHERE aggregate_id IN ('repo-1','repo-2') OR payload_json LIKE '%repo-1%' OR payload_json LIKE '%repo-2%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        (repos, links, touched)
+    };
+    let before = records(&f);
+    assert_eq!(before.0.len(), 2);
     assert_eq!(
         f.effective(project(), key).value.value.0,
         json!("~/DevWorks/Repositories")
@@ -932,18 +997,20 @@ fn repository_base_directory_inherits_reports_and_never_moves_repositories() {
     assert!(matches!(refused(&d).code, DomainErrorCode::InvalidArgument));
 
     applied(&f.save("user-a", ws(), 2, &[(key, json!("/srv/other"))]));
-    let location: String =
-        f.h.raw()
-            .query_row(
-                "SELECT canonical_location FROM repositories WHERE id='repo-1'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+    applied(&f.save("user-a", project(), 2, &[(key, Value::Null)]));
+    // The new default is what a new clone of the project would use ...
     assert_eq!(
-        location, "/Users/me/Elsewhere/engine",
-        "existing repositories keep their paths"
+        f.effective(project(), key).value.value.0,
+        json!("/srv/other")
     );
+    // ... while every registered repository record, its project link and revision are exactly
+    // as before, and no history names a repository.
+    assert_eq!(
+        records(&f),
+        before,
+        "existing repositories keep their records"
+    );
+    assert_eq!(before.2, 0);
 }
 
 #[test]

@@ -15,15 +15,18 @@
 //!
 //! Principal invariants enforced here, on top of the gateway's authority port:
 //! * a principal whose host-resolved role is read-only (code reviewers) can never write or
-//!   propose settings;
+//!   propose settings, and an agent whose role cannot be resolved is refused the same way
+//!   (fail closed);
 //! * agents never apply settings: an agent `settings.save_revision` is a receipt-only
 //!   `ApprovalRequired` refusal that writes and stages nothing; agents draft changes through the
 //!   proposal command, which calls [`stage_proposal`];
 //! * only a host-bound human principal applies, approves, rejects, reconciles or rolls back, and
-//!   nobody approves their own proposal;
+//!   nobody approves content they authored: the proposal's author and every human who
+//!   reconciled or edited it are recorded as content authors and none of them may approve it;
 //! * harness-enforced policies are not values: every write to them is refused, and instruction
 //!   text is typed text that cannot carry tool grants or policy;
-//! * credential-typed settings accept only opaque secret-store references.
+//! * credential-typed settings accept only host-minted secret-store references
+//!   ([`super::validate::is_secret_ref`]).
 use super::catalog::{Adoption, AgentRole, catalog, descriptor};
 use super::model::{
     self, AdoptedRevisions, Layer, NAMESPACE, Plan, body, chain, current_chain, current_layer,
@@ -330,9 +333,11 @@ fn writer(
             Ok(Writer::Apply)
         }
         PrincipalKind::Host => Ok(Writer::Apply),
+        // A role that cannot be resolved fails closed: it may be a read-only role.
         PrincipalKind::Agent => match roles.role(ctx) {
+            None => Err(denied("role_unresolved")),
             Some(role) if role.read_only() => Err(denied("read_only_role")),
-            _ => Ok(Writer::Propose),
+            Some(_) => Ok(Writer::Propose),
         },
         PrincipalKind::Package | PrincipalKind::Schedule => Err(denied("settings_write")),
     }
@@ -412,11 +417,11 @@ pub fn stage_proposal(
     require_scope(&*tx.configuration(), scope)?;
     match ctx.principal_kind() {
         PrincipalKind::Human => require_human(tx, ctx)?,
-        PrincipalKind::Agent => {
-            if roles.role(ctx).is_some_and(AgentRole::read_only) {
-                return Err(denied("read_only_role"));
-            }
-        }
+        PrincipalKind::Agent => match roles.role(ctx) {
+            None => return Err(denied("role_unresolved")),
+            Some(role) if role.read_only() => return Err(denied("read_only_role")),
+            Some(_) => {}
+        },
         PrincipalKind::Package | PrincipalKind::Schedule | PrincipalKind::Host => {
             return Err(denied("settings_proposal"));
         }
@@ -451,13 +456,33 @@ fn provenance(ctx: &InvocationContext) -> Value {
     })
 }
 
-fn proposal_body(entries: &[SettingAssignment], planned: &Plan, provenance: Value) -> Value {
+fn proposal_body(
+    entries: &[SettingAssignment],
+    planned: &Plan,
+    provenance: Value,
+    content_authors: &[String],
+) -> Value {
     json!({
         "entries": entries,
         "contentDigest": digest(entries),
         "keys": planned.changed.iter().map(|d| d.key).collect::<Vec<_>>(),
         "provenance": provenance,
+        "contentAuthors": content_authors,
     })
+}
+
+/// Every principal who authored the proposal's current content: its author and each human who
+/// reconciled or edited it. None of them may approve it.
+pub fn content_authors(p: &ProposalRecord) -> Vec<String> {
+    let mut authors = vec![p.author.0.as_str().to_owned()];
+    if let Some(recorded) = p.body["contentAuthors"].as_array() {
+        for a in recorded.iter().filter_map(Value::as_str) {
+            if !authors.iter().any(|x| x == a) {
+                authors.push(a.to_owned());
+            }
+        }
+    }
+    authors
 }
 
 fn stage(
@@ -474,7 +499,12 @@ fn stage(
         namespace: NAMESPACE.into(),
         base_revision: current.revision,
         author: ctx.principal().clone(),
-        body: proposal_body(entries, planned, provenance(ctx)),
+        body: proposal_body(
+            entries,
+            planned,
+            provenance(ctx),
+            &[ctx.principal().0.as_str().to_owned()],
+        ),
     })?;
     event(
         tx,
@@ -546,7 +576,8 @@ pub fn approve_proposal(
 ) -> Result<ProposalRecord, Failure> {
     require_human(tx, ctx)?;
     let p = pending(tx, id, expected_revision)?;
-    if &p.author == ctx.principal() {
+    let approver = ctx.principal().0.as_str();
+    if content_authors(&p).iter().any(|a| a == approver) {
         return Err(denied("self_approval"));
     }
     let current = current_layer(&*tx.configuration(), &p.scope)?;
@@ -637,12 +668,19 @@ pub fn reconcile_proposal(
     if !blocking.is_empty() {
         return Err(plan_refusal(&blocking, &p.scope).into());
     }
+    // The reconciler becomes a content author whether or not they edited the entries: the
+    // content is now bound to a base they chose.
+    let mut authors = content_authors(&p);
+    let reconciler = ctx.principal().0.as_str().to_owned();
+    if !authors.contains(&reconciler) {
+        authors.push(reconciler);
+    }
     let reconciled = tx.configuration().update_proposal(
         id,
         p.revision,
         ProposalChange::Reconcile {
             base_revision: current.revision,
-            body: proposal_body(&entries, &planned, p.body["provenance"].clone()),
+            body: proposal_body(&entries, &planned, p.body["provenance"].clone(), &authors),
         },
     )?;
     event(

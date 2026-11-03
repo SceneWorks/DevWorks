@@ -652,6 +652,12 @@ pub fn possibly_dispatched(state: OperationState) -> bool {
     use OperationState::*;
     matches!(state, Dispatching | OutcomeUnknown | NeedsInput)
 }
+/// States in which the effect has certainly not started, so the operation may still be cancelled
+/// before dispatch.
+pub fn cancellable_before_dispatch(state: OperationState) -> bool {
+    use OperationState::*;
+    matches!(state, IntentRecorded | RetryPending | Preflighted)
+}
 
 pub trait OperationRead {
     fn operation(&self, id: &OperationId) -> Result<Option<OperationRecord>, StorageError>;
@@ -762,13 +768,23 @@ pub struct QueueEntry {
     pub last_error: Option<String>,
     /// Boot epoch of the current claim; a claim is only current within the boot that made it.
     pub claim_boot_id: Option<Id>,
+    /// A cancellation was requested while the delivery was claimed or held behind an operation
+    /// whose outcome was not established. It is durable: a later hold, retry, requeue or claim
+    /// recovery cancels the delivery instead of making it ready again, unless its operation has
+    /// an established outcome that must still be recorded.
+    pub cancel_requested: bool,
+    /// When the delivery last failed or was held (store clock, UTC ms); `None` before that.
+    pub failed_at_ms: Option<i64>,
+    /// Root-scoped work recovered from an earlier boot: held until root eligibility is confirmed
+    /// (by the root-control layer or an explicit operator retry); never re-claimed automatically.
+    pub awaiting_eligibility: bool,
 }
 impl QueueEntry {
     /// This entry's keyset position in the inspection order (`None` once settled).
     pub fn inspection_key(&self) -> Option<DeliveryKey> {
         let (rank, a, b) = match self.state {
             QueueState::Claimed => (0, self.event_sequence, 0),
-            QueueState::Failed | QueueState::Reconciling => (1, self.event_sequence, 0),
+            QueueState::Failed | QueueState::Reconciling => (1, self.failed_at_ms.unwrap_or(0), 0),
             QueueState::Ready => (2, self.priority, self.ready_at_ms),
             _ => return None,
         };
@@ -823,7 +839,10 @@ pub enum ClaimRecovery {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RecoveryOutcome {
     pub requeued: Vec<Id>,
+    /// Held in `Reconciling`: possibly dispatched, or root-scoped work awaiting eligibility.
     pub held: Vec<Id>,
+    /// Settled `Cancelled` because a cancellation was requested while they were claimed.
+    pub cancelled: Vec<Id>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct QueueStatus {
@@ -843,8 +862,8 @@ pub struct DeliveryFilter {
     pub operation_id: Option<OperationId>,
 }
 /// Keyset position in the inspection order: `rank` 0 = claimed (oldest event first), 1 =
-/// failed or held (newest event first), 2 = ready in drain order (priority descending, ready
-/// time, id). `a`/`b` are the rank's sort keys.
+/// failed or held (most recent failure first), 2 = ready in drain order (priority descending,
+/// ready time, id). `a`/`b` are the rank's sort keys.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeliveryKey {
     pub rank: u8,
@@ -890,6 +909,14 @@ pub trait QueueRead {
     /// Earliest saved time after `now_ms` at which a delivery becomes ready or a claim's lease
     /// expires: the durable timer a dispatcher sleeps until (bounded by its sweep interval).
     fn next_due_ms(&self, now_ms: i64) -> Result<Option<i64>, StorageError>;
+    /// Held deliveries of `consumer` awaiting root eligibility, in id order after `after`, at
+    /// most `limit` (1..=500).
+    fn awaiting_eligibility(
+        &self,
+        consumer: &str,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<QueueEntry>, StorageError>;
 }
 /// Durable at-least-once delivery primitives. Delivery deduplication is per `(consumer, event)`;
 /// it is not exactly-once execution of external effects.
@@ -907,6 +934,9 @@ pub trait DurableQueue: QueueRead {
         fence: &QueueFence,
         lease_ms: i64,
     ) -> Result<QueueEntry, StorageError>;
+    /// Settles the owner's claim. `Cancelled` also cancels the delivery's undispatched operation
+    /// (`IntentRecorded`, `RetryPending`, `Preflighted`) and is refused once the operation may
+    /// have dispatched or has an outcome: a dispatched effect is reconciled, never cancelled.
     fn settle(
         &mut self,
         id: &Id,
@@ -914,7 +944,9 @@ pub trait DurableQueue: QueueRead {
         settlement: Settlement,
     ) -> Result<QueueEntry, StorageError>;
     /// Records the cause durably and either schedules a retry or fails terminally. An entry whose
-    /// operation may already have dispatched is held in `Reconciling` instead of becoming ready.
+    /// operation may already have dispatched is always held in `Reconciling`, whatever its
+    /// attempt budget, so a possibly dispatched effect is never reported as poison. A retry of an
+    /// entry whose cancellation was requested settles it `Cancelled` instead.
     fn fail(
         &mut self,
         id: &Id,
@@ -922,21 +954,29 @@ pub trait DurableQueue: QueueRead {
         cause: &str,
         disposition: FailureDisposition,
     ) -> Result<QueueEntry, StorageError>;
-    /// Cancels a ready/held entry, or raises the cancellation epoch of a claimed one so its owner
-    /// stops cooperatively and settles it as cancelled.
+    /// Cancels a ready/held entry (with its undispatched operation), or raises the cancellation
+    /// epoch of a claimed one and records the request durably so its owner stops cooperatively
+    /// and settles it as cancelled. A held entry whose operation may have dispatched only records
+    /// the request: what happened must be reconciled first. An entry whose operation already has
+    /// an outcome (`ObservedComplete`, `Failed`, `CancelledBeforeDispatch`) is refused.
     fn cancel(&mut self, id: &Id) -> Result<QueueEntry, StorageError>;
     /// Returns stale claims to `Ready` (new generation) when redelivery is safe, or holds them in
-    /// `Reconciling` when their operation may already have dispatched. Claims are bound to the
-    /// boot epoch that made them; renew/settle/fail also require the current boot.
+    /// `Reconciling` when their operation may already have dispatched. A claim whose cancellation
+    /// was requested is settled `Cancelled` instead of becoming ready. Root-scoped claims of an
+    /// earlier boot are held awaiting root eligibility rather than continued automatically.
+    /// Claims are bound to the boot epoch that made them; renew/settle/fail also require the
+    /// current boot.
     fn recover_claims(
         &mut self,
         mode: ClaimRecovery,
         limit: u16,
     ) -> Result<RecoveryOutcome, StorageError>;
     /// Makes a `Reconciling` or `Failed` entry ready again after explicit resolution (new
-    /// generation). Refused while its operation is still possibly dispatched. From `Failed` the
-    /// retry budget restarts (`attempt_count` = 0; earlier failures stay in history); from
-    /// `Reconciling` the attempt count is kept.
+    /// generation), confirming root eligibility. Refused while its operation is still possibly
+    /// dispatched. From `Failed` the retry budget restarts (`attempt_count` = 0; earlier failures
+    /// stay in history); from `Reconciling` the attempt count is kept. An entry whose
+    /// cancellation was requested is settled `Cancelled` instead, unless its operation has an
+    /// established outcome that redelivery must record.
     fn requeue(&mut self, id: &Id, delay_ms: i64) -> Result<QueueEntry, StorageError>;
     /// Compacts a settled (`Completed`/`Cancelled`/`Dismissed`) delivery: its bookkeeping (payload, lease) is dropped
     /// and it is no longer readable, but a tombstone keeps its `(consumer, event)` dedupe identity

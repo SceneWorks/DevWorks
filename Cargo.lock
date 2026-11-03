@@ -86,6 +86,7 @@ dependencies = [
  "devworks-adapters",
  "devworks-core",
  "devworks-extension-protocol",
+ "rusqlite",
  "serde_json",
  "tokio",
 ]

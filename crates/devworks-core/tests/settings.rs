@@ -10,7 +10,7 @@ use devworks_core::settings::catalog::{
 };
 use devworks_core::settings::service::OPERATIONS;
 use devworks_core::settings::validate::{
-    check_directory, check_value, codes, looks_like_credential,
+    SECRET_REF_PREFIX, check_directory, check_value, codes, looks_like_credential, secret_ref,
 };
 use devworks_core::settings::view::{Health, SettingsView, Source, Status, ViewError};
 use serde_json::{Value, json};
@@ -140,7 +140,29 @@ fn values_are_validated_by_type_and_credentials_are_refused() {
             "{raw}"
         );
     }
-    assert!(check_value(secret, &json!({"secretRef": "secret-1"})).is_empty());
+    assert!(check_value(secret, &json!({"secretRef": "dwsecret-0123456789abcdef"})).is_empty());
+    assert_eq!(
+        secret_ref("0123456789abcdef").as_deref(),
+        Some("dwsecret-0123456789abcdef")
+    );
+    // A raw token in the reference field, a token wrapped in the reference shape, references
+    // that are not host-minted and a minted id that is itself credential-shaped are all refused.
+    let github = format!("ghp_{}", "A1b2C3d4".repeat(5));
+    for reference in [
+        github.clone(),
+        format!("{SECRET_REF_PREFIX}{github}"),
+        "secret-1".to_owned(),
+        format!("{SECRET_REF_PREFIX}short"),
+        format!("{SECRET_REF_PREFIX}AKIAIOSFODNN7EXAMPLE"),
+    ] {
+        let issues = check_value(secret, &json!({ "secretRef": reference }));
+        assert_eq!(
+            issues.first().map(|i| i.code),
+            Some(codes::RAW_CREDENTIAL),
+            "{reference}"
+        );
+    }
+    assert_eq!(secret_ref("AKIAIOSFODNN7EXAMPLE"), None);
     let token = format!("sk-{}", "x".repeat(40));
     assert!(looks_like_credential(&format!("use \"{token}\" please")));
     assert!(looks_like_credential(
@@ -155,6 +177,7 @@ fn values_are_validated_by_type_and_credentials_are_refused() {
 
     assert!(check_directory("k", "/srv/repos").is_empty());
     assert!(check_directory("k", "~/Repos").is_empty());
+    assert!(check_directory("k", "~\\Repos").is_empty());
     assert!(check_directory("k", "C:\\Users\\me\\Repos").is_empty());
     assert_eq!(
         check_directory("k", "Repos")[0].code,

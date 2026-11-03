@@ -337,7 +337,8 @@ fn migration_three_upgrades_existing_deliveries() {
     c.execute_batch(
         "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('ev-old','host','fixture','a',1,'Old',0,'{}');
          INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('ev-v1','host','fixture','a',1,'Changed',0,'{}');
-         INSERT INTO queue_entries(id,consumer,event_id,priority,ready_at,state,payload_json) VALUES('q-v1','work','ev-v1',0,0,'Ready','{}');",
+         INSERT INTO queue_entries(id,consumer,event_id,priority,ready_at,state,payload_json) VALUES('q-v1','work','ev-v1',0,0,'Ready','{}');
+         INSERT INTO queue_entries(id,consumer,event_id,priority,ready_at,state,payload_json) VALUES('q-failed','work','ev-old',0,7,'Failed','{}');",
     )
     .unwrap();
     drop(c);
@@ -355,6 +356,20 @@ fn migration_three_upgrades_existing_deliveries() {
             e.last_error.clone()
         ),
         (2, 1, None, None)
+    );
+    assert_eq!(
+        (e.cancel_requested, e.awaiting_eligibility, e.failed_at_ms),
+        (false, false, None)
+    );
+    // A failed delivery is backfilled with a failure time so it keeps its inspection position.
+    let failed = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.queue().entry(&Id::new("q-failed").unwrap())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        (failed.state, failed.failed_at_ms),
+        (QueueState::Failed, Some(7))
     );
     let claimed = write(&s, |tx| {
         tx.queue().claim_ready(&ClaimRequest {

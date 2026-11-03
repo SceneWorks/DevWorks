@@ -19,12 +19,41 @@
 //!   fails (`Failed`) or holds (`Unknown`). A crash between A and B leaves `Dispatching`, which
 //!   restart classifies `OutcomeUnknown`: it is observed, never re-executed, and only an explicit
 //!   `queue.reconcile` (or `queue.retry` once safe) redelivers it. If the operation has already
-//!   completed (reconciled), the delivery only runs its handler; it never dispatches again.
+//!   completed (reconciled), the delivery only runs its handler; it never dispatches again. If B
+//!   itself cannot be recorded, the operation is marked `OutcomeUnknown` and the delivery held.
+//! * **Asynchronous handler** (consumer with an [`AsyncDeliveryHandler`], for example a package
+//!   process). The claim stays live with a renewed lease while the handler runs outside any
+//!   transaction; the handler commits later through a transactional commit path that checks the
+//!   claim fence and cancellation epoch (`package::commit_event`). A cancellation request is
+//!   observed at each renewal or wakeup and signalled to the handler; a commit after it is
+//!   refused, and the dispatcher settles the delivery `Cancelled`.
+//!
+//! **Cancellation** is cooperative and durable. A request against a claimed delivery raises its
+//! epoch and sets a marker the store keeps through holds, retries, requeues and claim recovery.
+//! The owner observes it at its next check (before applying, before dispatching, and when an
+//! effect reports `NotApplied`) and settles the delivery `Cancelled` with its undispatched
+//! operation. Once an effect may have dispatched, the request cannot take it back: its outcome is
+//! recorded from evidence and reconciled, and an effect is never dispatched again after the
+//! request.
+//!
+//! **Root eligibility.** Root-scoped work recovered from an earlier boot is held, not continued
+//! automatically; a consumer's [`RootEligibility`] (filled by the root-control layer) confirms
+//! which of it may resume. Without one it waits for an operator retry.
+//!
+//! **Sleep/wake detection** compares the wall clock with Tokio's monotonic clock. On Linux
+//! (`CLOCK_MONOTONIC`) and macOS (`mach_absolute_time`) the monotonic clock stops during system
+//! sleep, so a resume shows as a wall-clock jump and live leases are reasserted before recovery.
+//! Where the monotonic clock keeps counting through suspend (Windows `QueryPerformanceCounter`
+//! on current releases, Linux builds whose monotonic source includes suspend), no jump is seen.
+//! The fallback is then ordinary expired-lease recovery, which is safe: a live effect's delivery
+//! is held for reconciliation (its operation is possibly dispatched), the late result is
+//! recorded against the operation's attempt fence, and the effect is never re-executed.
 use crate::store;
 use devworks_core::ports::Clock;
 use devworks_core::ports::storage::{
-    ApplicationStore, AttemptBinding, DeliveryFilter, EventRecord, OperationRecord, QueueEntry,
-    QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError, WriteTransaction,
+    ApplicationStore, AttemptBinding, DeliveryFilter, DeliveryKey, EventRecord, OperationRecord,
+    QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
+    WriteTransaction, cancellable_before_dispatch, possibly_dispatched,
 };
 use devworks_core::protocol::{Id, OperationId, OperationState};
 use serde_json::{Value, json};
@@ -129,12 +158,58 @@ pub trait EffectExecutor: Send + Sync {
     fn observe(&self, operation: OperationRecord) -> EffectFuture;
 }
 
+/// What an [`AsyncDeliveryHandler`] reports when it finishes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AsyncOutcome {
+    /// The handler committed through its transactional commit path (which settles the
+    /// delivery); an identical replay that did not settle is settled `Completed`.
+    Committed,
+    /// Transient: retry after durable backoff.
+    Retry(String),
+    /// Deterministic (poison): visible terminal `Failed`.
+    Poison(String),
+    /// Hold the delivery with diagnostics.
+    Hold(String),
+}
+pub type AsyncFuture = Pin<Box<dyn Future<Output = AsyncOutcome> + Send>>;
+
+/// One claimed delivery handed to an [`AsyncDeliveryHandler`]. Its entry carries the claim fence
+/// and cancellation epoch the handler's commit must present; `cancelled` turns `true` when the
+/// dispatcher observes a cancellation request while the handler runs.
+pub struct AsyncDelivery {
+    pub delivery: Delivery,
+    pub cancelled: watch::Receiver<bool>,
+}
+
+/// A handler that runs outside the write owner (for example a package process) and commits
+/// later through a fenced transactional commit path. The dispatcher keeps the claim's lease
+/// renewed while it runs.
+pub trait AsyncDeliveryHandler: Send + Sync {
+    fn start(&self, delivery: AsyncDelivery) -> AsyncFuture;
+}
+
+/// Decides whether root-scoped work recovered from an earlier boot may continue automatically
+/// (for example: its root is not paused or held and its recovery class allows automatic
+/// continuation). Filled by the root-control layer; it runs inside the dispatcher's transaction.
+pub trait RootEligibility: Send + Sync {
+    fn may_resume(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        entry: &QueueEntry,
+    ) -> Result<bool, StorageError>;
+}
+
 /// A registered consumer. `name` is an opaque identifier (it is the wire `consumerId`).
 #[derive(Clone)]
 pub struct Consumer {
     pub name: String,
     pub handler: Arc<dyn DeliveryHandler>,
     pub effect: Option<Arc<dyn EffectExecutor>>,
+    /// When set, deliveries run through this asynchronous handler instead of `handler`.
+    pub async_handler: Option<Arc<dyn AsyncDeliveryHandler>>,
+    /// Confirms which root-scoped work recovered from an earlier boot may resume. `None` (the
+    /// safe default) leaves it held until an operator retries it.
+    pub eligibility: Option<Arc<dyn RootEligibility>>,
     pub retry: RetryPolicy,
 }
 
@@ -183,15 +258,22 @@ pub struct TickReport {
     pub woke: bool,
     pub reasserted: usize,
     pub recovered: RecoveryOutcome,
+    /// Held root-scoped deliveries whose eligibility was confirmed and that were requeued.
+    pub resumed: usize,
     pub claimed: usize,
 }
 
-/// Best-effort, coalescing post-commit wakeup.
+/// Best-effort, coalescing post-commit wakeup. It also prompts running asynchronous handlers'
+/// supervisors to renew their lease and look for a cancellation request now.
 #[derive(Clone)]
-pub struct Wakeup(Arc<Notify>);
+pub struct Wakeup {
+    pass: Arc<Notify>,
+    changed: Arc<Notify>,
+}
 impl Wakeup {
     pub fn wake(&self) {
-        self.0.notify_one();
+        self.pass.notify_one();
+        self.changed.notify_waiters();
     }
 }
 
@@ -202,6 +284,7 @@ struct Inner {
     cfg: DispatcherConfig,
     permits: Arc<Semaphore>,
     wake: Arc<Notify>,
+    changed: Arc<Notify>,
     status: watch::Sender<u64>,
     in_flight: Mutex<HashMap<Id, QueueFence>>,
     last_tick: Mutex<Option<(Instant, i64)>>,
@@ -252,6 +335,11 @@ impl Dispatcher {
             if c.retry.max_attempts <= 0 || c.retry.base_delay_ms < 0 {
                 return Err(invalid("retry policy bounds"));
             }
+            if c.async_handler.is_some() && c.effect.is_some() {
+                return Err(invalid(
+                    "an asynchronous consumer commits through its own path, not an effect executor",
+                ));
+            }
         }
         let (status, _) = watch::channel(0);
         Ok(Self {
@@ -262,6 +350,7 @@ impl Dispatcher {
                 consumers,
                 cfg,
                 wake: Arc::new(Notify::new()),
+                changed: Arc::new(Notify::new()),
                 status,
                 in_flight: Mutex::new(HashMap::new()),
                 last_tick: Mutex::new(None),
@@ -275,7 +364,10 @@ impl Dispatcher {
 
     /// Handle producers call after committing new deliveries (best effort).
     pub fn wakeup(&self) -> Wakeup {
-        Wakeup(self.inner.wake.clone())
+        Wakeup {
+            pass: self.inner.wake.clone(),
+            changed: self.inner.changed.clone(),
+        }
     }
 
     /// "Queue state may have changed" hints for UI; repair a missed hint with a durable query.
@@ -388,6 +480,7 @@ impl Dispatcher {
         let limit = inner.cfg.recovery_batch;
         report.recovered =
             store::write(&inner.store, move |tx| store::recover_expired(tx, limit)).await?;
+        report.resumed = self.resume_eligible().await?;
 
         // Claim only within free worker capacity.
         let mut permits: Vec<OwnedSemaphorePermit> = Vec::new();
@@ -452,6 +545,55 @@ impl Dispatcher {
         Ok(report)
     }
 
+    /// Requeues held root-scoped work recovered from an earlier boot once each consumer's
+    /// [`RootEligibility`] confirms it, one bounded page per transaction. Work whose operation
+    /// may have dispatched stays held for reconciliation whatever the port says.
+    async fn resume_eligible(&self) -> Result<usize, StorageError> {
+        let batch = self.inner.cfg.recovery_batch;
+        let mut resumed = 0;
+        for consumer in &self.inner.consumers {
+            let Some(port) = consumer.eligibility.clone() else {
+                continue;
+            };
+            let mut after: Option<Id> = None;
+            loop {
+                let (name, port, from) = (consumer.name.clone(), port.clone(), after.clone());
+                let (n, last, more) = store::write(&self.inner.store, move |tx| {
+                    let page = tx
+                        .queue()
+                        .awaiting_eligibility(&name, from.as_ref(), batch)?;
+                    let more = page.len() == usize::from(batch);
+                    let mut n = 0;
+                    for e in &page {
+                        if let Some(op) = &e.operation_id
+                            && tx
+                                .operations()
+                                .operation(op)?
+                                .is_some_and(|o| possibly_dispatched(o.state))
+                        {
+                            continue;
+                        }
+                        if port.may_resume(tx, e)? {
+                            tx.queue().requeue(&e.id, 0)?;
+                            n += 1;
+                        }
+                    }
+                    Ok((n, page.last().map(|e| e.id.clone()), more))
+                })
+                .await?;
+                resumed += n;
+                if !more {
+                    break;
+                }
+                after = last;
+            }
+        }
+        if resumed > 0 {
+            self.notify_status();
+        }
+        Ok(resumed)
+    }
+
     /// Waits until no delivery is in flight.
     pub async fn idle(&self) {
         let n = u32::try_from(self.inner.cfg.max_in_flight).unwrap_or(u32::MAX);
@@ -477,6 +619,18 @@ impl Dispatcher {
     /// The supervised loop: passes until [`Dispatcher::stop`], each followed by a bounded wait
     /// for a wakeup, the next saved ready/lease time, or the sweep interval.
     pub async fn run(&self) {
+        self.run_with_sweep(tokio::time::sleep).await;
+    }
+
+    /// [`Dispatcher::run`] with an injected sweep timer: after each pass, `sweep(wait)` must
+    /// resolve once the next pass is due without a wakeup, where `wait` is the sweep interval or
+    /// the time until the next saved ready/lease time, whichever is shorter. Production uses a
+    /// Tokio sleep; tests drive the sweep explicitly.
+    pub async fn run_with_sweep<S, F>(&self, mut sweep: S)
+    where
+        S: FnMut(Duration) -> F + Send,
+        F: Future<Output = ()> + Send,
+    {
         let inner = &self.inner;
         while !inner.stopping.load(Ordering::SeqCst) {
             // A failed pass (store busy or unavailable) is retried after the sweep interval.
@@ -492,7 +646,7 @@ impl Dispatcher {
                 let until = u64::try_from(due.saturating_sub(now).max(0)).unwrap_or(u64::MAX);
                 wait = wait.min(Duration::from_millis(until));
             }
-            let _ = tokio::time::timeout(wait, inner.wake.notified()).await;
+            let _ = first(inner.wake.notified(), sweep(wait)).await;
         }
     }
 
@@ -511,61 +665,73 @@ impl Dispatcher {
                 consumer: Some(consumer.name.clone()),
                 operation_id: None,
             };
-            let held: Vec<OperationRecord> = store::read(&self.inner.store, move |r| {
-                let page = r.queue().deliveries(&filter, None, 500)?;
-                let mut ops = Vec::new();
-                for e in page.entries {
-                    if e.state != QueueState::Reconciling {
-                        continue;
-                    }
-                    if let Some(op) = &e.operation_id
-                        && let Some(rec) = r.operations().operation(op)?
-                        && rec.state == OperationState::OutcomeUnknown
-                    {
-                        ops.push(rec);
+            // Bounded pages over every unsettled delivery of the consumer. Observation does not
+            // change a delivery's inspection position, so the keyset walk is stable.
+            let batch = self.inner.cfg.recovery_batch;
+            let mut after: Option<DeliveryKey> = None;
+            loop {
+                let (f, from) = (filter.clone(), after.clone());
+                let (held, next): (Vec<OperationRecord>, Option<DeliveryKey>) =
+                    store::read(&self.inner.store, move |r| {
+                        let page = r.queue().deliveries(&f, from.as_ref(), batch)?;
+                        let mut ops = Vec::new();
+                        for e in page.entries {
+                            if e.state != QueueState::Reconciling {
+                                continue;
+                            }
+                            if let Some(op) = &e.operation_id
+                                && let Some(rec) = r.operations().operation(op)?
+                                && rec.state == OperationState::OutcomeUnknown
+                            {
+                                ops.push(rec);
+                            }
+                        }
+                        Ok((ops, page.next))
+                    })
+                    .await?;
+                for op in held {
+                    let observed = executor.observe(op.clone()).await;
+                    let established = store::write(&self.inner.store, move |tx| {
+                        let Some(current) = tx.operations().operation(&op.id)? else {
+                            return Ok(false);
+                        };
+                        if current.state != OperationState::OutcomeUnknown
+                            || current.revision != op.revision
+                        {
+                            return Ok(false);
+                        }
+                        let (to, note) = observation(&observed);
+                        match to {
+                            Some(to) => {
+                                tx.operations().transition(
+                                    &op.id,
+                                    current.revision,
+                                    None,
+                                    to,
+                                    Some(json!({"reconciliation": note})),
+                                )?;
+                                Ok(true)
+                            }
+                            None => {
+                                if let Some(a) = current.latest_attempt() {
+                                    tx.operations().observe(
+                                        &op.id,
+                                        a.attempt_no,
+                                        json!({"reconciliation": note}),
+                                    )?;
+                                }
+                                Ok(false)
+                            }
+                        }
+                    })
+                    .await?;
+                    if established {
+                        resolved += 1;
                     }
                 }
-                Ok(ops)
-            })
-            .await?;
-            for op in held {
-                let observed = executor.observe(op.clone()).await;
-                let established = store::write(&self.inner.store, move |tx| {
-                    let Some(current) = tx.operations().operation(&op.id)? else {
-                        return Ok(false);
-                    };
-                    if current.state != OperationState::OutcomeUnknown
-                        || current.revision != op.revision
-                    {
-                        return Ok(false);
-                    }
-                    let (to, note) = observation(&observed);
-                    match to {
-                        Some(to) => {
-                            tx.operations().transition(
-                                &op.id,
-                                current.revision,
-                                None,
-                                to,
-                                Some(json!({"reconciliation": note})),
-                            )?;
-                            Ok(true)
-                        }
-                        None => {
-                            if let Some(a) = current.latest_attempt() {
-                                tx.operations().observe(
-                                    &op.id,
-                                    a.attempt_no,
-                                    json!({"reconciliation": note}),
-                                )?;
-                            }
-                            Ok(false)
-                        }
-                    }
-                })
-                .await?;
-                if established {
-                    resolved += 1;
+                match next {
+                    Some(k) => after = Some(k),
+                    None => break,
                 }
             }
         }
@@ -581,8 +747,16 @@ impl Dispatcher {
 
     async fn deliver(&self, idx: usize, claimed: QueueEntry) {
         let consumer = self.inner.consumers[idx].clone();
-        let outcome = match (&consumer.effect, &claimed.operation_id) {
-            (Some(executor), Some(_)) => {
+        let outcome = match (
+            &consumer.async_handler,
+            &consumer.effect,
+            &claimed.operation_id,
+        ) {
+            (Some(handler), _, _) => {
+                self.deliver_async(&consumer, handler.clone(), claimed.clone())
+                    .await
+            }
+            (None, Some(executor), Some(_)) => {
                 self.deliver_effect(&consumer, executor.clone(), claimed.clone())
                     .await
             }
@@ -609,6 +783,95 @@ impl Dispatcher {
                 return Ok(step);
             }
             apply(tx, &*handler, &e, policy)
+        })
+        .await
+    }
+
+    /// Asynchronous delivery: hand the live claim to the handler, renew its lease and watch for
+    /// cancellation while it runs, then settle whatever its commit path did not.
+    async fn deliver_async(
+        &self,
+        consumer: &Consumer,
+        handler: Arc<dyn AsyncDeliveryHandler>,
+        claimed: QueueEntry,
+    ) -> Result<Step, StorageError> {
+        let c = claimed.clone();
+        let begin = store::write(&self.inner.store, move |tx| {
+            let Some(e) = current(tx, &c)? else {
+                return Ok(Err(Step::Lost));
+            };
+            if let Some(step) = cancelled(tx, &c, &e)? {
+                return Ok(Err(step));
+            }
+            let event = tx
+                .history()
+                .event(&e.event_id)?
+                .ok_or_else(|| StorageError::NotFound {
+                    kind: "event",
+                    id: e.event_id.0.as_str().to_owned(),
+                })?;
+            Ok(Ok(Delivery { entry: e, event }))
+        })
+        .await?;
+        let delivery = match begin {
+            Ok(d) => d,
+            Err(step) => return Ok(step),
+        };
+        let fence = delivery.fence();
+        let epoch = delivery.entry.cancellation_epoch;
+        let (signal, cancelled_rx) = watch::channel(false);
+        let mut running = handler.start(AsyncDelivery {
+            delivery,
+            cancelled: cancelled_rx,
+        });
+        let lease = self.inner.cfg.lease_ms;
+        let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
+        let outcome = loop {
+            // Polled in order: a wakeup, the renewal timer, then the handler.
+            let check = first(self.inner.changed.notified(), tokio::time::sleep(every));
+            if let Either::Right(outcome) = first(check, &mut running).await {
+                break outcome;
+            }
+            let (id, f) = (claimed.id.clone(), fence.clone());
+            let asked = store::write(&self.inner.store, move |tx| {
+                let e = tx.queue().renew(&id, &f, lease)?;
+                Ok(e.cancellation_epoch != epoch || e.cancel_requested)
+            })
+            .await;
+            // A lost lease needs no signal: the handler's commit is refused as stale.
+            if matches!(asked, Ok(true)) {
+                let _ = signal.send(true);
+            }
+            self.notify_status();
+        };
+        let policy = consumer.retry;
+        store::write(&self.inner.store, move |tx| {
+            let Some(e) = current(tx, &claimed)? else {
+                // Settled by the handler's commit path (or recovered).
+                return Ok(Step::Lost);
+            };
+            if let Some(step) = cancelled(tx, &claimed, &e)? {
+                return Ok(step);
+            }
+            let fence = e
+                .fence()
+                .ok_or_else(|| invalid("claimed entry without fence"))?;
+            let after = match outcome {
+                AsyncOutcome::Committed => {
+                    tx.queue().settle(&e.id, &fence, Settlement::Completed)?
+                }
+                AsyncOutcome::Retry(cause) => store::fail_retry(
+                    tx,
+                    &e,
+                    &fence,
+                    &cause,
+                    policy.delay_for(e.attempt_count),
+                    policy.max_attempts,
+                )?,
+                AsyncOutcome::Poison(cause) => store::fail_terminal(tx, &e, &fence, &cause)?,
+                AsyncOutcome::Hold(cause) => store::hold(tx, &e, &fence, &cause)?,
+            };
+            Ok(Step::Settled(after.state))
         })
         .await
     }
@@ -743,6 +1006,13 @@ impl Dispatcher {
                 let after = store::hold(tx, &e, &fence, "late effect result after recovery")?;
                 return Ok(Step::Settled(after.state));
             }
+            // The effect did not happen and a cancellation arrived meanwhile: the operation
+            // (now `RetryPending`) is cancelled with the delivery instead of being retried.
+            if matches!(result, EffectResult::NotApplied(_))
+                && let Some(step) = cancelled(tx, &claimed, &e)?
+            {
+                return Ok(step);
+            }
             let after = match &result {
                 EffectResult::Completed(_) => return apply(tx, &*handler, &e, policy),
                 EffectResult::Failed(cause) => store::fail_terminal(tx, &e, &fence, cause)?,
@@ -778,6 +1048,23 @@ impl Dispatcher {
             let fence = e
                 .fence()
                 .ok_or_else(|| invalid("claimed entry without fence"))?;
+            // This claim dispatched an effect whose outcome could not be recorded: the outcome
+            // is unknown, so it is observed and reconciled (the store then holds the delivery).
+            if let Some(op_id) = &e.operation_id
+                && let Some(op) = tx.operations().operation(op_id)?
+                && op.state == OperationState::Dispatching
+                && let Some(attempt) = op.latest_attempt()
+                && attempt.binding.owner_generation == Some(e.generation)
+            {
+                let attempt_fence = attempt.fence();
+                tx.operations().transition(
+                    &op.id,
+                    op.revision,
+                    Some(&attempt_fence),
+                    OperationState::OutcomeUnknown,
+                    Some(json!({"unrecorded": store::bounded(&cause)})),
+                )?;
+            }
             store::fail_retry(
                 tx,
                 &e,
@@ -790,6 +1077,27 @@ impl Dispatcher {
         })
         .await;
     }
+}
+
+enum Either<A, B> {
+    Left(A),
+    Right(B),
+}
+
+/// Resolves with whichever future is ready first, polling `a` before `b` each time.
+async fn first<A: Future, B: Future>(a: A, b: B) -> Either<A::Output, B::Output> {
+    let mut a = std::pin::pin!(a);
+    let mut b = std::pin::pin!(b);
+    std::future::poll_fn(|cx| {
+        if let std::task::Poll::Ready(v) = a.as_mut().poll(cx) {
+            return std::task::Poll::Ready(Either::Left(v));
+        }
+        if let std::task::Poll::Ready(v) = b.as_mut().poll(cx) {
+            return std::task::Poll::Ready(Either::Right(v));
+        }
+        std::task::Poll::Pending
+    })
+    .await
 }
 
 /// Maps an observed effect result to the operation state it establishes (`None`: unknown).
@@ -825,34 +1133,31 @@ fn current(
     Ok(ours.then_some(e))
 }
 
-/// Cooperative cancellation: the epoch rose after the claim, so stop before applying. An
-/// undispatched operation is cancelled with it.
+/// Cooperative cancellation: a request arrived after the claim (the epoch rose) or survived a
+/// hold or requeue (the durable marker). It applies while the operation, if any, has certainly
+/// not dispatched (`IntentRecorded`, `RetryPending`, `Preflighted`): the delivery settles
+/// `Cancelled` and the store cancels the operation with it. A possibly dispatched or already
+/// established operation is reconciled instead, so this returns `None`.
 fn cancelled(
     tx: &mut dyn WriteTransaction,
     claimed: &QueueEntry,
     e: &QueueEntry,
 ) -> Result<Option<Step>, StorageError> {
-    if e.cancellation_epoch == claimed.cancellation_epoch {
+    if e.cancellation_epoch == claimed.cancellation_epoch && !e.cancel_requested {
         return Ok(None);
+    }
+    if let Some(op_id) = &e.operation_id {
+        let state = tx.operations().operation(op_id)?.map(|o| o.state);
+        let undispatched = state.is_some_and(|s| {
+            cancellable_before_dispatch(s) || s == OperationState::CancelledBeforeDispatch
+        });
+        if !undispatched {
+            return Ok(None);
+        }
     }
     let fence = e
         .fence()
         .ok_or_else(|| invalid("claimed entry without fence"))?;
-    if let Some(op_id) = &e.operation_id
-        && let Some(op) = tx.operations().operation(op_id)?
-        && matches!(
-            op.state,
-            OperationState::IntentRecorded | OperationState::RetryPending
-        )
-    {
-        tx.operations().transition(
-            &op.id,
-            op.revision,
-            None,
-            OperationState::CancelledBeforeDispatch,
-            None,
-        )?;
-    }
     let after = tx.queue().settle(&e.id, &fence, Settlement::Cancelled)?;
     Ok(Some(Step::Settled(after.state)))
 }

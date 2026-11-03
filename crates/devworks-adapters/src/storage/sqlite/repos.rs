@@ -467,7 +467,7 @@ fn unresolved(conn: &Connection, max: u16) -> Result<Vec<OperationRecord>, Stora
     raws.into_iter().map(|r| op_of(conn, r)).collect()
 }
 
-const QUEUE_COLUMNS: &str = "id,consumer,event_id,root_id,operation_id,priority,ready_at,state,owner_id,lease_until,generation,cancellation_epoch,attempt_count,payload_json,partition_key,event_seq,revision,last_error,claim_boot_id";
+const QUEUE_COLUMNS: &str = "id,consumer,event_id,root_id,operation_id,priority,ready_at,state,owner_id,lease_until,generation,cancellation_epoch,attempt_count,payload_json,partition_key,event_seq,revision,last_error,claim_boot_id,cancel_requested,failed_at,awaiting_eligibility";
 /// SQL list of settled queue states (they never block a partition or the watermark).
 /// `Compacted` is a dedupe tombstone of a settled delivery.
 const SETTLED: &str = "('Completed','Cancelled','Dismissed','Compacted')";
@@ -491,6 +491,9 @@ struct QueueRaw {
     revision: i64,
     error: Option<String>,
     claim_boot: Option<String>,
+    cancel_requested: bool,
+    failed_at: Option<i64>,
+    awaiting_eligibility: bool,
 }
 fn queue_row(r: &Row<'_>) -> rusqlite::Result<QueueRaw> {
     Ok(QueueRaw {
@@ -513,6 +516,9 @@ fn queue_row(r: &Row<'_>) -> rusqlite::Result<QueueRaw> {
         revision: r.get(16)?,
         error: r.get(17)?,
         claim_boot: r.get(18)?,
+        cancel_requested: r.get(19)?,
+        failed_at: r.get(20)?,
+        awaiting_eligibility: r.get(21)?,
     })
 }
 fn queue_of(r: QueueRaw) -> Result<QueueEntry, StorageError> {
@@ -536,6 +542,9 @@ fn queue_of(r: QueueRaw) -> Result<QueueEntry, StorageError> {
         revision: r.revision,
         last_error: r.error,
         claim_boot_id: opt_id(r.claim_boot)?,
+        cancel_requested: r.cancel_requested,
+        failed_at_ms: r.failed_at,
+        awaiting_eligibility: r.awaiting_eligibility,
     })
 }
 fn entry(conn: &Connection, id: &Id) -> Result<Option<QueueEntry>, StorageError> {
@@ -582,8 +591,8 @@ const INSPECTION_RANKS: [(u8, &str, &str, &str); 3] = [
     (
         1,
         "state IN ('Failed','Reconciling')",
-        "(event_seq,id)<(?3,?5)",
-        "event_seq DESC,id DESC",
+        "(coalesce(failed_at,0),id)<(?3,?5)",
+        "coalesce(failed_at,0) DESC,id DESC",
     ),
     (
         2,
@@ -691,6 +700,23 @@ fn checkpoint(
         Some(p) => Ok(progress_row(conn, consumer, p)?.0),
         None => Ok(progress(conn, consumer)?.watermark),
     }
+}
+fn awaiting_eligibility(
+    conn: &Connection,
+    consumer: &str,
+    after: Option<&Id>,
+    max: u16,
+) -> Result<Vec<QueueEntry>, StorageError> {
+    let n = limit(max)?;
+    let mut s = stmt(
+        conn,
+        &format!(
+            "SELECT {QUEUE_COLUMNS} FROM queue_entries WHERE consumer=?1 AND awaiting_eligibility=1 AND state='Reconciling' AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3"
+        ),
+    )?;
+    let raws: Vec<QueueRaw> =
+        db(db(s.query_map(params![consumer, after.map(Id::as_str), n], queue_row))?.collect())?;
+    raws.into_iter().map(queue_of).collect()
 }
 fn next_due(conn: &Connection, now: i64) -> Result<Option<i64>, StorageError> {
     db(stmt(
@@ -875,6 +901,14 @@ macro_rules! read_impls {
             }
             fn next_due_ms(&self, now_ms: i64) -> Result<Option<i64>, StorageError> {
                 next_due(self.conn, now_ms)
+            }
+            fn awaiting_eligibility(
+                &self,
+                consumer: &str,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<QueueEntry>, StorageError> {
+                awaiting_eligibility(self.conn, consumer, after, limit)
             }
         }
         impl PackageHandlerRead for $t {
@@ -1454,19 +1488,100 @@ impl Unit<'_> {
     }
     /// Records a settlement in the consumer's progress rows: the reserved `''` row counts
     /// settlements and keeps the highest settled sequence; an ordered partition's row is its
-    /// contiguous checkpoint (its head always settles first, so the maximum is contiguous).
+    /// contiguous checkpoint. A delivery behind the partition's head can be settled first (an
+    /// operator cancels a queued delivery), so the checkpoint is recomputed as the settled prefix:
+    /// it never passes the lowest unsettled delivery of the partition.
     fn settled(&self, e: &QueueEntry) -> Result<(), StorageError> {
-        let mut keys = vec![""];
+        db(stmt(self.conn,
+            "INSERT INTO consumer_progress(consumer,partition_key,applied_seq,revision) VALUES(?1,'',?2,1) ON CONFLICT(consumer,partition_key) DO UPDATE SET applied_seq=max(applied_seq,excluded.applied_seq),revision=revision+1",
+        )?
+        .execute(params![e.consumer, e.event_sequence]))?;
         if let Some(p) = e.partition.as_deref() {
-            keys.push(p);
-        }
-        for key in keys {
+            let (lowest_unsettled, highest_settled): (Option<i64>, Option<i64>) = db(stmt(
+                self.conn,
+                &format!(
+                    "SELECT (SELECT min(event_seq) FROM queue_entries WHERE consumer=?1 AND partition_key=?2 AND state NOT IN {SETTLED}),(SELECT max(event_seq) FROM queue_entries WHERE consumer=?1 AND partition_key=?2 AND state IN {SETTLED})"
+                ),
+            )?
+            .query_row(params![e.consumer, p], |r| Ok((r.get(0)?, r.get(1)?))))?;
+            let settled = highest_settled.unwrap_or(0);
+            let prefix = match lowest_unsettled {
+                Some(low) => settled.min(low - 1),
+                None => settled,
+            };
             db(stmt(self.conn,
                 "INSERT INTO consumer_progress(consumer,partition_key,applied_seq,revision) VALUES(?1,?2,?3,1) ON CONFLICT(consumer,partition_key) DO UPDATE SET applied_seq=max(applied_seq,excluded.applied_seq),revision=revision+1",
             )?
-            .execute(params![e.consumer, key, e.event_sequence]))?;
+            .execute(params![e.consumer, p, prefix.max(0)]))?;
         }
         Ok(())
+    }
+    /// Cancels the delivery's operation before dispatch. Refused when the effect may have started
+    /// or already has an outcome; an operation already cancelled before dispatch is left as is.
+    fn cancel_operation(&mut self, e: &QueueEntry) -> Result<(), StorageError> {
+        let Some(op_id) = &e.operation_id else {
+            return Ok(());
+        };
+        let op = self.load_op(op_id)?;
+        if op.state == OperationState::CancelledBeforeDispatch {
+            return Ok(());
+        }
+        if !cancellable_before_dispatch(op.state) {
+            return Err(invalid(format!(
+                "the delivery's operation is {}; only an undispatched operation can be cancelled",
+                state_name(op.state)
+            )));
+        }
+        // A preflighted attempt is closed under its own fence, with the reason as its
+        // observation; an operation without a live attempt has nothing to attribute it to.
+        let fence = match op.state {
+            OperationState::Preflighted => op.latest_attempt().map(AttemptRecord::fence),
+            _ => None,
+        };
+        let note = fence
+            .as_ref()
+            .map(|_| json!({"cancelledWithDelivery": e.id.as_str()}));
+        OperationJournal::transition(
+            self,
+            op_id,
+            op.revision,
+            fence.as_ref(),
+            OperationState::CancelledBeforeDispatch,
+            note,
+        )?;
+        Ok(())
+    }
+    /// Whether a requested cancellation applies instead of making `e` ready again: there is no
+    /// operation, or it has certainly not dispatched. An established outcome (`ObservedComplete`,
+    /// `Failed`) must still be recorded by redelivery, so the request cannot apply to it.
+    fn cancel_applies(&self, e: &QueueEntry) -> Result<bool, StorageError> {
+        if !e.cancel_requested {
+            return Ok(false);
+        }
+        Ok(match &e.operation_id {
+            None => true,
+            Some(op) => {
+                let state = self.load_op(op)?.state;
+                cancellable_before_dispatch(state)
+                    || state == OperationState::CancelledBeforeDispatch
+            }
+        })
+    }
+    /// Settles an unclaimed or claimed delivery `Cancelled` with its undispatched operation.
+    fn settle_cancelled(
+        &mut self,
+        e: &QueueEntry,
+        cause: &str,
+    ) -> Result<QueueEntry, StorageError> {
+        self.cancel_operation(e)?;
+        db(stmt(self.conn,
+            "UPDATE queue_entries SET state='Cancelled',owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,awaiting_eligibility=0,revision=revision+1 WHERE id=?1 AND generation=?2",
+        )?
+        .execute(params![e.id.as_str(), e.generation]))?;
+        let after = self.reload(&e.id)?;
+        self.settled(&after)?;
+        self.observe_queue(&after, "QueueDeliveryCancelled", json!({"cause": cause}))?;
+        Ok(after)
     }
     fn not_possibly_dispatched(&self, e: &QueueEntry, action: &str) -> Result<(), StorageError> {
         if let Some(op) = &e.operation_id
@@ -1641,10 +1756,13 @@ impl DurableQueue for Unit<'_> {
         fence: &QueueFence,
         settlement: Settlement,
     ) -> Result<QueueEntry, StorageError> {
-        self.fenced(id, fence)?;
+        let e = self.fenced(id, fence)?;
         let state = match settlement {
             Settlement::Completed => QueueState::Completed,
-            Settlement::Cancelled => QueueState::Cancelled,
+            Settlement::Cancelled => {
+                self.cancel_operation(&e)?;
+                QueueState::Cancelled
+            }
         };
         // A completion clears the visible failure; a cancellation keeps it as evidence.
         db(stmt(self.conn,
@@ -1665,6 +1783,10 @@ impl DurableQueue for Unit<'_> {
     ) -> Result<QueueEntry, StorageError> {
         bounded("failure cause", cause, 1024)?;
         let e = self.fenced(id, fence)?;
+        let dispatched = match &e.operation_id {
+            Some(op) => possibly_dispatched(self.load_op(op)?.state),
+            None => false,
+        };
         let (state, ready_at) = match disposition {
             FailureDisposition::Retry {
                 delay_ms,
@@ -1673,16 +1795,16 @@ impl DurableQueue for Unit<'_> {
                 if delay_ms < 0 || max_attempts <= 0 {
                     return Err(invalid("retry delay/attempt bounds"));
                 }
-                let dispatched = match &e.operation_id {
-                    Some(op) => possibly_dispatched(self.load_op(op)?.state),
-                    None => false,
-                };
-                if e.attempt_count >= max_attempts {
-                    (QueueState::Failed, e.ready_at_ms)
-                } else if dispatched {
-                    // A retry hint never authorizes replaying an effect that may have happened:
-                    // hold the delivery for reconciliation, exactly as claim recovery does.
+                if dispatched {
+                    // A retry hint never authorizes replaying an effect that may have happened,
+                    // and an exhausted budget never turns it into poison: hold the delivery for
+                    // reconciliation, exactly as claim recovery does.
                     (QueueState::Reconciling, e.ready_at_ms)
+                } else if self.cancel_applies(&e)? {
+                    // A cancellation requested during the attempt wins over its retry.
+                    return self.settle_cancelled(&e, cause);
+                } else if e.attempt_count >= max_attempts {
+                    (QueueState::Failed, e.ready_at_ms)
                 } else {
                     (
                         QueueState::Ready,
@@ -1692,12 +1814,15 @@ impl DurableQueue for Unit<'_> {
                     )
                 }
             }
+            // A possibly dispatched effect is held, never poison.
+            FailureDisposition::Terminal if dispatched => (QueueState::Reconciling, e.ready_at_ms),
             FailureDisposition::Terminal => (QueueState::Failed, e.ready_at_ms),
         };
+        let failed_at = (state != QueueState::Ready).then_some(self.now);
         db(stmt(self.conn,
-            "UPDATE queue_entries SET state=?1,ready_at=?2,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,revision=revision+1,last_error=?5 WHERE id=?3 AND generation=?4",
+            "UPDATE queue_entries SET state=?1,ready_at=?2,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,revision=revision+1,last_error=?5,failed_at=coalesce(?6,failed_at) WHERE id=?3 AND generation=?4",
         )?
-        .execute(params![queue_state_name(state), ready_at, id.as_str(), fence.generation, cause]))?;
+        .execute(params![queue_state_name(state), ready_at, id.as_str(), fence.generation, cause, failed_at]))?;
         let after = self.reload(id)?;
         self.observe_queue(
             &after,
@@ -1716,29 +1841,47 @@ impl DurableQueue for Unit<'_> {
 
     fn cancel(&mut self, id: &Id) -> Result<QueueEntry, StorageError> {
         let e = self.queue_entry(id)?;
+        let op_state = match &e.operation_id {
+            Some(op) => Some(self.load_op(op)?.state),
+            None => None,
+        };
+        let request = |me: &mut Self| -> Result<QueueEntry, StorageError> {
+            db(stmt(
+                me.conn,
+                "UPDATE queue_entries SET cancellation_epoch=cancellation_epoch+1,cancel_requested=1,revision=revision+1 WHERE id=?1",
+            )?
+            .execute([id.as_str()]))?;
+            let after = me.reload(id)?;
+            me.observe_queue(
+                &after,
+                "QueueCancellationRequested",
+                json!({"state": queue_state_name(after.state)}),
+            )?;
+            Ok(after)
+        };
         match e.state {
+            // The effect may have happened: record the request; reconciliation decides.
+            QueueState::Reconciling if op_state.is_some_and(possibly_dispatched) => request(self),
             QueueState::Ready | QueueState::Reconciling => {
-                db(stmt(self.conn,
-                    "UPDATE queue_entries SET state='Cancelled',cancellation_epoch=cancellation_epoch+1,revision=revision+1 WHERE id=?1",
-                )?
-                .execute([id.as_str()]))?;
-                let after = self.reload(id)?;
-                self.settled(&after)?;
-                return Ok(after);
-            }
-            QueueState::Claimed => {
+                if op_state.is_some_and(|s| !cancellable_before_dispatch(s)) {
+                    return Err(invalid(
+                        "the delivery's operation already has an outcome; it cannot be cancelled",
+                    ));
+                }
                 db(stmt(
                     self.conn,
                     "UPDATE queue_entries SET cancellation_epoch=cancellation_epoch+1,revision=revision+1 WHERE id=?1",
                 )?
                 .execute([id.as_str()]))?;
+                let e = self.reload(id)?;
+                self.settle_cancelled(&e, "cancelled before dispatch")
             }
-            QueueState::Cancelled => return Ok(e),
+            QueueState::Claimed => request(self),
+            QueueState::Cancelled => Ok(e),
             QueueState::Completed | QueueState::Failed | QueueState::Dismissed => {
-                return Err(invalid("a settled delivery cannot be cancelled"));
+                Err(invalid("a settled delivery cannot be cancelled"))
             }
         }
-        self.reload(id)
     }
 
     fn recover_claims(
@@ -1771,21 +1914,30 @@ impl DurableQueue for Unit<'_> {
         for raw in stale {
             let id = id_of(raw)?;
             let e = self.reload(&id)?;
-            let held = match &e.operation_id {
+            let dispatched = match &e.operation_id {
                 Some(op) => possibly_dispatched(self.load_op(op)?.state),
                 // Handler database effects commit atomically with completion, so redelivering an
                 // entry without an external operation is safe (at-least-once).
                 None => false,
             };
-            let state = if held {
+            if !dispatched && self.cancel_applies(&e)? {
+                self.settle_cancelled(&e, "cancellation requested before claim recovery")?;
+                out.cancelled.push(id);
+                continue;
+            }
+            // Root-scoped work of a dead process is not continued automatically: the root may
+            // have been paused or held meanwhile, so it waits until its eligibility is confirmed.
+            let awaiting = mode == ClaimRecovery::PriorBoots && e.root_id.is_some();
+            let state = if dispatched || awaiting {
                 QueueState::Reconciling
             } else {
                 QueueState::Ready
             };
+            let failed_at = (state == QueueState::Reconciling).then_some(self.now);
             db(stmt(self.conn,
-                "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,generation=generation+1,revision=revision+1 WHERE id=?2 AND state='Claimed' AND generation=?3",
+                "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,generation=generation+1,revision=revision+1,awaiting_eligibility=?4,failed_at=coalesce(?5,failed_at) WHERE id=?2 AND state='Claimed' AND generation=?3",
             )?
-            .execute(params![queue_state_name(state), id.as_str(), e.generation]))?;
+            .execute(params![queue_state_name(state), id.as_str(), e.generation, awaiting, failed_at]))?;
             let after = self.reload(&id)?;
             self.observe_queue(
                 &after,
@@ -1795,9 +1947,10 @@ impl DurableQueue for Unit<'_> {
                     "previousGeneration": e.generation,
                     "outcome": queue_state_name(state),
                     "mode": format!("{mode:?}"),
+                    "awaitingEligibility": awaiting,
                 }),
             )?;
-            if held {
+            if state == QueueState::Reconciling {
                 out.held.push(id);
             } else {
                 out.requeued.push(id);
@@ -1815,6 +1968,9 @@ impl DurableQueue for Unit<'_> {
             return Err(invalid("delay must be non-negative"));
         }
         self.not_possibly_dispatched(&e, "a retry")?;
+        if self.cancel_applies(&e)? {
+            return self.settle_cancelled(&e, "cancellation requested before the retry");
+        }
         let ready = self
             .now
             .checked_add(delay_ms)
@@ -1827,7 +1983,7 @@ impl DurableQueue for Unit<'_> {
             e.attempt_count
         };
         db(stmt(self.conn,
-            "UPDATE queue_entries SET state='Ready',ready_at=?1,attempt_count=?4,generation=generation+1,revision=revision+1 WHERE id=?2 AND generation=?3",
+            "UPDATE queue_entries SET state='Ready',ready_at=?1,attempt_count=?4,generation=generation+1,revision=revision+1,awaiting_eligibility=0 WHERE id=?2 AND generation=?3",
         )?
         .execute(params![ready, id.as_str(), e.generation, attempts]))?;
         let after = self.reload(id)?;
@@ -1848,9 +2004,9 @@ impl DurableQueue for Unit<'_> {
         bounded("hold cause", cause, 1024)?;
         self.fenced(id, fence)?;
         db(stmt(self.conn,
-            "UPDATE queue_entries SET state='Reconciling',owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,generation=generation+1,revision=revision+1,last_error=?1 WHERE id=?2 AND generation=?3",
+            "UPDATE queue_entries SET state='Reconciling',owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,generation=generation+1,revision=revision+1,last_error=?1,failed_at=?4 WHERE id=?2 AND generation=?3",
         )?
-        .execute(params![cause, id.as_str(), fence.generation]))?;
+        .execute(params![cause, id.as_str(), fence.generation, self.now]))?;
         let after = self.reload(id)?;
         self.observe_queue(&after, "QueueDeliveryHeld", json!({"cause": cause}))?;
         Ok(after)

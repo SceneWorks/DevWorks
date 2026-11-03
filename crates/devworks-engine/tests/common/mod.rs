@@ -216,6 +216,8 @@ pub fn consumer(name: &str, handler: Arc<dyn DeliveryHandler>) -> Consumer {
         name: name.into(),
         handler,
         effect: None,
+        async_handler: None,
+        eligibility: None,
         retry: RetryPolicy {
             base_delay_ms: 100,
             max_delay_ms: 10_000,
@@ -356,4 +358,44 @@ pub fn principal(s: &dyn ApplicationStore, name: &str, kind: PrincipalKind) -> I
         Counter::new(info.restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     )
+}
+
+/// Seeds a project and a feature work item `root` directly in the store file: root-scoped
+/// deliveries need an owning root and the engine has no work-item port.
+pub fn seed_root(h: &Harness, root: &str) {
+    let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    c.execute_batch(&format!(
+        "INSERT OR IGNORE INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-a','A','Active',1,1,0);
+         INSERT INTO work_items VALUES('{root}','project-a','feature',NULL,NULL,NULL,'Fixture',1,0,1,1,1,'{{}}');"
+    ))
+    .unwrap();
+}
+
+/// Submits a `queue.*` resolution for `e` through the shared gateway as `ctx`.
+pub fn resolve_queue(
+    h: &Harness,
+    s: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    operation: &str,
+    key: &str,
+    e: &QueueEntry,
+    resolution: &str,
+) -> devworks_core::protocol::CommandReply<devworks_core::protocol::results::DomainDecision> {
+    let body = format!(
+        r#"{{"mode":"Command","protocol":"1.0-draft.1","requestKey":"{key}","body":{{"kind":"{operation}","deliveryId":"{}","expectedRevision":"{}","expectedFence":"{}","resolution":"{resolution}","reason":"operator decision"}}}}"#,
+        e.id.as_str(),
+        e.revision,
+        e.generation
+    );
+    let ids = h.ids.clone();
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &Authority,
+        store: s,
+        ids: &*ids,
+    };
+    devworks_core::services::UseCases::new()
+        .with_queue()
+        .command(&gateway, ctx, operation, body.as_bytes())
+        .expect("addressed reply")
 }

@@ -526,6 +526,14 @@ impl QueueRead for Unsupported {
     fn next_due_ms(&self, _: i64) -> Result<Option<i64>, StorageError> {
         nope()
     }
+    fn awaiting_eligibility(
+        &self,
+        _: &str,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<QueueEntry>, StorageError> {
+        nope()
+    }
 }
 impl PackageHandlerRead for Unsupported {
     fn package_state(&self, _: &str) -> Result<Option<PackageState>, StorageError> {

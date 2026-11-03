@@ -10,6 +10,17 @@
 //! exact accepted reply. External effects run later through ordinary operation admission;
 //! accepting their intents is not their completion.
 //!
+//! Checkpoints ([`expected_checkpoint`]): an ordered subscription (a delivery with a partition)
+//! uses its partition's contiguous checkpoint, so a commit is refused if another commit of the
+//! same partition moved it. An unordered subscription has no order to protect, so its checkpoint
+//! is per delivery: `0` until this delivery is processed, and the accepted reply carries the
+//! delivery's own event sequence. A consumer-wide watermark would change whenever an unrelated
+//! delivery settled (spurious conflicts) and could lie below the committed event.
+//!
+//! Cancellation: the invocation carries the claim's cancellation epoch. A delivery whose epoch
+//! rose (or whose cancellation is otherwise requested) refuses a new commit with
+//! [`CommitRefusal::Cancelled`] and nothing is written; the dispatcher settles it `Cancelled`.
+//!
 //! Replay: an identical commit for an already processed `(package, subscription, event)` returns
 //! the original receipt, checkpoint, state revision and operation IDs without writing; a changed
 //! one is refused. A stale or revoked invocation cannot introduce a new commit, but may recover
@@ -20,8 +31,8 @@ use devworks_core::fingerprint::sha256_hex;
 use devworks_core::jcs;
 use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::{
-    NewEvent, NewOperation, NewQueueEntry, ProcessingRecord, QueueFence, QueueState, Settlement,
-    StorageError, WriteTransaction,
+    NewEvent, NewOperation, NewQueueEntry, ProcessingRecord, QueueEntry, QueueFence, QueueRead,
+    QueueState, Settlement, StorageError, WriteTransaction,
 };
 use devworks_core::protocol::{EventId, Id, OperationId};
 use devworks_extension_protocol::package::{EventCommit, PackageRequest, RpcResult, RpcVersion};
@@ -41,6 +52,8 @@ pub struct PackageInvocation {
     /// The claimed delivery this invocation handles.
     pub delivery_id: Id,
     pub fence: QueueFence,
+    /// The claim's cancellation epoch when the invocation started.
+    pub cancellation_epoch: i64,
     /// Host actor that attributes the commit's history.
     pub actor: devworks_core::protocol::ActorId,
     /// Consumer that admits the commit's effect intents (the broker's outbox).
@@ -57,6 +70,8 @@ pub enum CommitRefusal {
     BindingMismatch,
     /// The invocation's delivery is no longer claimed by it (stale or revoked).
     StaleInvocation,
+    /// A cancellation was requested for the delivery after the invocation started.
+    Cancelled,
     CheckpointConflict {
         expected: i64,
         current: i64,
@@ -97,6 +112,14 @@ pub fn payload_digest(commit: &EventCommit) -> Result<String, StorageError> {
     }
     let canonical = jcs::canonicalize(&v).map_err(|e| invalid(format!("{e:?}")))?;
     Ok(sha256_hex(canonical.as_bytes()))
+}
+
+/// The checkpoint a new commit for `entry` must present (see the module documentation).
+pub fn expected_checkpoint(queue: &dyn QueueRead, entry: &QueueEntry) -> Result<i64, StorageError> {
+    match entry.partition.as_deref() {
+        Some(p) => queue.checkpoint(&entry.consumer, Some(p)),
+        None => Ok(0),
+    }
 }
 
 fn wire_err<E: std::fmt::Debug>(e: E) -> StorageError {
@@ -192,10 +215,11 @@ pub fn commit_event(
     {
         return Ok(CommitOutcome::Refused(CommitRefusal::StaleInvocation));
     }
+    if delivery.cancellation_epoch != inv.cancellation_epoch || delivery.cancel_requested {
+        return Ok(CommitOutcome::Refused(CommitRefusal::Cancelled));
+    }
     let partition = delivery.partition.clone();
-    let checkpoint = tx
-        .queue()
-        .checkpoint(&delivery.consumer, partition.as_deref())?;
+    let checkpoint = expected_checkpoint(&*tx.queue(), &delivery)?;
     let expected_checkpoint = counter(&commit.expected_checkpoint)?;
     if expected_checkpoint != checkpoint {
         return Ok(CommitOutcome::Refused(CommitRefusal::CheckpointConflict {
@@ -289,9 +313,10 @@ pub fn commit_event(
     }
     tx.queue()
         .settle(&inv.delivery_id, &inv.fence, Settlement::Completed)?;
-    let checkpoint = tx
-        .queue()
-        .checkpoint(&delivery.consumer, partition.as_deref())?;
+    let checkpoint = match partition.as_deref() {
+        Some(p) => tx.queue().checkpoint(&delivery.consumer, Some(p))?,
+        None => delivery.event_sequence,
+    };
     let record = ProcessingRecord {
         package_id: inv.package_id.clone(),
         subscription_id: inv.subscription_id.clone(),

@@ -122,14 +122,11 @@ pub fn check_value(d: &SettingDescriptor, v: &Value) -> Vec<Issue> {
             None => out.push(ty("a list of model IDs")),
         },
         ValueKind::SecretRef => {
-            let reference = v.as_object().filter(|o| o.len() == 1).and_then(|o| {
-                o.get("secretRef").and_then(Value::as_str).filter(|s| {
-                    !s.is_empty()
-                        && s.len() <= 128
-                        && s.bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                })
-            });
+            let reference = v
+                .as_object()
+                .filter(|o| o.len() == 1)
+                .and_then(|o| o.get("secretRef").and_then(Value::as_str))
+                .filter(|s| is_secret_ref(s));
             if reference.is_none() {
                 // Anything but an opaque reference in a credential field is treated as a raw
                 // credential attempt and never stored or echoed.
@@ -151,6 +148,29 @@ pub fn check_value(d: &SettingDescriptor, v: &Value) -> Vec<Issue> {
     out
 }
 
+/// Prefix of every host-minted secret-store reference.
+pub const SECRET_REF_PREFIX: &str = "dwsecret-";
+
+/// Whether `s` is a host-minted secret-store reference: [`SECRET_REF_PREFIX`] followed by an
+/// opaque id of 16..=96 ASCII letters and digits. Neither the reference nor its id may look
+/// like a credential, so a pasted token wrapped in the reference shape is still refused.
+pub fn is_secret_ref(s: &str) -> bool {
+    let Some(opaque) = s.strip_prefix(SECRET_REF_PREFIX) else {
+        return false;
+    };
+    (16..=96).contains(&opaque.len())
+        && opaque.bytes().all(|b| b.is_ascii_alphanumeric())
+        && !looks_like_credential(s)
+        && !looks_like_credential(opaque)
+}
+
+/// Mints the reference the secret store returns for an opaque stored-secret id, or `None` when
+/// the id cannot form a valid reference.
+pub fn secret_ref(opaque_id: &str) -> Option<String> {
+    let reference = format!("{SECRET_REF_PREFIX}{opaque_id}");
+    is_secret_ref(&reference).then_some(reference)
+}
+
 /// Syntactic directory validation. Availability is a separate, advisory runtime check.
 pub fn check_directory(key: &str, s: &str) -> Vec<Issue> {
     if s.is_empty() || s.len() > 4096 || s.chars().any(char::is_control) || s.trim() != s {
@@ -168,6 +188,7 @@ pub fn check_directory(key: &str, s: &str) -> Vec<Issue> {
     let absolute = s.starts_with('/')
         || s == "~"
         || s.starts_with("~/")
+        || s.starts_with("~\\")
         || windows_drive
         || s.starts_with("\\\\");
     if !absolute {

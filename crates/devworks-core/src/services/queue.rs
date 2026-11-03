@@ -1,5 +1,5 @@
 //! `QueueDispatcher` use cases: `queue.inspect`, `queue.consumer_status`, `queue.resolve`,
-//! `queue.retry` and `queue.reconcile` (DW-003, CAP-QUEUE).
+//! `queue.retry` and `queue.reconcile` (CAP-QUEUE).
 //!
 //! One implementation serves every entry point: the native UI and agent tools both submit to the
 //! [`crate::gateway::Gateway`] with this service registered in [`super::UseCases`], so validation,
@@ -16,19 +16,25 @@
 //! | `Retry` | `Failed`, `Reconciling` | Ready now with a fresh retry budget; the failure cause stays visible until it completes. |
 //! | `Reconcile` | `Reconciling` | Re-evaluates the operation journal; once the outcome is established the delivery is redelivered so its handler records it idempotently. |
 //! | `AcknowledgePoison` | `Failed` | `Dismissed` (terminal); its partition continues. |
-//! | `CancelBeforeDispatch` | `Ready`, `Reconciling` | `Cancelled`; an undispatched operation becomes `CancelledBeforeDispatch`. |
+//! | `CancelBeforeDispatch` | `Ready`, `Reconciling` | `Cancelled`; an undispatched operation (`IntentRecorded`, `RetryPending`, `Preflighted`) becomes `CancelledBeforeDispatch`. Refused with `Conflict` once the operation has an outcome (`ObservedComplete`, `Failed`, `CancelledBeforeDispatch`): an established outcome is recorded by redelivery, never cancelled away. |
 //!
 //! While the linked operation is possibly dispatched (`Dispatching`, `OutcomeUnknown`,
 //! `NeedsInput`) every resolution is refused with `OutcomeUnknown` and the delivery stays held:
 //! the operation's reconciler must first record what actually happened. `queue.retry` accepts
 //! only `Retry` and `queue.reconcile` only `Reconcile`; `queue.resolve` accepts all four.
 //!
+//! A cancellation requested while a delivery was claimed or held is durable: a later `Retry` or
+//! `Reconcile` of that delivery settles it `Cancelled` with its undispatched operation instead of
+//! redelivering it, unless the operation's outcome was established (`ObservedComplete`,
+//! `Failed`), which redelivery must still record.
+//!
 //! # Retained CodeGraph behavior
 //!
 //! * `AdminController.GetJobQueue` (`GET api/admin/jobs/queue`) maps to `queue.inspect`: it lists
 //!   only work that is running, failed or queued — successful work drops out — ordered running
-//!   first, then failures newest first, then queued work in drain order, with attempt counts,
-//!   next-attempt times and errors. Its running/queued/failed counters are `queue.consumer_status`
+//!   first, then failures newest first (by the time they last failed or were held, as in the
+//!   source), then queued work in drain order, with attempt counts, next-attempt times and
+//!   errors. Its running/queued/failed counters are `queue.consumer_status`
 //!   (`leasedCount`, `pendingCount`, `poisonCount`). Divergence: the source hid a failure once a
 //!   later run of the same operation and target succeeded. A required native delivery is never
 //!   skipped or acknowledged by another delivery's success (async-queue-options.md "Contract to
@@ -47,7 +53,7 @@ use crate::operations::OperationInput;
 use crate::operations::queue::Input;
 use crate::ports::storage::{
     DeliveryFilter, DeliveryKey, NewEvent, QueueEntry, QueueState, ReadSnapshot, StorageError,
-    WriteTransaction, possibly_dispatched,
+    WriteTransaction, cancellable_before_dispatch, possibly_dispatched,
 };
 use crate::ports::{CommandHandler, Decided, HandlerFailure, IdKind, QueryAnswer, QueryHandler};
 use crate::protocol::records::{ConsumerStatus, QueueDelivery, QueueResolution};
@@ -497,25 +503,15 @@ fn resolve(
             tx.queue().dismiss(id, &r.reason.0)?
         }
         QueueResolution::CancelBeforeDispatch => {
-            if !matches!(entry.state, QueueState::Ready | QueueState::Reconciling) {
+            if !matches!(entry.state, QueueState::Ready | QueueState::Reconciling)
+                || operation
+                    .as_ref()
+                    .is_some_and(|op| !cancellable_before_dispatch(op.state))
+            {
                 return conflict();
             }
-            let after = tx.queue().cancel(id)?;
-            if let Some(op) = &operation
-                && matches!(
-                    op.state,
-                    OperationState::IntentRecorded | OperationState::RetryPending
-                )
-            {
-                tx.operations().transition(
-                    &op.id,
-                    op.revision,
-                    None,
-                    OperationState::CancelledBeforeDispatch,
-                    None,
-                )?;
-            }
-            after
+            // The store cancels the undispatched operation with its delivery.
+            tx.queue().cancel(id)?
         }
     };
     let event_id = EventId(tx.new_id(IdKind::Event));

@@ -131,7 +131,8 @@ pub enum ValueKind {
     Instructions,
     /// Ordered unique model IDs.
     ModelList,
-    /// An opaque secret-store reference `{"secretRef": "<id>"}`; never a credential value.
+    /// A host-minted secret-store reference `{"secretRef": "dwsecret-<opaque id>"}` (see
+    /// [`super::validate::is_secret_ref`]); never a credential value.
     SecretRef,
 }
 
@@ -254,7 +255,7 @@ impl SettingDescriptor {
             }),
             ValueKind::SecretRef => json!({
                 "type": "object", "required": ["secretRef"], "additionalProperties": false,
-                "properties": {"secretRef": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}}
+                "properties": {"secretRef": {"type": "string", "pattern": "^dwsecret-[A-Za-z0-9]{16,96}$"}}
             }),
         };
         json!({"$id": self.schema_id(), "revision": SCHEMA_REVISION, "value": body})

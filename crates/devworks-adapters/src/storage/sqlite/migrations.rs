@@ -70,7 +70,7 @@ pub const MIGRATION_0001_SHA256: &str =
     "c64cc140ad8de8c4c2ca7e7d3e3efac32966cea8bfc0bdf5e46e9c55206bd6a4";
 /// Recorded checksum of migration 3.
 pub const MIGRATION_0003_SHA256: &str =
-    "cbc54258a27e1db055d35b098e7a9af73b35b70f6fd66751098a6e650dcf5cd5";
+    "b08289a2ef6eea452e7b7513c4c811564b90c2bd550445cb932212805be24ddc";
 
 #[derive(Clone, Debug)]
 pub(crate) struct Meta {

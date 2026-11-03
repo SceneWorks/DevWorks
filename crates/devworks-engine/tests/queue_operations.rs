@@ -1,4 +1,4 @@
-//! `queue.*` through the shared application gateway on the real store (DW-003 AC2): the same use
+//! `queue.*` through the shared application gateway on the real store: the same use
 //! cases for a UI principal and an agent tool, receipts, revision/fence checks, refusals and the
 //! retained CodeGraph `GetJobQueue`/`DismissJob` behavior.
 mod common;
@@ -498,4 +498,147 @@ fn reconcile_requires_an_established_outcome_and_cancel_only_before_dispatch() {
         DomainErrorCode::Conflict
     );
     let _ = queued;
+}
+
+/// `CancelBeforeDispatch` applies only before dispatch: a held delivery whose operation already
+/// has an outcome (`ObservedComplete` or `Failed`) is a `Conflict` and keeps its outcome, while
+/// a preflighted (started, not dispatched) operation is cancelled with its delivery.
+#[test]
+fn cancel_before_dispatch_is_refused_once_the_operation_has_an_outcome() {
+    for (observed, op_state) in [
+        (
+            EffectResult::Completed(json!({"found": true})),
+            OperationState::ObservedComplete,
+        ),
+        (
+            EffectResult::Failed("rejected".into()),
+            OperationState::Failed,
+        ),
+    ] {
+        let f = Fixture::new();
+        let (_, held, _, fx) = scenario(&f);
+        *fx.observation.lock().unwrap() = observed;
+        let mut c = consumer("effects", Recorder::ok());
+        c.effect = Some(fx.executor());
+        let d = dispatcher(&f.h, f.s.clone(), vec![c]);
+        assert_eq!(runtime().block_on(d.observe_unknown()).unwrap(), 1);
+        let op = held.operation_id.clone().unwrap();
+        assert_eq!(
+            read(&*f.s, |r| r.operations().operation(&op))
+                .unwrap()
+                .state,
+            op_state
+        );
+        let now = entry(&*f.s, &held.id);
+        assert_eq!(now.state, QueueState::Reconciling);
+        assert_eq!(
+            refused(&f.command(
+                &f.operator,
+                "queue.resolve",
+                "c-1",
+                &f.resolution(&now, "CancelBeforeDispatch")
+            )),
+            DomainErrorCode::Conflict
+        );
+        assert_eq!(entry(&*f.s, &held.id).state, QueueState::Reconciling);
+        assert_eq!(
+            read(&*f.s, |r| r.operations().operation(&op))
+                .unwrap()
+                .state,
+            op_state
+        );
+    }
+
+    let f = Fixture::new();
+    let preflighted = write(&*f.s, |tx| {
+        let op = intent(tx)?;
+        let e = enqueue_tx(tx, "effects", None, Some(op.clone()), json!({}))?;
+        let rec = tx.operations().operation(&op)?.unwrap();
+        tx.operations()
+            .begin_attempt(&op, rec.revision, AttemptBinding::default())?;
+        Ok(e)
+    })
+    .unwrap();
+    let (cancelled, _) = applied(&f.command(
+        &f.operator,
+        "queue.resolve",
+        "c-2",
+        &f.resolution(&preflighted, "CancelBeforeDispatch"),
+    ));
+    assert_eq!(cancelled.state, OperationState::CancelledBeforeDispatch);
+    let op = preflighted.operation_id.clone().unwrap();
+    assert_eq!(
+        read(&*f.s, |r| r.operations().operation(&op))
+            .unwrap()
+            .state,
+        OperationState::CancelledBeforeDispatch
+    );
+}
+
+/// Failures and holds are listed newest first by when they failed (the retained source's
+/// order), not by event sequence: a delivery for an older event that failed later comes first.
+#[test]
+fn failures_are_listed_by_failure_time_newest_first() {
+    let f = Fixture::new();
+    let older = enqueue(&*f.s, "jobs", None, json!({}));
+    let newer = enqueue(&*f.s, "jobs", None, json!({}));
+    let claims = claim_all(&f.s, "jobs");
+    let fence = |e: &QueueEntry| {
+        claims
+            .iter()
+            .find(|c| c.id == e.id)
+            .unwrap()
+            .fence()
+            .unwrap()
+    };
+    let (id, fc) = (newer.id.clone(), fence(&newer));
+    write(&*f.s, move |tx| {
+        tx.queue()
+            .fail(&id, &fc, "first failure", FailureDisposition::Terminal)
+    })
+    .unwrap();
+    f.h.advance(1_000);
+    let (id, fc) = (older.id.clone(), fence(&older));
+    write(&*f.s, move |tx| {
+        tx.queue()
+            .fail(&id, &fc, "later failure", FailureDisposition::Terminal)
+    })
+    .unwrap();
+    let listed = page(&f.query(
+        &f.operator,
+        "queue.inspect",
+        "q-1",
+        r#""consumerId":"jobs","page":{"limit":50}"#,
+    ));
+    let ids: Vec<_> = listed.items.0.iter().map(|d| d.id.clone()).collect();
+    assert_eq!(ids, [older.id.clone(), newer.id.clone()]);
+    assert!(older.event_sequence < newer.event_sequence);
+    // Keyset paging follows the same order.
+    let first = page(&f.query(
+        &f.operator,
+        "queue.inspect",
+        "q-2",
+        r#""consumerId":"jobs","page":{"limit":1}"#,
+    ));
+    let cursor = first.next_cursor.clone().unwrap().0;
+    let second = page(&f.query(
+        &f.operator,
+        "queue.inspect",
+        "q-3",
+        &format!(r#""consumerId":"jobs","page":{{"limit":1,"cursor":"{cursor}"}}"#),
+    ));
+    assert_eq!(
+        [first.items.0[0].id.clone(), second.items.0[0].id.clone()],
+        [older.id.clone(), newer.id.clone()]
+    );
+}
+
+fn claim_all(s: &Arc<dyn ApplicationStore>, consumer: &str) -> Vec<QueueEntry> {
+    let request = ClaimRequest {
+        consumer: consumer.into(),
+        owner: id("worker"),
+        lease_ms: 60_000,
+        limit: 10,
+    };
+    write(&**s, move |tx| tx.queue().claim_ready(&request)).unwrap()
 }
