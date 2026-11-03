@@ -413,8 +413,10 @@ fn require_kind(
     Ok(())
 }
 
-/// Appends one attributed authority history event. An agent invocation stays attributed to the
-/// agent; linked human authorization sources are recorded beside it.
+/// Appends one attributed authority history event (a principal, grant or repository-deletion
+/// record, and nothing else) through the capability-gated history the gateway's handler view
+/// allows only for the ingress principal. An agent invocation stays attributed to the agent;
+/// linked human authorization sources are recorded beside it.
 pub(crate) fn record(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -424,6 +426,17 @@ pub(crate) fn record(
     kind: &str,
     mut payload: Value,
 ) -> Result<i64, StorageError> {
+    if ![
+        PRINCIPAL_AGGREGATE,
+        GRANT_AGGREGATE,
+        super::deletion::DELETION_AGGREGATE,
+    ]
+    .contains(&aggregate_kind)
+    {
+        return Err(StorageError::InvalidRecord(format!(
+            "{aggregate_kind} is not an authority history aggregate"
+        )));
+    }
     if let Some(map) = payload.as_object_mut() {
         map.insert(
             "principalKind".into(),
@@ -436,18 +449,19 @@ pub(crate) fn record(
         }
     }
     let id = EventId(tx.new_id(IdKind::Event));
-    tx.history().append(NewEvent {
-        id,
-        actor: ctx.principal().clone(),
-        project_id: None,
-        root_id: None,
-        operation_id: None,
-        aggregate_kind: aggregate_kind.into(),
-        aggregate_id: aggregate_id.into(),
-        aggregate_revision,
-        kind: kind.into(),
-        payload,
-    })
+    tx.authority_history(&super::CAPABILITY, ctx.principal())?
+        .append(NewEvent {
+            id,
+            actor: ctx.principal().clone(),
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: aggregate_kind.into(),
+            aggregate_id: aggregate_id.into(),
+            aggregate_revision,
+            kind: kind.into(),
+            payload,
+        })
 }
 
 /// Binds (or re-binds at `expected_revision`) a non-human principal's authority. Only the user

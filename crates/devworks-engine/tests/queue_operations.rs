@@ -10,6 +10,8 @@ use devworks_core::protocol::records::QueueDelivery;
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, DomainErrorCode, OperationState, Receipt, Rejection};
 use devworks_core::services::UseCases;
+use devworks_core::services::artifacts::replies::REPLY_CONSUMER;
+use devworks_core::services::queue::REPLY_REQUIRED;
 use devworks_engine::{EffectResult, Outcome};
 use serde_json::json;
 use std::sync::Arc;
@@ -641,4 +643,154 @@ fn claim_all(s: &Arc<dyn ApplicationStore>, consumer: &str) -> Vec<QueueEntry> {
         limit: 10,
     };
     write(&**s, move |tx| tx.queue().claim_ready(&request)).unwrap()
+}
+
+fn fault(reply: &CommandReply<DomainDecision>) -> devworks_core::protocol::DomainFault {
+    match reply {
+        CommandReply::Recorded {
+            receipt:
+                Receipt {
+                    decision: DomainDecision::Refused { fault },
+                    ..
+                },
+            ..
+        } => fault.clone(),
+        other => panic!("not refused: {other:?}"),
+    }
+}
+
+/// Claims every ready reply delivery and fails `targets` terminally (as a poison outcome, or a
+/// retry budget an earlier build applied, would), returning their current records.
+fn fail_replies(f: &Fixture, targets: &[&QueueEntry]) -> Vec<QueueEntry> {
+    let claimed = claim_all(&f.s, REPLY_CONSUMER);
+    targets
+        .iter()
+        .map(|t| {
+            let c = claimed.iter().find(|c| c.id == t.id).expect("claimed");
+            let (id, fence) = (c.id.clone(), c.fence().unwrap());
+            write(&*f.s, move |tx| {
+                tx.queue()
+                    .fail(&id, &fence, "failed", FailureDisposition::Terminal)
+            })
+            .unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn a_receipt_reply_is_never_cancelled_and_dismissed_only_when_it_cannot_be_honoured() {
+    let f = Fixture::new();
+    let mandatory_refusal = |reply: &CommandReply<DomainDecision>, what: &str| {
+        let fault = fault(reply);
+        assert_eq!(
+            (
+                fault.code,
+                fault.retry,
+                fault.target_kind.map(|k| k.0).as_deref()
+            ),
+            (
+                DomainErrorCode::Conflict,
+                devworks_core::protocol::RetryAdvice::Never,
+                Some(REPLY_REQUIRED)
+            ),
+            "{what}"
+        );
+    };
+    // A genuine reply delivery: the recorded command commits one for its receipt.
+    let unknown = r#""deliveryId":"no-such-delivery","expectedRevision":"1","expectedFence":"0","resolution":"Retry","reason":"x""#;
+    assert_eq!(
+        refused(&f.command(&f.operator, "queue.resolve", "r-0", unknown)),
+        DomainErrorCode::NotFound
+    );
+    let genuine = read(&*f.s, |s| {
+        s.queue().deliveries(
+            &DeliveryFilter {
+                consumer: Some(REPLY_CONSUMER.into()),
+                operation_id: None,
+            },
+            None,
+            10,
+        )
+    })
+    .entries
+    .remove(0);
+    assert_eq!(genuine.state, QueueState::Ready);
+    // An operator can never cancel it.
+    mandatory_refusal(
+        &f.command(
+            &f.operator,
+            "queue.resolve",
+            "r-1",
+            &f.resolution(&genuine, "CancelBeforeDispatch"),
+        ),
+        "cancel a ready reply",
+    );
+    assert_eq!(entry(&*f.s, &genuine.id).state, QueueState::Ready);
+
+    // Unhonourable deliveries: a payload that is no publication intent, and a well-formed intent
+    // whose event is not its receipt's decision.
+    let unreadable = enqueue(&*f.s, REPLY_CONSUMER, None, json!({"bad": true}));
+    let misdirected = enqueue(
+        &*f.s,
+        REPLY_CONSUMER,
+        None,
+        json!({"actorId": "operator", "scopeKey": "scope", "requestKey": "r-0",
+            "commandId": "command-1"}),
+    );
+    mandatory_refusal(
+        &f.command(
+            &f.operator,
+            "queue.resolve",
+            "r-2",
+            &f.resolution(&unreadable, "CancelBeforeDispatch"),
+        ),
+        "cancel even an unreadable reply delivery",
+    );
+    let failed = fail_replies(&f, &[&genuine, &unreadable, &misdirected]);
+    let [genuine, unreadable, misdirected] = [&failed[0], &failed[1], &failed[2]];
+    assert!(failed.iter().all(|e| e.state == QueueState::Failed));
+
+    // A failed reply that can still be published is not acknowledged away: it is retried.
+    mandatory_refusal(
+        &f.command(
+            &f.operator,
+            "queue.resolve",
+            "r-3",
+            &f.resolution(genuine, "AcknowledgePoison"),
+        ),
+        "dismiss a publishable reply",
+    );
+    assert_eq!(entry(&*f.s, &genuine.id).state, QueueState::Failed);
+    mandatory_refusal(
+        &f.command(
+            &f.operator,
+            "queue.resolve",
+            "r-4",
+            &f.resolution(genuine, "CancelBeforeDispatch"),
+        ),
+        "cancel a failed reply",
+    );
+    let (retried, _) = applied(&f.command(
+        &f.operator,
+        "queue.retry",
+        "r-5",
+        &f.resolution(genuine, "Retry"),
+    ));
+    assert!(matches!(
+        retried.state,
+        OperationState::IntentRecorded | OperationState::RetryPending
+    ));
+    assert_eq!(entry(&*f.s, &genuine.id).state, QueueState::Ready);
+
+    // Genuinely poisoned deliveries are acknowledged.
+    for (key, e) in [("r-6", unreadable), ("r-7", misdirected)] {
+        let (dismissed, _) = applied(&f.command(
+            &f.operator,
+            "queue.resolve",
+            key,
+            &f.resolution(e, "AcknowledgePoison"),
+        ));
+        assert_eq!(dismissed.state, OperationState::Failed);
+        assert_eq!(entry(&*f.s, &e.id).state, QueueState::Dismissed);
+    }
 }

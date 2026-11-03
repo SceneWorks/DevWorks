@@ -447,6 +447,18 @@ pub trait WriteTransaction {
     ) -> Result<&mut dyn GrantLedger, StorageError> {
         Ok(self.grants())
     }
+    /// History appends of the `crate::authority` seams (principal, grant and repository-deletion
+    /// records), under the same rule as [`Self::authority_writes`]. The gateway's handler view of
+    /// [`Self::history`] refuses those records, so a use case cannot forge them.
+    fn authority_history(
+        &mut self,
+        _: &AuthorityCapability,
+        _actor: &ActorId,
+    ) -> Result<&mut dyn HistoryLog, StorageError> {
+        Ok(self.history())
+    }
+    /// The artifact repository. Inside a use case (the gateway's handler view) backup pins,
+    /// physical-removal claims and receipt reply records are refused.
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository;
     fn sessions(&mut self) -> &mut dyn SessionRepository;
 }

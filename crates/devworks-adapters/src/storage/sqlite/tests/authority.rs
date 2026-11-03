@@ -1992,6 +1992,92 @@ fn a_use_case_cannot_write_authority_or_grant_records_directly() {
     assert_eq!(added, ["CommandDecided"]);
 }
 
+/// History a use case may not forge: each guarded aggregate (under an innocuous kind) and each
+/// guarded kind (under an innocuous aggregate).
+const FORGED_HISTORY: [(&str, &str); 13] = [
+    (auth::PRINCIPAL_AGGREGATE, "Noted"),
+    (auth::GRANT_AGGREGATE, "Noted"),
+    (auth::DENIAL_AGGREGATE, "Noted"),
+    (deletion::DELETION_AGGREGATE, "Noted"),
+    (
+        devworks_core::services::artifacts::replies::REPLY_AGGREGATE,
+        "Noted",
+    ),
+    ("command", "Noted"),
+    ("command_receipt", "Noted"),
+    ("fixture", "PrincipalAuthorityBound"),
+    ("fixture", "PrincipalAuthorityRevoked"),
+    ("fixture", "AuthorityGrantIssued"),
+    ("fixture", "AuthorityGrantRevoked"),
+    ("fixture", "RepositoryDeletionAuthorized"),
+    ("fixture", "ReceiptReplyPublished"),
+];
+
+/// A use case that appends every forged record straight to the handler view's history.
+#[derive(Default)]
+struct HistoryForger {
+    outcomes: Mutex<Vec<(&'static str, &'static str, bool)>>,
+}
+impl CommandHandler for HistoryForger {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        _: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let mut out = self.outcomes.lock().unwrap();
+        for (aggregate, kind) in FORGED_HISTORY {
+            let event = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
+            let appended = tx.history().append(NewEvent {
+                id: event,
+                actor: ctx.principal().clone(),
+                project_id: None,
+                root_id: None,
+                operation_id: None,
+                aggregate_kind: aggregate.into(),
+                aggregate_id: "agent-a".into(),
+                aggregate_revision: 9,
+                kind: kind.into(),
+                payload: json!({}),
+            });
+            let refused = matches!(&appended, Err(StorageError::InvalidRecord(m))
+                if m.contains("recorded only by the gateway"));
+            out.push((aggregate, kind, refused));
+        }
+        drop(out);
+        accept_in(tx)
+    }
+}
+
+#[test]
+fn a_use_case_cannot_append_authority_grant_deletion_or_reply_history() {
+    let fx = Fx::new();
+    // Even under the user's own ingress, where the authority seams may write.
+    for (ctx, key) in [
+        (fx.ctx("user-a", PrincipalKind::Human), "forge-user"),
+        (fx.agent("agent-r"), "forge-agent"),
+    ] {
+        let before = fx.events().len();
+        let handler = Arc::new(HistoryForger::default());
+        let authority = fx.authority();
+        let reply = fx
+            .gateway(&authority)
+            .command(&ctx, "runs.start", start(key).as_bytes(), handler.clone())
+            .unwrap();
+        assert!(matches!(reply, CommandReply::Recorded { .. }), "{reply:?}");
+        let outcomes = handler.outcomes.lock().unwrap().clone();
+        assert_eq!(outcomes.len(), FORGED_HISTORY.len());
+        for (aggregate, kind, refused) in outcomes {
+            assert!(refused, "{key}: {aggregate}/{kind} was appended");
+        }
+        let added: Vec<String> = fx.events()[before..]
+            .iter()
+            .map(|e| e.kind.clone())
+            .collect();
+        assert_eq!(added, ["CommandDecided"], "{key}");
+    }
+}
+
 /// A use case that creates and revokes authority through the seams, optionally acting under a
 /// context it was handed (a forgery) and optionally through a lying transaction wrapper.
 struct Seams {

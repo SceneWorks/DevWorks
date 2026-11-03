@@ -1277,13 +1277,13 @@ impl Dispatcher {
     }
 }
 
-enum Either<A, B> {
+pub(crate) enum Either<A, B> {
     Left(A),
     Right(B),
 }
 
 /// Resolves with whichever future is ready first, polling `a` before `b` each time.
-async fn first<A: Future, B: Future>(a: A, b: B) -> Either<A::Output, B::Output> {
+pub(crate) async fn first<A: Future, B: Future>(a: A, b: B) -> Either<A::Output, B::Output> {
     let mut a = std::pin::pin!(a);
     let mut b = std::pin::pin!(b);
     std::future::poll_fn(|cx| {

@@ -1142,6 +1142,72 @@ fn a_crash_between_the_file_and_its_metadata_is_recovered_without_duplicates() {
     );
 }
 
+/// The engine's boot runs queue/journal recovery (classification, then prior-boot claims) before
+/// artifact recovery. The two commute: after a crash between a reply file and its metadata,
+/// either order requeues the dead claim, resolves the staging operation, removes the orphan and
+/// publishes the reply exactly once.
+#[test]
+fn boot_recovery_orders_commute_and_publish_the_reply_once() {
+    for queue_first in [true, false] {
+        let fx = Fx::new();
+        let user = fx.user();
+        recorded(&fx.start_home(&user, "start-1", "Home"));
+        let claimed = fx.claim();
+        *fx.files.crash_at.lock().unwrap() = Some(Step::Renamed);
+        let crashed = catch_unwind(AssertUnwindSafe(|| {
+            fx.replies.publish(&*fx.store, &claimed[0])
+        }));
+        assert!(crashed.is_err());
+        let fx = fx.restart();
+        let queue = |fx: &Fx| {
+            let classified = fx.write(|tx| tx.operations().classify_interrupted(100));
+            let requeued = fx.write(|tx| tx.queue().recover_claims(ClaimRecovery::PriorBoots, 100));
+            (classified, requeued)
+        };
+        let ((classified, requeued), artifacts) = if queue_first {
+            let q = queue(&fx);
+            (q, fx.svc.recover(&*fx.store).unwrap())
+        } else {
+            let a = fx.svc.recover(&*fx.store).unwrap();
+            (queue(&fx), a)
+        };
+        let order = if queue_first {
+            "queue first"
+        } else {
+            "artifacts first"
+        };
+        // Classification sees the staging operation only when it runs first; artifact recovery
+        // resolves it from its metadata either way.
+        assert_eq!(classified.len(), usize::from(queue_first), "{order}");
+        assert_eq!(artifacts.failed.len(), 1, "{order}: {artifacts:?}");
+        assert_eq!(artifacts.removed_orphans.len(), 1, "{order}: {artifacts:?}");
+        assert_eq!(
+            (requeued.requeued.len(), requeued.held.len()),
+            (1, 0),
+            "{order}"
+        );
+        assert_eq!(published(fx.publish_all()).len(), 1, "{order}");
+        assert_eq!(fx.count("SELECT count(*) FROM artifacts"), 1, "{order}");
+        assert_eq!(
+            fx.count("SELECT count(*) FROM receipt_replies"),
+            1,
+            "{order}"
+        );
+        assert_eq!(fx.files.stored_files().unwrap().len(), 1, "{order}");
+        assert_eq!(
+            fx.count(
+                "SELECT count(*) FROM operations WHERE state NOT IN \
+                 ('ObservedComplete','Failed','CancelledBeforeDispatch')"
+            ),
+            0,
+            "{order}"
+        );
+        observation(fx.receipt(&fx.user(), "start-1"))
+            .check()
+            .unwrap();
+    }
+}
+
 #[test]
 fn a_failed_publication_in_boot_is_retried_without_residue() {
     let fx = Fx::new();

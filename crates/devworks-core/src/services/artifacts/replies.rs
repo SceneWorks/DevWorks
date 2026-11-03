@@ -31,7 +31,10 @@
 //! while the delivery is ready or claimed, pending (retry the same query); while it is held or
 //! failed, held behind its delivery, which an operator resolves (`queue.retry`/`queue.reconcile`);
 //! once it was cancelled or dismissed without a reply (or no intent exists), abandoned — the
-//! reply will never be published, and no retry is advised.
+//! reply will never be published, and no retry is advised. An operator cannot abandon a
+//! mandatory reply: `queue.resolve` refuses to cancel a reply delivery and dismisses only one
+//! that can never be honoured (`unhonourable`); a delivery an earlier build let an operator
+//! cancel or dismiss still reports abandoned.
 //!
 //! **Reply bytes** are the canonical (RFC 8785 JCS) JSON of the reply the command returned when it
 //! was recorded, `CommandReply::Recorded { receipt, replayed: false }`, built from the stored
@@ -141,6 +144,31 @@ pub(crate) fn record_intent(
         }),
     })?;
     Ok(())
+}
+
+/// Whether `event` is the receipt's own `CommandDecided` decision the intent names.
+fn names_decision(event: &crate::ports::storage::EventRecord, intent: &Intent) -> bool {
+    event.kind == "CommandDecided"
+        && event.aggregate_kind == "command"
+        && event.aggregate_id == intent.command_id.0.as_str()
+        && &event.actor == intent.identity.actor_id()
+}
+
+/// Whether a [`REPLY_CONSUMER`] delivery can never be honoured: its payload is not a publication
+/// intent, or it does not name its receipt's own `CommandDecided` decision. The decision and its
+/// receipt commit in one transaction and are retained together, so a delivery naming a present
+/// decision has a receipt whose reply is mandatory. Only an unhonourable delivery may be
+/// acknowledged as poison (`queue.resolve`); every other reply delivery is retried until
+/// published.
+pub(crate) fn unhonourable(
+    tx: &mut dyn WriteTransaction,
+    entry: &QueueEntry,
+) -> Result<bool, StorageError> {
+    let Some(intent) = Intent::parse(&entry.payload) else {
+        return Ok(true);
+    };
+    let event = tx.history().event(&entry.event_id)?;
+    Ok(!event.is_some_and(|e| names_decision(&e, &intent)))
 }
 
 /// The publication intent a delivery carries.
@@ -307,13 +335,7 @@ impl ReceiptReplies {
         })?;
         // The delivery must name its receipt's own decision; the reply's owner scope is that
         // decision's project, never something the delivery claims.
-        let decides = |e: &crate::ports::storage::EventRecord| {
-            e.kind == "CommandDecided"
-                && e.aggregate_kind == "command"
-                && e.aggregate_id == intent.command_id.0.as_str()
-                && &e.actor == intent.identity.actor_id()
-        };
-        let Some(event) = event.filter(decides) else {
+        let Some(event) = event.filter(|e| names_decision(e, &intent)) else {
             return Ok(ReplyOutcome::Poison(
                 "the delivery does not name its receipt's decision".into(),
             ));
