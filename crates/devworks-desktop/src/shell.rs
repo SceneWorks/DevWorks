@@ -681,13 +681,21 @@ impl Shell {
     }
 
     fn delete_removed(&mut self, artifact: ArtifactRef) {
-        let id = artifact.artifact_id.as_str().to_owned();
-        self.command(
-            Slot::DeleteAttachment(id),
-            "Deleting a removed attachment",
-            "artifacts.delete",
-            move |b| ops::delete_unsent_attachment(b, &artifact),
-        );
+        // Cleanup the user already asked for, so it is not refused while closing: a closed
+        // client keeps the frame unresolved, and the next launch submits it.
+        if self.offline.is_some() {
+            return;
+        }
+        let Some(b) = self.backend() else { return };
+        let frame = ops::delete_unsent_attachment(&*b, &artifact);
+        if let Some(c) = &mut self.client {
+            c.command(
+                Slot::DeleteAttachment(artifact.artifact_id.as_str().to_owned()),
+                "Deleting a removed attachment",
+                "artifacts.delete",
+                frame,
+            );
+        }
     }
 
     /// Re-derives the previews of restored image attachments from their stored artifacts.

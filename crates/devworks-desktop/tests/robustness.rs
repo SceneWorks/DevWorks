@@ -1264,6 +1264,73 @@ fn a_refused_paste_survives_close_as_failed_and_is_stored_on_retry() {
     assert_eq!(workspace_artifacts(&*real), [name]);
 }
 
+#[test]
+fn an_attachment_removed_while_saving_and_stored_during_close_is_deleted_at_the_next_launch() {
+    let root = Root::new("removed-stored-at-close");
+    let engine = start(&root);
+    let real = engine.backend();
+    // The save commits; its reply is held until the window is closing.
+    let gate = Gate::holding_replies("artifacts.save");
+    let script = Script::default();
+    script
+        .files
+        .lock()
+        .unwrap()
+        .push(vec![root.file("unwanted.txt", b"unwanted")]);
+    let mut h = harness(
+        shell_over(gate.over(real.clone()), &root, script),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    gate.close();
+    h.get_by_role_and_label(Role::Button, ATTACH_LABEL).click();
+    step_until(&mut h, "the save was admitted", |s| {
+        s.chat.draft().is_some_and(|d| {
+            d.attachments
+                .iter()
+                .any(|a| matches!(a.state, AttachState::Saving(_)))
+        })
+    });
+    // Removed while its save is in flight (the held reply keeps it there).
+    let remove = "Remove attachment unwanted.txt";
+    h.get_by_role_and_label(Role::Button, remove).scroll_to_me();
+    for _ in 0..3 {
+        h.step();
+    }
+    h.get_by_role_and_label(Role::Button, remove).click();
+    step_until(&mut h, "the attachment was removed", |s| {
+        !s.chat.removed.is_empty()
+    });
+    h.state_mut().request_close();
+    h.step();
+    gate.open();
+    step_until(&mut h, "the window closed", |s| {
+        matches!(s.lifecycle(), Lifecycle::Closed)
+    });
+    drop(h);
+    let pending = devworks_desktop::memory::Memory::load(&root.memory()).pending;
+    assert!(
+        pending
+            .commands
+            .iter()
+            .any(|c| c.operation == "artifacts.delete"),
+        "the deletion is kept for the next launch: {pending:?}"
+    );
+    let mut h = harness(
+        shell_over(real.clone(), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    assert!(
+        workspace_artifacts(&*real).is_empty(),
+        "{:?}",
+        workspace_artifacts(&*real)
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Bounded layouts
 
