@@ -44,6 +44,34 @@ pub struct AcquireInput {
     pub expected_revision: Revision,
     pub units: Limit,
     pub lease_ms: PositiveCounter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub purpose: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ResourcePriority", extend("x-since" = 2))]
+    pub priority: Option<ResourcePriority>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Limit", extend("x-since" = 2))]
+    pub capacity: Option<Limit>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub labels: Option<Items<Label>>,
 }
 impl Check for AcquireInput {
     fn check(&self) -> Result<(), String> {
@@ -51,11 +79,28 @@ impl Check for AcquireInput {
         self.expected_revision.check()?;
         self.units.check()?;
         self.lease_ms.check()?;
+        self.purpose.check()?;
+        self.priority.check()?;
+        self.capacity.check()?;
+        self.labels.check()?;
         Ok(())
     }
 }
 impl Revisioned for AcquireInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.purpose = None;
+        }
+        if revision < 2 {
+            self.priority = None;
+        }
+        if revision < 2 {
+            self.capacity = None;
+        }
+        if revision < 2 {
+            self.labels = None;
+        }
+    }
 }
 
 /// `resources.renew` Command input.

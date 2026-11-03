@@ -49,8 +49,9 @@
 //! the durable queue/outbox (with ordered partitions and consumer progress), package event-handler
 //! state and processing receipts, grants and actor/store identity, plus the scoped configuration
 //! repository ([`ConfigurationRepository`]), the host authority ledger ([`AuthorityLedger`]), the
-//! artifact store records ([`ArtifactRepository`]) and the session, transcript and lineage
-//! records ([`SessionRepository`]).
+//! artifact store records ([`ArtifactRepository`]), the session, transcript and lineage
+//! records ([`SessionRepository`]) and the resource reservation and owned-process records
+//! ([`ResourceRepository`]).
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -69,10 +70,12 @@ use std::sync::mpsc;
 mod artifacts;
 mod authority;
 mod configuration;
+mod resources;
 mod sessions;
 pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
+pub use resources::*;
 pub use sessions::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -461,6 +464,7 @@ pub trait WriteTransaction {
     /// physical-removal claims and receipt reply records are refused.
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository;
     fn sessions(&mut self) -> &mut dyn SessionRepository;
+    fn resources(&mut self) -> &mut dyn ResourceRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -498,6 +502,7 @@ pub trait ReadSnapshot {
     fn authority(&self) -> &dyn AuthorityRead;
     fn artifacts(&self) -> &dyn ArtifactRead;
     fn sessions(&self) -> &dyn SessionRead;
+    fn resources(&self) -> &dyn ResourceRead;
 }
 
 // ---------------------------------------------------------------------------------------------

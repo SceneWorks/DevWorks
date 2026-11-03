@@ -618,8 +618,8 @@ fn build() -> Vec<SettingDescriptor> {
         ),
         setting!(
             "power.keepAwake",
-            "Keep the computer awake while agents work",
-            "Prevent idle sleep while agents are working.",
+            "Keep the computer awake while DevWorks is open",
+            "While DevWorks is open, ask the operating system not to sleep when idle, even with no active work; the display may still turn off. It does not prevent explicit sleep, closing the lid, shutdown or every power policy. Closing DevWorks or turning this off releases the request.",
             Power,
             WORKSPACE,
             ValueKind::Bool,

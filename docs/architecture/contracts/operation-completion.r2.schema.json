@@ -3644,14 +3644,39 @@
       ],
       "type": "object"
     },
+    "LeaseEnd": {
+      "enum": [
+        "Released",
+        "Expired",
+        "Cancelled",
+        "Reconciled"
+      ],
+      "type": "string"
+    },
     "LeaseRecord": {
       "additionalProperties": false,
       "properties": {
+        "assignmentId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "endReason": {
+          "$ref": "#/$defs/LeaseEnd",
+          "x-since": 2
+        },
+        "endedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "expiresAtMs": {
           "$ref": "#/$defs/Counter"
         },
         "fence": {
           "$ref": "#/$defs/Counter"
+        },
+        "grantedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         },
         "id": {
           "$ref": "#/$defs/Id"
@@ -3659,11 +3684,51 @@
         "ownerId": {
           "$ref": "#/$defs/Id"
         },
+        "ownerUnreachableSinceMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "priority": {
+          "$ref": "#/$defs/ResourcePriority",
+          "x-since": 2
+        },
+        "projectId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "purpose": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
+        "queuePosition": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "renewedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "requestedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "resourceId": {
           "$ref": "#/$defs/Id"
         },
+        "rootId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
         "state": {
           "$ref": "#/$defs/LeaseState"
+        },
+        "units": {
+          "$ref": "#/$defs/Limit",
+          "x-since": 2
         }
       },
       "required": [
@@ -13605,9 +13670,22 @@
       ],
       "type": "object"
     },
+    "ResourcePriority": {
+      "enum": [
+        "Low",
+        "Medium",
+        "High",
+        "Critical"
+      ],
+      "type": "string"
+    },
     "ResourceRecord": {
       "additionalProperties": false,
       "properties": {
+        "available": {
+          "type": "boolean",
+          "x-since": 2
+        },
         "canonicalKey": {
           "$ref": "#/$defs/Text1To4096"
         },
@@ -13620,8 +13698,28 @@
         "id": {
           "$ref": "#/$defs/Id"
         },
+        "labels": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 2
+        },
+        "physical": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "projectId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
+        },
+        "scope": {
+          "$ref": "#/$defs/ResourceScope",
+          "x-since": 2
+        },
+        "used": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         },
         "waiters": {
           "$ref": "#/$defs/List_Id_0_128"
@@ -13636,6 +13734,13 @@
         "waiters"
       ],
       "type": "object"
+    },
+    "ResourceScope": {
+      "enum": [
+        "Machine",
+        "Project"
+      ],
+      "type": "string"
     },
     "RetrievalMode": {
       "enum": [

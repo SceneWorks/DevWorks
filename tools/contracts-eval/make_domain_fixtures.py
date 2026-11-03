@@ -378,5 +378,39 @@ case('artifacts.tag-clears','domain-request',{**tag,'body':{**tag['body'],'tags'
 case('reject-artifacts.tag-duplicates','domain-request',{**tag,'body':{**tag['body'],'tags':['a','a']}},False,False)
 case('reject-artifacts.tag-too-many','domain-request',{**tag,'body':{**tag['body'],'tags':['t'+str(i) for i in range(33)]}},False,False)
 case('reject-artifacts.tag-missing-revision','domain-request',{**tag,'body':{k:v for k,v in tag['body'].items() if k!='expectedRevision'}},False,False)
+# Schema revision 2 (resources): purpose, priority and create-time capacity/labels on acquire;
+# scope, occupancy, lifecycle, queue position and ownership on the records.
+def command_at(name,revision=2,**extra):
+ obj=request(name,'Command')
+ if revision is not None:obj['schemaRevision']=revision
+ obj['body'].update(extra);return obj
+acquire=dict(purpose='Run the desktop suite',priority='High',capacity=1,labels=['desktop'])
+case('r2-input-resources.acquire','domain-request.r2',command_at('resources.acquire',**acquire))
+case('r2-input-resources.acquire-plain','domain-request.r2',command_at('resources.acquire'))
+case('r1-input-resources.acquire-explicit','domain-request',command_at('resources.acquire',1))
+case('reject-r1-acquire-purpose','domain-request',command_at('resources.acquire',None,purpose='p'),False,False)
+case('reject-r1-explicit-acquire-priority','domain-request',command_at('resources.acquire',1,priority='High'),False,False)
+case('reject-r2-acquire-not-negotiated','domain-request.r2',command_at('resources.acquire',None,priority='Low'),False,False)
+case('reject-r2-acquire-unknown-priority','domain-request.r2',command_at('resources.acquire',priority='Urgent'),False,False)
+case('reject-r2-acquire-zero-capacity','domain-request.r2',command_at('resources.acquire',capacity=0),False,False)
+case('reject-r2-acquire-empty-purpose','domain-request.r2',command_at('resources.acquire',purpose=''),False,False)
+case('reject-r2-acquire-null-priority','domain-request.r2',command_at('resources.acquire',priority=None),False,False)
+for name in ['resources.renew','resources.release']:
+ case('r2-input-'+name,'domain-request.r2',command_at(name))
+for name in ['resources.list','resources.holders','resources.waiters']:
+ case('r2-input-'+name,'domain-request.r2',domain(name))
+lease_r2={**sample('LeaseRecord'),'units':1,'purpose':'Run the desktop suite','priority':'High','queuePosition':'1','requestedAtMs':'1793570000000','projectId':'project-a','rootId':'root-a','assignmentId':'assignment-a','sessionId':'session-a'}
+ended={**sample('LeaseRecord'),'state':'Released','units':1,'priority':'Medium','requestedAtMs':'1','grantedAtMs':'2','renewedAtMs':'3','endedAtMs':'4','endReason':'Expired','ownerUnreachableSinceMs':'3'}
+resource_r2={**sample('ResourceRecord'),'scope':'Machine','physical':True,'labels':['desktop'],'used':'1','available':False}
+case('r2-result-resources.acquire','operation-result.r2',{'kind':'resources.acquire','value':lease_r2})
+case('r2-result-resources.release-ended','operation-result.r2',{'kind':'resources.release','value':ended})
+case('r2-result-resources.renew','operation-result.r2',{'kind':'resources.renew','value':{**lease_r2,'state':'Held','fence':'3','grantedAtMs':'2','renewedAtMs':'5'}})
+case('r2-result-resources.holders','operation-result.r2',{'kind':'resources.holders','value':{'items':[lease_r2,ended],'hasMore':False}})
+case('r2-result-resources.waiters','operation-result.r2',{'kind':'resources.waiters','value':{'items':[{**lease_r2,'state':'Waiting'}],'hasMore':False}})
+case('r2-result-resources.list','operation-result.r2',{'kind':'resources.list','value':{'items':[resource_r2,{**sample('ResourceRecord'),'scope':'Project','projectId':'project-a','physical':False,'labels':[],'used':'0','available':True}],'hasMore':False}})
+case('reject-r1-result-lease-purpose','operation-result',{'kind':'resources.acquire','value':lease_r2},False,False)
+case('reject-r1-result-resource-scope','operation-result',{'kind':'resources.list','value':{'items':[resource_r2],'hasMore':False}},False,False)
+case('reject-r2-result-lease-end-reason','operation-result.r2',{'kind':'resources.release','value':{**ended,'endReason':'Stolen'}},False,False)
+case('reject-r2-result-resource-scope','operation-result.r2',{'kind':'resources.list','value':{'items':[{**resource_r2,'scope':'Global'}],'hasMore':False}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

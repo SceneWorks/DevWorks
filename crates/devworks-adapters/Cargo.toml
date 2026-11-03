@@ -24,3 +24,17 @@ devworks-core = { path = "../devworks-core", features = ["contract-suite"] }
 # and destructive steps. Already in the lockfile; Windows uses std handle flags only.
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.191"
+
+# Owned process trees (Job Objects, toolhelp thread resume, process times) and the keep-awake
+# execution state on Windows. windows-sys is Microsoft's generated raw binding crate, so the
+# struct layouts and signatures come from the Windows metadata instead of hand-written FFI.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Power",
+    "Win32_System_Threading",
+] }

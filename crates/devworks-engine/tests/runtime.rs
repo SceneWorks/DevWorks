@@ -9,6 +9,8 @@ mod common;
 use common::*;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
+use devworks_adapters::power::NativePower;
+use devworks_adapters::process::NativeProcessHost;
 use devworks_core::authority::destructive::FileIdentity;
 use devworks_core::authority::reads::ReadRoot;
 use devworks_core::context::{InvocationContext, PrincipalKind};
@@ -31,6 +33,7 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::replies::REPLY_CONSUMER;
 use devworks_core::services::history::HistoryService;
+use devworks_core::services::resources::ResourceService;
 use devworks_core::services::sessions::SessionService;
 use devworks_engine::{BootError, BootReport, Composition, Runtime, RuntimeConfig, boot};
 use serde_json::json;
@@ -226,6 +229,9 @@ fn composition(
         ids: h.ids.clone(),
         authority: Arc::new(Authority),
         artifacts,
+        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+        process_host: Arc::new(NativeProcessHost),
+        power: Arc::new(NativePower),
         use_cases: UseCases::new()
             .with_queue()
             .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store)))
@@ -415,7 +421,7 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
         assert!(matches!(o.state, ReceiptLookupState::Recorded), "{o:?}");
         assert_eq!(o.command_id.as_ref(), Some(&receipt.command_id));
         assert!(o.reply_artifact.is_some() && o.reply_schema.is_some());
-        rt.block_on(app.shutdown());
+        rt.block_on(app.shutdown()).into_result().unwrap();
         drop(app);
         drop(rt);
         drop(store);
@@ -435,7 +441,7 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
         let claimed = rt.block_on(within("idle", app.dispatcher().run_until_idle()));
         assert_eq!(claimed.unwrap(), 0, "{crash:?}");
         assert_published_once(&h, &*store);
-        rt.block_on(app.shutdown());
+        rt.block_on(app.shutdown()).into_result().unwrap();
     }
 }
 
@@ -475,7 +481,7 @@ fn boot_registers_the_reply_consumer_and_a_caller_cannot_displace_it() {
         }
     }));
     observation(&app, &user, "start-1").check().unwrap();
-    rt.block_on(app.shutdown());
+    rt.block_on(app.shutdown()).into_result().unwrap();
 }
 
 fn applied(reply: DomainCommandReply) -> OperationResult {
@@ -573,5 +579,5 @@ fn an_applied_delete_starts_a_collection_pass_that_removes_the_released_file() {
             .state,
         BlobState::Unlinked
     );
-    rt.block_on(app.shutdown());
+    rt.block_on(app.shutdown()).into_result().unwrap();
 }

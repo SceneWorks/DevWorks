@@ -221,6 +221,43 @@ impl Check for LeaseState {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ResourcePriority {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+impl Check for ResourcePriority {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ResourceScope {
+    Machine,
+    Project,
+}
+impl Check for ResourceScope {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum LeaseEnd {
+    Released,
+    Expired,
+    Cancelled,
+    Reconciled,
+}
+impl Check for LeaseEnd {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum DeliveryMode {
     ReadOnly,
     WriteEnabled,
@@ -2408,6 +2445,48 @@ pub struct ResourceRecord {
     pub capacity: Limit,
     pub holders: Items<Id>,
     pub waiters: Items<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ResourceScope", extend("x-since" = 2))]
+    pub scope: Option<ResourceScope>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 2))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub physical: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub labels: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub used: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub available: Option<bool>,
 }
 impl Check for ResourceRecord {
     fn check(&self) -> Result<(), String> {
@@ -2417,11 +2496,40 @@ impl Check for ResourceRecord {
         self.capacity.check()?;
         self.holders.check()?;
         self.waiters.check()?;
+        self.scope.check()?;
+        self.project_id.check()?;
+        self.physical.check()?;
+        self.labels.check()?;
+        self.used.check()?;
+        self.available.check()?;
         super::domain_rules::record(
             "ResourceRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ResourceRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.scope = None;
+        }
+        if revision < 2 {
+            self.project_id = None;
+        }
+        if revision < 2 {
+            self.physical = None;
+        }
+        if revision < 2 {
+            self.labels = None;
+        }
+        if revision < 2 {
+            self.used = None;
+        }
+        if revision < 2 {
+            self.available = None;
+        }
     }
 }
 
@@ -2434,6 +2542,104 @@ pub struct LeaseRecord {
     pub fence: Counter,
     pub expires_at_ms: Counter,
     pub state: LeaseState,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Limit", extend("x-since" = 2))]
+    pub units: Option<Limit>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub purpose: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ResourcePriority", extend("x-since" = 2))]
+    pub priority: Option<ResourcePriority>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub queue_position: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub requested_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub granted_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub renewed_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub ended_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "LeaseEnd", extend("x-since" = 2))]
+    pub end_reason: Option<LeaseEnd>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub owner_unreachable_since_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 2))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "RootId", extend("x-since" = 2))]
+    pub root_id: Option<RootId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "AssignmentId", extend("x-since" = 2))]
+    pub assignment_id: Option<AssignmentId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub session_id: Option<Id>,
 }
 impl Check for LeaseRecord {
     fn check(&self) -> Result<(), String> {
@@ -2443,11 +2649,72 @@ impl Check for LeaseRecord {
         self.fence.check()?;
         self.expires_at_ms.check()?;
         self.state.check()?;
+        self.units.check()?;
+        self.purpose.check()?;
+        self.priority.check()?;
+        self.queue_position.check()?;
+        self.requested_at_ms.check()?;
+        self.granted_at_ms.check()?;
+        self.renewed_at_ms.check()?;
+        self.ended_at_ms.check()?;
+        self.end_reason.check()?;
+        self.owner_unreachable_since_ms.check()?;
+        self.project_id.check()?;
+        self.root_id.check()?;
+        self.assignment_id.check()?;
+        self.session_id.check()?;
         super::domain_rules::record(
             "LeaseRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for LeaseRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.units = None;
+        }
+        if revision < 2 {
+            self.purpose = None;
+        }
+        if revision < 2 {
+            self.priority = None;
+        }
+        if revision < 2 {
+            self.queue_position = None;
+        }
+        if revision < 2 {
+            self.requested_at_ms = None;
+        }
+        if revision < 2 {
+            self.granted_at_ms = None;
+        }
+        if revision < 2 {
+            self.renewed_at_ms = None;
+        }
+        if revision < 2 {
+            self.ended_at_ms = None;
+        }
+        if revision < 2 {
+            self.end_reason = None;
+        }
+        if revision < 2 {
+            self.owner_unreachable_since_ms = None;
+        }
+        if revision < 2 {
+            self.project_id = None;
+        }
+        if revision < 2 {
+            self.root_id = None;
+        }
+        if revision < 2 {
+            self.assignment_id = None;
+        }
+        if revision < 2 {
+            self.session_id = None;
+        }
     }
 }
 
@@ -8264,6 +8531,34 @@ pub enum DomainCommand {
         expected_revision: Revision,
         units: Limit,
         lease_ms: PositiveCounter,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Text", extend("x-since" = 2))]
+        purpose: Option<Text>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ResourcePriority", extend("x-since" = 2))]
+        priority: Option<ResourcePriority>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Limit", extend("x-since" = 2))]
+        capacity: Option<Limit>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+        labels: Option<Items<Label>>,
     },
     #[serde(rename = "resources.renew")]
     ResourcesRenew {
@@ -9915,11 +10210,19 @@ impl Check for DomainCommand {
                 expected_revision,
                 units,
                 lease_ms,
+                purpose,
+                priority,
+                capacity,
+                labels,
             } => {
                 resource_id.check()?;
                 expected_revision.check()?;
                 units.check()?;
                 lease_ms.check()?;
+                purpose.check()?;
+                priority.check()?;
+                capacity.check()?;
+                labels.check()?;
             }
             Self::ResourcesRenew {
                 lease_id,
@@ -10517,7 +10820,31 @@ impl Check for DomainCommand {
 }
 
 impl Revisioned for DomainCommand {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::ResourcesAcquire {
+                purpose,
+                priority,
+                capacity,
+                labels,
+                ..
+            } => {
+                if revision < 2 {
+                    *purpose = None;
+                }
+                if revision < 2 {
+                    *priority = None;
+                }
+                if revision < 2 {
+                    *capacity = None;
+                }
+                if revision < 2 {
+                    *labels = None;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -12007,6 +12334,12 @@ impl Revisioned for OperationResult {
             Self::HistoryGitLinks { value } => value.retain_revision(revision),
             Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
             Self::HistoryToolUsage { value } => value.retain_revision(revision),
+            Self::ResourcesList { value } => value.retain_revision(revision),
+            Self::ResourcesAcquire { value } => value.retain_revision(revision),
+            Self::ResourcesRenew { value } => value.retain_revision(revision),
+            Self::ResourcesRelease { value } => value.retain_revision(revision),
+            Self::ResourcesHolders { value } => value.retain_revision(revision),
+            Self::ResourcesWaiters { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),

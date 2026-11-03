@@ -48,7 +48,7 @@
 //! harmless by inspection.
 use super::destructive::{
     DestructiveKind, EffectPlan, FilesystemResolver, InputNeeded, IntendedScope, PreflightDecision,
-    PreflightVerdict, ProtectedRoots, preflight,
+    PreflightVerdict, ProtectedRoots, ResolveError, ResolvedPath, preflight,
 };
 use super::policy::protected_ref;
 use super::redact::Redactor;
@@ -2429,4 +2429,224 @@ pub fn record_assessment(
             }),
         })
         .map(Some)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The launched child's environment
+
+/// The environment a command will actually run with: what the child inherits (unless the launch
+/// clears it) overlaid by the variables the launch sets. The preflight resolves `~` and
+/// environment references against it, never against the host's own environment, because a
+/// child with a different `HOME` (or any other variable) deletes different targets.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChildEnvironment {
+    vars: Vec<(String, String)>,
+    /// Variable names compare ignoring ASCII case (Windows).
+    case_insensitive: bool,
+}
+impl ChildEnvironment {
+    pub fn effective(
+        inherited: &[(String, String)],
+        clear: bool,
+        set: &[(String, String)],
+        case_insensitive: bool,
+    ) -> Self {
+        let mut env = Self {
+            vars: Vec::new(),
+            case_insensitive,
+        };
+        if !clear {
+            for (k, v) in inherited {
+                env.put(k, v);
+            }
+        }
+        for (k, v) in set {
+            env.put(k, v);
+        }
+        env
+    }
+    fn same(&self, a: &str, b: &str) -> bool {
+        if self.case_insensitive {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    }
+    fn put(&mut self, k: &str, v: &str) {
+        match self.vars.iter_mut().find(|(n, _)| {
+            if self.case_insensitive {
+                n.eq_ignore_ascii_case(k)
+            } else {
+                n == k
+            }
+        }) {
+            Some(slot) => slot.1 = v.to_owned(),
+            None => self.vars.push((k.to_owned(), v.to_owned())),
+        }
+    }
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.vars
+            .iter()
+            .find(|(n, _)| self.same(n, name))
+            .map(|(_, v)| v.as_str())
+    }
+    /// The home directory `~` names for the child (`HOME`, else `USERPROFILE`).
+    pub fn home(&self) -> Option<&str> {
+        self.get("HOME")
+            .or_else(|| self.get("USERPROFILE"))
+            .filter(|h| !h.is_empty())
+    }
+    /// `text` with `$NAME`, `${NAME}` and `%NAME%` references replaced by the child's values.
+    /// An undefined `$` reference becomes empty, as a POSIX shell expands it; an undefined `%`
+    /// reference stays literal, as cmd leaves it. Quoting is ignored, so a reference a shell
+    /// would not expand is expanded too: the result only adds targets to check.
+    pub fn substitute(&self, text: &str) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        let name_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '$' if chars.get(i + 1) == Some(&'{') => {
+                    match chars[i + 2..].iter().position(|&c| c == '}') {
+                        Some(n)
+                            if chars[i + 2..i + 2 + n].iter().all(|&c| name_char(c)) && n > 0 =>
+                        {
+                            let name: String = chars[i + 2..i + 2 + n].iter().collect();
+                            out.push_str(self.get(&name).unwrap_or(""));
+                            i += n + 3;
+                        }
+                        _ => {
+                            out.push('$');
+                            i += 1;
+                        }
+                    }
+                }
+                '$' if chars
+                    .get(i + 1)
+                    .is_some_and(|&c| c.is_ascii_alphabetic() || c == '_') =>
+                {
+                    let n = chars[i + 1..]
+                        .iter()
+                        .position(|&c| !name_char(c))
+                        .unwrap_or(chars.len() - i - 1);
+                    let name: String = chars[i + 1..i + 1 + n].iter().collect();
+                    out.push_str(self.get(&name).unwrap_or(""));
+                    i += n + 1;
+                }
+                '%' => match chars[i + 1..].iter().position(|&c| c == '%') {
+                    Some(n) if n > 0 && chars[i + 1..i + 1 + n].iter().all(|&c| name_char(c)) => {
+                        let name: String = chars[i + 1..i + 1 + n].iter().collect();
+                        match self.get(&name) {
+                            Some(v) => out.push_str(v),
+                            None => out.extend(&chars[i..i + n + 2]),
+                        }
+                        i += n + 2;
+                    }
+                    _ => {
+                        out.push('%');
+                        i += 1;
+                    }
+                },
+                c => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Resolves `~` against the child's home instead of the host's. The protected home stays the
+/// host user's own ([`FilesystemResolver::home`] is passed through).
+struct ChildResolver<'a> {
+    inner: &'a dyn FilesystemResolver,
+    home: Option<String>,
+}
+impl ChildResolver<'_> {
+    fn rewrite(&self, path: &str) -> Result<String, ResolveError> {
+        let rest = match path {
+            "~" => Some(""),
+            _ => path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")),
+        };
+        match (rest, &self.home) {
+            (None, _) => Ok(path.to_owned()),
+            (Some(rest), Some(home)) => Ok(if rest.is_empty() {
+                home.clone()
+            } else {
+                format!("{}/{rest}", home.trim_end_matches(['/', '\\']))
+            }),
+            (Some(_), None) => Err(ResolveError::Invalid(
+                "the launched command has no home directory".into(),
+            )),
+        }
+    }
+    fn cwd(&self, working_directory: Option<&str>) -> Result<Option<String>, ResolveError> {
+        working_directory.map(|w| self.rewrite(w)).transpose()
+    }
+}
+impl FilesystemResolver for ChildResolver<'_> {
+    fn resolve(
+        &self,
+        path: &str,
+        working_directory: Option<&str>,
+    ) -> Result<ResolvedPath, ResolveError> {
+        let cwd = self.cwd(working_directory)?;
+        self.inner.resolve(&self.rewrite(path)?, cwd.as_deref())
+    }
+    fn expand(
+        &self,
+        pattern: &str,
+        working_directory: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>, ResolveError> {
+        let cwd = self.cwd(working_directory)?;
+        self.inner
+            .expand(&self.rewrite(pattern)?, cwd.as_deref(), limit)
+    }
+    fn home(&self) -> Option<std::path::PathBuf> {
+        self.inner.home()
+    }
+    fn gitfile_target(&self, gitfile: &std::path::Path) -> Option<String> {
+        self.inner.gitfile_target(gitfile)
+    }
+}
+
+/// [`preflight_command`] for a command that will run with `env`: `~` resolves to the child's
+/// home, and the argv with its environment references substituted by the child's values is
+/// preflighted as well. A refusal of either analysis refuses the command (approval never
+/// unlocks it); otherwise the verdict of the command as written applies, so a reference the
+/// structured analysis cannot model stays held.
+pub fn preflight_command_in(
+    fs: &dyn FilesystemResolver,
+    roots: &ProtectedRoots,
+    argv: &[String],
+    working_directory: Option<&str>,
+    protected_branches: &[String],
+    env: &ChildEnvironment,
+) -> CommandVerdict {
+    let child = ChildResolver {
+        inner: fs,
+        home: env.home().map(str::to_owned),
+    };
+    let written = preflight_command(&child, roots, argv, working_directory, protected_branches);
+    if matches!(written, CommandVerdict::Blocked { .. }) {
+        return written;
+    }
+    let substituted: Vec<String> = argv.iter().map(|a| env.substitute(a)).collect();
+    let cwd = working_directory.map(|w| env.substitute(w));
+    if substituted.as_slice() != argv || cwd.as_deref() != working_directory {
+        let expanded = preflight_command(
+            &child,
+            roots,
+            &substituted,
+            cwd.as_deref(),
+            protected_branches,
+        );
+        if matches!(expanded, CommandVerdict::Blocked { .. }) {
+            return expanded;
+        }
+    }
+    written
 }

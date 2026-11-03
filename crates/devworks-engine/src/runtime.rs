@@ -1,12 +1,15 @@
-//! The engine's one boot entry point: [`boot`] recovers durable state in a fixed order, starts
-//! every required consumer and artifact collection, and only then returns the [`Runtime`]
-//! through which commands and queries are admitted. See the crate documentation ("Boot
+//! The engine's one boot entry point: [`boot`] recovers durable state in a fixed order (queue,
+//! artifacts, owned processes and resource leases), applies keep-awake, starts every required
+//! consumer, artifact collection and resource housekeeping, and only then returns the
+//! [`Runtime`] through which commands and queries are admitted. See the crate documentation ("Boot
 //! sequence") for the order and why each step sits where it does.
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
 use crate::replies::reply_consumer;
+use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
 use devworks_core::ports::files::FileFault;
+use devworks_core::ports::process::{PowerPort, ProcessHost};
 use devworks_core::ports::storage::{ApplicationStore, StorageError, Unavailable, WriteOptions};
 use devworks_core::ports::{AuthorityPort, Clock, IdSource};
 use devworks_core::protocol::results::DomainDecision;
@@ -17,6 +20,10 @@ use devworks_core::services::artifacts::lifecycle::{
     CollectReport, RecoveryReport as ArtifactRecoveryReport,
 };
 use devworks_core::services::artifacts::replies::ReceiptReplies;
+use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
+use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
+use devworks_core::services::resources::{MachineResource, ResourceService, desktop};
+use devworks_core::settings::view::Health;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,6 +32,8 @@ use tokio::task::JoinHandle;
 
 /// The operation whose applied decision may leave blobs pending physical removal.
 const RELEASES_BLOBS: &str = "artifacts.delete";
+/// The operation through which the `power.keepAwake` setting changes.
+const SAVES_SETTINGS: &str = "settings.save_revision";
 
 /// Everything the runtime is composed from. Every part is a core port or core service; the one
 /// `store` backs the gateway, the dispatcher, the reply publisher and artifact recovery and
@@ -38,6 +47,14 @@ pub struct Composition {
     /// the caller registered), publishes receipt replies through it and collects with it, so its
     /// readers, stream grants and deferred staging resolutions are shared by all three.
     pub artifacts: Arc<ArtifactService>,
+    /// The one resource service: [`boot`] registers the `resources.*` use cases with it (replacing
+    /// any the caller registered), so dispatch tickets, owned processes and leases share one
+    /// in-flight registry.
+    pub resources: Arc<ResourceService>,
+    /// The native process launcher every owned tree is spawned through.
+    pub process_host: Arc<dyn ProcessHost>,
+    /// The OS power facility the keep-awake setting is applied with.
+    pub power: Arc<dyn PowerPort>,
     /// The other use cases (queue, sessions, history, settings, ...).
     pub use_cases: UseCases,
     /// Consumers besides the required ones [`boot`] registers itself (package handlers, ...).
@@ -55,6 +72,14 @@ pub struct RuntimeConfig {
     pub collect_interval: Duration,
     /// In-flight cap of the receipt reply consumer (`None`: the dispatcher's whole capacity).
     pub reply_max_in_flight: Option<usize>,
+    /// Physically shared resources registered for the machine at boot (default: the desktop).
+    pub machine_resources: Vec<MachineResource>,
+    /// Time between resource housekeeping ticks (expiry, transfer, promotion, sleep/wake).
+    pub housekeeping_interval: Duration,
+    /// Cooperative stop period of owned trees at shutdown, within [`Self::shutdown_bound`].
+    pub shutdown_grace: Duration,
+    /// The one bound shared by every owned tree's stop at shutdown (AD20 default 30 s).
+    pub shutdown_bound: Duration,
 }
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
@@ -62,6 +87,10 @@ impl RuntimeConfig {
             dispatcher: DispatcherConfig::new(owner),
             collect_interval: Duration::from_secs(15 * 60),
             reply_max_in_flight: None,
+            machine_resources: vec![desktop()],
+            housekeeping_interval: Duration::from_secs(30),
+            shutdown_grace: Duration::from_secs(5),
+            shutdown_bound: Duration::from_secs(30),
         }
     }
 }
@@ -73,6 +102,11 @@ pub struct BootReport {
     pub queue: RecoveryReport,
     /// Artifact staging and managed-file recovery ([`ArtifactService::recover`]).
     pub artifacts: ArtifactRecoveryReport,
+    /// Machine resource registration and the recovery of owned processes and resource leases of
+    /// earlier boots ([`Housekeeper::boot`]).
+    pub resources: ResourceBootReport,
+    /// The keep-awake setting as applied at boot.
+    pub keep_awake: KeepAwakeStatus,
 }
 
 /// Why boot stopped; nothing was started and no command can be admitted.
@@ -84,6 +118,10 @@ pub enum BootError {
     Queue(StorageError),
     /// Artifact recovery failed.
     Artifacts(StorageError),
+    /// Machine resource registration or the owned-process and lease recovery failed.
+    Resources(StorageError),
+    /// The keep-awake setting could not be read.
+    Settings(StorageError),
 }
 
 /// One artifact collection pass.
@@ -119,6 +157,11 @@ pub struct Runtime {
     use_cases: UseCases,
     dispatcher: Dispatcher,
     collector: Arc<Collector>,
+    resources: Arc<ResourceService>,
+    housekeeper: Arc<Housekeeper>,
+    keep_awake: Arc<KeepAwake>,
+    shutdown_grace: Duration,
+    shutdown_bound: Duration,
     report: BootReport,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -130,10 +173,13 @@ pub struct Runtime {
 /// 2. recovers the queue and operation journal: interrupted operations are classified and
 ///    claims of earlier boots requeued or held ([`Dispatcher::recover`]);
 /// 3. recovers artifact staging and managed files ([`ArtifactService::recover`]);
-/// 4. starts delivery ([`Dispatcher::run`]);
-/// 5. starts artifact collection: a pass now, then periodically and after every applied
-///    `artifacts.delete`;
-/// 6. returns the handle through which commands are admitted.
+/// 4. registers the machine resources and recovers owned processes and resource leases of
+///    earlier boots ([`Housekeeper::boot`]);
+/// 5. applies the keep-awake setting;
+/// 6. starts delivery ([`Dispatcher::run`]);
+/// 7. starts artifact collection (a pass now, then periodically and after every applied
+///    `artifacts.delete`) and resource housekeeping ticks;
+/// 8. returns the handle through which commands are admitted.
 ///
 /// Must be awaited on a Tokio runtime with timers; the tasks it starts run there.
 pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
@@ -143,18 +189,23 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         ids,
         authority,
         artifacts,
+        resources,
+        process_host,
+        power,
         use_cases,
         mut consumers,
         config,
     } = composition;
-    let use_cases = use_cases.with_artifacts(artifacts.clone());
+    let use_cases = use_cases
+        .with_artifacts(artifacts.clone())
+        .with_resources(resources.clone());
     let mut replies = reply_consumer(
         Arc::new(ReceiptReplies::new(artifacts.clone())),
         store.clone(),
     );
     replies.max_in_flight = config.reply_max_in_flight;
     consumers.insert(0, replies);
-    let dispatcher = Dispatcher::new(store.clone(), clock, consumers, config.dispatcher)
+    let dispatcher = Dispatcher::new(store.clone(), clock.clone(), consumers, config.dispatcher)
         .map_err(BootError::Composition)?;
 
     let queue = dispatcher.recover().await.map_err(BootError::Queue)?;
@@ -163,6 +214,32 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .await
         .unwrap_or_else(|_| Err(panicked("artifact recovery")))
         .map_err(BootError::Artifacts)?;
+    let supervisor = Arc::new(ProcessSupervisor::new(
+        store.clone(),
+        process_host,
+        resources.clone(),
+    ));
+    let housekeeper = Arc::new(Housekeeper::new(
+        store.clone(),
+        clock,
+        resources.clone(),
+        supervisor,
+    ));
+    let recovered_resources = housekeeper
+        .boot(config.machine_resources.clone())
+        .await
+        .map_err(BootError::Resources)?;
+    // Applying may start an OS helper (and wait briefly to see it hold), so off the async thread.
+    let keep_awake = Arc::new(KeepAwake::new(power));
+    let (ka, st) = (keep_awake.clone(), store.clone());
+    let applied = tokio::task::spawn_blocking(move || {
+        devworks_core::ports::storage::read_snapshot(&*st, &Default::default(), |s| {
+            ka.refresh(s.configuration())
+        })
+    })
+    .await
+    .unwrap_or_else(|_| Err(panicked("keep-awake")))
+    .map_err(BootError::Settings)?;
 
     let run = dispatcher.clone();
     let delivery = tokio::spawn(async move { run.run().await });
@@ -178,6 +255,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         store.clone(),
         config.collect_interval,
     ));
+    let (keeper, every) = (housekeeper.clone(), config.housekeeping_interval);
+    let housekeeping = tokio::spawn(async move { keeper.run(every).await });
     Ok(Runtime {
         store,
         ids,
@@ -186,11 +265,18 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         use_cases,
         dispatcher,
         collector,
+        resources,
+        housekeeper,
+        keep_awake,
+        shutdown_grace: config.shutdown_grace,
+        shutdown_bound: config.shutdown_bound,
         report: BootReport {
             queue,
             artifacts: recovered,
+            resources: recovered_resources,
+            keep_awake: applied,
         },
-        tasks: Mutex::new(vec![delivery, collection]),
+        tasks: Mutex::new(vec![delivery, collection, housekeeping]),
     })
 }
 
@@ -241,6 +327,34 @@ impl Runtime {
     pub fn artifacts(&self) -> &Arc<ArtifactService> {
         &self.artifacts
     }
+    /// The resource service the `resources.*` use cases and dispatch-time checks share.
+    pub fn resources(&self) -> &Arc<ResourceService> {
+        &self.resources
+    }
+    /// The process supervisor every owned tree is launched through (process tools, package and
+    /// helper hosts).
+    pub fn processes(&self) -> &Arc<ProcessSupervisor> {
+        self.housekeeper.supervisor()
+    }
+    /// The keep-awake request as last applied (re-checking a held request).
+    pub fn keep_awake(&self) -> KeepAwakeStatus {
+        self.keep_awake.status()
+    }
+    /// Keep-awake runtime health for the Settings view (distinct from the configured value).
+    pub fn keep_awake_health(&self) -> Health {
+        self.keep_awake.health()
+    }
+    /// Re-applies the effective `power.keepAwake` setting. Commands through
+    /// [`Self::command_with`] do this after every committed `settings.save_revision`; host code
+    /// that changes settings outside the runtime's commands (proposal approval, rollback) calls
+    /// it after its unit of work commits.
+    pub fn refresh_keep_awake(&self) -> Result<KeepAwakeStatus, StorageError> {
+        let ka = &self.keep_awake;
+        devworks_core::ports::storage::read_snapshot(&*self.store, &Default::default(), |s| {
+            ka.refresh(s.configuration())
+        })
+    }
+
     /// The running dispatcher (status hints, wakeups, diagnostics).
     pub fn dispatcher(&self) -> &Dispatcher {
         &self.dispatcher
@@ -272,8 +386,9 @@ impl Runtime {
     }
 
     /// Admits a command. A command that may have committed (`Recorded`, or a lost
-    /// acknowledgment) wakes delivery for the reply intent its receipt committed, and an
-    /// applied `artifacts.delete` starts a collection pass for the blobs it released.
+    /// acknowledgment) wakes delivery for the reply intent its receipt committed, an applied
+    /// `artifacts.delete` starts a collection pass for the blobs it released, and an applied
+    /// `settings.save_revision` re-applies keep-awake.
     pub fn command_with(
         &self,
         ctx: &InvocationContext,
@@ -298,29 +413,47 @@ impl Runtime {
         if released && operation == RELEASES_BLOBS {
             self.collector.trigger.notify_one();
         }
+        if released && operation == SAVES_SETTINGS {
+            // A read failure leaves the previous request in place; the next save or explicit
+            // refresh applies the setting again.
+            let _ = self.refresh_keep_awake();
+        }
         outcome
     }
 
-    /// Stops admission of new deliveries and collection, then waits for the delivery loop, the
-    /// collector and every in-flight delivery to finish (an asynchronous handler gets its
-    /// consumer's stop grace).
-    pub async fn shutdown(&self) {
+    /// Stops admission of new deliveries, collection and housekeeping, waits for the delivery
+    /// loop, the collector, the housekeeper and every in-flight delivery to finish (an
+    /// asynchronous handler gets its consumer's stop grace), then stops every owned process tree
+    /// within [`RuntimeConfig::shutdown_bound`] (recording the `Shutdown` reconciliation of
+    /// resources) and releases the keep-awake request. Every tree is stopped natively even when
+    /// the store refuses writes; the report carries each tree's outcome and any write failure.
+    pub async fn shutdown(&self) -> ShutdownReport {
         self.stop();
         let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
         for task in tasks {
             let _ = task.await;
         }
         self.dispatcher.idle().await;
+        let stopped = self
+            .housekeeper
+            .shutdown(self.shutdown_grace, self.shutdown_bound)
+            .await;
+        self.keep_awake.apply(false);
+        stopped
     }
 
     fn stop(&self) {
         self.dispatcher.stop();
         self.collector.stop();
+        self.housekeeper.stop();
     }
 }
 
+/// Dropping the runtime also drops the process supervisor (each owned tree it still holds is
+/// killed) and the keep-awake request.
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop();
+        self.keep_awake.apply(false);
     }
 }

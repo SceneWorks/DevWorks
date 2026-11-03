@@ -451,12 +451,12 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `resources.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest` | `Page<ResourceRecord>` |
-| `resources.acquire` | **Command**<br>`resourceId`: `ResourceId`<br>`expectedRevision`: `Revision`<br>`units`: `Limit`<br>`leaseMs`: `PositiveCounter` | `LeaseRecord` |
-| `resources.renew` | **Command**<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br>`leaseMs`: `PositiveCounter` | `LeaseRecord` |
-| `resources.release` | **Command**<br>`leaseId`: `Id`<br>`expectedFence`: `Counter` | `LeaseRecord` |
-| `resources.holders` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest` | `Page<LeaseRecord>` |
-| `resources.waiters` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest` | `Page<LeaseRecord>` |
+| `resources.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ResourceRecord>` |
+| `resources.acquire` | **Command**<br>`resourceId`: `ResourceId`<br>`expectedRevision`: `Revision`<br>`units`: `Limit`<br>`leaseMs`: `PositiveCounter`<br>`purpose`: `?Text`<br>`priority`: `?ResourcePriority`<br>`capacity`: `?Limit`<br>`labels`: `?Items<Label>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `LeaseRecord` |
+| `resources.renew` | **Command**<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br>`leaseMs`: `PositiveCounter`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `LeaseRecord` |
+| `resources.release` | **Command**<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `LeaseRecord` |
+| `resources.holders` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<LeaseRecord>` |
+| `resources.waiters` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<LeaseRecord>` |
 
 ### Browser
 
@@ -763,6 +763,18 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 ### LeaseState
 
 `Waiting`, `Held`, `Releasing`, `Uncertain`, `Released`.
+
+### ResourcePriority
+
+`Low`, `Medium`, `High`, `Critical`.
+
+### ResourceScope
+
+`Machine`, `Project`.
+
+### LeaseEnd
+
+`Released`, `Expired`, `Cancelled`, `Reconciled`.
 
 ### DeliveryMode
 
@@ -1592,6 +1604,12 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `capacity` | `Limit` |
 | `holders` | `Items<Id>` |
 | `waiters` | `Items<Id>` |
+| `scope` | `?ResourceScope` · *revision 2+* |
+| `projectId` | `?ProjectId` · *revision 2+* |
+| `physical` | `?bool` · *revision 2+* |
+| `labels` | `?Items<Label>` · *revision 2+* |
+| `used` | `?Counter` · *revision 2+* |
+| `available` | `?bool` · *revision 2+* |
 
 ### LeaseRecord
 
@@ -1603,6 +1621,20 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `fence` | `Counter` |
 | `expiresAtMs` | `Counter` |
 | `state` | `LeaseState` |
+| `units` | `?Limit` · *revision 2+* |
+| `purpose` | `?Text` · *revision 2+* |
+| `priority` | `?ResourcePriority` · *revision 2+* |
+| `queuePosition` | `?Counter` · *revision 2+* |
+| `requestedAtMs` | `?Counter` · *revision 2+* |
+| `grantedAtMs` | `?Counter` · *revision 2+* |
+| `renewedAtMs` | `?Counter` · *revision 2+* |
+| `endedAtMs` | `?Counter` · *revision 2+* |
+| `endReason` | `?LeaseEnd` · *revision 2+* |
+| `ownerUnreachableSinceMs` | `?Counter` · *revision 2+* |
+| `projectId` | `?ProjectId` · *revision 2+* |
+| `rootId` | `?RootId` · *revision 2+* |
+| `assignmentId` | `?AssignmentId` · *revision 2+* |
+| `sessionId` | `?Id` · *revision 2+* |
 
 ### BrowserSession
 

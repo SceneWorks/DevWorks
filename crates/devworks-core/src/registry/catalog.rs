@@ -5416,7 +5416,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<ResourceRecord>",
         result_schema: schema_of::<Page<ResourceRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "resources.acquire",
@@ -5438,7 +5438,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "LeaseRecord",
         result_schema: schema_of::<LeaseRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "resources.renew",
@@ -5460,7 +5460,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "LeaseRecord",
         result_schema: schema_of::<LeaseRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "resources.release",
@@ -5482,7 +5482,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "LeaseRecord",
         result_schema: schema_of::<LeaseRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "resources.holders",
@@ -5504,7 +5504,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<LeaseRecord>",
         result_schema: schema_of::<Page<LeaseRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "resources.waiters",
@@ -5526,7 +5526,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<LeaseRecord>",
         result_schema: schema_of::<Page<LeaseRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "browser.sessions",

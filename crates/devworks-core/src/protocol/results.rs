@@ -1469,6 +1469,12 @@ impl Revisioned for OperationResult {
             Self::HistoryToolUsage { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
+            Self::ResourcesList { value } => value.retain_revision(revision),
+            Self::ResourcesAcquire { value } => value.retain_revision(revision),
+            Self::ResourcesRenew { value } => value.retain_revision(revision),
+            Self::ResourcesRelease { value } => value.retain_revision(revision),
+            Self::ResourcesHolders { value } => value.retain_revision(revision),
+            Self::ResourcesWaiters { value } => value.retain_revision(revision),
             _ => {}
         }
     }

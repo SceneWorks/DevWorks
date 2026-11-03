@@ -8,7 +8,10 @@
 pub mod artifacts;
 pub mod cursor;
 pub mod history;
+pub mod power;
+pub mod process;
 pub mod queue;
+pub mod resources;
 pub mod sessions;
 
 use crate::context::InvocationContext;
@@ -115,6 +118,14 @@ impl UseCases {
     pub fn with_history(mut self, service: Arc<history::HistoryService>) -> Self {
         for op in history::OPERATIONS {
             self.register(op, Some(service.clone()), None);
+        }
+        self
+    }
+
+    /// Registers the resources family (`ResourceService`).
+    pub fn with_resources(mut self, service: Arc<resources::ResourceService>) -> Self {
+        for op in resources::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self
     }

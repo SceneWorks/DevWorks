@@ -1040,6 +1040,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn sessions(&self) -> &dyn SessionRead {
         self
     }
+    fn resources(&self) -> &dyn ResourceRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1239,6 +1242,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn sessions(&mut self) -> &mut dyn SessionRepository {
+        self
+    }
+    fn resources(&mut self) -> &mut dyn ResourceRepository {
         self
     }
 }

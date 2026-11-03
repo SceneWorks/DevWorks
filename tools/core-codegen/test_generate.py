@@ -32,7 +32,10 @@ class SchemaRevisionRules(unittest.TestCase):
         carried = {o['operation']: generate.introduced_in(o) for _, o in generate.operations()}
         self.assertEqual({n for n, s in carried.items() if s}, {
             'artifacts.save', 'artifacts.list', 'history.events', 'history.work_lineage',
-            'history.git_links', 'history.evidence_links', 'history.tool_usage', 'sessions.briefing'})
+            'history.git_links', 'history.evidence_links', 'history.tool_usage', 'sessions.briefing',
+            'resources.list', 'resources.acquire', 'resources.renew', 'resources.release',
+            'resources.holders', 'resources.waiters'})
+        self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the

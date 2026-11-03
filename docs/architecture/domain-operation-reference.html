@@ -1515,32 +1515,32 @@
 </thead>
 <tbody><tr>
 <td><code>resources.list</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;ResourceRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>resources.acquire</code></td>
-<td><strong>Command</strong><br><code>resourceId</code>: <code>ResourceId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>units</code>: <code>Limit</code><br><code>leaseMs</code>: <code>PositiveCounter</code></td>
+<td><strong>Command</strong><br><code>resourceId</code>: <code>ResourceId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>units</code>: <code>Limit</code><br><code>leaseMs</code>: <code>PositiveCounter</code><br><code>purpose</code>: <code>?Text</code><br><code>priority</code>: <code>?ResourcePriority</code><br><code>capacity</code>: <code>?Limit</code><br><code>labels</code>: <code>?Items&lt;Label&gt;</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>LeaseRecord</code></td>
 </tr>
 <tr>
 <td><code>resources.renew</code></td>
-<td><strong>Command</strong><br><code>leaseId</code>: <code>Id</code><br><code>expectedFence</code>: <code>Counter</code><br><code>leaseMs</code>: <code>PositiveCounter</code></td>
+<td><strong>Command</strong><br><code>leaseId</code>: <code>Id</code><br><code>expectedFence</code>: <code>Counter</code><br><code>leaseMs</code>: <code>PositiveCounter</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>LeaseRecord</code></td>
 </tr>
 <tr>
 <td><code>resources.release</code></td>
-<td><strong>Command</strong><br><code>leaseId</code>: <code>Id</code><br><code>expectedFence</code>: <code>Counter</code></td>
+<td><strong>Command</strong><br><code>leaseId</code>: <code>Id</code><br><code>expectedFence</code>: <code>Counter</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>LeaseRecord</code></td>
 </tr>
 <tr>
 <td><code>resources.holders</code></td>
-<td><strong>Query</strong><br><code>resourceId</code>: <code>ResourceId</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>resourceId</code>: <code>ResourceId</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;LeaseRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>resources.waiters</code></td>
-<td><strong>Query</strong><br><code>resourceId</code>: <code>ResourceId</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>resourceId</code>: <code>ResourceId</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;LeaseRecord&gt;</code></td>
 </tr>
 </tbody></table>
@@ -2336,6 +2336,12 @@
 <p><code>Create</code>, <code>Attach</code>, <code>Inspect</code>.</p>
 <h3 id="leasestate">LeaseState</h3>
 <p><code>Waiting</code>, <code>Held</code>, <code>Releasing</code>, <code>Uncertain</code>, <code>Released</code>.</p>
+<h3 id="resourcepriority">ResourcePriority</h3>
+<p><code>Low</code>, <code>Medium</code>, <code>High</code>, <code>Critical</code>.</p>
+<h3 id="resourcescope">ResourceScope</h3>
+<p><code>Machine</code>, <code>Project</code>.</p>
+<h3 id="leaseend">LeaseEnd</h3>
+<p><code>Released</code>, <code>Expired</code>, <code>Cancelled</code>, <code>Reconciled</code>.</p>
 <h3 id="deliverymode">DeliveryMode</h3>
 <p><code>ReadOnly</code>, <code>WriteEnabled</code>.</p>
 <h3 id="priceorigin">PriceOrigin</h3>
@@ -4704,6 +4710,30 @@
 <td><code>waiters</code></td>
 <td><code>Items&lt;Id&gt;</code></td>
 </tr>
+<tr>
+<td><code>scope</code></td>
+<td><code>?ResourceScope</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>projectId</code></td>
+<td><code>?ProjectId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>physical</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>labels</code></td>
+<td><code>?Items&lt;Label&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>used</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>available</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
 </tbody></table>
 <h3 id="leaserecord">LeaseRecord</h3>
 <table>
@@ -4736,6 +4766,62 @@
 <tr>
 <td><code>state</code></td>
 <td><code>LeaseState</code></td>
+</tr>
+<tr>
+<td><code>units</code></td>
+<td><code>?Limit</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>purpose</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>priority</code></td>
+<td><code>?ResourcePriority</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>queuePosition</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>requestedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>grantedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>renewedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>endedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>endReason</code></td>
+<td><code>?LeaseEnd</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>ownerUnreachableSinceMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>projectId</code></td>
+<td><code>?ProjectId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>rootId</code></td>
+<td><code>?RootId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>assignmentId</code></td>
+<td><code>?AssignmentId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>sessionId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="browsersession">BrowserSession</h3>
