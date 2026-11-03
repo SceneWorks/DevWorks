@@ -9,7 +9,7 @@ use devworks_core::ports::storage::*;
 use devworks_core::ports::{GrantUse, IdKind, IdSource, StoredReceipt};
 use devworks_core::protocol::results::DomainDecision;
 use devworks_core::protocol::{
-    ActorId, AssignmentId, AttemptId, CONTRACT, EventId, ExecutionId, Id, OperationId,
+    ActorId, AssignmentId, AttemptId, CONTRACT, CommandId, EventId, ExecutionId, Id, OperationId,
     OperationState, ProjectId, Receipt, Revision, RevisionDimension, RootId, StoreId,
 };
 use devworks_core::registry::SchemaRevision;
@@ -173,6 +173,35 @@ pub(crate) fn actor_kind(
         .query_row([actor.0.as_str()], |r| r.get(0))
         .optional())?;
     kind.as_deref().map(parse_principal).transpose()
+}
+
+fn receipt_reply(
+    conn: &Connection,
+    identity: &ReceiptIdentity,
+) -> Result<Option<ReceiptReply>, StorageError> {
+    let row: Option<(String, String, String, String, i64)> = db(stmt(
+        conn,
+        "SELECT command_id,artifact_id,version_id,schema_json,published_at FROM receipt_replies WHERE actor_id=?1 AND scope_key=?2 AND idempotency_key=?3",
+    )?
+    .query_row(
+        params![
+            identity.actor_id().0.as_str(),
+            identity.scope_key().as_str(),
+            identity.request_key().0.as_str()
+        ],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    )
+    .optional())?;
+    let Some((command, artifact, version, schema, at)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(ReceiptReply {
+        command_id: CommandId(id_of(command)?),
+        artifact_id: id_of(artifact)?,
+        version_id: id_of(version)?,
+        schema: json_of(&schema)?,
+        published_at_ms: at,
+    }))
 }
 
 fn lookup_receipt(
@@ -857,6 +886,12 @@ macro_rules! read_impls {
             ) -> Result<Option<LedgerEntry>, StorageError> {
                 lookup_receipt(self.conn, identity)
             }
+            fn reply(
+                &self,
+                identity: &ReceiptIdentity,
+            ) -> Result<Option<ReceiptReply>, StorageError> {
+                receipt_reply(self.conn, identity)
+            }
         }
         impl HistoryRead for $t {
             fn event(&self, id: &EventId) -> Result<Option<EventRecord>, StorageError> {
@@ -1247,6 +1282,63 @@ impl CommandLedger for Unit<'_> {
             op,
             text(&body),
             self.now
+        ]))?;
+        Ok(())
+    }
+
+    fn record_reply(
+        &mut self,
+        identity: &ReceiptIdentity,
+        reply: &ReceiptReply,
+    ) -> Result<(), StorageError> {
+        object("reply schema", &reply.schema)?;
+        if lookup_receipt(self.conn, identity)?.is_none() {
+            return Err(StorageError::NotFound {
+                kind: "command_receipt",
+                id: identity.request_key().0.as_str().to_owned(),
+            });
+        }
+        let duplicate = receipt_reply(self.conn, identity)?.is_some()
+            || db(stmt(
+                self.conn,
+                "SELECT 1 FROM receipt_replies WHERE command_id=?1 OR artifact_id=?2",
+            )?
+            .exists(params![
+                reply.command_id.0.as_str(),
+                reply.artifact_id.as_str()
+            ]))?;
+        if duplicate {
+            return Err(StorageError::Duplicate {
+                kind: "receipt_reply",
+                id: reply.command_id.0.as_str().to_owned(),
+            });
+        }
+        let belongs = db(stmt(
+            self.conn,
+            "SELECT 1 FROM artifact_versions WHERE id=?1 AND artifact_id=?2",
+        )?
+        .exists(params![
+            reply.version_id.as_str(),
+            reply.artifact_id.as_str()
+        ]))?;
+        if !belongs {
+            return Err(StorageError::NotFound {
+                kind: "artifact_version",
+                id: reply.version_id.as_str().to_owned(),
+            });
+        }
+        db(stmt(self.conn,
+            "INSERT INTO receipt_replies(actor_id,scope_key,idempotency_key,command_id,artifact_id,version_id,schema_json,published_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        )?
+        .execute(params![
+            identity.actor_id().0.as_str(),
+            identity.scope_key().as_str(),
+            identity.request_key().0.as_str(),
+            reply.command_id.0.as_str(),
+            reply.artifact_id.as_str(),
+            reply.version_id.as_str(),
+            text(&reply.schema),
+            reply.published_at_ms
         ]))?;
         Ok(())
     }

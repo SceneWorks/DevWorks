@@ -1243,7 +1243,12 @@ fn storage_limits_refuse_visibly_and_never_delete() {
     let items = list(&fx, &user, "project-a");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].artifact.artifact_id, first.artifact_id);
-    let status = fx.read(|s| as_failure(fx.svc.storage_status(s, &project("project-a"))));
+    let status = fx.read(|s| {
+        as_failure(
+            fx.svc
+                .storage_status(s, &ArtifactScope::Project(project("project-a"))),
+        )
+    });
     assert_eq!(
         (status.used_bytes, status.quota_bytes, status.at_limit),
         (10, 15, false)
@@ -2444,11 +2449,13 @@ fn unknown_commit_outcomes_and_unwritable_resolutions_resolve_within_the_boot() 
             .put_blob(&st.digest, st.byte_count, &st.generation, &st.relative_path)?;
         let artifact = StoredArtifact {
             id: id("artifact-x"),
-            origin_project_id: project("project-a"),
+            origin_project_id: Some(project("project-a")),
             origin_work_id: None,
             title: "X".into(),
             revision: 1,
-            current_project_id: project("project-a"),
+            scope: ArtifactScope::Project(project("project-a")),
+            owner: None,
+            retention: ArtifactRetention::Explicit,
             scope_revision: 1,
             reference_revision: 1,
             current_version_id: None,

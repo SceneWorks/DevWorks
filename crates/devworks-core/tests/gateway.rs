@@ -1179,3 +1179,40 @@ fn a_commands_work_targets_come_from_its_selected_input_in_priority_order() {
     .unwrap();
     assert_eq!(decoded.targets, [id("root-a")]);
 }
+
+#[test]
+fn every_recorded_receipt_commits_its_reply_publication_intent() {
+    let h = Harness::new();
+    let ctx = context("user-a");
+    let reply = h
+        .gateway()
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), applied_edit())
+        .unwrap();
+    assert!(matches!(
+        reply,
+        CommandReply::Recorded {
+            replayed: false,
+            ..
+        }
+    ));
+    assert_eq!(h.store.intents(), vec!["receipt_replies".to_owned()]);
+    // A replay records no new receipt and no new intent.
+    h.gateway()
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), applied_edit())
+        .unwrap();
+    assert_eq!(h.store.intents().len(), 1);
+    // A refused decision is a recorded receipt too: its writes are undone, its intent is not.
+    let refused = Arc::new(Writer(Writes::ThenRefuse, Count::default()));
+    let fresh = EDIT.replace("key-1", "key-2");
+    h.gateway()
+        .command(&ctx, "projects.edit", fresh.as_bytes(), refused)
+        .unwrap();
+    assert_eq!(h.store.intents().len(), 2);
+    // A command that rolls back records neither.
+    let forged = Arc::new(Writer(Writes::ForgeCommandHistory, Count::default()));
+    let third = EDIT.replace("key-1", "key-3");
+    h.gateway()
+        .command(&ctx, "projects.edit", third.as_bytes(), forged)
+        .unwrap();
+    assert_eq!((h.store.intents().len(), h.store.receipt_count()), (2, 2));
+}

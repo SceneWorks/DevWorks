@@ -1,4 +1,4 @@
-//! `ArtifactService`: the per-project local artifact store behind `artifacts.save`, `.list`,
+//! `ArtifactService`: the local artifact store behind `artifacts.save`, `.list`,
 //! `.read`, `.preview`, `.export`, `.reference` and `.delete` (ART-01..05), registered through
 //! [`crate::services::UseCases::with_artifacts`]. The UI, agent tools, packages and MCP reach the
 //! same use cases through the gateway; there is no second implementation of any rule.
@@ -67,11 +67,32 @@
 //! only while no reader holds it and no backup pins it. Previews are a separate, disposable
 //! derived class ([`ArtifactFiles::collect_derived`]).
 //!
+//! # Scopes and retention
+//!
+//! An artifact is owned by a project or by the workspace ([`ArtifactScope`]). A workspace artifact
+//! (a projectless receipt's reply, a workspace attachment) has an owning principal and no
+//! project; it follows the same visibility, deletion, retention and quota rules as a project
+//! artifact, with the workspace as its scope: its audience is its owner, the user, the host and
+//! the unconfined workspace coordinator ([`Viewer`]), and a project sees it only once it is
+//! shared with that project. Workspace usage is measured against the workspace-level storage
+//! limit.
+//!
+//! A receipt's durable typed reply ([`replies`]) is a [`ArtifactRetention::Receipt`] artifact:
+//! system-owned, immutable and retained while its receipt is retained, because the shared
+//! contracts keep command identity and its recorded decision as correctness records, never
+//! disposable logs. `artifacts.delete` refuses it (`Conflict`, [`RECEIPT_RETAINED`]) and it is
+//! never shared, moved or replaced, so explicit user deletion under ART-05 (which covers the
+//! user's own work outputs) can never break a receipt. Only the receipt's principal (with the
+//! user, the host and the workspace coordinator) sees it, so another principal's receipts are
+//! not disclosed, and project listings omit it. Its bytes count toward its scope's usage, but
+//! the storage limit never refuses it: a receipt's reply is not optional work output.
+//!
 //! # Access (ART-04)
 //!
 //! Current authority (role, selected tools, reviewer read-only, project confinement) is the
-//! gateway's [`crate::ports::AuthorityPort`]. On top of it, every use case checks project
-//! scope: an invocation bound to a project sees only artifacts that project owns or is shared;
+//! gateway's [`crate::ports::AuthorityPort`]. On top of it, every use case checks scope: an
+//! invocation bound to a project sees only artifacts that project owns or is shared; a workspace
+//! invocation sees every project's artifacts and the workspace artifacts its principal may see;
 //! anything else is `NotFound`, so existence is not disclosed. Agents receive references and
 //! bounded text windows or previews, never whole files in model context; binary content is an
 //! expiring, principal-bound stream handle re-authorized at every use
@@ -88,6 +109,7 @@
 //! `StorageUnavailable`.
 pub mod lifecycle;
 pub mod preview;
+pub mod replies;
 
 use crate::authority::reads::{ReadRefusal, ReadRequest, VerifiedReader};
 use crate::context::{InvocationContext, PrincipalKind};
@@ -96,9 +118,10 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, artifacts as ops};
 use crate::ports::files::{ArtifactFiles, ArtifactSources, FileFault, SourceOrigin, SourceRefusal};
 use crate::ports::storage::{
-    ArtifactLink, ArtifactState, AttemptBinding, AttemptFence, BlobState, ConfigScope,
-    ConfigurationRead, LinkPurpose, ListPosition, NewEvent, NewOperation, ReadSnapshot,
-    StorageError, StoredArtifact, StoredVersion, SubjectKey, Unavailable, WriteTransaction,
+    ArtifactLink, ArtifactRetention, ArtifactScope, ArtifactState, AttemptBinding, AttemptFence,
+    AuthorityRead, BlobState, ConfigScope, ConfigurationRead, LinkPurpose, ListPosition, NewEvent,
+    NewOperation, ReadSnapshot, StorageError, StoredArtifact, StoredVersion, SubjectKey,
+    Unavailable, WriteTransaction,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -118,7 +141,7 @@ use crate::protocol::{
     CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
     ProjectId, RetryAdvice, Revision, RevisionDimension, RootId,
 };
-use crate::settings::catalog::{ARTIFACT_MAX_FILE_KEY, ARTIFACT_QUOTA_KEY, descriptor};
+use crate::settings::catalog::{ARTIFACT_MAX_FILE_KEY, ARTIFACT_QUOTA_KEY, AgentRole, descriptor};
 use crate::settings::model::{chain, current_chain};
 use lifecycle::{Readers, StreamPurpose, Streams};
 use serde_json::{Value, json};
@@ -155,6 +178,9 @@ pub const READ_WINDOW: usize = 65536;
 pub const SHARED_REFERENCES_REMAIN: &str = "SharedReferencesRemain";
 /// Fault target kind of a save refused by the project's storage limit (nothing was deleted).
 pub const QUOTA_TARGET: &str = "artifact_storage_quota";
+/// Fault target kind of a delete, share, move or replacement refused because the artifact is a
+/// receipt's durable reply, retained while its receipt is retained (nothing changed).
+pub const RECEIPT_RETAINED: &str = "artifact_receipt_retained";
 
 // ---------------------------------------------------------------------------------------------
 // Refusals
@@ -269,6 +295,13 @@ impl AuthorizedScope {
             Self::Project(p) => p == project,
         }
     }
+    /// Whether the scope covers an artifact owner scope.
+    fn covers_scope(&self, scope: &ArtifactScope) -> bool {
+        match scope {
+            ArtifactScope::Project(p) => self.covers(p),
+            ArtifactScope::Workspace => *self == Self::Workspace,
+        }
+    }
 }
 
 /// The principal's reference scope from its current host binding: the user and the host act
@@ -291,16 +324,70 @@ pub fn authorized_scope(
     })
 }
 
-/// Whether an invocation may see `artifact`: a project-bound invocation sees what its project
-/// owns or was shared; a workspace invocation sees every project's artifacts.
-fn visible(
+/// Who is looking at artifacts: the invocation, and whether its principal is the unconfined
+/// workspace coordinator (resolved from its current host binding).
+#[derive(Clone, Copy, Debug)]
+pub struct Viewer<'a> {
+    ctx: &'a InvocationContext,
+    coordinator: bool,
+}
+impl<'a> Viewer<'a> {
+    pub fn resolve(
+        authority: &dyn AuthorityRead,
+        ctx: &'a InvocationContext,
+    ) -> Result<Self, StorageError> {
+        let coordinator = ctx.principal_kind() == PrincipalKind::Agent
+            && authority.principal(ctx.principal())?.is_some_and(|b| {
+                b.active
+                    && b.kind == PrincipalKind::Agent
+                    && b.role == Some(AgentRole::WorkspaceCoordinator)
+                    && b.project_id.is_none()
+            });
+        Ok(Self { ctx, coordinator })
+    }
+    /// The workspace-level audience of what `owner` owns: the owner itself, the user, the host
+    /// and the unconfined workspace coordinator.
+    fn sees_owned(&self, owner: Option<&crate::protocol::ActorId>) -> bool {
+        matches!(
+            self.ctx.principal_kind(),
+            PrincipalKind::Human | PrincipalKind::Host
+        ) || self.coordinator
+            || owner == Some(self.ctx.principal())
+    }
+}
+
+/// Whether an invocation may see `artifact`. A project-bound invocation sees what its project
+/// owns or was shared; a workspace invocation sees every project's artifacts and the workspace
+/// artifacts its principal belongs to the audience of. A receipt reply is seen only by its
+/// receipt's principal and the workspace audience, within the same scope rules.
+pub(crate) fn visible(
     read: &dyn crate::ports::storage::ArtifactRead,
-    ctx: &InvocationContext,
+    viewer: &Viewer<'_>,
     artifact: &StoredArtifact,
 ) -> Result<bool, StorageError> {
-    Ok(match ctx.project_id() {
-        None => true,
-        Some(p) => &artifact.current_project_id == p || read.shares(&artifact.id)?.contains(p),
+    visible_in(read, viewer, artifact, viewer.ctx.project_id())
+}
+
+/// [`visible`] for work of `project` (`None`: the workspace) rather than the invocation's own
+/// project, for references a session or a work item records.
+pub(crate) fn visible_in(
+    read: &dyn crate::ports::storage::ArtifactRead,
+    viewer: &Viewer<'_>,
+    artifact: &StoredArtifact,
+    project: Option<&ProjectId>,
+) -> Result<bool, StorageError> {
+    if artifact.retention == ArtifactRetention::Receipt
+        && !viewer.sees_owned(artifact.owner.as_ref())
+    {
+        return Ok(false);
+    }
+    Ok(match (project, &artifact.scope) {
+        (None, ArtifactScope::Project(_)) => true,
+        (None, ArtifactScope::Workspace) => viewer.sees_owned(artifact.owner.as_ref()),
+        (Some(p), ArtifactScope::Project(owner)) => {
+            owner == p || read.shares(&artifact.id)?.contains(p)
+        }
+        (Some(p), ArtifactScope::Workspace) => read.shares(&artifact.id)?.contains(p),
     })
 }
 
@@ -319,12 +406,24 @@ fn require_project(ctx: &InvocationContext, project: &ProjectId) -> Result<(), R
 /// The live artifact `id` if this invocation may see it (otherwise `NotFound`).
 fn visible_artifact(
     read: &dyn crate::ports::storage::ArtifactRead,
-    ctx: &InvocationContext,
+    viewer: &Viewer<'_>,
     id: &Id,
 ) -> Result<StoredArtifact, Failure> {
     match read.artifact(id)? {
-        Some(a) if a.state == ArtifactState::Live && visible(read, ctx, &a)? => Ok(a),
+        Some(a) if a.state == ArtifactState::Live && visible(read, viewer, &a)? => Ok(a),
         _ => Err(not_found("artifact", id).into()),
+    }
+}
+
+/// A receipt's reply is never deleted, shared, moved or replaced through the artifact use cases.
+fn require_explicit(artifact: &StoredArtifact) -> Result<(), Refusal> {
+    match artifact.retention {
+        ArtifactRetention::Explicit => Ok(()),
+        ArtifactRetention::Receipt => Err(Refusal::new(
+            DomainErrorCode::Conflict,
+            RECEIPT_RETAINED,
+            Some(artifact.id.clone()),
+        )),
     }
 }
 
@@ -361,7 +460,7 @@ fn setting_i64(
         .unwrap_or(0))
 }
 
-/// Visible storage status of one project (ART-04/05): usage against its limit.
+/// Visible storage status of one scope (ART-04/05): usage against its limit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageStatus {
     pub used_bytes: i64,
@@ -407,8 +506,11 @@ fn record(
         artifact: version_ref(v),
         name: label(&a.title),
         created_at_ms: counter(a.created_at_ms),
-        scope: DataScope::Project {
-            project_id: a.current_project_id.clone(),
+        scope: match &a.scope {
+            ArtifactScope::Project(p) => DataScope::Project {
+                project_id: p.clone(),
+            },
+            ArtifactScope::Workspace => DataScope::Workspace,
         },
         reference_count: counter(references as i64),
     })
@@ -459,7 +561,7 @@ fn event(
     tx.history().append(NewEvent {
         id,
         actor: ctx.principal().clone(),
-        project_id: Some(artifact.current_project_id.clone()),
+        project_id: artifact.scope.project().cloned(),
         root_id: root,
         operation_id: operation,
         aggregate_kind: aggregate_kind.into(),
@@ -721,52 +823,20 @@ impl ArtifactService {
             "projectId": project.0.as_str(),
             "source": source_json(source),
         });
-        let args = sha256_hex(payload.to_string().as_bytes());
-        let (operation, fence) = env.write(move |tx| {
-            let id = OperationId(tx.new_id(IdKind::Operation));
-            tx.operations().record_intent(NewOperation {
-                id: id.clone(),
-                root_id: None,
-                assignment_id: None,
-                capability: STAGE_CAPABILITY.into(),
-                schema_version: 1,
-                args_digest: args,
-                payload,
-            })?;
-            let attempt = tx
-                .operations()
-                .begin_attempt(&id, 1, AttemptBinding::default())?;
-            tx.operations().transition(
-                &id,
-                2,
-                Some(&attempt.fence()),
-                OperationState::Dispatching,
-                Some(json!({"step": "staging"})),
-            )?;
-            Ok((id, attempt.fence()))
-        })?;
-        let staging = StagingRef {
-            operation_id: operation.clone(),
-            fence: fence.clone(),
-            digest: digest.clone(),
-            byte_count: expected_bytes,
+        let mut reader = Stoppable {
+            inner: &mut *file,
+            env,
+            clock: &*self.clock,
         };
-        let staging_name = format!("{}.part", operation.0.as_str());
-        let published = {
-            let mut source = Stoppable {
-                inner: &mut *file,
-                env,
-                clock: &*self.clock,
-            };
-            self.files.publish(
-                &staging_name,
-                &mut source,
-                &digest,
-                expected_bytes as u64,
-                reuse.as_deref(),
-                operation.0.as_str(),
-            )
-        };
+        let (staging, published) = self.journal_and_publish(
+            env,
+            &mut reader,
+            &digest,
+            expected_bytes,
+            reuse.as_deref(),
+            payload,
+        )?;
+        let (operation, fence) = (staging.operation_id.clone(), staging.fence.clone());
         let published = match published {
             Ok(p) => p,
             Err(fault) => {
@@ -819,14 +889,79 @@ impl ArtifactService {
         }))
     }
 
-    /// The project's storage status for the Settings/Artifacts views.
+    /// Journals a staging operation (`Dispatching` in its own small write) and publishes `source`
+    /// as that operation's new generation of `digest` (or verifies and reuses `reuse`). The
+    /// publication outcome is returned with the staging reference; on a failure the caller
+    /// resolves the operation.
+    fn journal_and_publish(
+        &self,
+        env: &Preparation<'_>,
+        source: &mut dyn std::io::Read,
+        digest: &str,
+        expected_bytes: i64,
+        reuse: Option<&str>,
+        payload: Value,
+    ) -> Result<
+        (
+            StagingRef,
+            Result<crate::ports::files::PublishedBlob, FileFault>,
+        ),
+        StorageError,
+    > {
+        let args = sha256_hex(payload.to_string().as_bytes());
+        let (operation, fence) = env.write(move |tx| {
+            let id = OperationId(tx.new_id(IdKind::Operation));
+            tx.operations().record_intent(NewOperation {
+                id: id.clone(),
+                root_id: None,
+                assignment_id: None,
+                capability: STAGE_CAPABILITY.into(),
+                schema_version: 1,
+                args_digest: args,
+                payload,
+            })?;
+            let attempt = tx
+                .operations()
+                .begin_attempt(&id, 1, AttemptBinding::default())?;
+            tx.operations().transition(
+                &id,
+                2,
+                Some(&attempt.fence()),
+                OperationState::Dispatching,
+                Some(json!({"step": "staging"})),
+            )?;
+            Ok((id, attempt.fence()))
+        })?;
+        let staging = StagingRef {
+            operation_id: operation.clone(),
+            fence,
+            digest: digest.to_owned(),
+            byte_count: expected_bytes,
+        };
+        let published = self.files.publish(
+            &format!("{}.part", operation.0.as_str()),
+            source,
+            digest,
+            expected_bytes as u64,
+            reuse,
+            operation.0.as_str(),
+        );
+        Ok((staging, published))
+    }
+
+    /// A scope's storage status for the Settings/Artifacts views: a project's against its limit,
+    /// the workspace's against the workspace-level limit.
     pub fn storage_status(
         &self,
         snapshot: &dyn ReadSnapshot,
-        project: &ProjectId,
+        scope: &ArtifactScope,
     ) -> Result<StorageStatus, Failure> {
-        let used = snapshot.artifacts().project_usage(project)?;
-        let quota = setting_i64(snapshot.configuration(), Some(project), ARTIFACT_QUOTA_KEY)?;
+        let used = usage(snapshot.artifacts(), scope)?;
+        let quota = setting_i64(
+            snapshot.configuration(),
+            scope.project(),
+            ARTIFACT_QUOTA_KEY,
+        )?;
         let max = setting_i64(snapshot.configuration(), None, ARTIFACT_MAX_FILE_KEY)?;
         Ok(StorageStatus {
             used_bytes: used,
@@ -993,10 +1128,26 @@ fn new_version(
     }
 }
 
-fn check_quota(tx: &mut dyn WriteTransaction, project: &ProjectId) -> Result<(), Failure> {
-    let quota = setting_i64(tx.configuration(), Some(project), ARTIFACT_QUOTA_KEY)?;
-    if quota > 0 && tx.artifacts().project_usage(project)? > quota {
-        return Err(quota_refusal(project).into());
+/// Bytes a scope holds.
+fn usage(
+    read: &dyn crate::ports::storage::ArtifactRead,
+    scope: &ArtifactScope,
+) -> Result<i64, StorageError> {
+    match scope {
+        ArtifactScope::Project(p) => read.project_usage(p),
+        ArtifactScope::Workspace => read.workspace_usage(),
+    }
+}
+
+fn check_quota(tx: &mut dyn WriteTransaction, scope: &ArtifactScope) -> Result<(), Failure> {
+    let quota = setting_i64(tx.configuration(), scope.project(), ARTIFACT_QUOTA_KEY)?;
+    if quota > 0 && usage(tx.artifacts(), scope)? > quota {
+        return Err(Refusal::new(
+            DomainErrorCode::CapacityWait,
+            QUOTA_TARGET,
+            scope.project().map(|p| p.0.clone()),
+        )
+        .into());
     }
     Ok(())
 }
@@ -1050,11 +1201,13 @@ impl ArtifactService {
         let artifact_id = tx.new_id(IdKind::Artifact);
         let mut artifact = StoredArtifact {
             id: artifact_id.clone(),
-            origin_project_id: project_id.clone(),
+            origin_project_id: Some(project_id.clone()),
             origin_work_id: ctx.root_id().cloned(),
             title: title.clone(),
             revision: 1,
-            current_project_id: project_id.clone(),
+            scope: ArtifactScope::Project(project_id.clone()),
+            owner: None,
+            retention: ArtifactRetention::Explicit,
             scope_revision: 1,
             reference_revision: 1,
             current_version_id: None,
@@ -1080,7 +1233,7 @@ impl ArtifactService {
         for link in origin_links(ctx, &version.id) {
             tx.artifacts().add_link(&link)?;
         }
-        check_quota(tx, project_id)?;
+        check_quota(tx, &artifact.scope)?;
         complete_operation(
             tx,
             &staged.operation_id,
@@ -1124,7 +1277,8 @@ impl ArtifactService {
         else {
             return Err(unsupported().into());
         };
-        let mut artifact = visible_artifact(tx.artifacts(), ctx, artifact_id)?;
+        let viewer = Viewer::resolve(tx.authority(), ctx)?;
+        let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
         live_version(tx.artifacts(), &artifact, version_id)?;
         if expected_revision.get() != artifact.reference_revision {
             return Err(conflict(
@@ -1136,7 +1290,7 @@ impl ArtifactService {
             ));
         }
         let key = SubjectKey::of(subject);
-        let mut projects = vec![artifact.current_project_id.clone()];
+        let mut projects: Vec<ProjectId> = artifact.scope.project().cloned().into_iter().collect();
         projects.extend(tx.artifacts().shares(artifact_id)?);
         let mut found = false;
         for p in &projects {
@@ -1199,6 +1353,7 @@ impl ArtifactService {
         deletion: &ArtifactDeletion,
     ) -> Result<DomainDecision, Failure> {
         let scope = authorized_scope(tx.authority(), ctx)?;
+        let viewer = Viewer::resolve(tx.authority(), ctx)?;
         let summary = |id: &Id, revision: i64, changed: bool| MutationSummary {
             id: id.clone(),
             revision: rev(revision),
@@ -1211,8 +1366,9 @@ impl ArtifactService {
                 expected_revision,
                 expected_reference_revision,
             } => {
-                let mut artifact = visible_artifact(tx.artifacts(), ctx, artifact_id)?;
+                let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
                 let version = live_version(tx.artifacts(), &artifact, version_id)?;
+                require_explicit(&artifact)?;
                 self.check_revisions(&artifact, expected_revision, expected_reference_revision)?;
                 self.authorize_reference_set(tx, &artifact, &scope)?;
                 let now = tx.now_ms();
@@ -1256,7 +1412,8 @@ impl ArtifactService {
                 expected_reference_revision,
                 expected_versions_digest,
             } => {
-                let mut artifact = visible_artifact(tx.artifacts(), ctx, artifact_id)?;
+                let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
+                require_explicit(&artifact)?;
                 self.check_revisions(&artifact, expected_revision, expected_reference_revision)?;
                 let versions = tx.artifacts().versions(artifact_id)?;
                 if versions_digest(&versions) != String::from(expected_versions_digest.clone()) {
@@ -1306,7 +1463,8 @@ impl ArtifactService {
                 project_id,
                 expected_reference_revision,
             } => {
-                let mut artifact = visible_artifact(tx.artifacts(), ctx, artifact_id)?;
+                let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
+                require_explicit(&artifact)?;
                 if expected_reference_revision.get() != artifact.reference_revision {
                     return Err(conflict(
                         RevisionDimension::Reference,
@@ -1324,7 +1482,7 @@ impl ArtifactService {
                     )
                     .into());
                 }
-                if &artifact.current_project_id == project_id {
+                if artifact.scope.project() == Some(project_id) {
                     // Detach never deletes: the owning project's reference is removed only by an
                     // explicit deletion (or a documents move).
                     return Err(Refusal::new(
@@ -1389,17 +1547,18 @@ impl ArtifactService {
         Ok(())
     }
 
-    /// Global deletion needs authority over every project with a live reference; otherwise it is
-    /// `SharedReferencesRemain` with no other projects disclosed, and nothing changes.
+    /// Global deletion needs authority over the owner scope and every project with a live
+    /// reference; otherwise it is `SharedReferencesRemain` with no other scope disclosed, and
+    /// nothing changes. A workspace artifact's owner scope is covered only by workspace-wide
+    /// authority.
     fn authorize_reference_set(
         &self,
         tx: &mut dyn WriteTransaction,
         artifact: &StoredArtifact,
         scope: &AuthorizedScope,
     ) -> Result<(), Failure> {
-        let mut projects = vec![artifact.current_project_id.clone()];
-        projects.extend(tx.artifacts().shares(&artifact.id)?);
-        if projects.iter().all(|p| scope.covers(p)) {
+        let projects = tx.artifacts().shares(&artifact.id)?;
+        if scope.covers_scope(&artifact.scope) && projects.iter().all(|p| scope.covers(p)) {
             return Ok(());
         }
         Err(Refusal::new(
@@ -1528,7 +1687,8 @@ impl ArtifactService {
         version_id: &Id,
     ) -> Result<(StoredArtifact, StoredVersion, bool), Failure> {
         let read = snapshot.artifacts();
-        let artifact = visible_artifact(read, ctx, artifact_id)?;
+        let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
+        let artifact = visible_artifact(read, &viewer, artifact_id)?;
         if version_id.as_str().starts_with("pv-") {
             let source = read
                 .versions(artifact_id)?

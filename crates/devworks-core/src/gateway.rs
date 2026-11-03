@@ -10,7 +10,8 @@
 //!    and principal check → receipt lookup (equal fingerprint replays, a different fingerprint is
 //!    `IdempotencyConflict`, an incompatible stored record is a visible hold) → the use case's
 //!    current-state reads/CAS and decision against transaction-scoped repositories → grant
-//!    consumption → `CommandDecided` history → receipt. Domain changes, outbox intents, consumed
+//!    consumption → `CommandDecided` history → receipt → the receipt's reply publication intent
+//!    ([`crate::services::artifacts::replies`]). Domain changes, outbox intents, consumed
 //!    grants, history and receipt commit together or not at all;
 //! 5. `Recorded` only after the commit is confirmed; a lost acknowledgment is
 //!    `CommandStatusUnknown`, resolved by resubmitting the same command/key (receipt lookup).
@@ -30,9 +31,9 @@ use crate::ports::storage::{
     CommandLedger, CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter,
     EventPage, EventRecord, GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead,
     LedgerEntry, NewAuthorityGrant, NewEvent, NewGrant, NewPrincipalBinding, OperationJournal,
-    PackageHandlerLedger, PrincipalBinding, ReadOptions, RegisteredRepository, RevisionConflict,
-    Savepoint, SessionRepository, StorageError, StoreInfo, WriteOptions, WriteTransaction,
-    read_snapshot, run_write,
+    PackageHandlerLedger, PrincipalBinding, ReadOptions, ReceiptReply, RegisteredRepository,
+    RevisionConflict, Savepoint, SessionRepository, StorageError, StoreInfo, WriteOptions,
+    WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
@@ -790,8 +791,9 @@ fn unit_of_work(
     // The decision is attached to the work it acted on (HISTORY-02), so a work item's history
     // shows every command decided on it, from the UI or an agent alike.
     let scope = decision_scope(tx, ctx, &command.targets, decided.operation_id.as_ref())?;
+    let reply_owner = scope.project.clone();
     let sequence = tx.history().append(NewEvent {
-        id: event_id,
+        id: event_id.clone(),
         actor: ctx.principal().clone(),
         project_id: scope.project,
         root_id: scope.root,
@@ -828,6 +830,14 @@ fn unit_of_work(
             fingerprint: command.fingerprint.clone(),
             receipt: receipt.clone(),
         },
+    )?;
+    // The receipt's durable typed reply is published after commit; its intent commits here.
+    crate::services::artifacts::replies::record_intent(
+        tx,
+        &command.identity,
+        &receipt.command_id,
+        &event_id,
+        reply_owner.as_ref(),
     )?;
     Ok(Unit::Recorded(receipt))
 }
@@ -999,9 +1009,15 @@ impl CommandLedgerRead for HandlerTx<'_> {
     fn lookup(&self, _: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError> {
         Err(ledger_owned())
     }
+    fn reply(&self, _: &ReceiptIdentity) -> Result<Option<ReceiptReply>, StorageError> {
+        Err(ledger_owned())
+    }
 }
 impl CommandLedger for HandlerTx<'_> {
     fn record(&mut self, _: &ReceiptIdentity, _: &StoredReceipt) -> Result<(), StorageError> {
+        Err(ledger_owned())
+    }
+    fn record_reply(&mut self, _: &ReceiptIdentity, _: &ReceiptReply) -> Result<(), StorageError> {
         Err(ledger_owned())
     }
 }

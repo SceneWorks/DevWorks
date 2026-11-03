@@ -522,8 +522,21 @@ pub enum LedgerEntry {
         reason: String,
     },
 }
+/// The published durable typed reply of one receipt: its immutable reply artifact version and
+/// the schema reference the reply bytes conform to, recorded once after the receipt commits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceiptReply {
+    pub command_id: crate::protocol::CommandId,
+    pub artifact_id: crate::protocol::Id,
+    pub version_id: crate::protocol::Id,
+    /// The `SchemaRef` (wire form) fixed at publication.
+    pub schema: Value,
+    pub published_at_ms: i64,
+}
 pub trait CommandLedgerRead {
     fn lookup(&self, identity: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError>;
+    /// The published reply of the receipt at `identity`, if it was published.
+    fn reply(&self, identity: &ReceiptIdentity) -> Result<Option<ReceiptReply>, StorageError>;
 }
 pub trait CommandLedger: CommandLedgerRead {
     /// Inserts a decided receipt. Identity `(actor, scopeKey, requestKey)` is unique. Only the
@@ -532,6 +545,14 @@ pub trait CommandLedger: CommandLedgerRead {
         &mut self,
         identity: &ReceiptIdentity,
         receipt: &StoredReceipt,
+    ) -> Result<(), StorageError>;
+    /// Records the published reply of an existing receipt, once: a second reply for the same
+    /// receipt, command or artifact is [`StorageError::Duplicate`]. Only the receipt reply
+    /// publisher records it: the transaction a use case receives refuses this call.
+    fn record_reply(
+        &mut self,
+        identity: &ReceiptIdentity,
+        reply: &ReceiptReply,
     ) -> Result<(), StorageError>;
 }
 

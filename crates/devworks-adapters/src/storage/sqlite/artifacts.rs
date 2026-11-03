@@ -3,7 +3,7 @@
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{Id, OperationId, ProjectId, RootId};
+use devworks_core::protocol::{ActorId, Id, OperationId, ProjectId, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 
@@ -26,55 +26,73 @@ fn bounded(limit: u16) -> Result<i64, StorageError> {
     Ok(limit as i64)
 }
 
-const ARTIFACT_COLUMNS: &str = "id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,reference_revision,current_version_id,state,created_at,provenance_json";
-type ArtifactRaw = (
-    String,
-    String,
-    Option<String>,
-    String,
-    i64,
-    String,
-    i64,
-    i64,
-    Option<String>,
-    String,
-    i64,
-    String,
-);
+const ARTIFACT_COLUMNS: &str = "id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,reference_revision,current_version_id,state,created_at,provenance_json,scope_kind,owner_actor_id,retention";
+struct ArtifactRaw {
+    id: String,
+    origin: Option<String>,
+    work: Option<String>,
+    title: String,
+    revision: i64,
+    current: Option<String>,
+    scope_revision: i64,
+    reference_revision: i64,
+    version: Option<String>,
+    state: String,
+    created_at: i64,
+    provenance: String,
+    scope_kind: String,
+    owner: Option<String>,
+    retention: String,
+}
 fn artifact_row(r: &Row<'_>) -> rusqlite::Result<ArtifactRaw> {
-    Ok((
-        r.get(0)?,
-        r.get(1)?,
-        r.get(2)?,
-        r.get(3)?,
-        r.get(4)?,
-        r.get(5)?,
-        r.get(6)?,
-        r.get(7)?,
-        r.get(8)?,
-        r.get(9)?,
-        r.get(10)?,
-        r.get(11)?,
-    ))
+    Ok(ArtifactRaw {
+        id: r.get(0)?,
+        origin: r.get(1)?,
+        work: r.get(2)?,
+        title: r.get(3)?,
+        revision: r.get(4)?,
+        current: r.get(5)?,
+        scope_revision: r.get(6)?,
+        reference_revision: r.get(7)?,
+        version: r.get(8)?,
+        state: r.get(9)?,
+        created_at: r.get(10)?,
+        provenance: r.get(11)?,
+        scope_kind: r.get(12)?,
+        owner: r.get(13)?,
+        retention: r.get(14)?,
+    })
 }
 fn artifact_of(raw: ArtifactRaw) -> Result<StoredArtifact, StorageError> {
-    let (id, origin, work, title, revision, current, scope, reference, version, state, at, prov) =
-        raw;
+    let scope = match (raw.scope_kind.as_str(), raw.current) {
+        ("Project", Some(p)) => ArtifactScope::Project(ProjectId(id_of(p)?)),
+        ("Workspace", None) => ArtifactScope::Workspace,
+        (kind, _) => return Err(corrupt(format!("stored artifact scope {kind}"))),
+    };
     Ok(StoredArtifact {
-        id: id_of(id)?,
-        origin_project_id: ProjectId(id_of(origin)?),
-        origin_work_id: work.map(id_of).transpose()?.map(RootId),
-        title,
-        revision,
-        current_project_id: ProjectId(id_of(current)?),
-        scope_revision: scope,
-        reference_revision: reference,
-        current_version_id: version.map(id_of).transpose()?,
-        state: ArtifactState::parse(&state)
-            .ok_or_else(|| corrupt(format!("stored artifact state {state}")))?,
-        created_at_ms: at,
-        provenance: json_of(&prov)?,
+        id: id_of(raw.id)?,
+        origin_project_id: raw.origin.map(id_of).transpose()?.map(ProjectId),
+        origin_work_id: raw.work.map(id_of).transpose()?.map(RootId),
+        title: raw.title,
+        revision: raw.revision,
+        scope,
+        owner: raw.owner.map(id_of).transpose()?.map(ActorId),
+        retention: ArtifactRetention::parse(&raw.retention)
+            .ok_or_else(|| corrupt(format!("stored artifact retention {}", raw.retention)))?,
+        scope_revision: raw.scope_revision,
+        reference_revision: raw.reference_revision,
+        current_version_id: raw.version.map(id_of).transpose()?,
+        state: ArtifactState::parse(&raw.state)
+            .ok_or_else(|| corrupt(format!("stored artifact state {}", raw.state)))?,
+        created_at_ms: raw.created_at,
+        provenance: json_of(&raw.provenance)?,
     })
+}
+fn scope_columns(scope: &ArtifactScope) -> (&'static str, Option<&str>) {
+    match scope {
+        ArtifactScope::Project(p) => ("Project", Some(p.0.as_str())),
+        ArtifactScope::Workspace => ("Workspace", None),
+    }
 }
 
 const VERSION_COLUMNS: &str = "v.id,v.artifact_id,v.version_no,v.blob_digest,b.byte_count,v.media_type,v.created_at,v.deleted_at,v.source_json,b.generation";
@@ -232,7 +250,7 @@ fn list(
     };
     let mut s = db(conn.prepare_cached(&format!(
         "SELECT {ARTIFACT_COLUMNS} FROM artifacts a
-         WHERE a.state='Live' AND a.current_version_id IS NOT NULL
+         WHERE a.state='Live' AND a.current_version_id IS NOT NULL AND a.retention='Explicit'
            AND (a.current_project_id=?1 OR EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND s.project_id=?1))
            AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
          ORDER BY a.created_at DESC, a.id DESC LIMIT ?4"
@@ -414,6 +432,15 @@ macro_rules! artifact_reads {
                     [project.0.as_str()],
                 )
             }
+            fn workspace_usage(&self) -> Result<i64, StorageError> {
+                count(
+                    self.conn,
+                    "SELECT COALESCE(SUM(b.byte_count),0) FROM blobs b WHERE b.digest IN (
+                       SELECT v.blob_digest FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id
+                       WHERE a.scope_kind='Workspace' AND v.deleted_at IS NULL)",
+                    [],
+                )
+            }
             fn unresolved_staging(
                 &self,
                 after: Option<&OperationId>,
@@ -508,7 +535,17 @@ impl ArtifactRepository for Unit<'_> {
         if !a.provenance.is_object() {
             return Err(invalid("artifact provenance must be a JSON object"));
         }
-        for project in [&a.origin_project_id, &a.current_project_id] {
+        if a.owner.is_none()
+            && (a.scope == ArtifactScope::Workspace || a.retention == ArtifactRetention::Receipt)
+        {
+            return Err(invalid(
+                "a workspace artifact or a receipt reply needs an owning principal",
+            ));
+        }
+        for project in [a.origin_project_id.as_ref(), a.scope.project()]
+            .into_iter()
+            .flatten()
+        {
             if !exists(
                 self.conn,
                 "SELECT 1 FROM projects WHERE id=?1",
@@ -520,17 +557,32 @@ impl ArtifactRepository for Unit<'_> {
                 });
             }
         }
-        if let Some(w) = &a.origin_work_id
+        if let Some(owner) = &a.owner
             && !exists(
                 self.conn,
-                "SELECT 1 FROM work_items WHERE id=?1 AND project_id=?2",
-                [w.0.as_str(), a.origin_project_id.0.as_str()],
+                "SELECT 1 FROM actors WHERE id=?1",
+                [owner.0.as_str()],
             )?
         {
             return Err(StorageError::NotFound {
-                kind: "work_item",
-                id: w.0.as_str().to_owned(),
+                kind: "actor",
+                id: owner.0.as_str().to_owned(),
             });
+        }
+        if let Some(w) = &a.origin_work_id {
+            let Some(origin) = &a.origin_project_id else {
+                return Err(invalid("an origin work item needs its origin project"));
+            };
+            if !exists(
+                self.conn,
+                "SELECT 1 FROM work_items WHERE id=?1 AND project_id=?2",
+                [w.0.as_str(), origin.0.as_str()],
+            )? {
+                return Err(StorageError::NotFound {
+                    kind: "work_item",
+                    id: w.0.as_str().to_owned(),
+                });
+            }
         }
         if artifact(self.conn, &a.id)?.is_some() {
             return Err(StorageError::Duplicate {
@@ -538,22 +590,26 @@ impl ArtifactRepository for Unit<'_> {
                 id: a.id.as_str().to_owned(),
             });
         }
+        let (scope_kind, current) = scope_columns(&a.scope);
         db(db(self.conn.prepare_cached(&format!(
-            "INSERT INTO artifacts({ARTIFACT_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"
+            "INSERT INTO artifacts({ARTIFACT_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)"
         )))?
         .execute(params![
             a.id.as_str(),
-            a.origin_project_id.0.as_str(),
+            a.origin_project_id.as_ref().map(|p| p.0.as_str()),
             a.origin_work_id.as_ref().map(|w| w.0.as_str()),
             a.title,
             a.revision,
-            a.current_project_id.0.as_str(),
+            current,
             a.scope_revision,
             a.reference_revision,
             a.current_version_id.as_ref().map(Id::as_str),
             a.state.as_str(),
             a.created_at_ms,
             a.provenance.to_string(),
+            scope_kind,
+            a.owner.as_ref().map(|o| o.0.as_str()),
+            a.retention.as_str(),
         ]))?;
         Ok(())
     }
@@ -595,18 +651,32 @@ impl ArtifactRepository for Unit<'_> {
     }
 
     fn update_artifact(&mut self, a: &StoredArtifact) -> Result<(), StorageError> {
+        if let Some(p) = a.scope.project()
+            && !exists(
+                self.conn,
+                "SELECT 1 FROM projects WHERE id=?1",
+                [p.0.as_str()],
+            )?
+        {
+            return Err(StorageError::NotFound {
+                kind: "project",
+                id: p.0.as_str().to_owned(),
+            });
+        }
+        let (scope_kind, current) = scope_columns(&a.scope);
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE artifacts SET title=?1,revision=?2,current_project_id=?3,scope_revision=?4,reference_revision=?5,current_version_id=?6,state=?7 WHERE id=?8",
+            "UPDATE artifacts SET title=?1,revision=?2,current_project_id=?3,scope_revision=?4,reference_revision=?5,current_version_id=?6,state=?7,scope_kind=?9 WHERE id=?8",
         ))?
         .execute(params![
             a.title,
             a.revision,
-            a.current_project_id.0.as_str(),
+            current,
             a.scope_revision,
             a.reference_revision,
             a.current_version_id.as_ref().map(Id::as_str),
             a.state.as_str(),
             a.id.as_str(),
+            scope_kind,
         ]))?;
         if n != 1 {
             return Err(StorageError::NotFound {

@@ -13,7 +13,7 @@
 //! collectible.
 use super::StorageError;
 use crate::protocol::shared::Subject;
-use crate::protocol::{Id, OperationId, ProjectId, RootId};
+use crate::protocol::{ActorId, Id, OperationId, ProjectId, RootId};
 use serde_json::Value;
 
 /// Journal capability of a staged artifact file publication.
@@ -99,19 +99,69 @@ impl ArtifactState {
     }
 }
 
+/// Who owns an artifact: a project, or the workspace (no project). A workspace artifact always
+/// has an owning principal ([`StoredArtifact::owner`]); it is visible to that principal, the
+/// user and the host, and the workspace coordinator, and to a project only once shared with it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ArtifactScope {
+    Project(ProjectId),
+    Workspace,
+}
+impl ArtifactScope {
+    pub fn project(&self) -> Option<&ProjectId> {
+        match self {
+            Self::Project(p) => Some(p),
+            Self::Workspace => None,
+        }
+    }
+}
+
+/// How long an artifact is kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArtifactRetention {
+    /// Kept until explicitly deleted (ART-05).
+    Explicit,
+    /// The durable typed reply of a command receipt: system-owned, immutable and retained while
+    /// its receipt is retained. It is never deleted, shared, moved or replaced through the
+    /// artifact use cases, and only the receipt's principal (with the user, the host and the
+    /// workspace coordinator) sees it.
+    Receipt,
+}
+impl ArtifactRetention {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "Explicit",
+            Self::Receipt => "Receipt",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "Explicit" => Some(Self::Explicit),
+            "Receipt" => Some(Self::Receipt),
+            _ => None,
+        }
+    }
+}
+
 /// One artifact: stable identity, origin and scope. Its versions are separate immutable rows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredArtifact {
     pub id: Id,
-    /// Project the artifact was created in; never changes (later reuse preserves it).
-    pub origin_project_id: ProjectId,
+    /// Project the artifact was created in (`None` for one created in the workspace scope);
+    /// never changes (later reuse preserves it).
+    pub origin_project_id: Option<ProjectId>,
     /// Work item (feature, issue or task root) that produced it, when the host lineage named one.
     pub origin_work_id: Option<RootId>,
     pub title: String,
     /// Positive; advances on every version publication or deletion.
     pub revision: i64,
-    /// Project that currently owns it (the origin unless the documents service moved it).
-    pub current_project_id: ProjectId,
+    /// The scope that currently owns it: a project (the origin unless the documents service moved
+    /// it) or the workspace.
+    pub scope: ArtifactScope,
+    /// The owning principal: required for the workspace scope and for receipt replies, `None`
+    /// for ordinary project artifacts (the project owns them).
+    pub owner: Option<ActorId>,
+    pub retention: ArtifactRetention,
     /// Advances whenever the set of projects that can see it changes.
     pub scope_revision: i64,
     /// Advances whenever its reference set (links, shares) changes.
@@ -247,7 +297,8 @@ pub trait ArtifactRead {
         operation: &OperationId,
     ) -> Result<Option<StoredVersion>, StorageError>;
     /// Live artifacts with a current version that `project` owns or is shared with, newest
-    /// first after `after`, at most `limit` (1..=500).
+    /// first after `after`, at most `limit` (1..=500). Receipt replies are not listed: they are
+    /// reached from their receipt.
     fn list(
         &self,
         project: &ProjectId,
@@ -274,6 +325,8 @@ pub trait ArtifactRead {
     ) -> Result<Vec<BlobRecord>, StorageError>;
     /// Bytes of distinct blobs named by live versions of artifacts `project` owns.
     fn project_usage(&self, project: &ProjectId) -> Result<i64, StorageError>;
+    /// Bytes of distinct blobs named by live versions of workspace-scoped artifacts.
+    fn workspace_usage(&self) -> Result<i64, StorageError>;
     /// Unresolved staging operations in ID order after `after`, at most `limit` (1..=500).
     fn unresolved_staging(
         &self,
@@ -304,11 +357,12 @@ pub trait ArtifactRepository: ArtifactRead {
         error: Option<&str>,
     ) -> Result<BlobRecord, StorageError>;
     /// Inserts a new artifact (its current version is set by [`Self::update_artifact`] after the
-    /// first version exists). The project and origin work item must exist.
+    /// first version exists). Its projects, origin work item and owner must exist; a workspace
+    /// artifact and a receipt reply need an owner.
     fn insert_artifact(&mut self, artifact: &StoredArtifact) -> Result<(), StorageError>;
     fn insert_version(&mut self, version: &StoredVersion) -> Result<(), StorageError>;
-    /// Replaces the mutable columns (title, revisions, current project/version, state). The
-    /// identity, origin, creation time and provenance never change.
+    /// Replaces the mutable columns (title, revisions, scope, current version, state). The
+    /// identity, origin, owner, retention, creation time and provenance never change.
     fn update_artifact(&mut self, artifact: &StoredArtifact) -> Result<(), StorageError>;
     /// Tombstones a live version at `at_ms`; an already tombstoned version is
     /// [`StorageError::InvalidRecord`].

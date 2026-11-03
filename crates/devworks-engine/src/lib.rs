@@ -35,11 +35,15 @@
 //!   epoch) without writing. A package process reaches it through [`AsyncDeliveryHandler`]: the
 //!   dispatcher keeps the claim live with a renewed lease while the handler runs and signals a
 //!   cancellation request. The package process host itself is a later item.
+//! * **Receipt replies.** [`replies::reply_consumer`] registers core's receipt reply publisher
+//!   as an asynchronous consumer: every recorded receipt's durable typed reply is published
+//!   after commit under the claim's fence, retried and recovered without duplicates.
 //!
 //! Nothing here establishes product acceptance: tests run the real SQLite adapter with injected
 //! clocks and scripted handlers, without inference, network or containers.
 pub mod dispatch;
 pub mod package;
+pub mod replies;
 mod store;
 
 pub use dispatch::{
