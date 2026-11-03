@@ -4,7 +4,6 @@
 //! decoded off the UI thread; content is never claimed to be analyzed.
 use crate::backend::{Backend, TaskOutput, resolve_command};
 use crate::ops;
-use devworks_core::protocol::CommandReply;
 use eframe::egui::ColorImage;
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -133,8 +132,9 @@ pub fn save(
     owned: Option<&Path>,
 ) -> Result<TaskOutput, String> {
     let outcome = resolve_command(backend, "artifacts.save", &frame);
-    if matches!(outcome, Ok(CommandReply::Recorded { .. }))
-        && let Some(p) = owned
+    // A recorded refusal (over the quota, say) stored nothing: the paste is kept.
+    if let Some(p) = owned
+        && ops::saved_artifact(outcome.clone()).is_ok()
     {
         remove_owned(p, &backend.scratch_dir());
     }

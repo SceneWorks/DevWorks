@@ -94,6 +94,12 @@ impl SettingsScreen {
                     let _ = view.edit(&k, v);
                 }
                 self.view = Some(view);
+                // A save replayed at launch can answer before the launch's own read; its
+                // follow-up read then builds the view and settles the save here.
+                if self.after_save {
+                    self.after_save = false;
+                    self.saving = false;
+                }
             }
             Some(view) if self.after_save => {
                 // Edits made while the save or this read were pending are not part of what

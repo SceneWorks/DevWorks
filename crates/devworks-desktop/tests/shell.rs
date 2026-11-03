@@ -437,6 +437,42 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
 // UI-08 / UI-09: attachments
 
 #[test]
+fn a_pasted_image_refused_by_the_artifact_quota_keeps_its_file() {
+    let root = Root::new("paste-refused");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let d = descriptor(devworks_core::settings::catalog::ARTIFACT_QUOTA_KEY).unwrap();
+    let body = json!({"scope": {"kind": "Workspace"}, "expectedRevision": "1", "entries": [
+        {"key": d.key, "value": {"schema": d.schema_ref(), "value": 1}}]});
+    ops::settings_saved(backend.command(
+        "settings.save_revision",
+        &ops::command_frame(&*backend, "settings.save_revision", body),
+    ))
+    .expect("a one-byte quota");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    let pasted = egui::ColorImage::new([3, 3], vec![egui::Color32::GREEN; 9]);
+    h.event(egui::Event::PasteImage(Arc::new(pasted)));
+    settle(&mut h);
+
+    let draft = h.state().chat.draft().expect("draft");
+    let [a] = draft.attachments.as_slice() else {
+        panic!("one attachment: {:?}", draft.attachments.len())
+    };
+    assert!(
+        matches!(a.state, devworks_desktop::chat::AttachState::Failed(_)),
+        "{:?}",
+        a.state
+    );
+    let path = a.path.clone().expect("the paste was materialized");
+    assert!(path.is_file(), "the refused paste is kept");
+}
+
+#[test]
 fn attachments_from_the_dialog_a_drop_and_a_paste_are_stored_with_their_conversation() {
     let root = Root::new("attach");
     let engine = start(&root);

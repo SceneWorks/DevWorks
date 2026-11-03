@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use devworks_core::protocol::provider::TranscriptBody;
-use devworks_desktop::backend::Backend;
+use devworks_desktop::backend::{Backend, Slot};
 use devworks_desktop::chat::{self, ATTACH_LABEL, AttachState, COMPOSER_LABEL, SEND_LABEL};
 use devworks_desktop::ops;
 use devworks_desktop::route::Route;
@@ -801,6 +801,48 @@ fn an_unknown_settings_save_survives_close_and_is_confirmed_at_the_next_launch()
     let mut keys = lossy.request_keys();
     keys.extend(again.request_keys());
     assert!(all_same(&keys), "{keys:?}");
+}
+
+#[test]
+fn a_replayed_settings_save_answered_before_the_first_read_still_finishes_saving() {
+    let root = Root::new("restart-settings-order");
+    let engine = start(&root);
+    let real = engine.backend();
+    let lossy = LoseAcks::over(real.clone(), "settings.save_revision", 4);
+    let script = Script::default();
+    script.folders.lock().unwrap().push(root.dir("repos"));
+    let mut h = harness(shell_over(lossy, &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(
+        &mut h,
+        Role::Button,
+        "Choose directory for Repository base directory",
+    );
+    click(&mut h, Role::Button, "Save changes");
+    h.state_mut().on_exit();
+    drop(h);
+    // The launch's settings read is held, so the replayed save answers first and its
+    // follow-up read supersedes the launch's: that read builds the view.
+    let read = Gate::new("settings.read_effective");
+    read.close();
+    let mut h = harness(
+        shell_over(read.over(real.clone()), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while h.state().client().unwrap().is_pending(&Slot::SettingsSave) {
+        assert!(std::time::Instant::now() < deadline, "the save is answered");
+        h.step();
+    }
+    h.step();
+    read.open();
+    settle(&mut h);
+    assert!(has_text(&h, "Revision 2"));
+    assert!(!has_text(&h, "unsaved change"));
+    assert!(!h.state().settings.saving, "the save finished");
+    assert!(!has_text(&h, "Not yet confirmed"));
 }
 
 #[test]
