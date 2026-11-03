@@ -1512,7 +1512,7 @@ impl ControlService {
         control_conflict(&control, input.expected_control_revision.get())?;
         // A stop still in progress answers itself, but only while the root still carries its
         // intent (paused, a human pause hold, no reactivation pending). A Continue since then
-        // is overridden: the stop is reapplied under the same journaled operation.
+        // is overridden: `stop_root` reapplies the stop under the same journaled operation.
         if let Some(op) = &control.stop_operation_id
             && let Some(rec) = tx.operations().operation(op)?
         {
@@ -1523,38 +1523,9 @@ impl ControlService {
             let intent = control.desired == DesiredExecution::Paused
                 && !control.reactivate
                 && paused_by_hold;
-            if !is_terminal(rec.state) && !intent {
-                self.pause_root(
-                    tx,
-                    ctx.principal(),
-                    &root,
-                    &control,
-                    StopCause::Stop,
-                    "Stopped",
-                )?;
-                let cancelled = self.cancel_root_deliveries(tx, &root.id)?;
-                let after = control_of(tx.runs(), &root.id)?;
-                record(
-                    tx,
-                    ctx.principal(),
-                    &root,
-                    Some(op),
-                    CONTROL_AGGREGATE,
-                    root.id.0.as_str(),
-                    after.revision,
-                    "RootStopReapplied",
-                    json!({"stopEpoch": after.stop_epoch, "cancelledDeliveries": cancelled}),
-                )?;
-                return Ok(Decided {
-                    decision: DomainDecision::Accepted {
-                        operation_id: op.clone(),
-                    },
-                    operation_id: Some(op.clone()),
-                });
-            }
             let live = tx.runs().live_activation(&root.id)?;
             let nothing_live = live.is_none() && !self.root_has_work(tx, &root.id)?;
-            if !is_terminal(rec.state) || (nothing_live && intent) {
+            if intent && (!is_terminal(rec.state) || nothing_live) {
                 return Ok(Decided {
                     decision: DomainDecision::NoChange {
                         result: OperationResult::RunsStop {
@@ -1636,6 +1607,37 @@ impl ControlService {
         cause: StopCause,
         reason: &str,
     ) -> Result<(OperationId, bool), StorageError> {
+        // One stop pointer per root, written only here: an unfinished stop (pending, or held
+        // with an unknown outcome) is reused and widened to this cause — paused again under a
+        // new stop epoch and generation, its root-scoped deliveries cancelled again — never
+        // overwritten, so its settlement and its reconciliation hold are never orphaned.
+        if let Some(op) = &control.stop_operation_id
+            && tx
+                .operations()
+                .operation(op)?
+                .is_some_and(|o| !is_terminal(o.state))
+        {
+            let op = op.clone();
+            self.pause_root(tx, actor, root, control, cause, reason)?;
+            let cancelled = self.cancel_root_deliveries(tx, &root.id)?;
+            let after = control_of(tx.runs(), &root.id)?;
+            record(
+                tx,
+                actor,
+                root,
+                Some(&op),
+                CONTROL_AGGREGATE,
+                root.id.0.as_str(),
+                after.revision,
+                "RootStopReapplied",
+                json!({
+                    "cause": cause.as_str(),
+                    "stopEpoch": after.stop_epoch,
+                    "cancelledDeliveries": cancelled,
+                }),
+            )?;
+            return Ok((op, false));
+        }
         let (mut after, hold) = self.pause_root(tx, actor, root, control, cause, reason)?;
         let cancelled = self.cancel_root_deliveries(tx, &root.id)?;
         let live = tx.runs().live_activation(&root.id)?;

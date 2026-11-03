@@ -159,6 +159,10 @@ pub struct RunSupervisor {
     pub stop_grace: Duration,
     /// The bound of one root's owned-tree stop.
     pub stop_bound: Duration,
+    /// Most pending stops one pass executes (1..=500). Passes rotate through every pending
+    /// stop from a cursor, so no root's stop waits behind others that stay pending.
+    pub stop_batch: u16,
+    stop_cursor: Mutex<Option<RootId>>,
     last: Mutex<Option<(Instant, i64)>>,
     stopping: AtomicBool,
     wake: Notify,
@@ -187,6 +191,8 @@ impl RunSupervisor {
             wake_jump_ms: 10_000,
             stop_grace: Duration::from_secs(5),
             stop_bound: Duration::from_secs(30),
+            stop_batch: 500,
+            stop_cursor: Mutex::new(None),
             last: Mutex::new(None),
             stopping: AtomicBool::new(false),
             wake: Notify::new(),
@@ -298,7 +304,29 @@ impl RunSupervisor {
     /// Executes every journaled stop still to be observed: the stop is marked dispatching, the
     /// launches and owned trees it covers are stopped (bounded), and the outcome is recorded.
     async fn execute_stops(&self) -> Result<Vec<(RootId, OperationState)>, StorageError> {
-        let pending = store::read(&self.store, |s| s.runs().pending_stops(None, 500)).await?;
+        let batch = self.stop_batch.clamp(1, 500);
+        let cursor = self
+            .stop_cursor
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let from = cursor.clone();
+        let mut pending = store::read(&self.store, move |s| {
+            s.runs().pending_stops(from.as_ref(), batch)
+        })
+        .await?;
+        if pending.is_empty() && cursor.is_some() {
+            // Past the last pending stop: wrap around to the first.
+            pending =
+                store::read(&self.store, move |s| s.runs().pending_stops(None, batch)).await?;
+        }
+        // A full page continues after its last root next pass; a short one starts over.
+        *self.stop_cursor.lock().unwrap_or_else(|p| p.into_inner()) =
+            if pending.len() == usize::from(batch) {
+                pending.last().map(|c| c.root_id.clone())
+            } else {
+                None
+            };
         let mut out = Vec::new();
         for c in pending {
             let Some(op) = c.stop_operation_id.clone() else {

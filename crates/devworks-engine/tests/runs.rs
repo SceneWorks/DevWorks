@@ -40,7 +40,7 @@ use devworks_core::services::sessions::SessionService;
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::{
     ActivationLauncher, Composition, Launch, LaunchEnd, LaunchFuture, RunComposition, RunGate,
-    RunSupervisor, RuntimeConfig, ShutdownStage, boot,
+    RunSupervisor, RunTick, RuntimeConfig, ShutdownStage, boot,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -3190,4 +3190,88 @@ fn trees_a_stop_could_not_verify_stay_held_after_a_continue() {
         .unwrap()
         .state;
     assert_eq!(state, OperationState::ObservedComplete);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes, round 5: one stop pointer per root, fair pending-stop passes
+
+#[test]
+fn archival_reuses_an_unfinished_stop_instead_of_orphaning_it() {
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let host = Arc::new(FakeHost::default());
+    host.stubborn.store(true, Ordering::SeqCst);
+    let (sup, processes) = supervisor(&fx, host.clone(), None);
+    let mut sup = Arc::try_unwrap(sup).ok().expect("the only handle");
+    sup.stop_grace = Duration::from_millis(20);
+    sup.stop_bound = Duration::from_millis(100);
+    let sup = Arc::new(sup);
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    let op = match decision(&fx.stop(&fx.user, "root-i")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("stop not accepted: {other:?}"),
+    };
+    let rt = runtime();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::OutcomeUnknown)]
+    );
+    // A second Stop answers the unfinished one unchanged.
+    let again = unchanged(&fx.stop(&fx.user, "root-i"));
+    assert_eq!(again["operationId"], op.0.as_str());
+    // Archival widens the unfinished stop rather than replacing it.
+    rt.block_on(sup.stop_project_now(&ProjectId(id("project-a"))))
+        .unwrap();
+    assert_eq!(fx.control("root-i").stop_operation_id, Some(op.clone()));
+    assert!(fx.events("root-i").iter().any(|k| k == "RootStopReapplied"));
+    // Once the tree can be stopped, the one stop settles and its hold clears.
+    host.stubborn.store(false, Ordering::SeqCst);
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert!(
+        tick.stops
+            .contains(&(rid("root-i"), OperationState::ObservedComplete)),
+        "{:?}",
+        tick.stops
+    );
+    let state = read(&*fx.store, |s| s.operations().operation(&op))
+        .unwrap()
+        .state;
+    assert_eq!(state, OperationState::ObservedComplete);
+    assert!(
+        !fx.holds("root-i")
+            .iter()
+            .any(|b| b.cause == HoldCause::Reconciliation),
+        "{:?}",
+        fx.holds("root-i")
+    );
+    assert!(processes.owned().is_empty());
+}
+
+#[test]
+fn pending_stops_beyond_one_batch_are_executed_in_rotation() {
+    let fx = Fx::new();
+    let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), None);
+    let mut sup = Arc::try_unwrap(sup).ok().expect("the only handle");
+    sup.stop_batch = 2;
+    let sup = Arc::new(sup);
+    // Three roots whose stops stay pending (each covered activation is still owned).
+    for r in ["root-b", "root-g", "root-i"] {
+        applied(&fx.start(&fx.user, r, 1, 1));
+        fx.launch("supervisor-x");
+    }
+    for r in ["root-b", "root-g", "root-i"] {
+        assert!(matches!(
+            decision(&fx.stop(&fx.user, r)),
+            DomainDecision::Accepted { .. }
+        ));
+    }
+    let rt = runtime();
+    let roots = |tick: RunTick| -> Vec<RootId> { tick.stops.into_iter().map(|(r, _)| r).collect() };
+    let first = roots(rt.block_on(sup.tick()).unwrap());
+    let second = roots(rt.block_on(sup.tick()).unwrap());
+    let third = roots(rt.block_on(sup.tick()).unwrap());
+    assert_eq!(first, vec![rid("root-b"), rid("root-g")]);
+    assert_eq!(second, vec![rid("root-i")], "the third root is not starved");
+    assert_eq!(third, first, "the rotation wraps around");
 }
