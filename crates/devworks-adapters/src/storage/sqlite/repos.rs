@@ -877,6 +877,7 @@ fn grant(conn: &Connection, id: &Id) -> Result<Option<GrantRecord>, StorageError
                 root_id: RootId(id_of(root)?),
                 revision,
                 active: state == "Active",
+                revoked: state == "Revoked",
                 authority_source: source,
                 binding: json_of(&binding)?,
                 expires_at_ms: expires,
@@ -1041,6 +1042,9 @@ impl ReadSnapshot for Snapshot<'_> {
         self
     }
     fn resources(&self) -> &dyn ResourceRead {
+        self
+    }
+    fn runs(&self) -> &dyn RunRead {
         self
     }
 }
@@ -1245,6 +1249,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn resources(&mut self) -> &mut dyn ResourceRepository {
+        self
+    }
+    fn runs(&mut self) -> &mut dyn RunRepository {
         self
     }
 }
@@ -2147,6 +2154,32 @@ impl DurableQueue for Unit<'_> {
         Ok(after)
     }
 
+    fn hold_for_eligibility(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        cause: &str,
+    ) -> Result<QueueEntry, StorageError> {
+        bounded("hold cause", cause, 1024)?;
+        let e = self.fenced(id, fence)?;
+        if e.root_id.is_none() {
+            return Err(invalid(
+                "only root-scoped deliveries wait for root eligibility",
+            ));
+        }
+        db(stmt(self.conn,
+            "UPDATE queue_entries SET state='Reconciling',owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,generation=generation+1,revision=revision+1,last_error=?1,failed_at=?4,awaiting_eligibility=1 WHERE id=?2 AND generation=?3",
+        )?
+        .execute(params![cause, id.as_str(), fence.generation, self.now]))?;
+        let after = self.reload(id)?;
+        self.observe_queue(
+            &after,
+            "QueueDeliveryAwaitingEligibility",
+            json!({"cause": cause}),
+        )?;
+        Ok(after)
+    }
+
     fn dismiss(&mut self, id: &Id, reason: &str) -> Result<QueueEntry, StorageError> {
         if reason.len() > 65_536 || reason.contains('\0') {
             return Err(invalid("dismissal reason bounds"));
@@ -2368,6 +2401,32 @@ impl GrantLedger for Unit<'_> {
             "UPDATE resume_grants SET uses_remaining=?1,state=?2,revision=revision+1 WHERE id=?3 AND revision=?4",
         )?
         .execute(params![remaining, state, g.id.as_str(), g.revision]))?;
+        if n != 1 {
+            return Err(corrupt("grant changed inside its transaction"));
+        }
+        grant(self.conn, &g.id)?.ok_or_else(|| corrupt("grant vanished inside its transaction"))
+    }
+
+    fn revoke(&mut self, id: &Id, expected_revision: i64) -> Result<GrantRecord, StorageError> {
+        let g = grant(self.conn, id)?.ok_or_else(|| StorageError::NotFound {
+            kind: "grant",
+            id: id.as_str().to_owned(),
+        })?;
+        if g.revision != expected_revision {
+            return Err(StorageError::conflict(
+                RevisionDimension::Authority,
+                "grant",
+                g.id.clone(),
+                Revision::new(expected_revision)
+                    .map_err(|_| invalid("expected revision must be positive"))?,
+                revision(g.revision)?,
+            ));
+        }
+        let n = db(stmt(
+            self.conn,
+            "UPDATE resume_grants SET state='Revoked',revision=revision+1 WHERE id=?1 AND revision=?2",
+        )?
+        .execute(params![g.id.as_str(), g.revision]))?;
         if n != 1 {
             return Err(corrupt("grant changed inside its transaction"));
         }

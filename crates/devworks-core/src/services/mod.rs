@@ -12,6 +12,7 @@ pub mod power;
 pub mod process;
 pub mod queue;
 pub mod resources;
+pub mod runs;
 pub mod sessions;
 
 use crate::context::InvocationContext;
@@ -125,6 +126,14 @@ impl UseCases {
     /// Registers the resources family (`ResourceService`).
     pub fn with_resources(mut self, service: Arc<resources::ResourceService>) -> Self {
         for op in resources::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the runs family (`ControlService`).
+    pub fn with_runs(mut self, service: Arc<runs::ControlService>) -> Self {
+        for op in runs::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

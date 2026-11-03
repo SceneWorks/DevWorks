@@ -141,7 +141,25 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0010_resources_processes.sql"),
         rebuilds_tables: false,
     },
+    // Additive columns (all defaulted or nullable), tables and indexes for run root controls.
+    // The writer floor rises to 11: a build 10 or older has no run-control gate, so as a writer
+    // it would claim and run the root-scoped deliveries of a paused, held or stopped root and
+    // bypass the restart hold; it must open this store read-only. The reader floor stays at 8:
+    // no earlier build reads root controls, activations, assignments, blockers, run instructions
+    // or session turns (the migration 1 tables were never written by a build), and the defaulted
+    // columns leave every query an earlier reader makes unchanged, so reading stays safe. Both
+    // are at least every earlier floor.
+    Migration {
+        version: 11,
+        minimum_reader: 8,
+        minimum_writer: 11,
+        sql: include_str!("migrations/0011_run_controls.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 11; a test fails if the shipped text changes.
+pub const MIGRATION_0011_SHA256: &str =
+    "8607df6d8f6fd0fe885e21595e7e5245422916b8bdf0d0679fd7f0ca5b0f19af";
 /// Recorded checksum of migration 10; a test fails if the shipped text changes.
 pub const MIGRATION_0010_SHA256: &str =
     "7fab1dd563202155578de4ffe4e14bf89647e97815685f0e58a886a051c20f01";
