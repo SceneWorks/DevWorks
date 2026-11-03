@@ -218,9 +218,18 @@ fn an_attachment_removed_while_it_is_being_stored_does_not_survive() {
     gate.close();
     script.files.lock().unwrap().push(vec![slow.clone()]);
     h.get_by_role_and_label(Role::Button, ATTACH_LABEL).click();
+    // Held while its save is admitted (the frame is already in the attachment's state).
+    step_until(&mut h, "the save was admitted", |s| {
+        s.chat.draft().is_some_and(|d| {
+            d.attachments
+                .iter()
+                .any(|a| matches!(a.state, AttachState::Saving(_)))
+        })
+    });
+    // Scrolled into the composer's attachment area (the save stays held, so no settling).
+    h.get_by_role_and_label(Role::Button, "Remove attachment slow.txt")
+        .scroll_to_me();
     h.run_steps(3);
-    let a = &h.state().chat.draft().unwrap().attachments[0];
-    assert!(matches!(a.state, AttachState::Storing), "{:?}", a.state);
     h.get_by_role_and_label(Role::Button, "Remove attachment slow.txt")
         .click();
     h.run_steps(2);

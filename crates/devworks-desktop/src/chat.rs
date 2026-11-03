@@ -26,10 +26,12 @@ use std::path::PathBuf;
 /// A removed attachment whose save may have committed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Removed {
-    /// The materialized paste, removed once the outcome is known.
+    /// A file the shell created for it (a pasted image), removed once it is resolved.
     pub path: Option<PathBuf>,
-    /// The unconfirmed save's frame; `None` while its save (or confirmation) is running.
+    /// Its save's frame (`None` while it is still being prepared: nothing is admitted).
     pub frame: Option<Vec<u8>>,
+    /// That frame is admitted and its outcome not back yet.
+    pub in_flight: bool,
 }
 
 /// Draft key of the conversation not started yet.
@@ -49,7 +51,11 @@ pub const NO_COORDINATOR: &str = "The workspace coordinator is not connected in 
 pub enum AttachState {
     /// Waiting for the conversation to exist (its ID is the attachment's provenance tag).
     WaitingForConversation,
+    /// Its save is being prepared (hashing, upload ticket); nothing is admitted yet.
     Storing,
+    /// Its exact `artifacts.save` frame is admitted (or about to be): kept here first, so a
+    /// close at any point confirms this same request at the next launch.
+    Saving(Vec<u8>),
     Stored(ArtifactRef),
     /// The save's outcome is not known yet; confirmed by resubmitting this exact frame.
     Unconfirmed(Vec<u8>),
@@ -62,6 +68,9 @@ pub struct Attachment {
     pub media_type: String,
     /// The picked or materialized file (absent once restored from memory).
     pub path: Option<PathBuf>,
+    /// The shell created `path` (a pasted image). Only such a file is ever removed, and its
+    /// ownership is recorded here when it is created, never inferred from where it is.
+    pub owned: bool,
     pub state: AttachState,
     pub preview: Option<TextureHandle>,
     pub preview_note: Option<String>,
@@ -122,6 +131,7 @@ impl Draft {
             matches!(
                 a.state,
                 AttachState::Storing
+                    | AttachState::Saving(_)
                     | AttachState::WaitingForConversation
                     | AttachState::Unconfirmed(_)
             )
@@ -149,25 +159,36 @@ impl Draft {
                 .attachments
                 .iter()
                 .filter_map(|a| match &a.state {
-                    AttachState::Unconfirmed(frame) => Some(UnconfirmedAttachment {
-                        name: a.name.clone(),
-                        media_type: a.media_type.clone(),
-                        path: a.path.clone(),
-                        frame: frame.clone(),
-                    }),
+                    // Admitted or about to be: confirmed with this frame at the next launch.
+                    AttachState::Saving(frame) | AttachState::Unconfirmed(frame) => {
+                        Some(UnconfirmedAttachment {
+                            name: a.name.clone(),
+                            media_type: a.media_type.clone(),
+                            path: a.path.clone(),
+                            owned: a.owned,
+                            frame: frame.clone(),
+                        })
+                    }
                     _ => None,
                 })
                 .collect(),
             uploads: self
                 .attachments
                 .iter()
-                .filter_map(|a| match (&a.state, &a.path) {
-                    (AttachState::WaitingForConversation, Some(path)) => Some(PendingUpload {
+                // Never admitted: stored afresh at the next launch.
+                .filter(|a| {
+                    matches!(
+                        a.state,
+                        AttachState::WaitingForConversation | AttachState::Storing
+                    )
+                })
+                .filter_map(|a| {
+                    Some(PendingUpload {
                         name: a.name.clone(),
                         media_type: a.media_type.clone(),
-                        path: path.clone(),
-                    }),
-                    _ => None,
+                        path: a.path.clone()?,
+                        owned: a.owned,
+                    })
                 })
                 .collect(),
         }
@@ -907,7 +928,9 @@ fn attachment_chip(ui: &mut Ui, a: &Attachment, actions: &mut Vec<ChatAction>) {
                         AttachState::WaitingForConversation => {
                             ("Waiting for the conversation".to_owned(), Tone::Neutral)
                         }
-                        AttachState::Storing => ("Storing…".to_owned(), Tone::Neutral),
+                        AttachState::Storing | AttachState::Saving(_) => {
+                            ("Storing…".to_owned(), Tone::Neutral)
+                        }
                         AttachState::Stored(r) => (
                             format!("Stored · {}", bytes_label(r.byte_length.get())),
                             Tone::Good,

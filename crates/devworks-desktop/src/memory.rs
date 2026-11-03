@@ -37,8 +37,10 @@ pub struct StoredAttachment {
 pub struct UnconfirmedAttachment {
     pub name: String,
     pub media_type: String,
-    /// The materialized paste, removed once the outcome is known.
     pub path: Option<PathBuf>,
+    /// The shell created `path` (a pasted image): removed once the artifact service holds it.
+    #[serde(default)]
+    pub owned: bool,
     pub frame: Vec<u8>,
 }
 
@@ -49,7 +51,8 @@ pub struct DraftMemory {
     pub attachments: Vec<StoredAttachment>,
     #[serde(default)]
     pub unconfirmed: Vec<UnconfirmedAttachment>,
-    /// Attachments not stored yet (waiting for their conversation): stored at the next launch.
+    /// Attachments whose save was never admitted (waiting for their conversation, or being
+    /// prepared): stored at the next launch.
     #[serde(default)]
     pub uploads: Vec<PendingUpload>,
 }
@@ -60,6 +63,9 @@ pub struct PendingUpload {
     pub name: String,
     pub media_type: String,
     pub path: PathBuf,
+    /// The shell created `path` (a pasted image).
+    #[serde(default)]
+    pub owned: bool,
 }
 
 /// A command whose outcome was not known at close.
@@ -82,6 +88,7 @@ pub struct SubmittedMemory {
 /// Removed attachments whose save outcome was not known at close: confirmed, then deleted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RemovedMemory {
+    /// A file the shell created for it (a pasted image), removed once resolved.
     pub path: Option<PathBuf>,
     pub frame: Vec<u8>,
 }

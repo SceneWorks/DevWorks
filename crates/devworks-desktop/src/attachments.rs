@@ -2,8 +2,9 @@
 //! workspace artifacts tagged with their conversation, through a user-ingress upload ticket and
 //! `artifacts.save` — the artifact service hashes, verifies and publishes the bytes. Previews are
 //! decoded off the UI thread; content is never claimed to be analyzed.
-use crate::backend::{Backend, TaskOutput, is_unknown, resolve_command};
+use crate::backend::{Backend, TaskOutput, resolve_command};
 use crate::ops;
+use devworks_core::protocol::CommandReply;
 use eframe::egui::ColorImage;
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -97,55 +98,76 @@ pub fn max_attachment_bytes(backend: &dyn Backend) -> u64 {
         .unwrap_or(64 << 20)
 }
 
-/// Stores `path` as a workspace artifact for `session`: mint the user's upload ticket, hash the
-/// file, `artifacts.save` it with the conversation tag (resubmitting the identical frame while
-/// the outcome is unknown). Removes `remove_after` (a materialized paste) once the outcome is
-/// known; while it is not, the file stays so a later identical resubmission can still read it.
-pub fn store(
+/// Prepares `path`'s workspace artifact for `session`: hash the file, mint the user's upload
+/// ticket and build the exact `artifacts.save` frame (with its request key and the
+/// conversation tag). Nothing is admitted yet: the shell keeps the frame in the attachment's
+/// state before submitting it, so a close at any point can still confirm that same request.
+pub fn prepare(
     backend: &dyn Backend,
     path: &Path,
     name: &str,
     media_type: &str,
     session: &str,
-    remove_after: bool,
 ) -> Result<TaskOutput, String> {
-    let result = (|| {
-        let (digest, bytes) = sha256_file(path, max_attachment_bytes(backend))?;
-        let ticket = backend.mint_workspace_upload(path)?;
-        let tags: Vec<String> = ops::conversation_tag(session).into_iter().collect();
-        let frame = ops::save_workspace_artifact(
-            backend,
-            ticket.as_str(),
-            name,
-            media_type,
-            &digest,
-            bytes,
-            &tags,
-        );
-        let outcome = resolve_command(backend, "artifacts.save", &frame);
-        Ok(TaskOutput::Stored { outcome, frame })
-    })();
-    let unresolved =
-        matches!(&result, Ok(TaskOutput::Stored { outcome, .. }) if is_unknown(outcome));
-    if remove_after && !unresolved {
-        let _ = std::fs::remove_file(path);
-    }
-    result
+    let (digest, bytes) = sha256_file(path, max_attachment_bytes(backend))?;
+    let ticket = backend.mint_workspace_upload(path)?;
+    let tags: Vec<String> = ops::conversation_tag(session).into_iter().collect();
+    let frame = ops::save_workspace_artifact(
+        backend,
+        ticket.as_str(),
+        name,
+        media_type,
+        &digest,
+        bytes,
+        &tags,
+    );
+    Ok(TaskOutput::Prepared { frame })
 }
 
-/// Resubmits an attachment's unconfirmed `artifacts.save` frame unchanged (same request key).
-pub fn confirm(
+/// Admits an attachment's prepared `artifacts.save` frame, or resubmits it unchanged (same
+/// request key) to confirm an unknown outcome. `owned` is a file the shell created (a pasted
+/// image): it is removed once the artifact service holds its copy, never before.
+pub fn save(
     backend: &dyn Backend,
     frame: Vec<u8>,
-    materialized: Option<&Path>,
+    owned: Option<&Path>,
 ) -> Result<TaskOutput, String> {
     let outcome = resolve_command(backend, "artifacts.save", &frame);
-    if !is_unknown(&outcome)
-        && let Some(p) = materialized
+    if matches!(outcome, Ok(CommandReply::Recorded { .. }))
+        && let Some(p) = owned
     {
-        let _ = std::fs::remove_file(p);
+        remove_owned(p, &backend.scratch_dir());
     }
     Ok(TaskOutput::Stored { outcome, frame })
+}
+
+/// Removes a file the shell created, and only when it is plainly one: a regular file (not a
+/// symbolic link) directly in `scratch`, named without `..`. Ownership itself is recorded on
+/// the attachment when the shell creates the file; this is defence in depth. Returns whether
+/// it removed the file.
+pub fn remove_owned(path: &Path, scratch: &Path) -> bool {
+    use std::path::Component;
+    if path.components().any(|c| {
+        !matches!(
+            c,
+            Component::Normal(_) | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return false;
+    }
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !meta.file_type().is_file() {
+        return false;
+    }
+    let (Some(parent), Ok(scratch)) = (path.parent(), std::fs::canonicalize(scratch)) else {
+        return false;
+    };
+    if std::fs::canonicalize(parent).ok() != Some(scratch) {
+        return false;
+    }
+    std::fs::remove_file(path).is_ok()
 }
 
 /// Decodes a bounded preview of an image file.
@@ -227,6 +249,38 @@ pub fn pasted_path(text: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_plain_file_directly_in_the_scratch_directory_is_removed() {
+        let dir = std::env::temp_dir().join(format!("devworks-owned-{}", std::process::id()));
+        let scratch = dir.join("staging-ui");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let outside = dir.join("notes.txt");
+        std::fs::write(&outside, b"user").unwrap();
+        // `..` lexically inside the scratch directory, really beside it.
+        assert!(!remove_owned(&scratch.join("../notes.txt"), &scratch));
+        // A symbolic link in the scratch directory to a user's file.
+        let link = scratch.join("link.txt");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(!remove_owned(&link, &scratch));
+        assert!(outside.exists() && std::fs::symlink_metadata(&link).is_ok());
+        // A nested directory's file is not directly in it.
+        std::fs::create_dir_all(scratch.join("nested")).unwrap();
+        std::fs::write(scratch.join("nested/x.png"), b"x").unwrap();
+        assert!(!remove_owned(&scratch.join("nested/x.png"), &scratch));
+        // Any `..` is refused, even one that resolves back into it.
+        let back = scratch.join("back.png");
+        std::fs::write(&back, b"png").unwrap();
+        assert!(!remove_owned(&scratch.join("nested/../back.png"), &scratch));
+        assert!(back.exists());
+        // The shell's own paste is.
+        let paste = scratch.join("pasted.png");
+        std::fs::write(&paste, b"png").unwrap();
+        assert!(remove_owned(&paste, &scratch));
+        assert!(!paste.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn media_types_follow_extensions_and_only_decodable_images_preview() {
@@ -310,7 +364,9 @@ mod tests {
                 assert_eq!(size, [3, 2]);
                 assert_eq!(&rgba[..4], &[255, 0, 0, 255]);
             }
-            TaskOutput::Stored { .. } => panic!("expected a preview"),
+            TaskOutput::Stored { .. } | TaskOutput::Prepared { .. } => {
+                panic!("expected a preview")
+            }
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

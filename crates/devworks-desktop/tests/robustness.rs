@@ -11,6 +11,7 @@ use devworks_desktop::backend::Backend;
 use devworks_desktop::chat::{self, ATTACH_LABEL, AttachState, COMPOSER_LABEL, SEND_LABEL};
 use devworks_desktop::ops;
 use devworks_desktop::route::Route;
+use devworks_desktop::shell::Lifecycle;
 use devworks_desktop::theme;
 use eframe::egui::{self, accesskit::Role};
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -944,6 +945,7 @@ fn restored_uploads_without_a_pending_start_are_stored_at_the_next_launch() {
         name: name.into(),
         media_type: "text/plain".into(),
         path: root.file(name, name.as_bytes()),
+        owned: false,
     };
     let mut memory = Memory::default();
     for (key, name) in [
@@ -976,6 +978,129 @@ fn restored_uploads_without_a_pending_start_are_stored_at_the_next_launch() {
     let mut names = workspace_artifacts(&*real);
     names.sort();
     assert_eq!(names, ["for-new.txt", "for-older.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn only_files_the_shell_created_are_ever_removed() {
+    let root = Root::new("owned-files");
+    let engine = start(&root);
+    let real = engine.backend();
+    let scratch = real.scratch_dir();
+    std::fs::create_dir_all(&scratch).unwrap();
+    // 1. The exact `..` path: lexically under the scratch directory, really beside it.
+    let beside = scratch.parent().unwrap().join("notes.txt");
+    std::fs::write(&beside, b"notes").unwrap();
+    let dotted = scratch.join("../notes.txt");
+    // 2. A symbolic link in the scratch directory to a user's file.
+    let target = root.file("target.txt", b"target");
+    let link = scratch.join("link.txt");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    // 3. A user's file inside the scratch directory that the shell did not create.
+    let mine = scratch.join("mine.txt");
+    std::fs::write(&mine, b"mine").unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    for path in [&dotted, &link, &mine] {
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .focus();
+        h.step();
+        h.event(egui::Event::Paste(path.display().to_string()));
+        settle(&mut h);
+    }
+    let draft = h.state().chat.draft().unwrap();
+    assert_eq!(draft.attachments.len(), 3);
+    let states: Vec<_> = draft
+        .attachments
+        .iter()
+        .map(|a| (a.name.as_str(), &a.state, a.owned))
+        .collect();
+    assert!(
+        draft.attachments.iter().all(|a| !a.owned),
+        "never the shell's own files: {states:?}"
+    );
+    // The two regular files are stored; the link is refused (storage fails), and still kept.
+    assert!(matches!(states[0].1, AttachState::Stored(_)), "{states:?}");
+    assert!(matches!(states[1].1, AttachState::Failed(_)), "{states:?}");
+    assert!(matches!(states[2].1, AttachState::Stored(_)), "{states:?}");
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok(),
+        "a failed upload removed nothing"
+    );
+    // Uploaded, then removed from the draft: the user's files are untouched either way.
+    for name in ["notes.txt", "link.txt", "mine.txt"] {
+        click(&mut h, Role::Button, &format!("Remove attachment {name}"));
+    }
+    assert!(
+        workspace_artifacts(&*real).is_empty(),
+        "their artifacts were deleted"
+    );
+    assert_eq!(std::fs::read(&beside).unwrap(), b"notes");
+    assert!(std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()));
+    assert_eq!(std::fs::read(&target).unwrap(), b"target");
+    assert_eq!(std::fs::read(&mine).unwrap(), b"mine");
+}
+
+#[test]
+fn a_save_held_past_the_quiesce_bound_is_confirmed_at_the_next_launch() {
+    let root = Root::new("held-save");
+    let engine = start(&root);
+    let real = engine.backend();
+    let first = LoseAcks::over(real.clone(), "artifacts.save", 0);
+    // The save commits; its reply is held until after the window has closed.
+    let gate = Gate::holding_replies("artifacts.save");
+    let script = Script::default();
+    script
+        .files
+        .lock()
+        .unwrap()
+        .push(vec![root.file("held.txt", b"held")]);
+    let mut h = harness(
+        shell_over(gate.over(first.clone()), &root, script),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().unwrap();
+    gate.close();
+    h.get_by_role_and_label(Role::Button, ATTACH_LABEL).click();
+    step_until(&mut h, "the save was admitted", |s| {
+        s.chat.draft().is_some_and(|d| {
+            d.attachments
+                .iter()
+                .any(|a| matches!(a.state, AttachState::Saving(_)))
+        })
+    });
+    h.state_mut().request_close();
+    // Quiescing gives up at its bound with the save still in flight.
+    step_until(&mut h, "the window closed", |s| {
+        matches!(s.lifecycle(), Lifecycle::Closed)
+    });
+    gate.open();
+    drop(h);
+    let again = LoseAcks::over(real.clone(), "artifacts.save", 0);
+    let mut h = harness(
+        shell_over(again.clone(), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let draft = &h.state().chat.drafts[&session];
+    assert_eq!(draft.attachments.len(), 1, "kept in its draft");
+    assert!(
+        matches!(draft.attachments[0].state, AttachState::Stored(_)),
+        "{:?}",
+        draft.attachments[0].state
+    );
+    assert_eq!(workspace_artifacts(&*real), ["held.txt"], "stored once");
+    let mut keys = first.request_keys();
+    keys.extend(again.request_keys());
+    assert!(
+        keys.len() >= 2 && all_same(&keys),
+        "the same request: {keys:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

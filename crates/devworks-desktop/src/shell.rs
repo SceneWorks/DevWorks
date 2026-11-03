@@ -194,6 +194,7 @@ impl Shell {
                     name: a.name.clone(),
                     media_type: a.media_type.clone(),
                     path: None,
+                    owned: false,
                     state: AttachState::Stored(r),
                     preview: None,
                     preview_note: None,
@@ -207,6 +208,7 @@ impl Shell {
                     name: a.name.clone(),
                     media_type: a.media_type.clone(),
                     path: Some(a.path.clone()),
+                    owned: a.owned,
                     state: AttachState::WaitingForConversation,
                     preview: None,
                     preview_note: None,
@@ -220,6 +222,7 @@ impl Shell {
                     name: a.name.clone(),
                     media_type: a.media_type.clone(),
                     path: a.path.clone(),
+                    owned: a.owned,
                     state: AttachState::Unconfirmed(a.frame.clone()),
                     preview: None,
                     preview_note: None,
@@ -508,14 +511,20 @@ impl Shell {
         );
     }
 
-    /// Attaches files to the active conversation's draft (dialog, drop and paste all land here).
+    /// Attaches the user's files to the active conversation's draft (dialog, drop and pasted
+    /// paths). The shell never removes these files.
     pub fn attach(&mut self, paths: Vec<PathBuf>) {
-        if self.online().is_err() || paths.is_empty() {
+        self.attach_files(paths.into_iter().map(|p| (p, false)).collect());
+    }
+
+    /// Attaches files; `owned` marks one the shell created itself (a pasted image).
+    fn attach_files(&mut self, files: Vec<(PathBuf, bool)>) {
+        if self.online().is_err() || files.is_empty() {
             return;
         }
         let waiting = self.chat.selected.is_none();
         let key = self.chat.draft_key();
-        for path in paths {
+        for (path, owned) in files {
             let local = self.chat.next_local();
             let name = path
                 .file_name()
@@ -532,6 +541,7 @@ impl Shell {
                 name,
                 media_type: media.clone(),
                 path: Some(path.clone()),
+                owned,
                 // Storing once its save is submitted (below, or when its conversation starts).
                 state: AttachState::WaitingForConversation,
                 preview: None,
@@ -561,7 +571,7 @@ impl Shell {
         let Some(b) = self.backend() else { return };
         let name = format!("{}.png", b.token("pasted-image"));
         match attachments::materialize_paste(image, &b.scratch_dir(), &name) {
-            Ok(path) => self.attach(vec![path]),
+            Ok(path) => self.attach_files(vec![(path, true)]),
             Err(e) => self.announce(format!("The pasted image could not be attached: {e}")),
         }
     }
@@ -572,22 +582,31 @@ impl Shell {
         let Some(a) = self.chat.take_attachment(local) else {
             return;
         };
-        let materialized = self.materialized(a.path.as_deref());
+        let owned = a.path.clone().filter(|_| a.owned);
         match a.state {
-            // Nothing was saved: only a materialized paste is left to remove.
+            // Nothing was admitted: only a file the shell created is left to remove.
             AttachState::WaitingForConversation | AttachState::Failed(_) => {
-                if let Some(p) = materialized {
-                    let _ = std::fs::remove_file(p);
-                }
+                self.remove_owned(owned.as_deref());
             }
-            // Its save is running: the reply decides (a stored copy is deleted, an unknown
-            // outcome is kept with this file to confirm).
+            // Being prepared: its reply finds it removed and admits nothing.
             AttachState::Storing => {
                 self.chat.removed.insert(
                     local,
                     chat::Removed {
-                        path: materialized,
+                        path: owned,
                         frame: None,
+                        in_flight: true,
+                    },
+                );
+            }
+            // Admitted: its reply decides (a stored copy is deleted, an unknown outcome kept).
+            AttachState::Saving(frame) => {
+                self.chat.removed.insert(
+                    local,
+                    chat::Removed {
+                        path: owned,
+                        frame: Some(frame),
+                        in_flight: true,
                     },
                 );
             }
@@ -596,8 +615,9 @@ impl Shell {
                 self.chat.removed.insert(
                     local,
                     chat::Removed {
-                        path: materialized,
+                        path: owned,
                         frame: Some(frame),
+                        in_flight: false,
                     },
                 );
             }
@@ -617,11 +637,26 @@ impl Shell {
         }
     }
 
-    /// `path` when it is a file the shell materialized (a paste), never a user's own file.
-    fn materialized(&self, path: Option<&std::path::Path>) -> Option<PathBuf> {
-        let scratch = self.backend()?.scratch_dir();
-        path.filter(|p| p.starts_with(&scratch))
-            .map(std::path::Path::to_path_buf)
+    /// Removes a file the shell created (recorded as owned when it was created).
+    fn remove_owned(&self, path: Option<&std::path::Path>) {
+        if let (Some(p), Some(b)) = (path, self.backend()) {
+            attachments::remove_owned(p, &b.scratch_dir());
+        }
+    }
+
+    /// Admits an attachment's save frame (prepared, or unconfirmed) under `slot`.
+    fn submit_save(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        frame: Vec<u8>,
+        owned: Option<PathBuf>,
+    ) -> bool {
+        self.client.as_mut().is_some_and(|c| {
+            c.task(slot, label, move |b| {
+                attachments::save(b, frame, owned.as_deref())
+            })
+        })
     }
 
     fn delete_removed(&mut self, artifact: ArtifactRef) {
@@ -673,9 +708,6 @@ impl Shell {
     /// Starts storing every attachment of `session`'s draft that waits. One becomes Storing
     /// only once its save is submitted (closing refuses it: it stays waiting, and is kept).
     fn store_waiting(&mut self, session: &str) {
-        let Some(scratch) = self.backend().map(|b| b.scratch_dir()) else {
-            return;
-        };
         let jobs: Vec<(u64, PathBuf, String, String)> = self
             .chat
             .drafts
@@ -697,12 +729,11 @@ impl Shell {
             .unwrap_or_default();
         for (local, path, name, media) in jobs {
             let sid = session.to_owned();
-            let materialized = path.starts_with(&scratch);
             let submitted = self.client.as_mut().is_some_and(|c| {
                 c.task(
                     Slot::Attach(session.to_owned(), local),
                     &format!("Storing {name}"),
-                    move |b| attachments::store(b, &path, &name, &media, &sid, materialized),
+                    move |b| attachments::prepare(b, &path, &name, &media, &sid),
                 )
             });
             if submitted && let Some(a) = self.chat.attachment_mut(local) {
@@ -851,6 +882,23 @@ impl Shell {
                     }
                 }
             }
+            (Slot::Attach(key, local), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
+                if let Some(a) = self.chat.attachment_mut(local) {
+                    let owned = a.path.clone().filter(|_| a.owned);
+                    let label = format!("Storing {}", a.name);
+                    // The frame is in the state before it is admitted: a close from here on
+                    // keeps it, and the next launch confirms this same request.
+                    a.state = AttachState::Saving(frame.clone());
+                    if !self.submit_save(Slot::Attach(key, local), &label, frame.clone(), owned)
+                        && let Some(a) = self.chat.attachment_mut(local)
+                    {
+                        a.state = AttachState::Unconfirmed(frame);
+                    }
+                } else if let Some(r) = self.chat.removed.remove(&local) {
+                    // Removed while it was being prepared: nothing was admitted.
+                    self.remove_owned(r.path.as_deref());
+                }
+            }
             (Slot::Attach(_, local), Reply::Task(t)) => {
                 let state = match t {
                     Ok(TaskOutput::Stored { outcome, frame }) if is_unknown(&outcome) => {
@@ -863,7 +911,7 @@ impl Shell {
                         }
                         Err(e) => AttachState::Failed(e.describe()),
                     },
-                    Ok(TaskOutput::Preview { .. }) => {
+                    Ok(TaskOutput::Preview { .. } | TaskOutput::Prepared { .. }) => {
                         AttachState::Failed("unexpected reply".into())
                     }
                     Err(e) => AttachState::Failed(e),
@@ -883,26 +931,29 @@ impl Shell {
                     }
                     // Removed while it was being stored: nothing the user removed survives.
                     None => match state {
+                        // (The save removed the shell's own file once it was stored.)
                         AttachState::Stored(r) => {
                             self.chat.removed.remove(&local);
                             self.delete_removed(r);
                         }
                         // Kept, with its file, until "Confirm outcomes" resolves it.
                         AttachState::Unconfirmed(frame) => {
-                            self.chat
-                                .removed
-                                .entry(local)
-                                .or_insert(chat::Removed {
-                                    path: None,
-                                    frame: None,
-                                })
-                                .frame = Some(frame);
+                            let r = self.chat.removed.entry(local).or_insert(chat::Removed {
+                                path: None,
+                                frame: None,
+                                in_flight: false,
+                            });
+                            r.frame = Some(frame);
+                            r.in_flight = false;
                         }
-                        // Not saved (the save removed a materialized file itself).
+                        // Not saved: the shell's own file is no longer needed.
                         AttachState::Failed(_)
                         | AttachState::Storing
+                        | AttachState::Saving(_)
                         | AttachState::WaitingForConversation => {
-                            self.chat.removed.remove(&local);
+                            if let Some(r) = self.chat.removed.remove(&local) {
+                                self.remove_owned(r.path.as_deref());
+                            }
                         }
                     },
                 }
@@ -918,7 +969,7 @@ impl Shell {
                                 egui::TextureOptions::LINEAR,
                             ));
                         }
-                        Ok(TaskOutput::Stored { .. }) => {}
+                        Ok(TaskOutput::Stored { .. } | TaskOutput::Prepared { .. }) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
                 }
@@ -1553,6 +1604,7 @@ impl Shell {
                 chat::Removed {
                     path: r.path,
                     frame: Some(r.frame),
+                    in_flight: false,
                 },
             );
         }
@@ -1867,7 +1919,7 @@ impl Shell {
                 .chat
                 .removed
                 .values()
-                .filter(|r| r.frame.is_some())
+                .filter(|r| r.frame.is_some() && !r.in_flight)
                 .count()
     }
 
@@ -1893,20 +1945,17 @@ impl Shell {
             .chat
             .removed
             .iter()
+            .filter(|(_, r)| !r.in_flight)
             .filter_map(|(l, r)| Some((*l, r.frame.clone()?, r.path.clone())))
             .collect();
         for (local, frame, path) in removed {
             // A removed attachment, under its own local ID (which no draft holds any more):
             // confirmed, then deleted by its reply.
-            let submitted = self.client.as_mut().is_some_and(|c| {
-                c.task(
-                    Slot::Attach(String::new(), local),
-                    "Confirming a removed attachment",
-                    move |b| attachments::confirm(b, frame, path.as_deref()),
-                )
-            });
-            if submitted && let Some(r) = self.chat.removed.get_mut(&local) {
-                r.frame = None;
+            let slot = Slot::Attach(String::new(), local);
+            if self.submit_save(slot, "Confirming a removed attachment", frame, path)
+                && let Some(r) = self.chat.removed.get_mut(&local)
+            {
+                r.in_flight = true;
             }
         }
     }
@@ -1919,20 +1968,15 @@ impl Shell {
             return;
         };
         let frame = frame.clone();
-        let path = a.path.clone();
-        let materialized = self.materialized(path.as_deref());
+        let owned = a.path.clone().filter(|_| a.owned);
         // Its own draft's slot, wherever the user is now.
         let key = self.chat.owner(local).unwrap_or_default();
-        let submitted = self.client.as_mut().is_some_and(|c| {
-            c.task(
-                Slot::Attach(key, local),
-                "Confirming an attachment",
-                move |b| attachments::confirm(b, frame, materialized.as_deref()),
-            )
-        });
+        let slot = Slot::Attach(key, local);
         // Not submitted (closing): it stays unconfirmed, its frame kept.
-        if submitted && let Some(a) = self.chat.attachment_mut(local) {
-            a.state = AttachState::Storing;
+        if self.submit_save(slot, "Confirming an attachment", frame.clone(), owned)
+            && let Some(a) = self.chat.attachment_mut(local)
+        {
+            a.state = AttachState::Saving(frame);
         }
     }
 
