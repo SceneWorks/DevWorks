@@ -35,6 +35,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `conventions.read` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -50,6 +53,9 @@ impl Check for ReadInput {
         self.revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReadInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `conventions.edit` Command input.
@@ -68,6 +74,9 @@ impl Check for EditInput {
         Ok(())
     }
 }
+impl Revisioned for EditInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `conventions.version` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -82,6 +91,9 @@ impl Check for VersionInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for VersionInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `conventions.applicability` Command input.
@@ -99,6 +111,9 @@ impl Check for ApplicabilityInput {
         self.applicability.check()?;
         Ok(())
     }
+}
+impl Revisioned for ApplicabilityInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `conventions.retire` Command input.
@@ -118,6 +133,9 @@ impl Check for RetireInput {
         Ok(())
     }
 }
+impl Revisioned for RetireInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `conventions.index` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -136,6 +154,9 @@ impl Check for IndexInput {
         Ok(())
     }
 }
+impl Revisioned for IndexInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `conventions.import` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -152,6 +173,9 @@ impl Check for ImportInput {
         self.schema.check()?;
         Ok(())
     }
+}
+impl Revisioned for ImportInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `conventions.delete` Command input.
@@ -171,6 +195,9 @@ impl Check for DeleteInput {
         Ok(())
     }
 }
+impl Revisioned for DeleteInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `conventions.move` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -188,6 +215,9 @@ impl Check for MoveInput {
         Ok(())
     }
 }
+impl Revisioned for MoveInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `conventions.resources` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -204,6 +234,9 @@ impl Check for ResourcesInput {
         self.applicability.check()?;
         Ok(())
     }
+}
+impl Revisioned for ResourcesInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `conventions.delete_resource` Command input.
@@ -223,6 +256,9 @@ impl Check for DeleteResourceInput {
         Ok(())
     }
 }
+impl Revisioned for DeleteResourceInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `conventions.search` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -241,6 +277,9 @@ impl Check for SearchInput {
         self.text.check()?;
         Ok(())
     }
+}
+impl Revisioned for SearchInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `conventions` family, built only for the selected operation and mode.

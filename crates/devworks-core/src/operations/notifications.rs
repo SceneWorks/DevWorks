@@ -34,6 +34,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `notifications.read` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -46,6 +49,9 @@ impl Check for ReadInput {
         self.notification_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReadInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `notifications.acknowledge` Command input.
@@ -62,6 +68,9 @@ impl Check for AcknowledgeInput {
         Ok(())
     }
 }
+impl Revisioned for AcknowledgeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `notifications.settings` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -71,6 +80,9 @@ impl Check for SettingsQueryInput {
     fn check(&self) -> Result<(), String> {
         Ok(())
     }
+}
+impl Revisioned for SettingsQueryInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `notifications.settings` Command input.
@@ -86,6 +98,9 @@ impl Check for SettingsCommandInput {
         self.config.check()?;
         Ok(())
     }
+}
+impl Revisioned for SettingsCommandInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `notifications` family, built only for the selected operation and mode.

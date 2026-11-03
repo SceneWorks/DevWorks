@@ -30,6 +30,9 @@ impl Check for PreviewInput {
         Ok(())
     }
 }
+impl Revisioned for PreviewInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `imports.configure` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +51,9 @@ impl Check for ConfigureInput {
         self.config.check()?;
         Ok(())
     }
+}
+impl Revisioned for ConfigureInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `imports.apply` Command input.
@@ -68,6 +74,9 @@ impl Check for ApplyInput {
         Ok(())
     }
 }
+impl Revisioned for ApplyInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `imports.runs` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -81,6 +90,9 @@ impl Check for RunsInput {
         Ok(())
     }
 }
+impl Revisioned for RunsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `imports.inspect` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -93,6 +105,9 @@ impl Check for InspectInput {
         self.run_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `imports` family, built only for the selected operation and mode.

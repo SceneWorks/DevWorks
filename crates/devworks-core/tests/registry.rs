@@ -1,7 +1,7 @@
 //! The generated registry must cover the complete recorded catalog exactly.
 mod common;
 
-use devworks_core::registry::{self, AuthorityClass, EffectClass, Envelope, Mode};
+use devworks_core::registry::{self, AuthorityClass, EffectClass, Envelope, Mode, SchemaRevision};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -143,10 +143,10 @@ fn exactly_the_five_recorded_hybrid_names_have_both_modes() {
 fn every_binding_publishes_strict_input_and_result_schemas() {
     let mut count = 0;
     for d in registry::all() {
-        let result = serde_json::to_value(d.result_schema()).unwrap();
+        let result = serde_json::to_value(d.result_schema(SchemaRevision::INITIAL)).unwrap();
         assert!(result.is_object(), "{}", d.name);
         for b in d.modes {
-            let schema = serde_json::to_value(b.input_schema()).unwrap();
+            let schema = serde_json::to_value(b.input_schema(SchemaRevision::INITIAL)).unwrap();
             if d.envelope == Envelope::Domain {
                 // Agent tool descriptors expose the body members; unknown members are refused.
                 assert_eq!(
@@ -160,6 +160,127 @@ fn every_binding_publishes_strict_input_and_result_schemas() {
         }
     }
     assert_eq!(count, 358);
+}
+
+/// Every property name declared anywhere in a schema, sorted (the envelope's own negotiated
+/// `schemaRevision` member is not part of the typed input).
+fn property_names(v: &Value) -> Vec<String> {
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                if let Some(Value::Object(props)) = m.get("properties") {
+                    out.extend(props.keys().filter(|k| *k != "schemaRevision").cloned());
+                }
+                m.values().for_each(|x| walk(x, out));
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(v, &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
+    let register = json("docs/architecture/contracts/family-coverage.json");
+    let mut revisioned = BTreeSet::new();
+    let mut documents: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut members = |file: &str| -> Vec<String> {
+        documents
+            .entry(file.to_owned())
+            .or_insert_with(|| {
+                property_names(&json(&format!("docs/architecture/contracts/{file}")))
+            })
+            .clone()
+    };
+    for o in register["families"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|f| f["operations"].as_array().unwrap())
+    {
+        let d = registry::find(o["operation"].as_str().unwrap()).unwrap();
+        let listed: Vec<u32> = o["schemaRevisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["revision"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(
+            d.revisions.iter().map(|r| r.0).collect::<Vec<_>>(),
+            listed,
+            "{} revisions",
+            d.name
+        );
+        assert_eq!(d.revisions[0], SchemaRevision::INITIAL, "{}", d.name);
+        if d.revisions.len() > 1 {
+            revisioned.insert(d.name);
+        }
+        // The native schema of every revision has the members of that revision's recorded
+        // documents: specialized envelopes compare the whole envelope, every result its value.
+        for r in o["schemaRevisions"].as_array().unwrap() {
+            let revision = SchemaRevision(r["revision"].as_u64().unwrap() as u32);
+            if let Envelope::Specialized { .. } = d.envelope {
+                let native = serde_json::to_value(d.modes[0].input_schema(revision)).unwrap();
+                assert_eq!(
+                    property_names(&native),
+                    members(r["inputSchema"].as_str().unwrap()),
+                    "{} input at revision {}",
+                    d.name,
+                    revision.0
+                );
+            }
+            if d.revisions.len() == 1 {
+                continue;
+            }
+            let document = members(r["resultSchema"].as_str().unwrap());
+            let native = serde_json::to_value(d.result_schema(revision)).unwrap();
+            for name in property_names(&native) {
+                assert!(
+                    document.binary_search(&name).is_ok(),
+                    "{} result member {name} at revision {} is not in its document",
+                    d.name,
+                    revision.0
+                );
+            }
+        }
+    }
+    assert_eq!(
+        revisioned,
+        BTreeSet::from(["artifacts.list", "artifacts.save"])
+    );
+    // Revision 1 is exactly the earlier shape; revision 2 adds the tags member and its bounds.
+    for (name, mode) in [
+        ("artifacts.save", Mode::Command),
+        ("artifacts.list", Mode::Query),
+    ] {
+        let d = registry::find(name).unwrap();
+        let schema = |s| serde_json::to_value(s).unwrap().to_string();
+        let (input1, input2) = (
+            schema(d.binding(mode).unwrap().input_schema(SchemaRevision(1))),
+            schema(d.binding(mode).unwrap().input_schema(SchemaRevision(2))),
+        );
+        let (result1, result2) = (
+            schema(d.result_schema(SchemaRevision(1))),
+            schema(d.result_schema(SchemaRevision(2))),
+        );
+        for s in [&input1, &result1] {
+            assert!(
+                !s.contains("\"tags\"") && !s.contains("ArtifactTags"),
+                "{name}"
+            );
+        }
+        for s in [&input2, &result2] {
+            assert!(
+                s.contains("\"tags\"") && s.contains("\"x-since\":2"),
+                "{name}"
+            );
+            assert!(s.contains("\"maxItems\":32") && s.contains("\"uniqueItems\":true"));
+        }
+    }
 }
 
 #[test]

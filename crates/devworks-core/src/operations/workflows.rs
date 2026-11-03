@@ -32,6 +32,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `workflows.create_status` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -54,6 +57,9 @@ impl Check for CreateStatusInput {
         Ok(())
     }
 }
+impl Revisioned for CreateStatusInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `workflows.rename_status` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -73,6 +79,9 @@ impl Check for RenameStatusInput {
         Ok(())
     }
 }
+impl Revisioned for RenameStatusInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `workflows.order` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -89,6 +98,9 @@ impl Check for OrderInput {
         self.ordered_status_ids.check()?;
         Ok(())
     }
+}
+impl Revisioned for OrderInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `workflows.reassign_and_remove` Command input.
@@ -110,6 +122,9 @@ impl Check for ReassignAndRemoveInput {
         self.expected_affected_work_digest.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReassignAndRemoveInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `workflows` family, built only for the selected operation and mode.

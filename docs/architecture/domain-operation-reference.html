@@ -1075,12 +1075,12 @@
 </thead>
 <tbody><tr>
 <td><code>artifacts.save</code></td>
-<td><strong>Command</strong><br><a href="contracts/artifact-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Save&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/artifact-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Save&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/artifact-command-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>ArtifactRecord</code></td>
 </tr>
 <tr>
 <td><code>artifacts.list</code></td>
-<td><strong>Query</strong><br><a href="contracts/artifact-query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;List&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/artifact-query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;List&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/artifact-query-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;ArtifactRecord&gt;</code></td>
 </tr>
 <tr>
@@ -2298,7 +2298,7 @@
 </tr>
 </tbody></table>
 <h2 id="domain-types">Domain types</h2>
-<p>Reference names reused from earlier shared/provider/data contracts retain their existing schema definitions; they are not redeclared here. Other types below are closed records, enumerations or <code>kind</code>-tagged unions. Generic lists/pages and scalar bounds are native checked support types.</p>
+<p>Reference names reused from earlier shared/provider/data contracts retain their existing schema definitions; they are not redeclared here. Other types below are closed records, enumerations or <code>kind</code>-tagged unions. Generic lists/pages and scalar bounds are native checked support types. A field marked <em>revision N+</em> was introduced at schema revision N: callers that negotiated an earlier revision never receive it and may not send it.</p>
 <h3 id="lifestate">LifeState</h3>
 <p><code>Active</code>, <code>Archived</code>, <code>Deleted</code>.</p>
 <h3 id="workkind">WorkKind</h3>
@@ -7151,6 +7151,10 @@
 <tr>
 <td><code>referenceCount</code></td>
 <td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>tags</code></td>
+<td><code>?ArtifactTags</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="artifactreadcontent">ArtifactReadContent</h3>

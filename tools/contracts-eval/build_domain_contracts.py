@@ -10,24 +10,42 @@ def rust(t):
 ATTR='#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]\n'
 REC=ATTR+'#[serde(rename_all = "camelCase", deny_unknown_fields)]\n'
 TAG=ATTR+'#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]\n'
-def fields(fs,indent='    '):
+def fields(fs,indent='    ',since=None):
  lines=[]
  for n,t in fs.items():
-  if t.startswith('?'):lines.append(indent+'#[serde(default, skip_serializing_if = "Option::is_none")]')
+  if since and n in since:lines += [indent+'#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "gated_member")]',indent+f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}))]']
+  elif t.startswith('?'):lines.append(indent+'#[serde(default, skip_serializing_if = "Option::is_none")]')
   lines.append(indent+f'pub {n}: {rust(t)},')
  return '\n'.join(lines)
-def enumfields(fs):return fields(fs,'        ').replace('pub ','')
+def enumfields(fs,since=None):return fields(fs,'        ',since).replace('pub ','')
+def tokens(t):return set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*',t))
+# Members introduced in a later operation schema revision ("since") and the types that carry one.
+RC={n for n,d in TYPES.items() if d.get('since')}
+while True:
+ grown=set(RC)
+ for n,d in TYPES.items():
+  members=d['fields'].values() if d['kind']=='record' else [t for fs in d['variants'].values() for t in fs.values()] if d['kind']=='union' else []
+  if any(tokens(t)&RC for t in members):grown.add(n)
+ if grown==RC:break
+ RC=grown
+def retain(fs,since,call,assign=None):
+ assign=call if assign is None else assign;out=[]
+ for n,t in fs.items():
+  if n in since:out.append(f'if revision<{since[n]} {{{assign}{n}=None;}}'+(f' else {{{call}{n}.retain_revision(revision);}}' if tokens(t)&RC else ''))
+  elif tokens(t)&RC:out.append(f'{call}{n}.retain_revision(revision);')
+ return out
 def checkfields(fs,base='self.',indent='        '):
  return '\n'.join(indent+f'{base}{n}.check()?;' for n in fs)
 lines=['//! Generated architecture DTOs. Edit domain_spec.py and regenerate; no services.',
  'use super::domain_support::*;',
  'use crate::{Id,Revision,Counter,ProjectId,RootId,ActorId,AssignmentId,OperationId,QueryId,RequestKey,CommandId,EventId,StoreId,ResourceId,CorrelationId,Protocol,ReadStamp,OperationState,RootControl,Activation,Blockers,EligibilityTarget,Purpose,Event,CommandReply};',
  'use crate::provider::{Digest,ArtifactRef,SchemaRef,TranscriptPage};',
- 'use crate::data_delivery::{DataScope,ViewSelection,Coverage,GitOid,GraphPage,RetrievalPage,DeliveryBarrier,DeliverySnapshot};',
+ 'use crate::data_delivery::{DataScope,ViewSelection,Coverage,GitOid,GraphPage,RetrievalPage,DeliveryBarrier,DeliverySnapshot,ArtifactTags};',
  'use serde::{Serialize,Deserialize}; use schemars::JsonSchema;', '']
 for name,d in TYPES.items():
  if d['kind']=='record':
-  lines += [REC+f'pub struct {name} {{',fields(d['fields']),'}',f'impl Check for {name} {{ fn check(&self)->Result<(),String>{{',checkfields(d['fields']),f'    super::domain_rules::record("{name}", &serde_json::to_value(self).map_err(|e|e.to_string())?)?;', '    Ok(()) } }','']
+  lines += [REC+f'pub struct {name} {{',fields(d['fields'],since=d.get('since')),'}',f'impl Check for {name} {{ fn check(&self)->Result<(),String>{{',checkfields(d['fields']),f'    super::domain_rules::record("{name}", &serde_json::to_value(self).map_err(|e|e.to_string())?)?;', '    Ok(()) } }','']
+  if name in RC:lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{',*retain(d['fields'],d.get('since',{}),'self.'),'}}','']
  elif d['kind']=='enum':
   lines += [ATTR+f'pub enum {name} {{',*['    '+pascal(v)+',' if v[0].isupper() else '    #[serde(rename = "'+v+'")] '+pascal(v)+',' for v in d['values']],'}',f'impl Check for {name} {{fn check(&self)->Result<(),String>{{Ok(())}}}}','']
  else:
@@ -37,13 +55,17 @@ for name,d in TYPES.items():
   for v,fs in d['variants'].items():
    lines += [f' Self::{v} {{'+','.join(fs)+'} => {',checkfields(fs,'','    '),' },']
   lines += ['} Ok(()) }}','']
+  if name in RC:
+   arms=[f' Self::{v} {{'+','.join(n for n,t in fs.items() if tokens(t)&RC)+',..} => {'+''.join(retain({n:t for n,t in fs.items() if tokens(t)&RC},{},''))+'},' for v,fs in d['variants'].items() if any(tokens(t)&RC for t in fs.values())]
+   lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{match self {{',*arms,*([' _ => {}'] if len(arms)<len(d['variants']) else []),'}}}}','']
 
 def included(d,mode): return d['mode'] in [mode,'Hybrid']
 def opfields(d,mode): return d[mode.lower()+'Fields'] if d['mode']=='Hybrid' else d['fields']
+def opsince(d,mode): return {n:r for n,r in d.get('since',{}).items() if n in opfields(d,mode)}
 for mode in ['Query','Command']:
  lines += [TAG+f'pub enum Domain{mode} {{']
  for n,d in OPS.items():
-  if included(d,mode):lines += ['    #[serde(rename = "'+n+'")] '+pascal(n)+' {',enumfields(opfields(d,mode)),'    },']
+  if included(d,mode):lines += ['    #[serde(rename = "'+n+'")] '+pascal(n)+' {',enumfields(opfields(d,mode),opsince(d,mode)),'    },']
  lines += ['}',f'impl Domain{mode} {{pub fn operation(&self)->&\'static str {{match self {{']
  for n,d in OPS.items():
   if included(d,mode):lines.append(f' Self::{pascal(n)} {{..}} => "{n}",')
@@ -53,9 +75,16 @@ for mode in ['Query','Command']:
    fs=opfields(d,mode)
    lines += [f' Self::{pascal(n)} {{'+','.join(fs)+'} => {',checkfields(fs,'','    '),' },']
  lines += [f'}} super::domain_rules::input(self.operation(),"{mode}",&serde_json::to_value(self).map_err(|e|e.to_string())?) }} }}','']
+ arms=[]
+ for n,d in OPS.items():
+  if included(d,mode):
+   fs=opfields(d,mode);since=opsince(d,mode);gated={k:t for k,t in fs.items() if k in since or tokens(t)&RC}
+   if gated:arms.append(f' Self::{pascal(n)} {{'+','.join(gated)+',..} => {'+''.join(retain(gated,since,'','*'))+'},')
+ lines += [f'impl Revisioned for Domain{mode} {{fn retain_revision(&mut self,{"revision" if arms else "_"}:u32){{',*([ 'match self {',*arms,' _ => {}','}'] if arms else []),'}}','']
 lines += [ATTR+'#[serde(tag="mode", rename_all_fields="camelCase", deny_unknown_fields)]',
  'pub enum DomainRequest { Query {protocol:Protocol, query_id:QueryId, body:DomainQuery}, Command {protocol:Protocol, request_key:RequestKey, body:DomainCommand} }',
- 'impl DomainRequest {pub fn validate(&self)->Result<(),String>{match self{Self::Query{body,..}=>body.check(),Self::Command{body,..}=>body.check()}} pub fn operation(&self)->&\'static str{match self{Self::Query{body,..}=>body.operation(),Self::Command{body,..}=>body.operation()}}}', '']
+ 'impl DomainRequest {pub fn validate(&self)->Result<(),String>{match self{Self::Query{body,..}=>body.check(),Self::Command{body,..}=>body.check()}} pub fn operation(&self)->&\'static str{match self{Self::Query{body,..}=>body.operation(),Self::Command{body,..}=>body.operation()}}}',
+ 'impl Revisioned for DomainRequest {fn retain_revision(&mut self,revision:u32){match self{Self::Query{body,..}=>body.retain_revision(revision),Self::Command{body,..}=>body.retain_revision(revision)}}}', '']
 results={n:d['result'] for n,d in OPS.items()}|LEGACY_RESULTS
 lines += [TAG+'pub enum OperationResult {']
 for n,t in results.items(): lines += [f'    #[serde(rename="{n}")] {pascal(n)} {{value:{rust(t)}}},']
@@ -64,6 +93,8 @@ for n in results: lines += [f' Self::{pascal(n)} {{..}}=>"{n}",']
 lines += ['}}}', 'impl Check for OperationResult {fn check(&self)->Result<(),String>{match self{']
 for n in results:lines += [f' Self::{pascal(n)} {{value}}=>value.check()?,']
 lines += ['} super::domain_rules::result(self.operation(), &serde_json::to_value(self).map_err(|e|e.to_string())?) }}', '']
+projected=[n for n,t in results.items() if tokens(t)&RC]
+lines += ['impl Revisioned for OperationResult {fn retain_revision(&mut self,revision:u32){match self{',*[f' Self::{pascal(n)} {{value}}=>value.retain_revision(revision),' for n in projected],*([' _ => {}'] if len(projected)<len(results) else []),'}}}','']
 # Generic receipts preserve admitted/rejected/unknown command distinctions. Outcome
 # variants cannot mint human authority or make an external uncertainty successful.
 lines += [TAG+'''pub enum DomainDecision {

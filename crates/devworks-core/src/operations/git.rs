@@ -43,6 +43,9 @@ impl Check for WorktreeInput {
         Ok(())
     }
 }
+impl Revisioned for WorktreeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `git.inspect` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -58,6 +61,9 @@ impl Check for InspectInput {
         self.worktree_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `git.diff` Query input.
@@ -82,6 +88,9 @@ impl Check for DiffInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for DiffInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `git` family, built only for the selected operation and mode.

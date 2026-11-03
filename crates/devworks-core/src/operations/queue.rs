@@ -35,6 +35,9 @@ impl Check for InspectInput {
         Ok(())
     }
 }
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `queue.resolve` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -55,6 +58,9 @@ impl Check for ResolveInput {
         self.reason.check()?;
         Ok(())
     }
+}
+impl Revisioned for ResolveInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `queue.retry` Command input.
@@ -77,6 +83,9 @@ impl Check for RetryInput {
         Ok(())
     }
 }
+impl Revisioned for RetryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `queue.consumer_status` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -89,6 +98,9 @@ impl Check for ConsumerStatusInput {
         self.consumer_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for ConsumerStatusInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `queue.reconcile` Command input.
@@ -110,6 +122,9 @@ impl Check for ReconcileInput {
         self.reason.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReconcileInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `queue` family, built only for the selected operation and mode.

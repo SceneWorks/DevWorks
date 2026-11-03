@@ -8,10 +8,13 @@
 //!    before anything else in the frame is interpreted, so it can never grant anything;
 //! 3. operation selection: the host-selected operation must be registered and allow the selected
 //!    mode; a domain envelope's `mode` must equal it; the selector member must name the selected
-//!    operation (shared input shapes never merge entitlements);
+//!    operation (shared input shapes never merge entitlements); the optional `schemaRevision`
+//!    member must name a revision the operation registers (absent means 1). Any other revision is
+//!    refused here, before authority and before any receipt exists;
 //! 4. caller identity member (`queryId` for a Query, `requestKey` for a Command);
-//! 5. strict typed decode into the selected input type (unknown members rejected), nested bounds
-//!    and the recorded pure cross-field rules;
+//! 5. strict typed decode into the selected input type at the negotiated revision (unknown
+//!    members and members introduced after that revision rejected), nested bounds and the
+//!    recorded pure cross-field rules;
 //! 6. normalization and the intent [`Fingerprint`];
 //! 7. effective-action classification: an `ActionDependent` binding is resolved to the effect
 //!    class of the action the typed input selects (AD69), so authority and receipt admission see
@@ -21,7 +24,9 @@ use crate::framing::{self, FrameError};
 use crate::operations::{OperationInput, browser, github};
 use crate::protocol::records::{AccountAction, BrowserSessionAction};
 use crate::protocol::{CONTRACT, Id, QueryId, RequestKey};
-use crate::registry::{self, EffectClass, Envelope, Mode, ModeBinding, OperationDescriptor};
+use crate::registry::{
+    self, EffectClass, Envelope, Mode, ModeBinding, OperationDescriptor, SchemaRevision,
+};
 use serde_json::{Map, Value};
 use std::fmt;
 
@@ -43,6 +48,11 @@ pub enum AdmissionError {
     ModeNotAllowed {
         operation: &'static str,
         mode: Mode,
+    },
+    /// The request negotiated a schema revision the selected operation does not register.
+    UnsupportedSchemaRevision {
+        operation: &'static str,
+        revision: u64,
     },
     EnvelopeModeMismatch {
         selected: Mode,
@@ -86,6 +96,10 @@ impl fmt::Display for AdmissionError {
             Self::ModeNotAllowed { operation, mode } => {
                 write!(f, "{operation} does not allow {} mode", mode.as_str())
             }
+            Self::UnsupportedSchemaRevision {
+                operation,
+                revision,
+            } => write!(f, "{operation} does not support schema revision {revision}"),
             Self::EnvelopeModeMismatch { selected } => {
                 write!(
                     f,
@@ -126,6 +140,9 @@ pub struct DecodedRequest {
     pub key: CallerKey,
     pub input: OperationInput,
     pub fingerprint: Fingerprint,
+    /// The negotiated schema revision: it selects the strict decoder, enters the fingerprint and
+    /// the receipt, and decides the result projection.
+    pub revision: SchemaRevision,
     /// Effective effect class (never `ActionDependent`).
     pub effect: EffectClass,
     /// Effective action label for action-dependent bindings.
@@ -145,7 +162,7 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
         error: AdmissionError::Frame(e),
         key: None,
     })?;
-    let Value::Object(object) = value else {
+    let Value::Object(mut object) = value else {
         return Err(Refusal {
             error: AdmissionError::NotAnObject,
             key: None,
@@ -176,6 +193,7 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
             mode: selection.mode,
         })
     })?;
+    let revision = negotiated_revision(&mut object, descriptor).map_err(refuse)?;
     if descriptor.envelope == Envelope::Domain
         && object.get("mode").and_then(Value::as_str) != Some(selection.mode.as_str())
     {
@@ -202,9 +220,9 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
     let decoded = match descriptor.envelope {
         Envelope::Domain => {
             let body = domain_body(value, selection.mode).map_err(refuse)?;
-            (binding.decode)(body)
+            (binding.decode)(body, revision)
         }
-        Envelope::Specialized { .. } => (binding.decode)(value),
+        Envelope::Specialized { .. } => (binding.decode)(value, revision),
     }
     .map_err(refuse)?;
     // Defense in depth: the generated decoder must have produced the selected binding.
@@ -213,7 +231,7 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
             "decoder produced a different operation".into(),
         )));
     }
-    let fingerprint = fingerprint::compute(descriptor, binding.mode, &decoded.normalized)
+    let fingerprint = fingerprint::compute(descriptor, binding.mode, revision, &decoded.normalized)
         .map_err(|e| refuse(AdmissionError::Fingerprint(e.to_string())))?;
     let (effect, action) = effective_effect(binding, &decoded.input).map_err(refuse)?;
     let targets = work_targets(&decoded.normalized);
@@ -223,10 +241,42 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
         key,
         input: decoded.input,
         fingerprint,
+        revision,
         effect,
         action,
         targets,
     })
+}
+
+/// Takes the envelope's `schemaRevision` member (absent means [`SchemaRevision::INITIAL`]) and
+/// checks that the selected operation registers it. The member is envelope metadata: it never
+/// reaches the typed decoder, and the fingerprint binds the revision itself.
+fn negotiated_revision(
+    object: &mut Map<String, Value>,
+    descriptor: &'static OperationDescriptor,
+) -> Result<SchemaRevision, AdmissionError> {
+    let Some(member) = object.remove("schemaRevision") else {
+        return Ok(SchemaRevision::INITIAL);
+    };
+    // Only an integer spelling within the member's range names a revision: `1.0`, `2e0`, strings,
+    // 0 and values above the range are a malformed envelope, never a revision to look up.
+    let revision = member
+        .as_u64()
+        .filter(|r| (1..=u64::from(SchemaRevision::MAX.0)).contains(r))
+        .ok_or_else(|| {
+            AdmissionError::InvalidEnvelope(format!(
+                "schemaRevision must be an integer from 1 to {}",
+                SchemaRevision::MAX.0
+            ))
+        })?;
+    let revision = SchemaRevision(revision as u32);
+    if !descriptor.supports(revision) {
+        return Err(AdmissionError::UnsupportedSchemaRevision {
+            operation: descriptor.name,
+            revision: u64::from(revision.0),
+        });
+    }
+    Ok(revision)
 }
 
 /// Input members that name an existing work item a command acts on, in priority order: the

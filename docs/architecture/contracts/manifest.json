@@ -1,6 +1,6 @@
 {
   "contract": "1.0-draft.1",
-  "date": "2026-11-02",
+  "date": "2026-11-03",
   "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
   "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
   "schemaSources": [
@@ -21,23 +21,31 @@
     },
     {
       "file": "addon-command-request.schema.json",
-      "sha256": "1e50cc8d48544e561378d4e5d3f83e94258b0d9dccd2d3d59a349de4760a5f7e"
+      "sha256": "76bba13007c24561a3ce613e4df1f8a943f9610203e5a7d256488fc8511572b2"
     },
     {
       "file": "artifact-command-reply.schema.json",
       "sha256": "b206db3d40608fdc2e641e69504865691d273ba03c9206413b6b61931ba96f2c"
     },
     {
+      "file": "artifact-command-request.r2.schema.json",
+      "sha256": "f9fe6e9d49ee6515a1c5f1c1e01e3a0ecb563f02df31d32513b0ac6fa8668af1"
+    },
+    {
       "file": "artifact-command-request.schema.json",
-      "sha256": "733fedefbc5215e983255c0883b4f5c1a43462cf77f0bd730d804b96e22f426b"
+      "sha256": "525b9cc1962457686ca410addf6fecfe2dd0e1366ebbc9b574700bbcc5343848"
     },
     {
       "file": "artifact-deletion-request.schema.json",
-      "sha256": "017deb36675a1241cbe34edbb218b6115a65a65fd776a42b8b211c5629af0c85"
+      "sha256": "cd68c9debdab547eeed3998d3929a939d4e22a8b2e44d2ef01ce741a3ea3c312"
+    },
+    {
+      "file": "artifact-query-request.r2.schema.json",
+      "sha256": "eb002d13227f904a2dbdd577731ccf48d1a906e4ebb135e29d72ccb3f5f4ff0e"
     },
     {
       "file": "artifact-query-request.schema.json",
-      "sha256": "ab542e20f1f0738e29466c3360176c494e4f2c24af80e6ec1fa762def92db078"
+      "sha256": "b3b808feaa9f97f6f243c6c222e455bff5af1998368c8de96d9c13f27db8da5c"
     },
     {
       "file": "attempt-envelope.schema.json",
@@ -53,7 +61,7 @@
     },
     {
       "file": "command-request.schema.json",
-      "sha256": "4ae635d9f6ac948f68e8eafb156064e92f9e74ba7ed01239718b30592707f736"
+      "sha256": "8e821e7c0f306e8870a698537f1cb86b1108679ac07d442650a7e818e67f880f"
     },
     {
       "file": "delivery-barrier.schema.json",
@@ -64,8 +72,16 @@
       "sha256": "a5b59fd9d7dbed631c1445dbbda361b53a7c799f98717b9f9d131d6fee42806b"
     },
     {
+      "file": "domain-command-reply.r2.schema.json",
+      "sha256": "8d2092cef0ca11db242a33dca3c19aa07319e3b155d80e3b4039c21e14ed862f"
+    },
+    {
       "file": "domain-command-reply.schema.json",
       "sha256": "1c88a6a14db2850905c0265806823d7bdfa37a8923e824d3987f3bea19e95f2f"
+    },
+    {
+      "file": "domain-query-reply.r2.schema.json",
+      "sha256": "09d66ca5a98241ade688a176e43df56fc18f36169f845537a1837ed3001c66d5"
     },
     {
       "file": "domain-query-reply.schema.json",
@@ -73,7 +89,7 @@
     },
     {
       "file": "domain-request.schema.json",
-      "sha256": "b8887dc68d2235739406edff6e2049937c687174b490dd8c8c101945e6c4ab7c"
+      "sha256": "ee593a4da87d9829dbe8ad9f5df109af1533dca52f839c5a06e40129c85ec2ee"
     },
     {
       "file": "event.schema.json",
@@ -81,7 +97,7 @@
     },
     {
       "file": "git-command-request.schema.json",
-      "sha256": "a3ecd93b8f261d3536978d4a9e3739c101da9925ffd0e16e3fde36c26b6ec318"
+      "sha256": "a1718e29fbd02c1c30c9ccd8155f2f98fedb60cb3a00b299d5b08d27fb14fa74"
     },
     {
       "file": "graph-page.schema.json",
@@ -89,11 +105,11 @@
     },
     {
       "file": "graph-read-request.schema.json",
-      "sha256": "5eacbde85e8366c95ba683d14b5fafe865b0ee39dd042cf97cefaad6275efe0b"
+      "sha256": "1eece9e6fd9260c3af95fe787623839c7bfa72ade43ab97bf7337121b5bf133c"
     },
     {
       "file": "index-command-request.schema.json",
-      "sha256": "b058cdb9e5b60123b8c05683216990f3c818ae4eece06eb8f96102561269f63b"
+      "sha256": "eb2bfdf772de716567bb0a6aaf11a1e0810a9cefa2d147a44b461d5045092845"
     },
     {
       "file": "inference-request.schema.json",
@@ -104,8 +120,16 @@
       "sha256": "e4734b6a32933313adcdf74f07ada57c2a20f7d911eb676c7c63d44f1225d516"
     },
     {
+      "file": "operation-completion.r2.schema.json",
+      "sha256": "8bc36b7034174c61a1e427b5ee590b1e8d65878dec3461ee6eaf1682d7ee2c41"
+    },
+    {
       "file": "operation-completion.schema.json",
       "sha256": "60ef6bd81f2d33e77cd2282fffce205f88982db13d35392f759df084b35fe7e1"
+    },
+    {
+      "file": "operation-result.r2.schema.json",
+      "sha256": "c86bad2d5b34f00109b1c302dd200d28bef0299dc02a9ca4086b12e49f487198"
     },
     {
       "file": "operation-result.schema.json",
@@ -149,11 +173,11 @@
     },
     {
       "file": "query-request.schema.json",
-      "sha256": "33e3ed9f91f1981b65c7102263bbe9a17e1f965142ff6389f2e0ce4119d46469"
+      "sha256": "737647f75b83d06f768f00d5788e71ea7bf99b9c153dc9fed43c99ac20adbeb3"
     },
     {
       "file": "release-command-request.schema.json",
-      "sha256": "8c1ff3b64d926dd8b49da66fb1bbb7589162d27c414f13d06ad90dfb35b587be"
+      "sha256": "1f05af1440d9dc931c0cc26281b09f7616001a0d626f950265e71ee51402f815"
     },
     {
       "file": "resolved-view-set.schema.json",
@@ -165,7 +189,7 @@
     },
     {
       "file": "retrieval-request.schema.json",
-      "sha256": "9a7faaac8e7c31cc3f70f33f94509d56780f992e60998122f21c02f9a8cc15bb"
+      "sha256": "2bfc28986437a48a9894010a06f8c67490de27b260c45f19821d00051d36af7e"
     },
     {
       "file": "route-decision.schema.json",
@@ -177,11 +201,11 @@
     },
     {
       "file": "session-command-request.schema.json",
-      "sha256": "e0a66d6d36586b39b6a518fdd0d006a04765c8fe0fea390cc5860cac7019cc86"
+      "sha256": "2a9596d63653c6ddae06da13e17592a0c95104eaced405ef295a2710467a5f76"
     },
     {
       "file": "session-query-request.schema.json",
-      "sha256": "c24d63c61e590546b82b7311078e486bad45245f9a61de716972c484f1899339"
+      "sha256": "b1759a8b672311b7f705def14ebb8d4a209a24f56c142fa5f4ed2999034e032d"
     },
     {
       "file": "transcript-batch.schema.json",
@@ -206,6 +230,7 @@
   "notes": [
     "Schema checks structural constraints; typed decoding checks signed-64 range and cross-field consistency.",
     "Authority, relationships, current eligibility and receipt/dispatch transitions remain application service obligations.",
-    "All registered operations now have concrete input/result candidates and explicit mode, authority, effect and recovery metadata. New query/command/completion envelopes coexist with earlier specialized candidate replies; no published SDK compatibility or production behavior claimed. Selection constraints must be applied before dispatch and before result publication."
+    "All registered operations now have concrete input/result candidates and explicit mode, authority, effect and recovery metadata. New query/command/completion envelopes coexist with earlier specialized candidate replies; no published SDK compatibility or production behavior claimed. Selection constraints must be applied before dispatch and before result publication.",
+    "Each operation lists the schema revisions it negotiates (schemaRevisions). A request names one with the optional envelope member schemaRevision (absent means 1); <name>.rN.schema.json documents the shape at revision N and later and base documents are revision 1. Members introduced at N carry x-since N."
   ]
 }

@@ -30,6 +30,9 @@ impl Check for ExecuteInput {
         Ok(())
     }
 }
+impl Revisioned for ExecuteInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `process.output` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -47,6 +50,9 @@ impl Check for OutputInput {
         Ok(())
     }
 }
+impl Revisioned for OutputInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `process.cancel` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -61,6 +67,9 @@ impl Check for CancelInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for CancelInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `process.install_project_dependencies` Command input.
@@ -81,6 +90,9 @@ impl Check for InstallProjectDependenciesInput {
         Ok(())
     }
 }
+impl Revisioned for InstallProjectDependenciesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `process.request_system_install` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -97,6 +109,9 @@ impl Check for RequestSystemInstallInput {
         self.reason.check()?;
         Ok(())
     }
+}
+impl Revisioned for RequestSystemInstallInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `process` family, built only for the selected operation and mode.

@@ -36,6 +36,9 @@ impl Check for SearchInput {
         Ok(())
     }
 }
+impl Revisioned for SearchInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `web.fetch` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -54,6 +57,9 @@ impl Check for FetchInput {
         self.timeout_ms.check()?;
         Ok(())
     }
+}
+impl Revisioned for FetchInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `web` family, built only for the selected operation and mode.

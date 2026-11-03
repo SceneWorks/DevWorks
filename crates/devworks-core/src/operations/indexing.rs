@@ -34,6 +34,9 @@ impl Check for DiscoverInput {
         Ok(())
     }
 }
+impl Revisioned for DiscoverInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `indexing.index` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -52,6 +55,9 @@ impl Check for IndexInput {
         self.views.check()?;
         Ok(())
     }
+}
+impl Revisioned for IndexInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `indexing.reindex` Command input.
@@ -72,6 +78,9 @@ impl Check for ReindexInput {
         Ok(())
     }
 }
+impl Revisioned for ReindexInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `indexing.retire_view` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -87,6 +96,9 @@ impl Check for RetireViewInput {
         Ok(())
     }
 }
+impl Revisioned for RetireViewInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `indexing.status` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -99,6 +111,9 @@ impl Check for StatusInput {
         self.repository_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for StatusInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `indexing.runs` Query input.
@@ -118,6 +133,9 @@ impl Check for RunsInput {
         Ok(())
     }
 }
+impl Revisioned for RunsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `indexing.configure_sources` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -134,6 +152,9 @@ impl Check for ConfigureSourcesInput {
         self.config.check()?;
         Ok(())
     }
+}
+impl Revisioned for ConfigureSourcesInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `indexing` family, built only for the selected operation and mode.

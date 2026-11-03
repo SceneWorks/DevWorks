@@ -1,8 +1,8 @@
 //! Generated architecture DTOs. Edit domain_spec.py and regenerate; no services.
 use super::domain_support::*;
 use crate::data_delivery::{
-    Coverage, DataScope, DeliveryBarrier, DeliverySnapshot, GitOid, GraphPage, RetrievalPage,
-    ViewSelection,
+    ArtifactTags, Coverage, DataScope, DeliveryBarrier, DeliverySnapshot, GitOid, GraphPage,
+    RetrievalPage, ViewSelection,
 };
 use crate::provider::{ArtifactRef, Digest, SchemaRef, TranscriptPage};
 use crate::{
@@ -4773,6 +4773,13 @@ pub struct ArtifactRecord {
     pub created_at_ms: Counter,
     pub scope: DataScope,
     pub reference_count: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ArtifactTags", extend("x-since" = 2))]
+    pub tags: Option<ArtifactTags>,
 }
 impl Check for ArtifactRecord {
     fn check(&self) -> Result<(), String> {
@@ -4781,11 +4788,20 @@ impl Check for ArtifactRecord {
         self.created_at_ms.check()?;
         self.scope.check()?;
         self.reference_count.check()?;
+        self.tags.check()?;
         super::domain_rules::record(
             "ArtifactRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ArtifactRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.tags = None;
+        }
     }
 }
 
@@ -7150,6 +7166,10 @@ impl Check for DomainQuery {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )
     }
+}
+
+impl Revisioned for DomainQuery {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -10127,6 +10147,10 @@ impl Check for DomainCommand {
     }
 }
 
+impl Revisioned for DomainCommand {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "mode", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainRequest {
@@ -10152,6 +10176,14 @@ impl DomainRequest {
         match self {
             Self::Query { body, .. } => body.operation(),
             Self::Command { body, .. } => body.operation(),
+        }
+    }
+}
+impl Revisioned for DomainRequest {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Query { body, .. } => body.retain_revision(revision),
+            Self::Command { body, .. } => body.retain_revision(revision),
         }
     }
 }
@@ -11590,6 +11622,16 @@ impl Check for OperationResult {
             self.operation(),
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )
+    }
+}
+
+impl Revisioned for OperationResult {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::ArtifactsSave { value } => value.retain_revision(revision),
+            Self::ArtifactsList { value } => value.retain_revision(revision),
+            _ => {}
+        }
     }
 }
 

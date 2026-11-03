@@ -32,6 +32,9 @@ impl Check for ConnectionsInput {
         Ok(())
     }
 }
+impl Revisioned for ConnectionsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `schemas.objects` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -59,6 +62,9 @@ impl Check for ObjectsInput {
         Ok(())
     }
 }
+impl Revisioned for ObjectsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `schemas.relationships` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -80,6 +86,9 @@ impl Check for RelationshipsInput {
         Ok(())
     }
 }
+impl Revisioned for RelationshipsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `schemas.index` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -94,6 +103,9 @@ impl Check for IndexInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for IndexInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `schemas.refresh` Command input.
@@ -110,6 +122,9 @@ impl Check for RefreshInput {
         Ok(())
     }
 }
+impl Revisioned for RefreshInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `schemas.remove_index` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -124,6 +139,9 @@ impl Check for RemoveIndexInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for RemoveIndexInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `schemas.configure` Command input.
@@ -145,6 +163,9 @@ impl Check for ConfigureInput {
         self.config.check()?;
         Ok(())
     }
+}
+impl Revisioned for ConfigureInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `schemas` family, built only for the selected operation and mode.

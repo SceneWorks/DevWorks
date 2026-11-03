@@ -36,6 +36,9 @@ impl Check for RunInput {
         Ok(())
     }
 }
+impl Revisioned for RunInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `dreaming.runs` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -51,6 +54,9 @@ impl Check for RunsInput {
         Ok(())
     }
 }
+impl Revisioned for RunsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `dreaming.report` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -64,6 +70,9 @@ impl Check for ReportInput {
         Ok(())
     }
 }
+impl Revisioned for ReportInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `dreaming.settings` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -76,6 +85,9 @@ impl Check for SettingsQueryInput {
         self.scope.check()?;
         Ok(())
     }
+}
+impl Revisioned for SettingsQueryInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `dreaming.settings` Command input.
@@ -94,6 +106,9 @@ impl Check for SettingsCommandInput {
         Ok(())
     }
 }
+impl Revisioned for SettingsCommandInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `dreaming.instructions` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -106,6 +121,9 @@ impl Check for InstructionsQueryInput {
         self.scope.check()?;
         Ok(())
     }
+}
+impl Revisioned for InstructionsQueryInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `dreaming.instructions` Command input.
@@ -123,6 +141,9 @@ impl Check for InstructionsCommandInput {
         self.content.check()?;
         Ok(())
     }
+}
+impl Revisioned for InstructionsCommandInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `dreaming.propose` Command input.
@@ -143,6 +164,9 @@ impl Check for ProposeInput {
         Ok(())
     }
 }
+impl Revisioned for ProposeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `dreaming.revert` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -162,6 +186,9 @@ impl Check for RevertInput {
         Ok(())
     }
 }
+impl Revisioned for RevertInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `dreaming.review` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -180,6 +207,9 @@ impl Check for ReviewInput {
         self.rationale.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReviewInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `dreaming` family, built only for the selected operation and mode.

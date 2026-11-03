@@ -34,6 +34,9 @@ impl Check for ReadInput {
         Ok(())
     }
 }
+impl Revisioned for ReadInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `roles.draft` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -57,6 +60,9 @@ impl Check for DraftInput {
         Ok(())
     }
 }
+impl Revisioned for DraftInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `roles.propose` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -74,6 +80,9 @@ impl Check for ProposeInput {
         Ok(())
     }
 }
+impl Revisioned for ProposeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `roles.history` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -88,6 +97,9 @@ impl Check for HistoryInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for HistoryInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `roles.rollback` Command input.
@@ -108,6 +120,9 @@ impl Check for RollbackInput {
         self.proposal_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for RollbackInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `roles` family, built only for the selected operation and mode.

@@ -2101,7 +2101,11 @@
         "name": "Label",
         "created_at_ms": "Counter",
         "scope": "DataScope",
-        "reference_count": "Counter"
+        "reference_count": "Counter",
+        "tags": "?ArtifactTags"
+      },
+      "since": {
+        "tags": 2
       }
     },
     "ArtifactReadContent": {
@@ -6290,6 +6294,16 @@
     "code.publishers": "GraphPage",
     "code.snippet": "GraphPage",
     "code.repository_dependencies": "GraphPage"
+  },
+  "schemaRevisions": {
+    "artifacts.save": [
+      1,
+      2
+    ],
+    "artifacts.list": [
+      1,
+      2
+    ]
   },
   "familyRules": {
     "projects": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",

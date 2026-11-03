@@ -4,12 +4,14 @@
 //! The fingerprinted document is
 //! `{"contract", "operation", "mode", "schemaRevision", "input"}` where `input` is the typed,
 //! re-serialized selected input (optional absence and explicit null are identical, covered hold
-//! sets are sorted, user text and ordered arrays are untouched). Request keys, query IDs,
+//! and tag sets are sorted, user text and ordered arrays are untouched) and `schemaRevision` is the
+//! revision the request negotiated (absent means 1, so a request that names revision 1 and one
+//! that names none are the same intent). Request keys, query IDs,
 //! transport retry counters and deadlines are not part of it; a changed expected revision is.
 //! A fingerprint is hashing semantics, never a permission.
 use crate::jcs::{self, JcsError};
 use crate::protocol::CONTRACT;
-use crate::registry::{Mode, OperationDescriptor};
+use crate::registry::{Mode, OperationDescriptor, SchemaRevision};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use std::fmt;
@@ -45,12 +47,17 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// The versioned document that is canonicalized and hashed for one admitted request.
-pub fn document(descriptor: &OperationDescriptor, mode: Mode, normalized_input: &Value) -> Value {
+pub fn document(
+    descriptor: &OperationDescriptor,
+    mode: Mode,
+    revision: SchemaRevision,
+    normalized_input: &Value,
+) -> Value {
     json!({
         "contract": CONTRACT,
         "operation": descriptor.name,
         "mode": mode.as_str(),
-        "schemaRevision": descriptor.schema_revision.0,
+        "schemaRevision": revision.0,
         "input": normalized_input,
     })
 }
@@ -58,8 +65,9 @@ pub fn document(descriptor: &OperationDescriptor, mode: Mode, normalized_input: 
 pub fn compute(
     descriptor: &OperationDescriptor,
     mode: Mode,
+    revision: SchemaRevision,
     normalized_input: &Value,
 ) -> Result<Fingerprint, JcsError> {
-    let canonical = jcs::canonicalize(&document(descriptor, mode, normalized_input))?;
+    let canonical = jcs::canonicalize(&document(descriptor, mode, revision, normalized_input))?;
     Ok(Fingerprint(sha256_hex(canonical.as_bytes())))
 }

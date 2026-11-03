@@ -34,6 +34,9 @@ impl Check for ReadEffectiveInput {
         Ok(())
     }
 }
+impl Revisioned for ReadEffectiveInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `settings.validate` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -50,6 +53,9 @@ impl Check for ValidateInput {
         self.entries.check()?;
         Ok(())
     }
+}
+impl Revisioned for ValidateInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `settings.save_revision` Command input.
@@ -68,6 +74,9 @@ impl Check for SaveRevisionInput {
         Ok(())
     }
 }
+impl Revisioned for SaveRevisionInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `settings.explain_source` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -82,6 +91,9 @@ impl Check for ExplainSourceInput {
         self.key.check()?;
         Ok(())
     }
+}
+impl Revisioned for ExplainSourceInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `settings` family, built only for the selected operation and mode.

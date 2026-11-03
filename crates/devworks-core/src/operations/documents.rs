@@ -41,6 +41,9 @@ impl Check for ImportInput {
         Ok(())
     }
 }
+impl Revisioned for ImportInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `documents.list` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -59,6 +62,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `documents.index` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -76,6 +82,9 @@ impl Check for IndexInput {
         Ok(())
     }
 }
+impl Revisioned for IndexInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `documents.retry` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -92,6 +101,9 @@ impl Check for RetryInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for RetryInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `documents` family, built only for the selected operation and mode.

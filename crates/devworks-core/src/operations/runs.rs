@@ -36,6 +36,9 @@ impl Check for RedirectInput {
         Ok(())
     }
 }
+impl Revisioned for RedirectInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `runs.stop` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -50,6 +53,9 @@ impl Check for StopInput {
         self.expected_control_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for StopInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `runs` family, built only for the selected operation and mode.

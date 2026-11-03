@@ -27,6 +27,9 @@ impl Check for AccountQueryInput {
         Ok(())
     }
 }
+impl Revisioned for AccountQueryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `github.account` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -46,6 +49,9 @@ impl Check for AccountCommandInput {
         Ok(())
     }
 }
+impl Revisioned for AccountCommandInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `github.repositories` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -64,6 +70,9 @@ impl Check for RepositoriesInput {
         Ok(())
     }
 }
+impl Revisioned for RepositoriesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `github.poll_status` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -76,6 +85,9 @@ impl Check for PollStatusInput {
         self.repository_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for PollStatusInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `github.issue_sync` Command input.
@@ -94,6 +106,9 @@ impl Check for IssueSyncInput {
         self.remote_issue_number.check()?;
         Ok(())
     }
+}
+impl Revisioned for IssueSyncInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `github.checks` Query input.
@@ -114,6 +129,9 @@ impl Check for ChecksInput {
         Ok(())
     }
 }
+impl Revisioned for ChecksInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `github.reviews` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -132,6 +150,9 @@ impl Check for ReviewsInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReviewsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `github` family, built only for the selected operation and mode.
