@@ -68,7 +68,22 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_writer: 5,
         sql: include_str!("migrations/0005_authority.sql"),
     },
+    // Additive columns, tables and indexes. Applying a migration overwrites both store floors,
+    // so it keeps the highest floors so far (5/5). Nothing here needs a higher reader floor:
+    // builds 5 and older never read artifact rows, and the added columns all have defaults, so
+    // their existing queries see the same results. Raising the writer floor is not needed
+    // either: no earlier build writes artifact tables. Lowering either floor would re-admit
+    // builds that migration 5 refuses.
+    Migration {
+        version: 6,
+        minimum_reader: 5,
+        minimum_writer: 5,
+        sql: include_str!("migrations/0006_artifacts.sql"),
+    },
 ];
+/// Recorded checksum of migration 6; a test fails if the shipped text changes.
+pub const MIGRATION_0006_SHA256: &str =
+    "7a2ebf3518bed204be5592dcdee4ad203b1971efc421c26535a1a6478571e768";
 /// Recorded checksum of migration 5; a test fails if the shipped text changes.
 pub const MIGRATION_0005_SHA256: &str =
     "3b8c62996c4506f42eb45c0e76db77d4a7160135090c48f533eaec821e48372f";

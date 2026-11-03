@@ -341,6 +341,9 @@ impl ReadSnapshot for MemSnapshot {
     fn authority(&self) -> &dyn AuthorityRead {
         &self.unsupported
     }
+    fn artifacts(&self) -> &dyn ArtifactRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -397,6 +400,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn authority(&mut self) -> &mut dyn AuthorityLedger {
+        &mut self.unsupported
+    }
+    fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         &mut self.unsupported
     }
 }
@@ -844,4 +850,125 @@ pub fn repo_file(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(path)
+}
+
+impl ArtifactRead for Unsupported {
+    fn project_exists(&self, _: &ProjectId) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn subject_exists(&self, _: &ProjectId, _: &SubjectKey) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn artifact(&self, _: &Id) -> Result<Option<StoredArtifact>, StorageError> {
+        nope()
+    }
+    fn version(&self, _: &Id) -> Result<Option<StoredVersion>, StorageError> {
+        nope()
+    }
+    fn versions(&self, _: &Id) -> Result<Vec<StoredVersion>, StorageError> {
+        nope()
+    }
+    fn version_by_operation(&self, _: &OperationId) -> Result<Option<StoredVersion>, StorageError> {
+        nope()
+    }
+    fn list(
+        &self,
+        _: &ProjectId,
+        _: Option<&ListPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        nope()
+    }
+    fn shares(&self, _: &Id) -> Result<Vec<ProjectId>, StorageError> {
+        nope()
+    }
+    fn links(&self, _: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
+        nope()
+    }
+    fn linked_to(&self, _: &SubjectKey) -> Result<Vec<ArtifactLink>, StorageError> {
+        nope()
+    }
+    fn blob(&self, _: &str) -> Result<Option<BlobRecord>, StorageError> {
+        nope()
+    }
+    fn live_references(&self, _: &str) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn pinned(&self, _: &str) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn blobs_in(
+        &self,
+        _: BlobState,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<BlobRecord>, StorageError> {
+        nope()
+    }
+    fn project_usage(&self, _: &ProjectId) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn unresolved_staging(
+        &self,
+        _: Option<&OperationId>,
+        _: u16,
+    ) -> Result<Vec<OperationId>, StorageError> {
+        nope()
+    }
+}
+impl ArtifactRepository for Unsupported {
+    fn put_blob(&mut self, _: &str, _: i64, _: &str, _: &str) -> Result<BlobRecord, StorageError> {
+        nope()
+    }
+    fn set_blob_state(
+        &mut self,
+        _: &str,
+        _: BlobState,
+        _: BlobState,
+        _: Option<&str>,
+    ) -> Result<BlobRecord, StorageError> {
+        nope()
+    }
+    fn insert_artifact(&mut self, _: &StoredArtifact) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_version(&mut self, _: &StoredVersion) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_artifact(&mut self, _: &StoredArtifact) -> Result<(), StorageError> {
+        nope()
+    }
+    fn tombstone_version(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn add_link(&mut self, _: &ArtifactLink) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn add_share(&mut self, _: &Id, _: &ProjectId) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn remove_share(&mut self, _: &Id, _: &ProjectId) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn pin(&mut self, _: &Id, _: &str) -> Result<(), StorageError> {
+        nope()
+    }
+    fn release_pins(&mut self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn claim_blob(&mut self, _: &str, _: &str, _: &str) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn adopt_claim(&mut self, _: &str, _: &str, _: &str, _: &str) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn finish_claim(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
 }

@@ -5,7 +5,9 @@ use super::{NativeFilesystem, normal_components};
 use devworks_core::authority::destructive::{
     CheckedTarget, DestructiveExecutor, DestructiveKind, FileIdentity, RemovalOutcome, ResolveError,
 };
-use devworks_core::authority::reads::{ReadRefusal, ReadRequest, VerifiedBytes, VerifiedReader};
+use devworks_core::authority::reads::{
+    ReadRefusal, ReadRequest, VerifiedBytes, VerifiedFile, VerifiedReader,
+};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
@@ -67,8 +69,48 @@ fn refusal(e: &io::Error) -> ReadRefusal {
     }
 }
 
+/// The opened file with every ancestor handle still held (no component can be renamed or
+/// replaced while it is read).
+struct HeldFile {
+    _ancestors: Vec<File>,
+    file: io::Take<File>,
+}
+impl Read for HeldFile {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.file.read(buf)
+    }
+}
+
 impl VerifiedReader for NativeFilesystem {
     fn read(&self, req: &ReadRequest<'_>) -> Result<VerifiedBytes, ReadRefusal> {
+        let (mut held, identity) = self.open_verified(req)?;
+        let mut bytes = Vec::new();
+        held.read_to_end(&mut bytes).map_err(|e| refusal(&e))?;
+        if bytes.len() as u64 > req.max_bytes {
+            return Err(ReadRefusal::TooLarge {
+                limit: req.max_bytes,
+            });
+        }
+        Ok(VerifiedBytes {
+            bytes,
+            identity: Some(identity),
+        })
+    }
+
+    fn open(&self, req: &ReadRequest<'_>) -> Result<VerifiedFile, ReadRefusal> {
+        let (held, identity) = self.open_verified(req)?;
+        Ok(VerifiedFile {
+            reader: Box::new(held),
+            identity: Some(identity),
+        })
+    }
+}
+
+impl NativeFilesystem {
+    fn open_verified(
+        &self,
+        req: &ReadRequest<'_>,
+    ) -> Result<(HeldFile, FileIdentity), ReadRefusal> {
         let parts = normal_components(req.relative).ok_or(ReadRefusal::Escape)?;
         // Alternate data streams and reserved device names are not files beneath the root.
         if parts
@@ -118,20 +160,14 @@ impl VerifiedReader for NativeFilesystem {
             };
             #[cfg(test)]
             self.hook();
-            let mut bytes = Vec::new();
-            (&handle)
-                .take(req.max_bytes.saturating_add(1))
-                .read_to_end(&mut bytes)
-                .map_err(|e| refusal(&e))?;
-            if bytes.len() as u64 > req.max_bytes {
-                return Err(ReadRefusal::TooLarge {
-                    limit: req.max_bytes,
-                });
-            }
-            return Ok(VerifiedBytes {
-                bytes,
-                identity: Some(identity),
-            });
+            let file = handle.take(req.max_bytes.saturating_add(1));
+            return Ok((
+                HeldFile {
+                    _ancestors: held,
+                    file,
+                },
+                identity,
+            ));
         }
         Err(ReadRefusal::Escape)
     }

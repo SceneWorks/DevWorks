@@ -105,6 +105,7 @@ impl StoreHarness for Harness {
     }
 }
 
+mod artifacts;
 mod authority;
 mod settings;
 

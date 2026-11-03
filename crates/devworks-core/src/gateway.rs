@@ -26,16 +26,16 @@ use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
-    ActorRegistry, AuthorityGrant, AuthorityLedger, AuthorityRead, CommandLedger,
-    CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter, EventPage, EventRecord,
-    GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead, LedgerEntry, NewAuthorityGrant,
-    NewEvent, NewGrant, NewPrincipalBinding, OperationJournal, PackageHandlerLedger,
-    PrincipalBinding, ReadOptions, RegisteredRepository, RevisionConflict, Savepoint, StorageError,
-    StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ActorRegistry, ArtifactRepository, AuthorityGrant, AuthorityLedger, AuthorityRead,
+    CommandLedger, CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter,
+    EventPage, EventRecord, GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead,
+    LedgerEntry, NewAuthorityGrant, NewEvent, NewGrant, NewPrincipalBinding, OperationJournal,
+    PackageHandlerLedger, PrincipalBinding, ReadOptions, RegisteredRepository, RevisionConflict,
+    Savepoint, StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
-    GrantUse, HandlerFailure, IdKind, IdSource, QueryHandler, StoredReceipt,
+    GrantUse, HandlerFailure, IdKind, IdSource, Preparation, Prepared, QueryHandler, StoredReceipt,
 };
 use crate::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, validate_command_reply,
@@ -90,6 +90,7 @@ pub struct AdmittedCommand {
     fingerprint: Fingerprint,
     effect: EffectClass,
     action: Option<&'static str>,
+    prepared: Option<Prepared>,
 }
 impl AdmittedCommand {
     pub fn descriptor(&self) -> &'static OperationDescriptor {
@@ -113,6 +114,10 @@ impl AdmittedCommand {
     }
     pub fn action(&self) -> Option<&'static str> {
         self.action
+    }
+    /// What the use case's [`CommandHandler::prepare`] staged for this command, if anything.
+    pub fn prepared<T: std::any::Any>(&self) -> Option<&T> {
+        self.prepared.as_ref().and_then(Prepared::get)
     }
 }
 
@@ -369,7 +374,7 @@ impl Gateway<'_> {
                 });
             }
         };
-        let admitted = AdmittedCommand {
+        let mut admitted = AdmittedCommand {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
             identity: ReceiptIdentity::bind(ctx, request_key.clone()),
@@ -377,7 +382,34 @@ impl Gateway<'_> {
             fingerprint: decoded.fingerprint,
             effect: decoded.effect,
             action: decoded.action,
+            prepared: None,
         };
+        // Preparation runs only for an admitted, currently authorized command and before its unit
+        // of work; it never records a receipt, so a failure here is retryable with the same key.
+        // Authority that can only replay never reaches a new decision, so it prepares nothing
+        // (no source read, no staging): the unit of work replays the receipt or denies.
+        let cancellation = options.cancellation.clone();
+        let env = Preparation::new(self.store, cancellation.as_ref(), options.deadline_ms);
+        let preparing = if authorization.is_replay_only() {
+            Ok(None)
+        } else {
+            handler.prepare(ctx, &admitted, &env)
+        };
+        match preparing {
+            Ok(prepared) => admitted.prepared = prepared,
+            Err(e) => {
+                // Same mapping as a write that was not admitted: nothing durable decided.
+                let retry = match e {
+                    StorageError::IncompatibleSchema(_) => RetryAdvice::Never,
+                    _ => RetryAdvice::SameCommand,
+                };
+                return Ok(self.rejected(request_key, Rejection::StorageUnavailable, retry));
+            }
+        }
+        // The use case settles what it prepared once the outcome is known (for example a staged
+        // file whose metadata a refusal or rollback never committed).
+        let prepared = admitted.prepared.clone();
+        let settle = handler.clone();
         let owned_ctx = ctx.clone();
         // Only a command that entered as the user (or the host itself) may write authority
         // records through the seams, and only as that principal.
@@ -420,7 +452,10 @@ impl Gateway<'_> {
             Ok(Unit::Denied) => {
                 self.rejected(request_key, Rejection::PermissionDenied, RetryAdvice::Never)
             }
-            Ok(Unit::Contract(e)) => return Err(GatewayFailure::HandlerContract(e)),
+            Ok(Unit::Contract(e)) => {
+                settle.settle(ctx, prepared.as_ref(), None, &env);
+                return Err(GatewayFailure::HandlerContract(e));
+            }
             Err(StorageError::CommitUnknown) => CommandReply::CommandStatusUnknown {
                 protocol: Protocol::Draft1,
                 request_key,
@@ -438,6 +473,7 @@ impl Gateway<'_> {
                 RetryAdvice::SameCommand,
             ),
         };
+        settle.settle(ctx, prepared.as_ref(), Some(&reply), &env);
         validate_command_reply(&reply).map_err(GatewayFailure::HandlerContract)?;
         Ok(reply)
     }
@@ -984,6 +1020,9 @@ impl WriteTransaction for HandlerTx<'_> {
             return Err(authority_owned());
         }
         self.inner.get_mut().authority_writes(capability, actor)
+    }
+    fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
+        self.inner.get_mut().artifacts()
     }
 }
 
