@@ -38,6 +38,9 @@
 //! * **Receipt replies.** [`replies::reply_consumer`] registers core's receipt reply publisher
 //!   as an asynchronous consumer: every recorded receipt's durable typed reply is published
 //!   after commit under the claim's fence, retried and recovered without duplicates.
+//! * **Resources and owned processes.** [`resources::Housekeeper`] runs the process
+//!   supervisor's recovery and the resource boot reconciliation at startup, periodic sweeps with
+//!   the same sleep/wake detection as the dispatcher, and the bounded shutdown of owned trees.
 //!
 //!
 //! # Boot sequence
@@ -85,6 +88,7 @@
 pub mod dispatch;
 pub mod package;
 pub mod replies;
+pub mod resources;
 pub mod runtime;
 mod store;
 

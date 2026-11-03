@@ -366,6 +366,9 @@ impl ReadSnapshot for MemSnapshot {
     fn sessions(&self) -> &dyn SessionRead {
         &self.unsupported
     }
+    fn resources(&self) -> &dyn ResourceRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -428,6 +431,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn sessions(&mut self) -> &mut dyn SessionRepository {
+        &mut self.unsupported
+    }
+    fn resources(&mut self) -> &mut dyn ResourceRepository {
         &mut self.unsupported
     }
 }
@@ -1297,6 +1303,91 @@ impl SessionRepository for Unsupported {
         nope()
     }
     fn insert_link(&mut self, _: &StoredLink) -> Result<(), StorageError> {
+        nope()
+    }
+}
+impl ResourceRead for Unsupported {
+    fn resource(&self, _: &Id) -> Result<Option<StoredResource>, StorageError> {
+        nope()
+    }
+    fn resource_by_key(&self, _: &str) -> Result<Option<StoredResource>, StorageError> {
+        nope()
+    }
+    fn resources(
+        &self,
+        _: &ResourceFilter,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<StoredResource>, StorageError> {
+        nope()
+    }
+    fn lease(&self, _: &Id) -> Result<Option<StoredLease>, StorageError> {
+        nope()
+    }
+    fn holder_lease(&self, _: &Id, _: &str) -> Result<Option<StoredLease>, StorageError> {
+        nope()
+    }
+    fn holders(&self, _: &Id, _: i64, _: u16) -> Result<Vec<StoredLease>, StorageError> {
+        nope()
+    }
+    fn waiters(
+        &self,
+        _: &Id,
+        _: Option<QueuePosition>,
+        _: u16,
+    ) -> Result<Vec<StoredLease>, StorageError> {
+        nope()
+    }
+    fn open_leases(
+        &self,
+        _: &OpenLeaseFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredLease>, StorageError> {
+        nope()
+    }
+    fn process(&self, _: &Id) -> Result<Option<StoredProcess>, StorageError> {
+        nope()
+    }
+    fn processes(
+        &self,
+        _: &ProcessFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredProcess>, StorageError> {
+        nope()
+    }
+}
+impl ResourceRepository for Unsupported {
+    fn insert_resource(&mut self, _: NewResource) -> Result<StoredResource, StorageError> {
+        nope()
+    }
+    fn redefine_resource(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: i64,
+        _: &[String],
+        _: bool,
+    ) -> Result<StoredResource, StorageError> {
+        nope()
+    }
+    fn next_fence(&mut self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn next_queue_ticket(&mut self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn insert_lease(&mut self, _: &StoredLease) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_lease(&mut self, _: &StoredLease, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_process(&mut self, _: NewProcess) -> Result<StoredProcess, StorageError> {
+        nope()
+    }
+    fn update_process(&mut self, _: &StoredProcess, _: i64) -> Result<(), StorageError> {
         nope()
     }
 }

@@ -1,0 +1,1073 @@
+//! Owned process trees, the process supervisor and native keep-awake, with trivial OS commands
+//! (shell sleeps; `cmd`/`ping` on Windows) on the real SQLite store. Every wait is bounded; no
+//! inference.
+//!
+//! Every test that spawns a process lives in this binary and runs serialized: a child spawned
+//! while another test thread holds open files can transiently inherit them (observed with the
+//! data-root lock), so spawning tests never share a test process with concurrent store reopens.
+#![allow(dead_code, clippy::result_large_err)]
+use devworks_adapters::fs::NativeFilesystem;
+use devworks_adapters::power::NativePower;
+use devworks_adapters::process::NativeProcessHost;
+use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
+use devworks_core::authority::HostAuthority;
+use devworks_core::authority::destructive::ProtectedRoots;
+use devworks_core::authority::service as auth;
+use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
+use devworks_core::gateway::Gateway;
+use devworks_core::ports::process::{Probe, ProcessHost, ProcessSpec, ProcessTree, TreeStatus};
+use devworks_core::ports::storage::*;
+use devworks_core::ports::{Clock, IdKind, IdSource};
+use devworks_core::protocol::records::{LeaseRecord, LeaseState};
+use devworks_core::protocol::results::{
+    DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
+};
+use devworks_core::protocol::support::Page;
+use devworks_core::protocol::{
+    ActorId, CommandReply, Counter, DomainFault, Id, ProjectId, Revision, RootId,
+};
+use devworks_core::services::UseCases;
+use devworks_core::services::process::{
+    ConfirmRefusal, LaunchPolicy, LaunchRefusal, LaunchRequest, LeaseClaim, ProcessSupervisor,
+    StopOutcome, StopScope,
+};
+use devworks_core::services::resources::{
+    DispatchFailure, DispatchRefusal, MachineResource, ReconcileCause, ResourceService,
+    register_machine,
+};
+use devworks_core::settings::catalog::AgentRole;
+use serde_json::{Value, json};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+const T0: i64 = 1_700_000_000_000;
+
+/// Serializes the tests of this binary (see the module documentation).
+fn serial() -> MutexGuard<'static, ()> {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+struct TestClock(AtomicI64);
+impl Clock for TestClock {
+    fn now_ms(&self) -> Counter {
+        Counter::new(self.0.load(Ordering::SeqCst)).unwrap()
+    }
+}
+struct TestIds(AtomicU64);
+impl IdSource for TestIds {
+    fn next_id(&self, kind: IdKind) -> Id {
+        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
+    }
+}
+
+/// A temporary data root reopened across simulated process restarts.
+struct Harness {
+    root: PathBuf,
+    clock: Arc<TestClock>,
+    ids: Arc<TestIds>,
+}
+impl Harness {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "devworks-process-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Self {
+            root,
+            clock: Arc::new(TestClock(AtomicI64::new(T0))),
+            ids: Arc::new(TestIds(AtomicU64::new(0))),
+        }
+    }
+    fn store(&self) -> SqliteStore {
+        SqliteStore::open(SqliteConfig::new(
+            self.root.clone(),
+            self.clock.clone(),
+            self.ids.clone(),
+            ActorId(Id::new("host").unwrap()),
+        ))
+        .expect("open store")
+    }
+    fn set_now(&self, ms: i64) {
+        self.clock.0.store(ms, Ordering::SeqCst);
+    }
+    fn connection(&self) -> rusqlite::Connection {
+        let c = rusqlite::Connection::open(self.root.join("workspace.sqlite")).unwrap();
+        c.busy_timeout(Duration::from_secs(5)).unwrap();
+        c
+    }
+    /// Seeds rows the adapter has no port for yet (projects, work items, repositories).
+    fn sql(&self, batch: &str) {
+        self.connection().execute_batch(batch).unwrap();
+    }
+    fn sql_with(&self, statement: &str, value: &str) {
+        self.connection()
+            .execute(statement, rusqlite::params![value])
+            .unwrap();
+    }
+}
+impl Drop for Harness {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// A removed-on-drop scratch directory.
+struct Scratch(PathBuf);
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "devworks-process-{tag}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+    fn path(&self, rel: &str) -> String {
+        self.0.join(rel).to_string_lossy().into_owned()
+    }
+}
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// `script` run by the platform shell.
+fn shell(script: &str) -> ProcessSpec {
+    let argv: Vec<String> = if cfg!(windows) {
+        vec!["cmd".into(), "/C".into(), script.into()]
+    } else {
+        vec!["/bin/sh".into(), "-c".into(), script.into()]
+    };
+    ProcessSpec::new(&argv).unwrap()
+}
+/// A tree of a root and a descendant that each sleep for about `secs` seconds (on Windows a
+/// `cmd` root waiting on its `ping` child, passed as plain words so no shell quoting applies).
+fn sleeping_tree(secs: u32) -> ProcessSpec {
+    if cfg!(windows) {
+        let argv: Vec<String> = ["cmd", "/C", "ping", "-n", &secs.to_string(), "127.0.0.1"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        ProcessSpec::new(&argv).unwrap()
+    } else {
+        shell(&format!("sleep {secs} & sleep {secs}; wait"))
+    }
+}
+
+fn id(s: &str) -> Id {
+    Id::new(s).unwrap()
+}
+fn actor(s: &str) -> ActorId {
+    ActorId(id(s))
+}
+fn project(s: &str) -> ProjectId {
+    ProjectId(id(s))
+}
+fn root(s: &str) -> RootId {
+    RootId(id(s))
+}
+
+struct Fx {
+    h: Harness,
+    store: Arc<SqliteStore>,
+    svc: Arc<ResourceService>,
+    cases: UseCases,
+    n: Arc<AtomicU64>,
+}
+
+impl Fx {
+    fn new() -> Self {
+        let fx = Self::open(Harness::new(), Arc::new(AtomicU64::new(0)));
+        fx.h.sql(
+            "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
+             INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
+             INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Feature A',1,0,1,1,1,'{}');
+             INSERT INTO work_items VALUES('root-b','project-b','feature',NULL,NULL,NULL,'Feature B',1,0,1,1,1,'{}');",
+        );
+        fx.write(|tx| {
+            for (a, k) in [
+                ("user-a", PrincipalKind::Human),
+                ("agent-a", PrincipalKind::Agent),
+                ("agent-c", PrincipalKind::Agent),
+                ("agent-b", PrincipalKind::Agent),
+            ] {
+                tx.actors().register(&actor(a), k, a)?;
+            }
+            Ok(())
+        });
+        let user = fx.ctx("user-a", PrincipalKind::Human, None);
+        for (who, p) in [
+            ("agent-a", "project-a"),
+            ("agent-c", "project-a"),
+            ("agent-b", "project-b"),
+        ] {
+            let by = user.clone();
+            let binding = NewPrincipalBinding {
+                actor: actor(who),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: Some(project(p)),
+                tool_families: None,
+                bound_by: actor("user-a"),
+            };
+            fx.write(move |tx| {
+                auth::bind_principal(tx, &by, binding, None)
+                    .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+            });
+        }
+        fx
+    }
+    fn open(h: Harness, n: Arc<AtomicU64>) -> Self {
+        let store = Arc::new(h.store());
+        let svc = Arc::new(ResourceService::new(h.ids.clone(), h.clock.clone()));
+        let cases = UseCases::new().with_resources(svc.clone());
+        Self {
+            h,
+            store,
+            svc,
+            cases,
+            n,
+        }
+    }
+    /// A process restart: every handle is dropped, then the store is reopened (a new boot).
+    fn restart(self) -> Self {
+        let Fx {
+            h,
+            store,
+            svc,
+            cases,
+            n,
+        } = self;
+        drop((cases, svc, store));
+        Self::open(h, n)
+    }
+    fn ctx(&self, who: &str, kind: PrincipalKind, p: Option<&str>) -> InvocationContext {
+        let info = self.store.info();
+        HostIngress::new(&*self.store)
+            .context(
+                actor(who),
+                kind,
+                id("invocation-1"),
+                id("ui-main"),
+                Counter::new(info.restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_lineage(p.map(project), None, None)
+    }
+    /// An agent of `p` working on that project's root in `session`.
+    fn agent(&self, who: &str, p: &str, session: &str) -> InvocationContext {
+        let r = if p == "project-a" { "root-a" } else { "root-b" };
+        self.ctx(who, PrincipalKind::Agent, Some(p))
+            .with_lineage(Some(project(p)), Some(root(r)), None)
+            .with_session(id(session))
+    }
+    fn write<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
+    ) -> T {
+        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+    }
+    fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
+        read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
+    }
+    fn authority(&self) -> HostAuthority<'_> {
+        HostAuthority {
+            store: &*self.store,
+            clock: &*self.h.clock,
+            protected_branches: &[],
+        }
+    }
+    fn command_keyed(
+        &self,
+        ctx: &InvocationContext,
+        op: &str,
+        key: &str,
+        mut body: Value,
+        revision: Option<u32>,
+    ) -> DomainCommandReply {
+        body["kind"] = json!(op);
+        let mut frame =
+            json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key, "body": body});
+        if let Some(r) = revision {
+            frame["schemaRevision"] = json!(r);
+        }
+        let authority = self.authority();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*self.store,
+            ids: &*self.h.ids,
+        };
+        self.cases
+            .command(&gateway, ctx, op, frame.to_string().as_bytes())
+            .expect("addressable")
+    }
+    fn command(&self, ctx: &InvocationContext, op: &str, body: Value) -> DomainCommandReply {
+        let key = format!("key-{}", self.n.fetch_add(1, Ordering::SeqCst));
+        self.command_keyed(ctx, op, &key, body, Some(2))
+    }
+    fn query_at(
+        &self,
+        ctx: &InvocationContext,
+        op: &str,
+        mut body: Value,
+        revision: Option<u32>,
+    ) -> DomainQueryReply {
+        body["kind"] = json!(op);
+        let mut frame =
+            json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-1", "body": body});
+        if let Some(r) = revision {
+            frame["schemaRevision"] = json!(r);
+        }
+        let authority = self.authority();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*self.store,
+            ids: &*self.h.ids,
+        };
+        self.cases
+            .query(&gateway, ctx, op, frame.to_string().as_bytes())
+            .expect("addressable")
+    }
+    fn acquire(&self, ctx: &InvocationContext, resource: &str, extra: Value) -> DomainCommandReply {
+        let mut body = json!({"resourceId": resource, "expectedRevision": "1", "units": 1,
+            "leaseMs": "60000"});
+        for (k, v) in extra.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        self.command(ctx, "resources.acquire", body)
+    }
+    fn holders(&self, ctx: &InvocationContext, resource: &str) -> Page<LeaseRecord> {
+        match result(self.query_at(
+            ctx,
+            "resources.holders",
+            json!({"resourceId": resource, "page": {"limit": 50}}),
+            Some(2),
+        )) {
+            OperationResult::ResourcesHolders { value } => value,
+            other => panic!("{other:?}"),
+        }
+    }
+    fn waiters(
+        &self,
+        ctx: &InvocationContext,
+        resource: &str,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Page<LeaseRecord> {
+        let mut page = json!({"limit": limit});
+        if let Some(c) = cursor {
+            page["cursor"] = json!(c);
+        }
+        match result(self.query_at(
+            ctx,
+            "resources.waiters",
+            json!({"resourceId": resource, "page": page}),
+            Some(2),
+        )) {
+            OperationResult::ResourcesWaiters { value } => value,
+            other => panic!("{other:?}"),
+        }
+    }
+    fn stored(&self, lease: &LeaseRecord) -> StoredLease {
+        let l = lease.id.clone();
+        self.read(move |r| r.resources().lease(&l)).unwrap()
+    }
+    fn register(&self, def: MachineResource) -> StoredResource {
+        self.write(move |tx| register_machine(tx, &def))
+    }
+    fn reconcile(
+        &self,
+        cause: ReconcileCause,
+    ) -> devworks_core::services::resources::ReconcileReport {
+        let svc = self.svc.clone();
+        self.write(move |tx| svc.reconcile(tx, cause))
+    }
+    fn dispatch(
+        &self,
+        ctx: &InvocationContext,
+        resource: &str,
+        lease: &LeaseRecord,
+        fence: i64,
+    ) -> Result<devworks_core::services::resources::DispatchTicket, DispatchFailure> {
+        let (svc, ctx, resource, lease) = (
+            self.svc.clone(),
+            ctx.clone(),
+            resource.to_owned(),
+            lease.id.clone(),
+        );
+        self.write(move |tx| Ok(svc.authorize_dispatch(tx, &ctx, &resource, &lease, fence)))
+    }
+    fn events(&self, kind: &str) -> Vec<EventRecord> {
+        let mut out = Vec::new();
+        let mut after = 0;
+        loop {
+            let page = self.read(move |r| r.history().page(&EventFilter::All, after, 500));
+            out.extend(page.events.into_iter().filter(|e| e.kind == kind));
+            if !page.has_more {
+                return out;
+            }
+            after = page.next_after;
+        }
+    }
+    fn supervisor(&self) -> ProcessSupervisor {
+        ProcessSupervisor::new(
+            self.store.clone(),
+            Arc::new(NativeProcessHost),
+            self.svc.clone(),
+        )
+    }
+}
+
+fn recorded(reply: DomainCommandReply) -> (DomainDecision, bool) {
+    match reply {
+        CommandReply::Recorded {
+            receipt, replayed, ..
+        } => (receipt.decision, replayed),
+        other => panic!("expected a recorded decision, got {other:?}"),
+    }
+}
+fn lease(reply: DomainCommandReply) -> LeaseRecord {
+    match recorded(reply).0 {
+        DomainDecision::Applied { result } | DomainDecision::NoChange { result } => match result {
+            OperationResult::ResourcesAcquire { value }
+            | OperationResult::ResourcesRenew { value }
+            | OperationResult::ResourcesRelease { value } => value,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("expected an applied decision, got {other:?}"),
+    }
+}
+fn unchanged(reply: DomainCommandReply) -> LeaseRecord {
+    match recorded(reply).0 {
+        DomainDecision::NoChange {
+            result:
+                OperationResult::ResourcesAcquire { value }
+                | OperationResult::ResourcesRelease { value },
+        } => value,
+        other => panic!("expected NoChange, got {other:?}"),
+    }
+}
+fn refused(reply: DomainCommandReply) -> DomainFault {
+    match recorded(reply).0 {
+        DomainDecision::Refused { fault } => fault,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+fn result(reply: DomainQueryReply) -> OperationResult {
+    match reply {
+        DomainQueryReply::Result { result, .. } => result,
+        other => panic!("expected a result, got {other:?}"),
+    }
+}
+fn fault(reply: DomainQueryReply) -> DomainFault {
+    match reply {
+        DomainQueryReply::Rejected { fault, .. } => fault,
+        other => panic!("expected a fault, got {other:?}"),
+    }
+}
+fn st(l: &LeaseRecord) -> &'static str {
+    match l.state {
+        LeaseState::Waiting => "Waiting",
+        LeaseState::Held => "Held",
+        LeaseState::Releasing => "Releasing",
+        LeaseState::Uncertain => "Uncertain",
+        LeaseState::Released => "Released",
+    }
+}
+fn fence(l: &LeaseRecord) -> i64 {
+    l.fence.get()
+}
+fn release(fx: &Fx, ctx: &InvocationContext, l: &LeaseRecord, f: i64) -> DomainCommandReply {
+    fx.command(
+        ctx,
+        "resources.release",
+        json!({"leaseId": l.id.as_str(), "expectedFence": f.to_string()}),
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// The native process host
+
+fn until_empty(tree: &mut dyn ProcessTree, bound: Duration) -> Option<TreeStatus> {
+    let start = Instant::now();
+    while start.elapsed() < bound {
+        let s = tree.poll().unwrap();
+        if s.empty {
+            return Some(s);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    None
+}
+
+#[test]
+fn a_tree_that_finishes_reports_its_exit_code() {
+    let _serial = serial();
+    let mut tree = NativeProcessHost.spawn(&shell("exit 3")).unwrap();
+    let status = until_empty(&mut *tree, Duration::from_secs(10)).expect("finished");
+    assert_eq!(status.exit_code, Some(3));
+    assert!(!tree.identity().birth.is_empty());
+}
+
+#[test]
+fn the_forced_stop_reaps_every_descendant() {
+    let _serial = serial();
+    #[cfg(unix)]
+    {
+        // The descendant writes its pid, so its end is checked independently of the group.
+        let dir = std::env::temp_dir().join(format!("devworks-tree-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("child.pid");
+        let script = format!("sleep 30 & echo $! > '{}'; sleep 30; wait", file.display());
+        let mut tree = NativeProcessHost.spawn(&shell(&script)).unwrap();
+        let start = Instant::now();
+        let child: libc::pid_t = loop {
+            if let Some(pid) = std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+            {
+                break pid;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "no child pid");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(!tree.poll().unwrap().empty);
+        tree.kill().unwrap();
+        let status = until_empty(&mut *tree, Duration::from_secs(5)).expect("tree emptied");
+        assert_eq!(status.exit_code, None, "killed by a signal");
+        // The descendant is gone too (collected by init once it died).
+        let start = Instant::now();
+        loop {
+            // SAFETY: a signal-0 existence check. A zombie awaiting its reaper is dead too
+            // (containers without an init that reaps keep zombies).
+            let zombie = std::fs::read_to_string(format!("/proc/{child}/stat"))
+                .ok()
+                .and_then(|s| {
+                    s.rsplit_once(')')
+                        .map(|(_, rest)| rest.trim_start().starts_with('Z'))
+                })
+                .unwrap_or(false);
+            let alive = unsafe { libc::kill(child, 0) } == 0 && !zombie;
+            if !alive {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "descendant survived"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Once empty, the group is never signalled again.
+        tree.kill().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[cfg(windows)]
+    {
+        let mut tree = NativeProcessHost.spawn(&sleeping_tree(30)).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!tree.poll().unwrap().empty);
+        tree.kill().unwrap();
+        until_empty(&mut *tree, Duration::from_secs(5)).expect("job emptied");
+        assert_eq!(NativeProcessHost.probe(tree.identity()), Probe::Gone);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cooperative_stop_lets_the_tree_exit_on_its_own() {
+    let _serial = serial();
+    let mut tree = NativeProcessHost
+        .spawn(&shell("trap 'exit 0' TERM; while :; do sleep 0.05; done"))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(tree.request_stop().unwrap());
+    let status = until_empty(&mut *tree, Duration::from_secs(5)).expect("stopped");
+    assert_eq!(status.exit_code, Some(0));
+}
+
+#[test]
+fn an_orphaned_tree_is_verified_by_birth_and_terminated() {
+    let _serial = serial();
+    let tree = NativeProcessHost.spawn(&sleeping_tree(30)).unwrap();
+    let identity = tree.identity().clone();
+    // A crash: the owner disappears without stopping the tree.
+    std::mem::forget(tree);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(NativeProcessHost.probe(&identity), Probe::Alive);
+    // A reused pid (different birth) is never treated as the recorded process.
+    let mut other = identity.clone();
+    other.birth = "1.000001".into();
+    other.group = None;
+    assert_eq!(NativeProcessHost.probe(&other), Probe::Gone);
+    assert_eq!(NativeProcessHost.terminate(&other), Probe::Gone);
+    assert_eq!(
+        NativeProcessHost.probe(&identity),
+        Probe::Alive,
+        "untouched"
+    );
+    let after = NativeProcessHost.terminate(&identity);
+    assert_eq!(after, Probe::Gone, "{after:?}");
+}
+
+#[test]
+fn a_missing_program_starts_nothing() {
+    let _serial = serial();
+    let spec = ProcessSpec::new(&["devworks-no-such-program-xyz".to_owned()]).unwrap();
+    assert!(matches!(
+        NativeProcessHost.spawn(&spec),
+        Err(devworks_core::ports::process::ProcessError::Spawn(_))
+    ));
+}
+
+#[test]
+fn dropping_an_owned_tree_kills_it() {
+    let _serial = serial();
+    let tree = NativeProcessHost.spawn(&sleeping_tree(30)).unwrap();
+    let identity = tree.identity().clone();
+    std::thread::sleep(Duration::from_millis(100));
+    drop(tree);
+    let start = Instant::now();
+    while NativeProcessHost.probe(&identity) == Probe::Alive {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "tree survived its owner"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn captured_output_is_readable() {
+    let _serial = serial();
+    let mut spec = shell("echo devworks-output");
+    spec.capture_output = true;
+    let mut tree = NativeProcessHost.spawn(&spec).unwrap();
+    let (mut out, _err) = tree.take_output().expect("pipes");
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut out, &mut text).unwrap();
+    assert!(text.contains("devworks-output"), "{text}");
+    until_empty(&mut *tree, Duration::from_secs(10)).expect("finished");
+    assert!(tree.take_output().is_none(), "taken once");
+}
+
+#[test]
+fn keep_awake_holds_a_native_request_and_releases_it() {
+    let _serial = serial();
+    use devworks_core::ports::process::{PowerPort, PowerRequest};
+    match NativePower.prevent_idle_sleep() {
+        Ok(mut held) => {
+            assert!(matches!(held.status(), PowerRequest::Effective { .. }));
+            drop(held);
+        }
+        // Without a power facility (for example no logind on a Linux runner) the request is
+        // reported unavailable with a reason, never as effective.
+        Err(reason) => {
+            assert!(!reason.is_empty());
+            let linux = cfg!(all(unix, not(target_os = "macos")));
+            assert!(
+                linux,
+                "macOS and Windows always offer the request: {reason}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The process supervisor
+
+fn policy_parts() -> (NativeFilesystem, ProtectedRoots) {
+    (
+        NativeFilesystem::default(),
+        ProtectedRoots::new(vec![], vec![], None),
+    )
+}
+
+#[test]
+fn launch_preflight_blocks_destructive_commands_before_anything_runs() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let sup = fx.supervisor();
+    // The target is a registered primary repository in a scratch directory: refused on every
+    // platform, and harmless even if a regression let it run.
+    let scratch = Scratch::new("launch");
+    let repo = scratch.path("repo");
+    std::fs::create_dir_all(format!("{repo}/.git")).unwrap();
+    fx.h.sql_with(
+        "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-a',?1,1)",
+        &repo,
+    );
+    let fs = NativeFilesystem::default();
+    let roots = ProtectedRoots::read(&*fx.store, Vec::new(), None).unwrap();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &roots,
+        protected_branches: &[],
+    };
+    let a = fx.agent("agent-a", "project-a", "s-a");
+    for approved in [false, true] {
+        let spec = ProcessSpec::new(&["rm".into(), "-rf".into(), repo.clone()]).unwrap();
+        let refusal = sup
+            .launch(
+                &a,
+                LaunchRequest {
+                    spec,
+                    operation_id: None,
+                    lease: None,
+                    approved_hold: approved,
+                },
+                &policy,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(refusal, LaunchRefusal::Blocked(_)),
+            "approval never unlocks a refusal: {refusal:?}"
+        );
+    }
+    assert_eq!(fx.events("DestructiveOperationBlocked").len(), 2);
+    let none = fx.read(|r| r.resources().processes(&ProcessFilter::Unsettled, None, 10));
+    assert!(none.is_empty(), "nothing was recorded or started");
+    // A missing program is recorded Failed with its attribution.
+    let spec = ProcessSpec::new(&["devworks-no-such-program-xyz".into()]).unwrap();
+    assert!(matches!(
+        sup.launch(
+            &a,
+            LaunchRequest {
+                spec,
+                operation_id: None,
+                lease: None,
+                approved_hold: false
+            },
+            &policy
+        ),
+        Err(LaunchRefusal::Spawn(_))
+    ));
+    let failed = fx.events("ProcessLaunchFailed");
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].root_id, Some(root("root-a")));
+}
+
+#[test]
+fn bounded_cancellation_reaps_the_tree_and_transfers_its_physical_lease() {
+    let _serial = serial();
+    let fx = Fx::new();
+    fx.register(MachineResource {
+        name: "gpu".into(),
+        capacity: 1,
+        physical: true,
+        labels: vec![],
+    });
+    let sup = fx.supervisor();
+    let (fs, roots) = policy_parts();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &roots,
+        protected_branches: &[],
+    };
+    let a = fx.agent("agent-a", "project-a", "s-a");
+    let b = fx.agent("agent-b", "project-b", "s-b");
+    let la = lease(fx.acquire(&a, "gpu", json!({"leaseMs": "1000"})));
+    // A stale fence never starts a process.
+    let stale = sup.launch(
+        &a,
+        LaunchRequest {
+            spec: sleeping_tree(30),
+            operation_id: None,
+            lease: Some(LeaseClaim {
+                resource: "gpu".into(),
+                lease: la.id.clone(),
+                fence: 9,
+            }),
+            approved_hold: false,
+        },
+        &policy,
+    );
+    assert!(matches!(
+        stale,
+        Err(LaunchRefusal::Resource(DispatchFailure::Refused(
+            DispatchRefusal::LeaseLost
+        )))
+    ));
+    let p = sup
+        .launch(
+            &a,
+            LaunchRequest {
+                spec: sleeping_tree(30),
+                operation_id: None,
+                lease: Some(LeaseClaim {
+                    resource: "gpu".into(),
+                    lease: la.id.clone(),
+                    fence: 1,
+                }),
+                approved_hold: false,
+            },
+            &policy,
+        )
+        .expect("launched");
+    let record = {
+        let id = p.id.clone();
+        fx.read(move |r| r.resources().process(&id)).unwrap()
+    };
+    assert_eq!(record.phase, ProcessPhase::Running);
+    assert_eq!(record.pid, Some(i64::from(p.identity.pid)));
+    assert_eq!(
+        (
+            record.actor.clone(),
+            record.root_id.clone(),
+            record.lease_id.clone()
+        ),
+        (actor("agent-a"), Some(root("root-a")), Some(la.id.clone()))
+    );
+    let lb = lease(fx.acquire(&b, "gpu", json!({})));
+    // The lease expires while the tree runs: uncertain, the waiter is not granted.
+    fx.h.set_now(T0 + 5_000);
+    fx.reconcile(ReconcileCause::Sweep);
+    assert_eq!(fx.stored(&la).phase, LeasePhase::Uncertain);
+    assert_eq!(fx.stored(&lb).phase, LeasePhase::Waiting);
+    assert!(sup.poll(&p).unwrap().is_none());
+    // Bounded cancellation reaps the whole tree, then the lease transfers in the same unit.
+    let started = std::time::Instant::now();
+    let outcome = sup
+        .cancel(&p, Duration::from_secs(2), Duration::from_secs(10))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(matches!(outcome, StopOutcome::Reaped { .. }), "{outcome:?}");
+    assert_eq!(NativeProcessHost.probe(&p.identity), Probe::Gone);
+    assert_eq!(fx.stored(&la).end_reason, Some(LeaseEndReason::Reconciled));
+    let granted = fx.stored(&lb);
+    assert_eq!((granted.phase, granted.fence), (LeasePhase::Held, 2));
+    assert!(sup.owned().is_empty());
+    // A finished tree is reaped by polling.
+    let quick = sup
+        .launch(
+            &b,
+            LaunchRequest {
+                spec: shell("exit 0"),
+                operation_id: None,
+                lease: None,
+                approved_hold: false,
+            },
+            &policy,
+        )
+        .unwrap();
+    assert!(matches!(
+        sup.wait(&quick, Duration::from_secs(10)).unwrap(),
+        Some(StopOutcome::Reaped {
+            exit_code: Some(0),
+            ..
+        })
+    ));
+    for kind in ["ProcessStarted", "ProcessStopRequested", "ProcessReaped"] {
+        assert!(!fx.events(kind).is_empty(), "{kind}");
+    }
+    // Shutdown with nothing owned only reconciles.
+    assert!(
+        sup.shutdown(Duration::from_millis(100), Duration::from_secs(1))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn shutdown_cancels_every_owned_tree_within_one_bound() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let sup = fx.supervisor();
+    let (fs, roots) = policy_parts();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &roots,
+        protected_branches: &[],
+    };
+    let a = fx.agent("agent-a", "project-a", "s-a");
+    // A work root's writers are stopped alone (GIT-07 cleanup, archival), others keep running.
+    let other = fx.agent("agent-b", "project-b", "s-b");
+    let theirs = sup
+        .launch(
+            &other,
+            LaunchRequest {
+                spec: sleeping_tree(30),
+                operation_id: None,
+                lease: None,
+                approved_hold: false,
+            },
+            &policy,
+        )
+        .unwrap();
+    let mine = sup
+        .launch(
+            &a,
+            LaunchRequest {
+                spec: sleeping_tree(30),
+                operation_id: None,
+                lease: None,
+                approved_hold: false,
+            },
+            &policy,
+        )
+        .unwrap();
+    let stopped = sup
+        .stop(
+            &StopScope::Root(root("root-a")),
+            Duration::from_millis(500),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+    assert_eq!(
+        stopped.iter().map(|(i, _)| i.clone()).collect::<Vec<_>>(),
+        vec![mine.id.clone()]
+    );
+    assert_eq!(NativeProcessHost.probe(&mine.identity), Probe::Gone);
+    assert_eq!(NativeProcessHost.probe(&theirs.identity), Probe::Alive);
+    let launched: Vec<_> = (0..2)
+        .map(|_| {
+            sup.launch(
+                &a,
+                LaunchRequest {
+                    spec: sleeping_tree(30),
+                    operation_id: None,
+                    lease: None,
+                    approved_hold: false,
+                },
+                &policy,
+            )
+            .unwrap()
+        })
+        .collect();
+    let started = std::time::Instant::now();
+    let out = sup
+        .shutdown(Duration::from_millis(500), Duration::from_secs(10))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(
+        out.len(),
+        3,
+        "the other project's tree and the two new ones"
+    );
+    assert!(
+        out.iter()
+            .all(|(_, o)| matches!(o, StopOutcome::Reaped { .. })),
+        "{out:?}"
+    );
+    assert_eq!(NativeProcessHost.probe(&theirs.identity), Probe::Gone);
+    for p in &launched {
+        assert_eq!(NativeProcessHost.probe(&p.identity), Probe::Gone);
+    }
+    assert_eq!(
+        fx.events("ResourcesReconciled").last().unwrap().payload["cause"],
+        "Shutdown"
+    );
+}
+
+#[test]
+fn recovery_kills_trees_of_an_earlier_boot_and_holds_lost_launches_for_a_person() {
+    let _serial = serial();
+    let fx = Fx::new();
+    fx.register(MachineResource {
+        name: "gpu".into(),
+        capacity: 2,
+        physical: true,
+        labels: vec![],
+    });
+    let a = fx.agent("agent-a", "project-a", "s-a");
+    let running = lease(fx.acquire(&a, "gpu", json!({})));
+    let lost = lease(fx.acquire(&fx.agent("agent-c", "project-a", "s-c"), "gpu", json!({})));
+    // A crash: the earlier boot launched a tree and recorded it, then died without stopping it.
+    let tree = NativeProcessHost.spawn(&sleeping_tree(30)).unwrap();
+    let identity = tree.identity().clone();
+    std::mem::forget(tree);
+    let platform = NativeProcessHost.platform().to_owned();
+    let (lr, ll) = (running.id.clone(), lost.id.clone());
+    let ident = identity.clone();
+    fx.write(move |tx| {
+        let mut p = tx.resources().insert_process(NewProcess {
+            id: Id::new("process-running").unwrap(),
+            platform: platform.clone(),
+            program: "sh".into(),
+            argv_sha256: "a".repeat(64),
+            operation_id: None,
+            lease_id: Some(lr),
+            actor: actor("agent-a"),
+            session_id: None,
+            project_id: Some(project("project-a")),
+            root_id: Some(root("root-a")),
+            assignment_id: None,
+        })?;
+        p.phase = ProcessPhase::Running;
+        p.pid = Some(i64::from(ident.pid));
+        p.birth = Some(ident.birth.clone());
+        p.group = ident.group;
+        p.revision = 2;
+        tx.resources().update_process(&p, 1)?;
+        // A launch whose identity was never recorded.
+        tx.resources().insert_process(NewProcess {
+            id: Id::new("process-lost").unwrap(),
+            platform,
+            program: "sh".into(),
+            argv_sha256: "b".repeat(64),
+            operation_id: None,
+            lease_id: Some(ll),
+            actor: actor("agent-c"),
+            session_id: None,
+            project_id: Some(project("project-a")),
+            root_id: Some(root("root-a")),
+            assignment_id: None,
+        })?;
+        Ok(())
+    });
+    let fx = fx.restart();
+    let sup = fx.supervisor();
+    let report = sup.recover().unwrap();
+    assert_eq!((report.killed, report.lost), (1, 1), "{report:?}");
+    assert_eq!(
+        NativeProcessHost.probe(&identity),
+        Probe::Gone,
+        "the orphaned tree was killed"
+    );
+    let read = |p: &str| {
+        let p = id(p);
+        fx.read(move |r| r.resources().process(&p)).unwrap()
+    };
+    assert_eq!(read("process-running").phase, ProcessPhase::Reaped);
+    assert_eq!(read("process-lost").phase, ProcessPhase::Lost);
+    // The lease served by the killed tree transferred; the lost one stays uncertain.
+    assert_eq!(
+        fx.stored(&running).end_reason,
+        Some(LeaseEndReason::Reconciled)
+    );
+    assert_eq!(fx.stored(&lost).phase, LeasePhase::Uncertain);
+    // Only a person can declare the lost launch stopped.
+    let agent = fx.agent("agent-a", "project-a", "s-a");
+    assert!(matches!(
+        sup.confirm_stopped(&agent, &id("process-lost")),
+        Err(ConfirmRefusal::HumanOnly)
+    ));
+    let user = fx.ctx("user-a", PrincipalKind::Human, None);
+    let confirmed = match sup.confirm_stopped(&user, &id("process-lost")) {
+        Ok(c) => c,
+        Err(e) => panic!("{e:?}"),
+    };
+    assert_eq!(confirmed.phase, ProcessPhase::Reaped);
+    assert_eq!(
+        fx.stored(&lost).end_reason,
+        Some(LeaseEndReason::Reconciled)
+    );
+    let statement = fx.events("ProcessConfirmedStopped");
+    assert_eq!(statement[0].actor, actor("user-a"));
+    // A second recovery finds nothing left to reconcile.
+    let again = sup.recover().unwrap();
+    assert_eq!(
+        (again.killed, again.lost, again.reaped, again.uncertain),
+        (0, 0, 0, 0)
+    );
+}

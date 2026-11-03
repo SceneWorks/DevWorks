@@ -129,7 +129,22 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0009_history_feeds.sql"),
         rebuilds_tables: false,
     },
+    // Additive columns (all defaulted or nullable), tables and indexes. The reader floor stays
+    // at 8: no earlier build reads resources, leases or owned processes (the migration 1
+    // resources table was never written), and the defaulted columns leave every existing query
+    // unchanged. The writer floor stays at 9: no earlier build writes any of these records, so
+    // it cannot break their fencing or queue invariants. Both are at least every earlier floor.
+    Migration {
+        version: 10,
+        minimum_reader: 8,
+        minimum_writer: 9,
+        sql: include_str!("migrations/0010_resources_processes.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 10; a test fails if the shipped text changes.
+pub const MIGRATION_0010_SHA256: &str =
+    "7fab1dd563202155578de4ffe4e14bf89647e97815685f0e58a886a051c20f01";
 /// Recorded checksum of migration 9; a test fails if the shipped text changes.
 pub const MIGRATION_0009_SHA256: &str =
     "0a893b2c15371f9d9d251bb45814eb9666ee883f94a5706a165184f5fd88c128";

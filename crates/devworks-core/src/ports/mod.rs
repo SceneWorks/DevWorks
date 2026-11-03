@@ -6,6 +6,7 @@
 //! and command use cases execute on the storage write owner's thread, so the gateway hands them
 //! across threads. Core stays runtime-agnostic (no async runtime dependency).
 pub mod files;
+pub mod process;
 pub mod storage;
 
 use crate::context::InvocationContext;
@@ -47,6 +48,9 @@ pub enum IdKind {
     TranscriptEntry,
     TranscriptBatch,
     Link,
+    Resource,
+    Lease,
+    Process,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

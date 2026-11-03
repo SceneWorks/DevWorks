@@ -45,7 +45,8 @@ macro_rules! store_contract_tests {
             queue_inspection_order_and_paging, package_handler_ledger,
             refused_decisions_persist_only_receipt_and_history,
             nested_savepoint_conflict_is_a_durable_refusal,
-            configuration_revisions_and_conflicts, configuration_proposal_lifecycle);
+            configuration_revisions_and_conflicts, configuration_proposal_lifecycle,
+            resource_reservation_records);
     };
     (@cases $harness:expr; $($case:ident),*) => {$(
         #[test]
@@ -2210,6 +2211,224 @@ pub fn configuration_proposal_lifecycle(h: &mut dyn StoreHarness) {
             .is_empty()
         );
         assert_eq!(c.proposal(&id("proposal-1"))?.unwrap(), approved);
+        Ok(())
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixture_lease(
+    lease: &str,
+    resource: &Id,
+    boot: &Id,
+    holder: &str,
+    priority: i64,
+    queue_seq: i64,
+    fence: i64,
+) -> StoredLease {
+    StoredLease {
+        id: id(lease),
+        resource_id: resource.clone(),
+        phase: if fence > 0 {
+            LeasePhase::Held
+        } else {
+            LeasePhase::Waiting
+        },
+        end_reason: None,
+        owner: ActorId(id("host")),
+        holder_key: holder.into(),
+        session_id: None,
+        project_id: None,
+        root_id: None,
+        assignment_id: None,
+        boot_id: boot.clone(),
+        purpose: Some("fixture".into()),
+        priority,
+        units: 1,
+        lease_ms: 1_000,
+        queue_seq,
+        fence,
+        requested_at_ms: 0,
+        granted_at_ms: (fence > 0).then_some(0),
+        renewed_at_ms: None,
+        expires_at_ms: 1_000,
+        ended_at_ms: None,
+        unreachable_since_ms: None,
+        revision: 1,
+    }
+}
+
+/// Resource reservation and owned-process records (RES-03): canonical keys, one open lease per
+/// holder and resource, one grant per fence, the waiter (priority, then FIFO) and holder (fence)
+/// orders, compare-and-set updates, prior-boot listings and persistence across restart.
+pub fn resource_reservation_records(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let boot = s.info().boot_id.expect("writable store");
+    let b = boot.clone();
+    write(&*s, move |tx| {
+        let r = tx.resources().insert_resource(NewResource {
+            id: id("res-a"),
+            name: "gpu".into(),
+            scope: ResourceScopeKind::Machine,
+            project_id: None,
+            physical: true,
+            capacity: 2,
+            labels: vec!["cuda".into()],
+        })?;
+        assert_eq!(
+            (r.canonical_key.as_str(), r.revision, r.fence_seq),
+            ("machine:gpu", 1, 0)
+        );
+        let again = tx.resources().insert_resource(NewResource {
+            id: id("res-b"),
+            name: "gpu".into(),
+            scope: ResourceScopeKind::Machine,
+            project_id: None,
+            physical: false,
+            capacity: 1,
+            labels: vec![],
+        });
+        assert!(matches!(again, Err(StorageError::Duplicate { .. })));
+        assert_eq!(tx.resources().next_fence(&r.id)?, 1);
+        assert_eq!(tx.resources().next_queue_ticket(&r.id)?, 1);
+        for (l, holder, priority, seq, fence) in [
+            ("w-1", "h-1", 1, 1, 0),
+            ("w-2", "h-2", 3, 2, 0),
+            ("w-3", "h-3", 1, 3, 0),
+            ("g-1", "h-4", 1, 4, 1),
+        ] {
+            tx.resources()
+                .insert_lease(&fixture_lease(l, &r.id, &b, holder, priority, seq, fence))?;
+        }
+        let dup = tx
+            .resources()
+            .insert_lease(&fixture_lease("w-9", &r.id, &b, "h-1", 1, 9, 0));
+        assert!(matches!(dup, Err(StorageError::Duplicate { .. })));
+        let reused = tx
+            .resources()
+            .insert_lease(&fixture_lease("g-2", &r.id, &b, "h-5", 1, 5, 1));
+        assert!(reused.is_err(), "a fence grants once");
+        let order: Vec<String> = tx
+            .resources()
+            .waiters(&r.id, None, 10)?
+            .iter()
+            .map(|l| l.id.as_str().to_owned())
+            .collect();
+        assert_eq!(order, ["w-2", "w-1", "w-3"]);
+        let rest = tx.resources().waiters(
+            &r.id,
+            Some(QueuePosition {
+                priority: 1,
+                queue_seq: 1,
+            }),
+            10,
+        )?;
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].id.as_str(), "w-3");
+        let held = tx.resources().holders(&r.id, 0, 10)?;
+        assert_eq!(held.len(), 1);
+        assert_eq!(
+            tx.resources()
+                .holder_lease(&r.id, "h-4")?
+                .unwrap()
+                .id
+                .as_str(),
+            "g-1"
+        );
+        // Compare-and-set: a stale revision is refused; an ended lease is final and frees its
+        // holder for a new lease.
+        let mut ended = held[0].clone();
+        ended.phase = LeasePhase::Released;
+        ended.end_reason = Some(LeaseEndReason::Released);
+        ended.ended_at_ms = Some(5);
+        ended.revision = 2;
+        assert!(matches!(
+            tx.resources().update_lease(&ended, 7),
+            Err(StorageError::LeaseLost { .. })
+        ));
+        tx.resources().update_lease(&ended, 1)?;
+        assert!(tx.resources().holders(&r.id, 0, 10)?.is_empty());
+        let mut later = ended.clone();
+        later.revision = 3;
+        assert!(
+            tx.resources().update_lease(&later, 2).is_err(),
+            "an ended lease is final"
+        );
+        tx.resources()
+            .insert_lease(&fixture_lease("g-3", &r.id, &b, "h-4", 1, 6, 2))?;
+        assert_eq!(
+            tx.resources()
+                .open_leases(&OpenLeaseFilter::All, None, 10)?
+                .len(),
+            4
+        );
+        assert!(
+            tx.resources()
+                .open_leases(&OpenLeaseFilter::PriorBoots(b.clone()), None, 10)?
+                .is_empty()
+        );
+        let mut p = tx.resources().insert_process(NewProcess {
+            id: id("proc-a"),
+            platform: "unix".into(),
+            program: "sleep".into(),
+            argv_sha256: "a".repeat(64),
+            operation_id: None,
+            lease_id: Some(id("g-3")),
+            actor: ActorId(id("host")),
+            session_id: None,
+            project_id: None,
+            root_id: None,
+            assignment_id: None,
+        })?;
+        assert_eq!(
+            (p.phase, p.boot_id.clone(), p.revision),
+            (ProcessPhase::Launching, b.clone(), 1)
+        );
+        p.phase = ProcessPhase::Running;
+        p.pid = Some(42);
+        p.birth = Some("1.000001".into());
+        p.group = Some(42);
+        p.revision = 2;
+        assert!(matches!(
+            tx.resources().update_process(&p, 5),
+            Err(StorageError::LeaseLost { .. })
+        ));
+        tx.resources().update_process(&p, 1)?;
+        assert_eq!(
+            tx.resources()
+                .processes(&ProcessFilter::Lease(id("g-3")), None, 10)?
+                .len(),
+            1
+        );
+        assert_eq!(
+            tx.resources()
+                .processes(&ProcessFilter::Unsettled, None, 10)?
+                .len(),
+            1
+        );
+        Ok(())
+    })
+    .unwrap();
+    drop(s);
+    let s = h.open();
+    let now = s.info().boot_id.expect("writable store");
+    assert_ne!(now, boot);
+    read(&*s, move |r| {
+        let prior =
+            r.resources()
+                .open_leases(&OpenLeaseFilter::PriorBoots(now.clone()), None, 10)?;
+        assert_eq!(
+            prior.len(),
+            4,
+            "every open lease belongs to the earlier boot"
+        );
+        let unsettled =
+            r.resources()
+                .processes(&ProcessFilter::UnsettledPriorBoots(now), None, 10)?;
+        assert_eq!(unsettled[0].pid, Some(42));
+        assert_eq!(
+            r.resources().lease(&id("g-1"))?.unwrap().end_reason,
+            Some(LeaseEndReason::Released)
+        );
         Ok(())
     });
 }

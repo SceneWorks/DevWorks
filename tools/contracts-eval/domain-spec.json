@@ -144,6 +144,31 @@
         "Released"
       ]
     },
+    "ResourcePriority": {
+      "kind": "enum",
+      "values": [
+        "Low",
+        "Medium",
+        "High",
+        "Critical"
+      ]
+    },
+    "ResourceScope": {
+      "kind": "enum",
+      "values": [
+        "Machine",
+        "Project"
+      ]
+    },
+    "LeaseEnd": {
+      "kind": "enum",
+      "values": [
+        "Released",
+        "Expired",
+        "Cancelled",
+        "Reconciled"
+      ]
+    },
     "DeliveryMode": {
       "kind": "enum",
       "values": [
@@ -1080,7 +1105,21 @@
         "revision": "Revision",
         "capacity": "Limit",
         "holders": "Items<Id>",
-        "waiters": "Items<Id>"
+        "waiters": "Items<Id>",
+        "scope": "?ResourceScope",
+        "project_id": "?ProjectId",
+        "physical": "?bool",
+        "labels": "?Items<Label>",
+        "used": "?Counter",
+        "available": "?bool"
+      },
+      "since": {
+        "scope": 2,
+        "project_id": 2,
+        "physical": 2,
+        "labels": 2,
+        "used": 2,
+        "available": 2
       }
     },
     "LeaseRecord": {
@@ -1091,7 +1130,37 @@
         "owner_id": "ActorId",
         "fence": "Counter",
         "expires_at_ms": "Counter",
-        "state": "LeaseState"
+        "state": "LeaseState",
+        "units": "?Limit",
+        "purpose": "?Text",
+        "priority": "?ResourcePriority",
+        "queue_position": "?Counter",
+        "requested_at_ms": "?Counter",
+        "granted_at_ms": "?Counter",
+        "renewed_at_ms": "?Counter",
+        "ended_at_ms": "?Counter",
+        "end_reason": "?LeaseEnd",
+        "owner_unreachable_since_ms": "?Counter",
+        "project_id": "?ProjectId",
+        "root_id": "?RootId",
+        "assignment_id": "?AssignmentId",
+        "session_id": "?Id"
+      },
+      "since": {
+        "units": 2,
+        "purpose": 2,
+        "priority": 2,
+        "queue_position": 2,
+        "requested_at_ms": 2,
+        "granted_at_ms": 2,
+        "renewed_at_ms": 2,
+        "ended_at_ms": 2,
+        "end_reason": 2,
+        "owner_unreachable_since_ms": 2,
+        "project_id": 2,
+        "root_id": 2,
+        "assignment_id": 2,
+        "session_id": 2
       }
     },
     "BrowserSession": {
@@ -4883,7 +4952,7 @@
       "result": "Page<ResourceRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session."
     },
     "resources.acquire": {
       "operation": "resources.acquire",
@@ -4892,12 +4961,22 @@
         "resource_id": "ResourceId",
         "expected_revision": "Revision",
         "units": "Limit",
-        "lease_ms": "PositiveCounter"
+        "lease_ms": "PositiveCounter",
+        "purpose": "?Text",
+        "priority": "?ResourcePriority",
+        "capacity": "?Limit",
+        "labels": "?Items<Label>"
       },
       "result": "LeaseRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Host derives owner and canonical physical identity; current assignment/root grant. Wait instead of oversubscribe; no release while physical outcome uncertain."
+      "rules": "Host derives owner and canonical physical identity; current assignment/root grant. Wait instead of oversubscribe; no release while physical outcome uncertain. Schema revision 2: purpose (at most 500 characters) and priority (default Medium) are recorded on the lease; waiters are served by priority, first come first served within one; capacity (default 1) and labels (at most 20 of at most 64 characters) apply when the call creates a project resource and must equal an existing one.",
+      "since": {
+        "purpose": 2,
+        "priority": 2,
+        "capacity": 2,
+        "labels": 2
+      }
     },
     "resources.renew": {
       "operation": "resources.renew",
@@ -4910,7 +4989,7 @@
       "result": "LeaseRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session."
     },
     "resources.release": {
       "operation": "resources.release",
@@ -4922,7 +5001,7 @@
       "result": "LeaseRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Owner/fence required; reconcile still-running physical resources before release."
+      "rules": "Owner/fence required; reconcile still-running physical resources before release. Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session."
     },
     "resources.holders": {
       "operation": "resources.holders",
@@ -4934,7 +5013,7 @@
       "result": "Page<LeaseRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session."
     },
     "resources.waiters": {
       "operation": "resources.waiters",
@@ -4946,7 +5025,7 @@
       "result": "Page<LeaseRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session."
     },
     "browser.sessions": {
       "operation": "browser.sessions",
@@ -6445,6 +6524,30 @@
       2
     ],
     "sessions.briefing": [
+      1,
+      2
+    ],
+    "resources.list": [
+      1,
+      2
+    ],
+    "resources.acquire": [
+      1,
+      2
+    ],
+    "resources.renew": [
+      1,
+      2
+    ],
+    "resources.release": [
+      1,
+      2
+    ],
+    "resources.holders": [
+      1,
+      2
+    ],
+    "resources.waiters": [
       1,
       2
     ]

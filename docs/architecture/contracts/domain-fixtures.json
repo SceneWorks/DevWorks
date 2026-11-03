@@ -6144,5 +6144,180 @@
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"artifacts.tag\",\"artifactId\":\"id-a\",\"tags\":[\"evidence\"]}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r2-input-resources.acquire",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\",\"purpose\":\"Run the desktop suite\",\"priority\":\"High\",\"capacity\":1,\"labels\":[\"desktop\"]},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-resources.acquire-plain",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r1-input-resources.acquire-explicit",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\"},\"schemaRevision\":1}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-acquire-purpose",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\",\"purpose\":\"p\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-explicit-acquire-priority",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\",\"priority\":\"High\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-acquire-not-negotiated",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\",\"priority\":\"Low\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-acquire-unknown-priority",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\",\"priority\":\"Urgent\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-acquire-zero-capacity",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\",\"capacity\":0},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-acquire-empty-purpose",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\",\"purpose\":\"\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-acquire-null-priority",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.acquire\",\"resourceId\":\"resource-a\",\"expectedRevision\":\"1\",\"units\":20,\"leaseMs\":\"1\",\"priority\":null},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-input-resources.renew",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.renew\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\",\"leaseMs\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-resources.release",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"resources.release\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-resources.list",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"resources.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-resources.holders",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"resources.holders\",\"resourceId\":\"resource-a\",\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-resources.waiters",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"resources.waiters\",\"resourceId\":\"resource-a\",\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-resources.acquire",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"resources.acquire\",\"value\":{\"id\":\"id-a\",\"resourceId\":\"resource-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Waiting\",\"units\":1,\"purpose\":\"Run the desktop suite\",\"priority\":\"High\",\"queuePosition\":\"1\",\"requestedAtMs\":\"1793570000000\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"assignmentId\":\"assignment-a\",\"sessionId\":\"session-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-resources.release-ended",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"resources.release\",\"value\":{\"id\":\"id-a\",\"resourceId\":\"resource-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Released\",\"units\":1,\"priority\":\"Medium\",\"requestedAtMs\":\"1\",\"grantedAtMs\":\"2\",\"renewedAtMs\":\"3\",\"endedAtMs\":\"4\",\"endReason\":\"Expired\",\"ownerUnreachableSinceMs\":\"3\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-resources.renew",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"resources.renew\",\"value\":{\"id\":\"id-a\",\"resourceId\":\"resource-a\",\"ownerId\":\"actor-a\",\"fence\":\"3\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"units\":1,\"purpose\":\"Run the desktop suite\",\"priority\":\"High\",\"queuePosition\":\"1\",\"requestedAtMs\":\"1793570000000\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"assignmentId\":\"assignment-a\",\"sessionId\":\"session-a\",\"grantedAtMs\":\"2\",\"renewedAtMs\":\"5\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-resources.holders",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"resources.holders\",\"value\":{\"items\":[{\"id\":\"id-a\",\"resourceId\":\"resource-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Waiting\",\"units\":1,\"purpose\":\"Run the desktop suite\",\"priority\":\"High\",\"queuePosition\":\"1\",\"requestedAtMs\":\"1793570000000\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"assignmentId\":\"assignment-a\",\"sessionId\":\"session-a\"},{\"id\":\"id-a\",\"resourceId\":\"resource-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Released\",\"units\":1,\"priority\":\"Medium\",\"requestedAtMs\":\"1\",\"grantedAtMs\":\"2\",\"renewedAtMs\":\"3\",\"endedAtMs\":\"4\",\"endReason\":\"Expired\",\"ownerUnreachableSinceMs\":\"3\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-resources.waiters",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"resources.waiters\",\"value\":{\"items\":[{\"id\":\"id-a\",\"resourceId\":\"resource-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Waiting\",\"units\":1,\"purpose\":\"Run the desktop suite\",\"priority\":\"High\",\"queuePosition\":\"1\",\"requestedAtMs\":\"1793570000000\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"assignmentId\":\"assignment-a\",\"sessionId\":\"session-a\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-resources.list",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"resources.list\",\"value\":{\"items\":[{\"id\":\"resource-a\",\"canonicalKey\":\"fixture\",\"revision\":\"1\",\"capacity\":20,\"holders\":[],\"waiters\":[],\"scope\":\"Machine\",\"physical\":true,\"labels\":[\"desktop\"],\"used\":\"1\",\"available\":false},{\"id\":\"resource-a\",\"canonicalKey\":\"fixture\",\"revision\":\"1\",\"capacity\":20,\"holders\":[],\"waiters\":[],\"scope\":\"Project\",\"projectId\":\"project-a\",\"physical\":false,\"labels\":[],\"used\":\"0\",\"available\":true}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-lease-purpose",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"resources.acquire\",\"value\":{\"id\":\"id-a\",\"resourceId\":\"resource-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Waiting\",\"units\":1,\"purpose\":\"Run the desktop suite\",\"priority\":\"High\",\"queuePosition\":\"1\",\"requestedAtMs\":\"1793570000000\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"assignmentId\":\"assignment-a\",\"sessionId\":\"session-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-result-resource-scope",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"resources.list\",\"value\":{\"items\":[{\"id\":\"resource-a\",\"canonicalKey\":\"fixture\",\"revision\":\"1\",\"capacity\":20,\"holders\":[],\"waiters\":[],\"scope\":\"Machine\",\"physical\":true,\"labels\":[\"desktop\"],\"used\":\"1\",\"available\":false}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-lease-end-reason",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"resources.release\",\"value\":{\"id\":\"id-a\",\"resourceId\":\"resource-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Released\",\"units\":1,\"priority\":\"Medium\",\"requestedAtMs\":\"1\",\"grantedAtMs\":\"2\",\"renewedAtMs\":\"3\",\"endedAtMs\":\"4\",\"endReason\":\"Stolen\",\"ownerUnreachableSinceMs\":\"3\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-resource-scope",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"resources.list\",\"value\":{\"items\":[{\"id\":\"resource-a\",\"canonicalKey\":\"fixture\",\"revision\":\"1\",\"capacity\":20,\"holders\":[],\"waiters\":[],\"scope\":\"Global\",\"physical\":true,\"labels\":[\"desktop\"],\"used\":\"1\",\"available\":false}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

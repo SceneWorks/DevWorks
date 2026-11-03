@@ -4254,6 +4254,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "capacity": {
+              "$ref": "#/$defs/Limit",
+              "x-since": 2
+            },
             "expectedRevision": {
               "$ref": "#/$defs/Revision"
             },
@@ -4261,8 +4265,20 @@
               "const": "resources.acquire",
               "type": "string"
             },
+            "labels": {
+              "$ref": "#/$defs/List_Text1To256_0_128",
+              "x-since": 2
+            },
             "leaseMs": {
               "$ref": "#/$defs/PositiveCounter"
+            },
+            "priority": {
+              "$ref": "#/$defs/ResourcePriority",
+              "x-since": 2
+            },
+            "purpose": {
+              "$ref": "#/$defs/Text1To4096",
+              "x-since": 2
             },
             "resourceId": {
               "$ref": "#/$defs/Id"
@@ -11310,6 +11326,15 @@
         "Confirmed",
         "Proposed",
         "Dropped"
+      ],
+      "type": "string"
+    },
+    "ResourcePriority": {
+      "enum": [
+        "Low",
+        "Medium",
+        "High",
+        "Critical"
       ],
       "type": "string"
     },

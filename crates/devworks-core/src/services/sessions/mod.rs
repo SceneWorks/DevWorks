@@ -575,6 +575,8 @@ impl SessionService {
         session.closed_by = Some(ctx.principal().clone());
         session.revision += 1;
         tx.sessions().update_session(&session)?;
+        // Ending a session frees its resource leases (CodeGraph `end_session` releases holds).
+        crate::services::resources::end_session_leases(tx, ctx.principal(), &session.id)?;
         let event = session_event(
             tx,
             ctx,
