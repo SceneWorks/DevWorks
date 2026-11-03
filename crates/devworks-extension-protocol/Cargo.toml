@@ -1,0 +1,16 @@
+[package]
+name = "devworks-extension-protocol"
+description = "Small versioned public wire DTOs exchanged between the DevWorks host and executable packages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Public package wire contract: no dependency on devworks-core, UI, database or provider SDKs.
+[dependencies]
+schemars.workspace = true
+semver.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
