@@ -1,0 +1,93 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><title>Approved UI reference</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f5f6f8;color:#233044;font:16px/1.75 system-ui,sans-serif}main{max-width:1000px;margin:auto;padding:40px 30px 70px;background:white}h1,h2{color:#172536;line-height:1.3}h2{margin-top:38px}a{color:#285d9c}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{text-align:left;vertical-align:top;border:1px solid #dce2ea;padding:10px}th{background:#edf1f6}li{margin:8px 0}a:focus-visible{outline:2px solid #285d9c;outline-offset:3px}@media(max-width:600px){main{padding:24px 18px}table{font-size:13px}}
+</style></head><body><main><h1>Approved UI reference</h1>
+<p>The approved revision 08 design keeps Chat as the primary app-wide interface and Overview specific to a project. This reference consolidates the user-reviewed presentation from 2 November 2026. Numbered requirements in <a href="devworks-requirements.html">the requirements reader</a>, the <a href="../architecture/devworks-architecture.md">architecture</a>, and CodeGraph delivery criteria carry the same decisions.</p>
+<p>The interactive HTML study uses local sample records. Its browser checks and screenshots validate the prototype; production delivery remains native Rust and egui, with native acceptance still required. This document describes the current design, superseding earlier screenshots and accumulated trial notes where they differ.</p>
+<h2>Chat and its shared coordinator</h2>
+<p>The left navigation remains visible, the active workspace conversation occupies the center, and the right sidebar has <strong>Current</strong> first and <strong>Chat History</strong> second. Current is selected initially. It answers app-wide status questions through Needs you, Working and Recently completed, with project labels and direct work links. Overview remains project specific.</p>
+<p>Chat History retains search, date grouping and the active conversation selection. Switching tabs preserves the conversation, draft, pending attachments and relevant scroll positions. Selecting a conversation restores its transcript and draft. <strong>New Chat</strong> stays in the center header beside <strong>Coordinator instructions</strong>, reachable with either sidebar tab selected. Omit the redundant conversation-name header row and the center “Across your projects” strip.</p>
+<p>The toolbar chat icon opens the same selected workspace conversation beside other screens. It keeps its session, messages, draft, attachments and model pin, remains open across navigation, and closes explicitly or on returning to Chat. Dedicated feature/issue conversations retain their own identity.</p>
+<p>Screen context follows COORD-09: opening the coordinator sidebar captures the current screen; meaningful navigation captures another notice only while it is open. Closed browsing and returning to Chat append none, and reopening never replays missed screens. Both views display only the latest recorded notice per conversation in its original position. Earlier notices remain unchanged in transcript/provider history, with ordinary messages preserved in order. Navigation performs no inference or work authorization.</p>
+<h2>Navigation and project work</h2>
+<ul>
+<li>Place global <strong>Approvals</strong> directly below Chat. Its inbox spans projects and supports project filtering.</li>
+<li>Put <strong>Activity</strong> within project Overview, including filters and full history; remove its separate left-navigation destination.</li>
+<li>Keep Intelligence destinations accessible through a collapsible navigation group.</li>
+<li>Left-align the installed version and update message at the bottom of the left sidebar. The update message retains its action.</li>
+</ul>
+<h2>Completion notifications</h2>
+<p>Verified feature and issue completions produce floating cards at the top center below the global toolbar, consistently on Chat and other screens. The overlay reserves no space, shifts no content, and leaves essential controls usable. It does not take focus.</p>
+<p>Cards stack like playing cards, newest first, and can expand to expose all messages. Every card persists until explicitly dismissed, including across navigation and restart. Opening or reading completed work does not dismiss it. Dismiss cards individually and retain their records in notification history. Include direct links to completed work and suppress duplicate completion events. Preserve keyboard dismissal/access, accessible status announcements and reduced motion. Reading or dismissing a notification does not resolve an approval or resume work. Required-input OS alerts remain a separate policy under NOTIFY-04.</p>
+<h2>Headers, surfaces and sidebars</h2>
+<p>Use the Workspace coordinator / Overview pattern across all pages and secondary views: warm neutral surfaces, bordered groups, consistent type and spacing, and quieter secondary actions. Each header belongs <strong>inside its primary content pane</strong>, sharing the pane’s continuous outer border with a divider into its body. A separate full-width header card does not match this design. Secondary panes begin alongside the integrated header.</p>
+<table>
+<thead>
+<tr>
+<th>Workspace</th>
+<th>Inner sidebar placement</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Approvals</td>
+<td>Right of primary content</td>
+</tr>
+<tr>
+<td>Knowledge entries and documents</td>
+<td>Right of primary content</td>
+</tr>
+<tr>
+<td>Dreaming run history</td>
+<td>Right of primary content</td>
+</tr>
+<tr>
+<td>Databases</td>
+<td>Right of primary content</td>
+</tr>
+</tbody></table>
+<p>Apply the same complete treatment to Repositories, Agents, Artifacts, Knowledge, Dreaming and every Database view/state. Keep artifact previews contained above their metadata and show honest empty/error/stale states. Preserve existing controls, forms, selection, filters and scroll positions. Responsive pane widths may adapt; do not reintroduce detached headers.</p>
+<p>Overview and Features use the same compact summary strip directly beneath their integrated headers. Numbers and labels sit beside each other with a shared baseline, size and spacing.</p>
+<h2>Composer</h2>
+<p>Use a <strong>plus-only attachment button</strong> with the tooltip and accessible name “Attach images or files.” File selection, drag/drop and paste, pending attachment removal and durable message association remain supported across interactive chat composers.</p>
+<p>In the workspace composer, align the plus button, model/tier selector and effort selector with Send along the bottom of the input. Below the input border, show <strong>All projects</strong> followed by the pinned model on the left and <strong>⌘ / Ctrl + Enter to send</strong> on the right. Omit “Workspace coordinator” from this metadata. Apply the same arrangement in the shared sidebar, allowing controls/metadata to wrap at narrower widths. Routing, effort, pinning, sending and attachment behavior remain intact.</p>
+<h2>Requirement and delivery mapping</h2>
+<table>
+<thead>
+<tr>
+<th>Approved behavior</th>
+<th>Requirements</th>
+<th>Existing native delivery slices</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Chat tabs, center New Chat and shared conversation</td>
+<td>UI-01–04, UI-11–13</td>
+<td>DW-10, DW-16</td>
+</tr>
+<tr>
+<td>Composer and attachments</td>
+<td>UI-02, UI-08–10</td>
+<td>DW-10, DW-16</td>
+</tr>
+<tr>
+<td>Global Approvals, Overview Activity and navigation</td>
+<td>UI-14</td>
+<td>DW-10, DW-12, DW-14</td>
+</tr>
+<tr>
+<td>Integrated headers, panels, inner sidebars and summary/footer alignment</td>
+<td>UI-15</td>
+<td>DW-10, DW-12, DW-16</td>
+</tr>
+<tr>
+<td>Persistent floating completion cards</td>
+<td>NOTIFY-01–05</td>
+<td>DW-10, DW-14</td>
+</tr>
+<tr>
+<td>Screen context capture and display projection</td>
+<td>COORD-09–10</td>
+<td>DW-15, DW-16</td>
+</tr>
+</tbody></table>
+<p>See the <a href="harness-workbench.html?page=chat&revision=8&project=sw">interactive prototype</a>, <a href="mockup-gallery.html">screen gallery</a>, and <a href="ui-08/verification.json">prototype verification</a>. They illustrate the approved design and do not replace native implementation evidence.</p>
+</main></body></html>

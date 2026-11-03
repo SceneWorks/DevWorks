@@ -5,13 +5,13 @@ sequenceDiagram
  participant Help as Local Help and tool registry
  participant View as Home or sidebar view
  participant Agent as Workspace coordinator
- User->>Nav: Open Dreaming or another screen
- Nav->>Chat: Append deduplicated host screen notice
- Chat-->>View: Same transcript and selected session
+ User->>Nav: Navigate while sidebar is open
+ Nav->>Chat: Append host notice; preserve prior entries
+ Chat-->>View: Render latest notice; retain ordinary messages
  Nav->>Help: Resolve screen topic and capability references
- User->>View: Open toolbar sidebar
- View->>Chat: Reuse draft, attachments and model selection
- Note over Nav,Agent: Navigation does not itself request inference
+ User->>View: Open sidebar: capture current screen
+ View->>Chat: Append current screen; reuse shared session
+ Note over Nav,Agent: Closed sidebar: no notices or replay; navigation does not request inference
  User->>View: Send message
  View->>Chat: Append user event
  Chat->>Agent: Routed turn with current screen context

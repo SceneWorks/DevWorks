@@ -50,7 +50,7 @@
       ],
       [
         "p",
-        "Requirements, architecture, interview decisions, and implementation planning are maintained in local files for now. They will eventually be transferred into CodeGraph. Shortcut is not used for this project. This document does not authorize implementation or external tracker writes; stable IDs and decision provenance must be preserved when the material moves into CodeGraph."
+        "CodeGraph feature requirements and items are the operational source of truth for approved requirements and delivery. Versioned authoring sources, generated documents and the UI reference publish the same decisions for review. Shortcut is not used for this project. Requirement approval and prototype validation do not establish native implementation or acceptance; preserve stable IDs and decision provenance when synchronizing changes."
       ]
     ]
   },
@@ -1372,26 +1372,26 @@
     "blocks": [
       [
         "figure",
-        "outputs/revised-00-chat-conversation.png",
-        "Figure 2 Reviewed chat arrangement with left navigation center conversation and right session history"
+        "outputs/ui-08/01-chat-current.png",
+        "Figure 2 Approved Chat layout with Current and Chat History tabs integrated header and floating completion cards"
       ],
       [
         "req",
         "UI-01",
         "Confirmed",
-        "The main chat screen must place existing navigation on the left, the active workspace coordinator conversation in the center, and chat session histories in a right-hand sidebar. It must not use a conversation dropdown in place of that sidebar."
+        "Chat is the primary app-wide interface. Place existing navigation on the left, the active workspace coordinator conversation in the center, and a right sidebar with Current first and Chat History second. Current is selected initially. Overview remains specific to the selected project. Do not replace the sidebar with a conversation dropdown."
       ],
       [
         "req",
         "UI-02",
         "Confirmed",
-        "The center conversation must support a persistent composer, readable messages and tool or result summaries, and links to the work being discussed. The initial state must clearly invite a conversation with workspace-wide scope. All chat composers support image/file attachments under UI-08 and a model selector under UI-10."
+        "The center conversation must support a persistent composer, readable messages and tool or result summaries, and links to the work being discussed. The initial state must invite a conversation with workspace-wide scope. Keep the integrated Workspace coordinator header; omit the redundant conversation-name row and Across your projects status strip because Current supplies that information. Align the plus attachment button, model/tier and effort controls with Send along the bottom of the workspace input. Below its border, show All projects followed by the pinned model on the left and the send keyboard hint on the right; omit redundant Workspace coordinator text. Preserve usable wrapping at narrower sizes. Every composer retains attachments under UI-08 and routing/effort under UI-10."
       ],
       [
         "req",
         "UI-03",
-        "Proposed",
-        "The right sidebar must list prior workspace conversations, show the active selection, support search and useful date grouping, and provide New chat. Switching sessions must restore the correct transcript and preserve drafts. Feature coordinator conversations remain attached to their features."
+        "Confirmed",
+        "The right sidebar must provide Current and Chat History tabs without disrupting the conversation. Current shows app-wide Needs you, Working and Recently completed, with project labels and direct links to affected work. Chat History shows prior workspace conversations, the active selection, search and useful date grouping. Keep New Chat in the persistent center header beside Coordinator instructions, available with either tab selected. Tab changes and navigation preserve the active session, per-chat draft, attachments and relevant scroll positions; session selection restores the correct transcript. Feature coordinator conversations remain attached to their features."
       ],
       [
         "req",
@@ -1404,6 +1404,22 @@
         "UI-05",
         "Proposed",
         "Coordinator role instructions, workspace scope, and relevant context must be inspectable. Detailed routing configuration must remain in Settings, while request attribution and cost may be inspected when useful."
+      ],
+      [
+        "req",
+        "UI-14",
+        "Confirmed",
+        "Place the app-wide Approvals destination directly below Chat in the left navigation, with an all-project inbox and project filtering. Activity belongs inside the project-specific Overview as a section with filters and full history, rather than a separate left-navigation destination. Keep Intelligence navigation collapsible without losing access to its screens."
+      ],
+      [
+        "req",
+        "UI-15",
+        "Confirmed",
+        "Use the approved Workspace coordinator / Overview visual language across every page and secondary view: warm neutral surfaces, bordered content groups, consistent type, spacing and quieter secondary actions. Integrate each page header into its primary content pane, with one continuous outer border and a divider into the body; do not use a detached full-width header card. Secondary panes start alongside the header. Place inner sidebars on the right for Approvals, Knowledge entries/documents, Dreaming run history and Databases. Complete the same grouping and header treatment for Repositories, Agents, Artifacts, Knowledge, Dreaming and all Database states/views. Overview and Features summary values and labels sit inline with matching baseline, size and spacing directly beneath the integrated header. Left-align the version and update message at the bottom of the left sidebar. Preserve existing capabilities and navigation/selection/filter/scroll behavior."
+      ],
+      [
+        "p",
+        "The approved UI reference is docs/planning/ui-reference.md and the revision 08 screen gallery. These define presentation alongside the numbered requirements; browser prototype evidence does not complete native implementation acceptance."
       ]
     ]
   },
@@ -1413,8 +1429,8 @@
     "blocks": [
       [
         "figure",
-        "outputs/revised-02-feature-board.png",
-        "Figure 3 Feature board with repository scope and its attached coordinator conversation"
+        "outputs/ui-08/04-feature-board.png",
+        "Figure 3 Approved feature board with integrated header repository scope and its attached coordinator conversation"
       ],
       [
         "table",
@@ -1507,13 +1523,13 @@
         "req",
         "UI-07",
         "Proposed",
-        "Keyboard navigation, readable focus states, screen-reader labels, text scaling, accessible status changes, and large histories must be supported. Resize behavior must preserve the conversation and essential controls. Theme and pane-sizing options remain open."
+        "Keyboard navigation, readable focus states, screen-reader labels, text scaling, accessible status changes, and large histories must be supported. Resize behavior must preserve the conversation and essential controls. Theme customization and exact native pane sizing remain open; the shared visual direction follows UI-15."
       ],
       [
         "req",
         "UI-08",
         "Confirmed",
-        "Every chat input must accept images and files through a selection dialog, drag-and-drop and paste. Apply this to workspace, feature, issue and every other interactive agent chat composer. Attachments must accompany the correct message and remain accessible from its conversation history; image inspection follows ROUTE-13."
+        "Every chat input must accept images and files through a selection dialog, drag-and-drop and paste. Apply this to workspace, feature, issue and every other interactive agent chat composer. Attachments must accompany the correct message and remain accessible from its conversation history; image inspection follows ROUTE-13. Use a plus-only attachment button with an accessible name and tooltip explaining that it attaches images or files."
       ],
       [
         "req",
@@ -1529,7 +1545,7 @@
       ],
       [
         "p",
-        "The mockup screenshots demonstrate current direction and sample interactions. Their exact spacing, colors, navigation wording, and panel widths are not a frozen design system or an acceptance substitute for the native implementation."
+        "The revision 08 screenshots illustrate the approved layout, navigation and sample interactions under UI-14/15. Exact native color values, typography metrics and pane widths remain implementation details within that visual direction. Prototype screenshots do not substitute for native acceptance."
       ],
       [
         "p",
@@ -1739,13 +1755,19 @@
         "req",
         "NOTIFY-03",
         "Proposed",
-        "Notification policy should cover decisions, failures, blocked work, significant completions, review changes, budget or authentication problems, and dreaming reports. Severity, quiet preferences, aggregation and OS alerts for other categories remain open; required-input OS alerts follow NOTIFY-04."
+        "Notification policy should cover decisions, failures, blocked work, significant completions, review changes, budget or authentication problems, and dreaming reports. Feature and issue completion presentation follows confirmed NOTIFY-05. Severity, quiet preferences, aggregation and OS alerts for other categories remain open; required-input OS alerts follow NOTIFY-04."
       ],
       [
         "req",
         "NOTIFY-04",
         "Confirmed",
         "When the app is not focused, items needing user input must also trigger native operating-system notifications where supported and permitted. Respect OS authorization and notification suppression. Keep the in-app notification and approval item available if OS alerts are denied, unavailable or suppressed. Displaying, reading or dismissing an OS notification must not resolve the decision. Native integration and per-platform behavior require validation."
+      ],
+      [
+        "req",
+        "NOTIFY-05",
+        "Confirmed",
+        "Verified feature and issue completions must produce highly visible in-app cards floating at the top center below the global toolbar on Chat and every other page. Cards must not reserve layout space, shift content, steal focus or obstruct essential controls. Stack new messages like playing cards, newest first, with access to expand and inspect every message. Keep each card until the user explicitly dismisses it, including across navigation and restart; opening or reading linked work must not dismiss it. Dismissal removes only that card from the stack and retains the notification in history. Provide direct links to completed work, avoid duplicate completion events, and preserve keyboard access, accessible status announcements and reduced-motion behavior. Dismissal or acknowledgment must not resolve approvals or resume work."
       ]
     ]
   },
@@ -3337,13 +3359,13 @@
         "req",
         "UI-13",
         "Confirmed",
-        "Once opened, keep the workspace coordinator sidebar open across navigation to other screens, project changes and relevant workspace selections until the user explicitly closes it or returns to the Home chat page. Returning Home closes the sidebar and displays that same active conversation in the normal center pane, preserving the established right-hand session history. Closing the sidebar preserves the session and its draft; subsequent navigation must not reopen it without the user choosing to do so. Preserve the existing left navigation and the page being inspected."
+        "Once opened, keep the workspace coordinator sidebar open across navigation to other screens, project changes and relevant workspace selections until the user explicitly closes it or returns to the Home chat page. Returning Home closes the sidebar and displays that same active conversation in the normal center pane, preserving the right-hand Current / Chat History tabs and their selection/state. Closing the sidebar preserves the session and its draft; subsequent navigation must not reopen it without the user choosing to do so. Preserve the existing left navigation and the page being inspected."
       ],
       [
         "req",
         "COORD-09",
         "Confirmed",
-        "The application-level coordinator must know which screen the user is currently viewing. Navigation to a screen or a meaningful selected workspace must post an attributed screen-context notice into the current Home conversation, including while that conversation is accessed from the sidebar. For example, opening Dreaming posts that the user has moved to Dreaming. Keep this context current as the user navigates, including when the sidebar is closed. Do not create a new coordinator/session or duplicate a notice merely because the same screen re-renders. Preserve original notices as transcript history rather than rewriting them when navigation changes again."
+        "The application-level coordinator receives host-authored screen context when its sidebar opens and when the viewed screen or meaningful selection changes while that sidebar is open. Opening injects the current screen without replaying navigation performed while closed. Closed-sidebar browsing and returning to Home chat must not append navigation notices. Do not create a new coordinator/session or duplicate a notice for an unchanged re-render. Home and sidebar views display only the most recent screen-context notice for the selected conversation; user, assistant and tool messages remain in order. Keep all recorded screen notices unchanged in the append-only transcript and provider history; consolidation is a display projection only, preserving the stable prompt prefix. Notices remain bounded and attributed, with local Help and relevant enabled-tool references under COORD-10."
       ],
       [
         "req",
@@ -3383,7 +3405,7 @@
       ],
       [
         "p",
-        "Prototype: harness-workbench.html, route page=chat&revision=5. Gallery: mockup-gallery.html. The accompanying image files capture the reviewed layout. The prototype is a presentation artifact with sample data, not a backend implementation. The source-to-screen mapping is recorded in design-coverage.json."
+        "Prototype: harness-workbench.html, route page=chat&revision=8. Gallery: mockup-gallery.html. The accompanying image files capture the reviewed layout. The prototype is a presentation artifact with sample data, not a backend implementation. The source-to-screen mapping is recorded in design-coverage.json."
       ],
       [
         "h2",

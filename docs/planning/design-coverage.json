@@ -189,14 +189,41 @@
       "ui": "Toolbar chat icon on all screens; shared Home session, draft, route pin, files and transcript; persistent right sidebar across navigation/projects; explicit close and automatic Home closure; deduplicated host screen notices with selected record, local Help and relevant effective tools; separate feature/issue coordinator transcripts."
     }
   ],
-  "prototype_revision": 7,
+  "prototype_revision": 8,
   "current_screens": [
+    {
+      "title": "Current work beside Chat",
+      "page": "chat",
+      "parameters": {
+        "sidebar": "current"
+      },
+      "preview": "ui-08/45-chat-current.png",
+      "coverage": "Needs you, Working and Recently completed across all projects. The conversation and draft stay in place."
+    },
+    {
+      "title": "Chat History when you need it",
+      "page": "chat",
+      "parameters": {
+        "sidebar": "history"
+      },
+      "preview": "ui-08/46-chat-history.png",
+      "coverage": "Search date-grouped conversations in the second tab. New Chat is always available beside Coordinator Instructions."
+    },
+    {
+      "title": "Persistent completion cards",
+      "page": "chat",
+      "parameters": {
+        "completions": "expanded"
+      },
+      "preview": "ui-08/47-completions.png",
+      "coverage": "Feature and issue completions float below the toolbar without moving the workspace. Open, expand and dismiss them explicitly; history is retained."
+    },
     {
       "title": "Workspace coordinator",
       "page": "chat",
       "parameters": {},
-      "preview": "ui-07/01-chat.png",
-      "coverage": "Primary chat, right-hand session history, router model selector, and file/image attachments."
+      "preview": "ui-08/01-chat.png",
+      "coverage": "Primary chat with Current / Chat History tabs, pinned New Chat, app-wide work status, router selection and attachments."
     },
     {
       "title": "Workspace coordinator beside Dreaming",
@@ -204,21 +231,21 @@
       "parameters": {
         "coordinator": "open"
       },
-      "preview": "ui-07/42-dreaming-coordinator.png",
+      "preview": "ui-08/42-dreaming-coordinator.png",
       "coverage": "Continue the current Home conversation from any screen. Navigation posts screen context with Help and effective tools."
     },
     {
       "title": "Multi-repository project",
       "page": "overview",
       "parameters": {},
-      "preview": "ui-07/02-project.png",
-      "coverage": "Repositories, mixed feature/issue priority queue, required input, and current execution policy."
+      "preview": "ui-08/02-project.png",
+      "coverage": "Project-specific attention, mixed feature/issue queue, filtered Activity, repositories and expandable policy."
     },
     {
       "title": "Feature backlog",
       "page": "features",
       "parameters": {},
-      "preview": "ui-07/03-features.png",
+      "preview": "ui-08/03-features.png",
       "coverage": "Search, filter, prioritize, create and refine features. Open each feature’s planning board."
     },
     {
@@ -227,21 +254,21 @@
       "parameters": {
         "view": "Board"
       },
-      "preview": "ui-07/04-feature-board.png",
+      "preview": "ui-08/04-feature-board.png",
       "coverage": "Manual Kanban controls alongside coordinator chat, plan readiness, concurrency and spending."
     },
     {
       "title": "Standalone issues",
       "page": "issues",
       "parameters": {},
-      "preview": "ui-07/07-issues.png",
+      "preview": "ui-08/07-issues.png",
       "coverage": "Local and GitHub-linked issues without synthetic features. Start, pause and Continue."
     },
     {
       "title": "Issue coordinator",
       "page": "issue",
       "parameters": {},
-      "preview": "ui-07/08-issue-workspace.png",
+      "preview": "ui-08/08-issue-workspace.png",
       "coverage": "A dedicated conversation, task history, worktree/branch/PR links and direct delivery to main."
     },
     {
@@ -250,7 +277,7 @@
       "parameters": {
         "view": "Changes"
       },
-      "preview": "ui-07/05-feature-changes.png",
+      "preview": "ui-08/05-feature-changes.png",
       "coverage": "Read source diffs with the feature conversation and linked repository PR."
     },
     {
@@ -259,14 +286,14 @@
       "parameters": {
         "view": "Delivery"
       },
-      "preview": "ui-07/06-feature-delivery.png",
+      "preview": "ui-08/06-feature-delivery.png",
       "coverage": "Task PRs to feature branches, independent review gates, final delivery and cleanup."
     },
     {
       "title": "Agents and sessions",
       "page": "agents",
       "parameters": {},
-      "preview": "ui-07/24-agents.png",
+      "preview": "ui-08/24-agents.png",
       "coverage": "Coordinator and worker activity, context usage, model route, pause and inspection."
     },
     {
@@ -275,14 +302,14 @@
       "parameters": {
         "inspect": "engine-worker"
       },
-      "preview": "ui-07/27-agent-transcript.png",
+      "preview": "ui-08/27-agent-transcript.png",
       "coverage": "Transcript, tool calls, context, effective tool access and worktree scope. Redirect at the next safe step."
     },
     {
       "title": "Project artifacts",
       "page": "artifacts",
       "parameters": {},
-      "preview": "ui-07/22-artifacts.png",
+      "preview": "ui-08/22-artifacts.png",
       "coverage": "Upload, preview, export and explicitly delete retained files with project/feature/task provenance."
     },
     {
@@ -292,29 +319,29 @@
         "view": "Board",
         "coordinator": "open"
       },
-      "preview": "ui-07/43-feature-global-chat.png",
+      "preview": "ui-08/43-feature-global-chat.png",
       "coverage": "The global Home conversation stays open beside dedicated feature chat, with independent transcripts and current-screen context."
     },
     {
       "title": "Unified Knowledge",
       "page": "knowledge",
       "parameters": {},
-      "preview": "ui-07/09-knowledge.png",
+      "preview": "ui-08/09-knowledge.png",
       "coverage": "Memory, facts and lessons in one tagged collection. Search, scope, evidence and revision history."
     },
     {
       "title": "Dreaming",
       "page": "dreaming",
       "parameters": {},
-      "preview": "ui-07/25-dreaming.png",
+      "preview": "ui-08/25-dreaming.png",
       "coverage": "Inspect consolidation runs, source verification, changes and unresolved conflicts."
     },
     {
       "title": "Approvals and required input",
       "page": "reviews",
       "parameters": {},
-      "preview": "ui-07/10-approvals.png",
-      "coverage": "Conflicts, skill overrides, role revisions and harness installation requests with recorded decisions."
+      "preview": "ui-08/10-approvals.png",
+      "coverage": "All-project approval inbox with project filtering, evidence, proposals and recorded decisions."
     },
     {
       "title": "Repository home",
@@ -323,7 +350,7 @@
         "repo": "engine",
         "tab": "Overview"
       },
-      "preview": "ui-07/11-repository.png",
+      "preview": "ui-08/11-repository.png",
       "coverage": "Overview, code projects, index views, dependencies, health and review entry points."
     },
     {
@@ -333,7 +360,7 @@
         "repo": "engine",
         "tab": "Graph"
       },
-      "preview": "ui-07/12-code-graph.png",
+      "preview": "ui-08/12-code-graph.png",
       "coverage": "Follow cross-repository relationships into nodes, source and provenance."
     },
     {
@@ -343,7 +370,7 @@
         "repo": "engine",
         "tab": "Health"
       },
-      "preview": "ui-07/13-repository-health.png",
+      "preview": "ui-08/13-repository-health.png",
       "coverage": "Findings, coverage, revision, severity and evidence linked to corrective work."
     },
     {
@@ -352,7 +379,7 @@
       "parameters": {
         "schema": "Schema"
       },
-      "preview": "ui-07/14-database-schema.png",
+      "preview": "ui-08/14-database-schema.png",
       "coverage": "Schema-only indexing for SQLite, MariaDB/MySQL, PostgreSQL and SQL Server; no HelixDB source reader."
     },
     {
@@ -361,14 +388,14 @@
       "parameters": {
         "schema": "Access"
       },
-      "preview": "ui-07/15-database-access.png",
+      "preview": "ui-08/15-database-access.png",
       "coverage": "Share connections across projects with independent access and explicit connection write enablement."
     },
     {
       "title": "Indexing diagnostics",
       "page": "indexing",
       "parameters": {},
-      "preview": "ui-07/23-indexing.png",
+      "preview": "ui-08/23-indexing.png",
       "coverage": "Stages, failures, stale views, optional semantic coverage, retry attempts and exportable logs."
     },
     {
@@ -377,7 +404,7 @@
       "parameters": {
         "settings": "Routing"
       },
-      "preview": "ui-07/17-settings-routing.png",
+      "preview": "ui-08/17-settings-routing.png",
       "coverage": "Subscription/API/compatible connections, model catalog, session affinity, failover and cool-off behavior."
     },
     {
@@ -386,7 +413,7 @@
       "parameters": {
         "settings": "Delivery"
       },
-      "preview": "ui-07/18-settings-delivery.png",
+      "preview": "ui-08/18-settings-delivery.png",
       "coverage": "Workspace defaults with project and repository overrides and visible effective policy."
     },
     {
@@ -395,7 +422,7 @@
       "parameters": {
         "settings": "Tools"
       },
-      "preview": "ui-07/19-settings-tools.png",
+      "preview": "ui-08/19-settings-tools.png",
       "coverage": "Individual toggles, Select all and read-only selection. Reviewers cannot gain write tools."
     },
     {
@@ -404,28 +431,28 @@
       "parameters": {
         "settings": "Skills"
       },
-      "preview": "ui-07/20-settings-skills.png",
+      "preview": "ui-08/20-settings-skills.png",
       "coverage": "Shared skill discovery and harness-owned skills. Proposed overrides require approval."
     },
     {
       "title": "Scheduled inference and maintenance",
       "page": "jobs",
       "parameters": {},
-      "preview": "ui-07/16-jobs.png",
+      "preview": "ui-08/16-jobs.png",
       "coverage": "App/project scope, prompts, routes, history, run controls, and skipped overlapping occurrences."
     },
     {
       "title": "Usage, costs and prompt caches",
       "page": "usage",
       "parameters": {},
-      "preview": "ui-07/21-usage.png",
+      "preview": "ui-08/21-usage.png",
       "coverage": "Request attribution, cost estimates, subscription usage and reported/unreported cache metrics."
     },
     {
       "title": "Resource reservations",
       "page": "resources",
       "parameters": {},
-      "preview": "ui-07/26-resources.png",
+      "preview": "ui-08/26-resources.png",
       "coverage": "Capacity, ownership and waiting work. Desktop control asks OK or Wait while you are active."
     },
     {
@@ -434,7 +461,7 @@
       "parameters": {
         "settings": "MCP"
       },
-      "preview": "ui-07/44-settings-mcp.png",
+      "preview": "ui-08/44-settings-mcp.png",
       "coverage": "Connect external servers and authorize other harnesses to read indexed code, planned work and Knowledge, with optional command grants."
     },
     {
@@ -443,7 +470,7 @@
       "parameters": {
         "knowledge": "Documents"
       },
-      "preview": "ui-07/28-documents.png",
+      "preview": "ui-08/28-documents.png",
       "coverage": "Import Markdown, text, PDF and Word as project artifacts; inspect scope, extraction, embeddings and retained copies."
     },
     {
@@ -454,7 +481,7 @@
         "doc": "doc-import",
         "docTab": "Passages"
       },
-      "preview": "ui-07/29-document-passages.png",
+      "preview": "ui-08/29-document-passages.png",
       "coverage": "Inspect searchable passages with document revisions, chunk identities and heading/page citations."
     },
     {
@@ -465,7 +492,7 @@
         "doc": "doc-scan",
         "docTab": "Overview"
       },
-      "preview": "ui-07/30-document-partial.png",
+      "preview": "ui-08/30-document-partial.png",
       "coverage": "Scanned pages awaiting a vision route stay visibly partial; failed and encrypted sources are never marked complete."
     },
     {
@@ -474,7 +501,7 @@
       "parameters": {
         "settings": "Addons"
       },
-      "preview": "ui-07/31-addons.png",
+      "preview": "ui-08/31-addons.png",
       "coverage": "Manage optional .NET, TypeScript, Swift and Rust semantic support alongside versioned executable packages."
     },
     {
@@ -485,7 +512,7 @@
         "package": "evidence",
         "packageTab": "Access & contributions"
       },
-      "preview": "ui-07/32-addon-access.png",
+      "preview": "ui-08/32-addon-access.png",
       "coverage": "Inspect tools, native UI, access, reviewer restrictions and routed inference before activating a package."
     },
     {
@@ -494,7 +521,7 @@
       "parameters": {
         "settings": "Safety"
       },
-      "preview": "ui-07/33-safety.png",
+      "preview": "ui-08/33-safety.png",
       "coverage": "Configurable trust, selected tools, immutable reviewer restrictions and visible destructive-operation guards."
     },
     {
@@ -503,7 +530,7 @@
       "parameters": {
         "settings": "Containers"
       },
-      "preview": "ui-07/34-containers.png",
+      "preview": "ui-08/34-containers.png",
       "coverage": "Docker, Podman and compatible Apple container preferences with project overrides and honest capability checks."
     },
     {
@@ -512,7 +539,7 @@
       "parameters": {
         "settings": "General"
       },
-      "preview": "ui-07/35-project-defaults.png",
+      "preview": "ui-08/35-project-defaults.png",
       "coverage": "Workspace and project clone directories, archive confirmation and harness-data-only deletion."
     },
     {
@@ -521,7 +548,7 @@
       "parameters": {
         "settings": "Knowledge"
       },
-      "preview": "ui-07/36-document-settings.png",
+      "preview": "ui-08/36-document-settings.png",
       "coverage": "Vision fallback is on by default; choose router paths and inspect the managed-artifact and indexing policies."
     },
     {
@@ -530,7 +557,7 @@
       "parameters": {
         "settings": "Updates"
       },
-      "preview": "ui-07/37-app-updates.png",
+      "preview": "ui-08/37-app-updates.png",
       "coverage": "Hourly release checking, automatic background download and approval before installation; installed version stays visible."
     },
     {
@@ -539,7 +566,7 @@
       "parameters": {
         "topic": "chat"
       },
-      "preview": "ui-07/38-help.png",
+      "preview": "ui-08/38-help.png",
       "coverage": "Local, version-matched guidance for every workspace and Settings topic, shared by humans and agents."
     },
     {
@@ -548,7 +575,7 @@
       "parameters": {
         "topic": "plugins"
       },
-      "preview": "ui-07/39-plugin-guide.png",
+      "preview": "ui-08/39-plugin-guide.png",
       "coverage": "Managed executable extensibility, approvals, permissions and a conceptual lifecycle; the SDK contract remains to be designed."
     },
     {
@@ -557,14 +584,14 @@
       "parameters": {
         "topic": "testing"
       },
-      "preview": "ui-07/40-testing-guide.png",
+      "preview": "ui-08/40-testing-guide.png",
       "coverage": "Important unit and integration coverage uses deterministic substitutes, with real-inference E2E reserved for later."
     },
     {
       "title": "Projects and archived work",
       "page": "portfolio",
       "parameters": {},
-      "preview": "ui-07/41-project-lifecycle.png",
+      "preview": "ui-08/41-project-lifecycle.png",
       "coverage": "Multi-repository projects, explicit archive/restore and preserved local repositories and GitHub resources."
     }
   ],
@@ -762,5 +789,7 @@
       1280,
       1600
     ]
-  }
+  },
+  "ui_refresh_review": "Revision 08 reflects the approved UI reference and canonical UI-14/15 and NOTIFY-05 requirements: Current / Chat History, pinned New Chat, app-wide attention and approvals, Activity in project Overview, floating persistent completion stack and shared bordered surfaces. Native implementation acceptance remains separate from prototype validation.",
+  "ui_header_review": "User correction: every page integrates its Workspace Coordinator header into the primary content pane, with secondary sidebars alongside it. Approvals, Knowledge, Dreaming and Databases place their inner sidebars on the right. Repositories, Agents and Artifacts have grouped collections; Knowledge, Dreaming and Databases use complete list/detail workspaces, including secondary views. Visual review accompanies interaction checks."
 }

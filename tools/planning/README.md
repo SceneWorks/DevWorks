@@ -19,7 +19,7 @@ Generated files live in `docs/planning/`; temporary diagram input lives in ignor
 
 The optional `--export-dir PATH` argument also mirrors the planning artifacts into another directory, preserving legacy `superharness-requirements.html` and `.docx` aliases there for earlier local links. Repository artifacts use the confirmed DevWorks name.
 
-Keep confirmed requirements, proposed details, the interview record, UI limitations and source provenance aligned. Local planning files remain authoritative until the user chooses to transfer them into CodeGraph. No Shortcut records are created by these scripts.
+Keep confirmed requirements, proposed details, the interview record, UI limitations and source provenance aligned. CodeGraph feature requirements and delivery items are the operational source of truth; these versioned sources and generated readers publish the same approved decisions. No Shortcut records are created by these scripts.
 
 ## Architecture review artifacts
 

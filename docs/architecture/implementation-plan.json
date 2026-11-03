@@ -10,9 +10,9 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "7edf58ac90088913de9e06331a563c0348de1caf1931b4379a839981987fb843",
+    "implementation-slices.json": "a56b7e6040c01e2ba417741455b5be93989ab2276fdbe68132956c27083baaad",
     "devworks-capability-catalog.json": "52be38907d23a6a800ca03072e0504cbef164f4a6d873dc27b6e714e8ec0476a",
-    "devworks-requirements-traceability.json": "70839bfdf69283d87c07431857cca677db9c0e5442e9b8a1d62bd8c8ab56d4b4",
+    "devworks-requirements-traceability.json": "9ed541e5865ac4f8194495cf8aa9a73d24dc893100d913ecd19e46803703ea3a",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
@@ -23,10 +23,10 @@
     "slices": 63,
     "operationFamilies": 48,
     "operations": 353,
-    "requirements": 353,
+    "requirements": 356,
     "requirementsByStatus": {
-      "Confirmed": 212,
-      "Proposed": 141
+      "Confirmed": 216,
+      "Proposed": 140
     },
     "inputSchemaCandidates": 353,
     "inputSchemasPending": 0,
@@ -300,6 +300,8 @@
         "UI-03",
         "UI-04",
         "UI-05",
+        "UI-14",
+        "UI-15",
         "UI-06",
         "UI-07",
         "UI-08",
@@ -793,7 +795,7 @@
         "contracts",
         "settings"
       ],
-      "acceptance": "Pin matching egui/eframe and rendering stack. Native window, keyboard/focus/accessibility, incremental projections, row/variable-block virtualization, images/file handles, pane restoration and clean optional-runtime absence work. No WebView UI.",
+      "acceptance": "Pin matching egui/eframe and rendering stack. Native window, keyboard/focus/accessibility, incremental projections, row/variable-block virtualization, images/file handles, pane restoration and clean optional-runtime absence work. No WebView UI. Implement UI-14/15 shared navigation, integrated pane headers, aligned secondary panes/right inner sidebars, warm bordered surfaces, inline summary strips and left-aligned sidebar footer across all routes/subviews. Preserve form, filter, selection and scroll state, keyboard/accessibility and responsive layouts; use the approved UI reference.",
       "gates": [
         "G02",
         "G10"
@@ -810,6 +812,8 @@
         "UI-03",
         "UI-04",
         "UI-05",
+        "UI-14",
+        "UI-15",
         "UI-06",
         "UI-07",
         "UI-08",
@@ -832,6 +836,7 @@
         "NOTIFY-02",
         "NOTIFY-03",
         "NOTIFY-04",
+        "NOTIFY-05",
         "PLAT-01",
         "PLAT-02",
         "PLAT-03",
@@ -983,7 +988,7 @@
         "files",
         "shell"
       ],
-      "acceptance": "Multi-repository work, editable requirements/plans/acceptance, task dependencies/assignments and evidence links use revisions. Plan approval is scope-bound; clear standalone issues retain immediate implementation behavior. Native list/board/detail and tools share the same operations. Every task requires a project and accepts an optional feature relationship. Standalone tasks use the issue view of the same identity; task/issue entry points never duplicate work. Validate feature membership and existing standalone execution/accounting/delivery semantics. Plans belong to the feature: one active approved plan and one pending replacement. Draft edits, submission and rejection preserve active authority and eligible work; no plan-version management UI. Shared human/agent task and issue priority edits plus bulk task ordering commit revisioned history. Screens expose Blocked by/Blocks and editable same-project cross-feature/standalone links; reject invalid/self/duplicate/cyclic changes without partial writes. Human/agent tasks.set_feature and optional feature at issue creation share authoritative membership. Link authorizes delivery without revised-plan approval; clear pauses until manual resume. Preserve stable identity, active agent/workspace, history and holds; coordinator owns integration. Direct transfers retain holds without creating a pause.",
+      "acceptance": "Multi-repository work, editable requirements/plans/acceptance, task dependencies/assignments and evidence links use revisions. Plan approval is scope-bound; clear standalone issues retain immediate implementation behavior. Native list/board/detail and tools share the same operations. Every task requires a project and accepts an optional feature relationship. Standalone tasks use the issue view of the same identity; task/issue entry points never duplicate work. Validate feature membership and existing standalone execution/accounting/delivery semantics. Plans belong to the feature: one active approved plan and one pending replacement. Draft edits, submission and rejection preserve active authority and eligible work; no plan-version management UI. Shared human/agent task and issue priority edits plus bulk task ordering commit revisioned history. Screens expose Blocked by/Blocks and editable same-project cross-feature/standalone links; reject invalid/self/duplicate/cyclic changes without partial writes. Human/agent tasks.set_feature and optional feature at issue creation share authoritative membership. Link authorizes delivery without revised-plan approval; clear pauses until manual resume. Preserve stable identity, active agent/workspace, history and holds; coordinator owns integration. Direct transfers retain holds without creating a pause. In project Overview, provide Activity filters and full history without a separate navigation destination. Use shared integrated headers and bordered panes throughout work views, align summary values/labels inline as on Features, and preserve existing navigation/selection/filter/scroll behavior under UI-14/15.",
       "gates": [
         "G07",
         "G11"
@@ -1054,6 +1059,8 @@
         "UI-03",
         "UI-04",
         "UI-05",
+        "UI-14",
+        "UI-15",
         "UI-06",
         "UI-07",
         "UI-08",
@@ -1187,7 +1194,7 @@
         "work",
         "controls"
       ],
-      "acceptance": "Approval proposals bind contents/target/revision, only host human interaction mints decisions, and approval wakeups re-admit saved operations without clearing pauses. Notifications and acknowledgment never resolve their linked decisions. Native OS denial retains in-app access. Feature-plan approval atomically promotes the exact pending draft with active scope/acceptance and history. Stale approval/edit races preserve the original plan; rejection leaves it approved. Approval never clears a pause.",
+      "acceptance": "Approval proposals bind contents/target/revision, only host human interaction mints decisions, and approval wakeups re-admit saved operations without clearing pauses. Notifications and acknowledgment never resolve their linked decisions. Native OS denial retains in-app access. Feature-plan approval atomically promotes the exact pending draft with active scope/acceptance and history. Stale approval/edit races preserve the original plan; rejection leaves it approved. Approval never clears a pause. Expose app-wide Approvals directly below Chat with project filtering under UI-14. Implement NOTIFY-05 verified feature/issue completion cards as a top-center floating newest-first stack on every page, persistent until explicit individual dismissal across navigation/restart, expandable with work links and retained history. Prevent duplicates, layout shifts, focus theft and essential-control obstruction; reading/opening is not dismissal and grants no decision/resume authority.",
       "gates": [
         "G04",
         "G10"
@@ -1213,7 +1220,8 @@
         "NOTIFY-01",
         "NOTIFY-02",
         "NOTIFY-03",
-        "NOTIFY-04"
+        "NOTIFY-04",
+        "NOTIFY-05"
       ],
       "supportingRequirements": [
         "AGENT-12",
@@ -1389,7 +1397,7 @@
         "delegation",
         "router"
       ],
-      "acceptance": "Every native composer uses persisted route/effort and attachments. Home/sidebar share one session, draft, transcript and pin. Navigation appends deduplicated bounded host notices and current Help/tool context without extra inference or authority.",
+      "acceptance": "Every native composer uses persisted route/effort and attachments. Home/sidebar share one session, draft, transcript and pin. Opening the workspace sidebar injects the current screen; meaningful navigation appends bounded host notices only while it remains open. Closed-sidebar browsing and return Home append none. Home/sidebar show only the latest screen notice while preserving prior transcript/provider entries unchanged and ordinary message order, with current Help/tool context and no extra inference or authority. Implement confirmed UI-01/03 Current and Chat History tabs (Current initially selected), app-wide attention/work/completion links and persistent center New Chat beside Coordinator instructions. Preserve tab/session drafts, attachments and scroll. Apply UI-02/08 plus-only composer actions aligned with Send and below-border scope/pin/shortcut metadata; omit redundant status/title/coordinator text.",
       "gates": [
         "G02",
         "G11"
@@ -1415,6 +1423,8 @@
         "UI-03",
         "UI-04",
         "UI-05",
+        "UI-14",
+        "UI-15",
         "UI-06",
         "UI-07",
         "UI-08",
@@ -7523,7 +7533,7 @@
     {
       "requirement": "UI-01",
       "requirementStatus": "Confirmed",
-      "statement": "The main chat screen must place existing navigation on the left, the active workspace coordinator conversation in the center, and chat session histories in a right-hand sidebar. It must not use a conversation dropdown in place of that sidebar.",
+      "statement": "Chat is the primary app-wide interface. Place existing navigation on the left, the active workspace coordinator conversation in the center, and a right sidebar with Current first and Chat History second. Current is selected initially. Overview remains specific to the selected project. Do not replace the sidebar with a conversation dropdown.",
       "sourceSection": "13 Primary chat interface",
       "architectureSection": "conversation-ui-and-screen-context",
       "owner": "Native UI and navigation registry",
@@ -7542,7 +7552,7 @@
     {
       "requirement": "UI-02",
       "requirementStatus": "Confirmed",
-      "statement": "The center conversation must support a persistent composer, readable messages and tool or result summaries, and links to the work being discussed. The initial state must clearly invite a conversation with workspace-wide scope. All chat composers support image/file attachments under UI-08 and a model selector under UI-10.",
+      "statement": "The center conversation must support a persistent composer, readable messages and tool or result summaries, and links to the work being discussed. The initial state must invite a conversation with workspace-wide scope. Keep the integrated Workspace coordinator header; omit the redundant conversation-name row and Across your projects status strip because Current supplies that information. Align the plus attachment button, model/tier and effort controls with Send along the bottom of the workspace input. Below its border, show All projects followed by the pinned model on the left and the send keyboard hint on the right; omit redundant Workspace coordinator text. Preserve usable wrapping at narrower sizes. Every composer retains attachments under UI-08 and routing/effort under UI-10.",
       "sourceSection": "13 Primary chat interface",
       "architectureSection": "conversation-ui-and-screen-context",
       "owner": "Native UI and navigation registry",
@@ -7560,8 +7570,8 @@
     },
     {
       "requirement": "UI-03",
-      "requirementStatus": "Proposed",
-      "statement": "The right sidebar must list prior workspace conversations, show the active selection, support search and useful date grouping, and provide New chat. Switching sessions must restore the correct transcript and preserve drafts. Feature coordinator conversations remain attached to their features.",
+      "requirementStatus": "Confirmed",
+      "statement": "The right sidebar must provide Current and Chat History tabs without disrupting the conversation. Current shows app-wide Needs you, Working and Recently completed, with project labels and direct links to affected work. Chat History shows prior workspace conversations, the active selection, search and useful date grouping. Keep New Chat in the persistent center header beside Coordinator instructions, available with either tab selected. Tab changes and navigation preserve the active session, per-chat draft, attachments and relevant scroll positions; session selection restores the correct transcript. Feature coordinator conversations remain attached to their features.",
       "sourceSection": "13 Primary chat interface",
       "architectureSection": "conversation-ui-and-screen-context",
       "owner": "Native UI and navigation registry",
@@ -7616,6 +7626,44 @@
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
     {
+      "requirement": "UI-14",
+      "requirementStatus": "Confirmed",
+      "statement": "Place the app-wide Approvals destination directly below Chat in the left navigation, with an all-project inbox and project filtering. Activity belongs inside the project-specific Overview as a section with filters and full history, rather than a separate left-navigation destination. Keep Intelligence navigation collapsible without losing access to its screens.",
+      "sourceSection": "13 Primary chat interface",
+      "architectureSection": "conversation-ui-and-screen-context",
+      "owner": "Native UI and navigation registry",
+      "validationFamily": "Native view/composer/control identity tests",
+      "validationGate": "G02",
+      "plannedCase": "AT-UI-14",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "shell",
+      "supportingSlices": [
+        "chat",
+        "work",
+        "settings"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "UI-15",
+      "requirementStatus": "Confirmed",
+      "statement": "Use the approved Workspace coordinator / Overview visual language across every page and secondary view: warm neutral surfaces, bordered content groups, consistent type, spacing and quieter secondary actions. Integrate each page header into its primary content pane, with one continuous outer border and a divider into the body; do not use a detached full-width header card. Secondary panes start alongside the header. Place inner sidebars on the right for Approvals, Knowledge entries/documents, Dreaming run history and Databases. Complete the same grouping and header treatment for Repositories, Agents, Artifacts, Knowledge, Dreaming and all Database states/views. Overview and Features summary values and labels sit inline with matching baseline, size and spacing directly beneath the integrated header. Left-align the version and update message at the bottom of the left sidebar. Preserve existing capabilities and navigation/selection/filter/scroll behavior.",
+      "sourceSection": "13 Primary chat interface",
+      "architectureSection": "conversation-ui-and-screen-context",
+      "owner": "Native UI and navigation registry",
+      "validationFamily": "Native view/composer/control identity tests",
+      "validationGate": "G02",
+      "plannedCase": "AT-UI-15",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "shell",
+      "supportingSlices": [
+        "chat",
+        "work",
+        "settings"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
       "requirement": "UI-06",
       "requirementStatus": "Proposed",
       "statement": "Every long-running operation must expose current state, progress where meaningful, cancellation or pause where supported, and recoverable errors. Empty, loading, offline, partial-data, failed, and stale-data states must be designed rather than represented as fabricated success or zero values.",
@@ -7637,7 +7685,7 @@
     {
       "requirement": "UI-07",
       "requirementStatus": "Proposed",
-      "statement": "Keyboard navigation, readable focus states, screen-reader labels, text scaling, accessible status changes, and large histories must be supported. Resize behavior must preserve the conversation and essential controls. Theme and pane-sizing options remain open.",
+      "statement": "Keyboard navigation, readable focus states, screen-reader labels, text scaling, accessible status changes, and large histories must be supported. Resize behavior must preserve the conversation and essential controls. Theme customization and exact native pane sizing remain open; the shared visual direction follows UI-15.",
       "sourceSection": "14 Detailed UI workspaces",
       "architectureSection": "conversation-ui-and-screen-context",
       "owner": "Native UI and navigation registry",
@@ -7656,7 +7704,7 @@
     {
       "requirement": "UI-08",
       "requirementStatus": "Confirmed",
-      "statement": "Every chat input must accept images and files through a selection dialog, drag-and-drop and paste. Apply this to workspace, feature, issue and every other interactive agent chat composer. Attachments must accompany the correct message and remain accessible from its conversation history; image inspection follows ROUTE-13.",
+      "statement": "Every chat input must accept images and files through a selection dialog, drag-and-drop and paste. Apply this to workspace, feature, issue and every other interactive agent chat composer. Attachments must accompany the correct message and remain accessible from its conversation history; image inspection follows ROUTE-13. Use a plus-only attachment button with an accessible name and tooltip explaining that it attaches images or files.",
       "sourceSection": "14 Detailed UI workspaces",
       "architectureSection": "conversation-ui-and-screen-context",
       "owner": "Native UI and navigation registry",
@@ -8254,7 +8302,7 @@
     {
       "requirement": "NOTIFY-03",
       "requirementStatus": "Proposed",
-      "statement": "Notification policy should cover decisions, failures, blocked work, significant completions, review changes, budget or authentication problems, and dreaming reports. Severity, quiet preferences, aggregation and OS alerts for other categories remain open; required-input OS alerts follow NOTIFY-04.",
+      "statement": "Notification policy should cover decisions, failures, blocked work, significant completions, review changes, budget or authentication problems, and dreaming reports. Feature and issue completion presentation follows confirmed NOTIFY-05. Severity, quiet preferences, aggregation and OS alerts for other categories remain open; required-input OS alerts follow NOTIFY-04.",
       "sourceSection": "16 Dreaming review queue and notifications",
       "architectureSection": "offline-help-diagnostics-updates-and-migration",
       "owner": "Notification service and OS adapter",
@@ -8278,6 +8326,23 @@
       "validationFamily": "Inbox/deduplication/deep-link/OS-permission checks",
       "validationGate": "G10",
       "plannedCase": "AT-NOTIFY-04",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "approvals",
+      "supportingSlices": [
+        "shell"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "NOTIFY-05",
+      "requirementStatus": "Confirmed",
+      "statement": "Verified feature and issue completions must produce highly visible in-app cards floating at the top center below the global toolbar on Chat and every other page. Cards must not reserve layout space, shift content, steal focus or obstruct essential controls. Stack new messages like playing cards, newest first, with access to expand and inspect every message. Keep each card until the user explicitly dismisses it, including across navigation and restart; opening or reading linked work must not dismiss it. Dismissal removes only that card from the stack and retains the notification in history. Provide direct links to completed work, avoid duplicate completion events, and preserve keyboard access, accessible status announcements and reduced-motion behavior. Dismissal or acknowledgment must not resolve approvals or resume work.",
+      "sourceSection": "16 Dreaming review queue and notifications",
+      "architectureSection": "offline-help-diagnostics-updates-and-migration",
+      "owner": "Notification service and OS adapter",
+      "validationFamily": "Inbox/deduplication/deep-link/OS-permission checks",
+      "validationGate": "G10",
+      "plannedCase": "AT-NOTIFY-05",
       "designStatus": "Proposed architecture mapping; not an implementation/test result",
       "primarySlice": "approvals",
       "supportingSlices": [
@@ -11249,7 +11314,7 @@
     {
       "requirement": "UI-13",
       "requirementStatus": "Confirmed",
-      "statement": "Once opened, keep the workspace coordinator sidebar open across navigation to other screens, project changes and relevant workspace selections until the user explicitly closes it or returns to the Home chat page. Returning Home closes the sidebar and displays that same active conversation in the normal center pane, preserving the established right-hand session history. Closing the sidebar preserves the session and its draft; subsequent navigation must not reopen it without the user choosing to do so. Preserve the existing left navigation and the page being inspected.",
+      "statement": "Once opened, keep the workspace coordinator sidebar open across navigation to other screens, project changes and relevant workspace selections until the user explicitly closes it or returns to the Home chat page. Returning Home closes the sidebar and displays that same active conversation in the normal center pane, preserving the right-hand Current / Chat History tabs and their selection/state. Closing the sidebar preserves the session and its draft; subsequent navigation must not reopen it without the user choosing to do so. Preserve the existing left navigation and the page being inspected.",
       "sourceSection": "26 Workspace coordinator access and screen context",
       "architectureSection": "conversation-ui-and-screen-context",
       "owner": "Shared conversation presenter and screen registry",
@@ -11268,7 +11333,7 @@
     {
       "requirement": "COORD-09",
       "requirementStatus": "Confirmed",
-      "statement": "The application-level coordinator must know which screen the user is currently viewing. Navigation to a screen or a meaningful selected workspace must post an attributed screen-context notice into the current Home conversation, including while that conversation is accessed from the sidebar. For example, opening Dreaming posts that the user has moved to Dreaming. Keep this context current as the user navigates, including when the sidebar is closed. Do not create a new coordinator/session or duplicate a notice merely because the same screen re-renders. Preserve original notices as transcript history rather than rewriting them when navigation changes again.",
+      "statement": "The application-level coordinator receives host-authored screen context when its sidebar opens and when the viewed screen or meaningful selection changes while that sidebar is open. Opening injects the current screen without replaying navigation performed while closed. Closed-sidebar browsing and returning to Home chat must not append navigation notices. Do not create a new coordinator/session or duplicate a notice for an unchanged re-render. Home and sidebar views display only the most recent screen-context notice for the selected conversation; user, assistant and tool messages remain in order. Keep all recorded screen notices unchanged in the append-only transcript and provider history; consolidation is a display projection only, preserving the stable prompt prefix. Notices remain bounded and attributed, with local Help and relevant enabled-tool references under COORD-10.",
       "sourceSection": "26 Workspace coordinator access and screen context",
       "architectureSection": "conversation-ui-and-screen-context",
       "owner": "Shared conversation presenter and screen registry",
