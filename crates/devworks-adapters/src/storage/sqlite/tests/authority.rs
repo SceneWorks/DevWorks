@@ -65,7 +65,13 @@ const ACTORS: [(&str, PrincipalKind); 9] = [
 
 impl Fx {
     fn new() -> Self {
+        Self::with_id_offset(0)
+    }
+    /// A fixture whose store draws identifiers from `offset` on, so two fixtures are two
+    /// distinct stores.
+    fn with_id_offset(offset: u64) -> Self {
         let h = Harness::new();
+        h.ids.0.store(offset, Ordering::SeqCst);
         let store = Arc::new(h.store());
         store
             .with_writer_connection(|c| {
@@ -1489,12 +1495,9 @@ fn register_repository(fx: &Fx, rid: &str, location: &str) {
         })
         .unwrap();
 }
+/// The protected roots as the host reads them: from the store, bound to its identity.
 fn roots(fx: &Fx) -> ProtectedRoots {
-    let repos = read_snapshot(&*fx.store, &ReadOptions::default(), |s| {
-        s.authority().registered_repositories()
-    })
-    .unwrap();
-    ProtectedRoots::new(repos, Vec::new(), None)
+    ProtectedRoots::read(&*fx.store, Vec::new(), None).unwrap()
 }
 
 #[test]
@@ -2552,4 +2555,238 @@ fn deletion_confirmations_are_short_lived_and_history_revisions_are_real() {
         deletion::authorize(&*fx.store, &fx.agent("agent-a"), &confirmation.id, &preview),
         Err(DeletionRefusal::HumanOnly)
     ));
+}
+
+// --- permits bound to their store; redaction scoped to secrets --------------------------------
+
+#[cfg(unix)]
+#[test]
+fn a_permit_minted_on_another_store_is_refused_against_the_real_roots() {
+    let fx = Fx::new();
+    let other = Fx::with_id_offset(10_000);
+    assert_ne!(fx.store.info().store_id, other.store.info().store_id);
+    let scratch = Scratch::new("foreign-permit");
+    let repo = scratch.path("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    register_repository(&fx, "repo-a", &repo);
+    register_repository(&other, "repo-a", &repo);
+    let fs = NativeFilesystem::new();
+    // The forger confirms and authorizes on a store it controls.
+    let forger = other.ctx("user-a", PrincipalKind::Human);
+    let foreign_roots = roots(&other);
+    let preview = deletion::prepare(
+        &fs,
+        &foreign_roots,
+        &id("repo-a"),
+        RepositoryDependencies::default(),
+    )
+    .unwrap();
+    let grant = deletion::confirm(&*other.store, &forger, &preview, T0 + 60_000).unwrap();
+    let permit = deletion::authorize(&*other.store, &forger, &grant.id, &preview).unwrap();
+    assert_eq!(permit.store_id(), &other.store.info().store_id);
+    // Against the real store's roots it matches nothing.
+    let plan = EffectPlan {
+        kind: DestructiveKind::RemoveTree,
+        targets: vec![repo.clone()],
+        working_directory: None,
+        scope: IntendedScope::PrimaryRepositoryDeletion(permit),
+    };
+    assert_eq!(
+        destructive::preflight(&fs, &roots(&fx), &plan).verdict,
+        PreflightVerdict::Blocked(BlockReason::PermitMismatch)
+    );
+    // Nor against roots that were not read from any store.
+    let unbound = ProtectedRoots::new(foreign_roots.repositories.clone(), Vec::new(), None);
+    assert_eq!(
+        destructive::preflight(&fs, &unbound, &plan).verdict,
+        PreflightVerdict::Blocked(BlockReason::PermitMismatch)
+    );
+    // A registry change after confirmation also refuses it on its own store.
+    register_repository(&other, "repo-z", &scratch.path("other"));
+    assert_eq!(
+        destructive::preflight(&fs, &roots(&other), &plan).verdict,
+        PreflightVerdict::Blocked(BlockReason::PermitMismatch)
+    );
+    assert!(std::path::Path::new(&repo).exists());
+}
+
+/// Writes history carrying ordinary paths, branch names and credential metadata, plus a token.
+struct Records;
+impl CommandHandler for Records {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        _: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let id = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id,
+            actor: ctx.principal().clone(),
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "note".into(),
+            aggregate_id: "note-2".into(),
+            aggregate_revision: 1,
+            kind: "Note".into(),
+            payload: json!({
+                "path": "/Users/Michael/Projects2025/DevWorksData",
+                "windowsPath": "C:/Users/Michael/Source/Repos/DevWorks2",
+                "branch": "feature/AddOAuth2LoginFlowForUsersV2",
+                "title": "Rename QueryBuilder2 to QueryPlannerImplementation",
+                "sha256": "deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe",
+                "credentialRevision": "3",
+                "credentialRef": "dwsecret-0123456789abcdef0123456789abcdef",
+                "credentialGeneration": 4,
+                "tokenEstimate": 5,
+                "sessionToken": "plain-session-value",
+                "leak": "uses ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+            }),
+        })?;
+        accept_in(tx)
+    }
+}
+
+/// Accepts with an operation whose identifier is shaped like a token.
+struct TokenShapedId;
+impl CommandHandler for TokenShapedId {
+    fn decide(
+        &self,
+        _: &InvocationContext,
+        _: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let op = OperationId(id("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+        tx.operations().record_intent(NewOperation {
+            id: op.clone(),
+            root_id: Some(RootId(id("root-a"))),
+            assignment_id: None,
+            capability: "runs.start".into(),
+            schema_version: 1,
+            args_digest: "d".into(),
+            payload: json!({}),
+        })?;
+        Ok(Decided {
+            decision: DomainDecision::Accepted {
+                operation_id: op.clone(),
+            },
+            operation_id: Some(op),
+        })
+    }
+}
+
+#[test]
+fn redaction_keeps_ordinary_values_and_refuses_what_it_cannot_redact() {
+    let fx = Fx::new();
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let authority = fx.authority();
+    // A path setting survives in the receipt and its replay, byte for byte.
+    let path = "/Users/Michael/Projects2025/DevWorksData";
+    let frame = fx.save_frame(
+        json!({"kind": "Workspace"}),
+        1,
+        "repositories.baseDirectory",
+        json!(path),
+    );
+    let first = fx
+        .cases
+        .command(
+            &fx.gateway(&authority),
+            &user,
+            "settings.save_revision",
+            frame.as_bytes(),
+        )
+        .unwrap();
+    let replay = fx
+        .cases
+        .command(
+            &fx.gateway(&authority),
+            &user,
+            "settings.save_revision",
+            frame.as_bytes(),
+        )
+        .unwrap();
+    assert!(format!("{first:?}").contains(path), "{first:?}");
+    assert!(matches!(
+        replay,
+        CommandReply::Recorded { replayed: true, .. }
+    ));
+    assert!(format!("{replay:?}").contains(path));
+    // History keeps paths, branch names, digests and credential metadata; secrets go.
+    let reply = fx
+        .gateway(&authority)
+        .command(
+            &user,
+            "runs.start",
+            start("records-1").as_bytes(),
+            Arc::new(Records),
+        )
+        .unwrap();
+    assert!(matches!(reply, CommandReply::Recorded { .. }));
+    let note = fx
+        .events()
+        .into_iter()
+        .find(|e| e.aggregate_id == "note-2")
+        .unwrap()
+        .payload;
+    for key in [
+        "path",
+        "windowsPath",
+        "branch",
+        "title",
+        "sha256",
+        "credentialRevision",
+        "credentialRef",
+        "credentialGeneration",
+        "tokenEstimate",
+    ] {
+        assert_ne!(
+            note[key],
+            json!(devworks_core::authority::redact::REDACTED),
+            "{key}"
+        );
+    }
+    assert_eq!(note["path"], path);
+    assert_eq!(note["branch"], "feature/AddOAuth2LoginFlowForUsersV2");
+    assert_eq!(
+        note["credentialRef"],
+        "dwsecret-0123456789abcdef0123456789abcdef"
+    );
+    assert_eq!(
+        note["sessionToken"],
+        devworks_core::authority::redact::REDACTED
+    );
+    assert!(!note["leak"].as_str().unwrap().contains("ghp_"));
+    let receipts =
+        fx.h.raw()
+            .query_row(
+                "SELECT group_concat(result_json, ' ') FROM command_receipts",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
+    assert!(receipts.contains(path));
+    // A decision whose secret sits in a field that cannot hold a redaction is refused, with
+    // every write undone, never stored unredacted.
+    let before = fx.events().len();
+    let failure = fx
+        .gateway(&authority)
+        .command(
+            &user,
+            "runs.start",
+            start("token-id").as_bytes(),
+            Arc::new(TokenShapedId),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        failure,
+        devworks_core::gateway::GatewayFailure::HandlerContract(_)
+    ));
+    assert_eq!(fx.events().len(), before);
+    let ops = read_snapshot(&*fx.store, &ReadOptions::default(), |s| {
+        s.operations().unresolved(100)
+    })
+    .unwrap();
+    assert!(ops.iter().all(|o| !o.id.0.as_str().starts_with("ghp_")));
 }

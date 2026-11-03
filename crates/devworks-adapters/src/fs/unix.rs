@@ -391,7 +391,7 @@ impl DestructiveExecutor for NativeFilesystem {
                 }
                 outcome.complete = outcome.remaining.is_empty();
             }
-            DestructiveKind::Move => {
+            DestructiveKind::Move | DestructiveKind::Consequential => {
                 return Err(ResolveError::Unsupported(
                     "moves are preflighted only; the executor does not perform them".into(),
                 ));

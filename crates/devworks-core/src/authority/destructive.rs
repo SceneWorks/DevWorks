@@ -20,8 +20,11 @@ use super::deletion::PrimaryDeletionPermit;
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
 use crate::ports::IdKind;
-use crate::ports::storage::{NewEvent, RegisteredRepository, StorageError, WriteTransaction};
-use crate::protocol::{EventId, Id};
+use crate::ports::storage::{
+    ApplicationStore, NewEvent, ReadOptions, RegisteredRepository, StorageError, WriteTransaction,
+    read_snapshot,
+};
+use crate::protocol::{EventId, Id, StoreId};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -121,8 +124,30 @@ pub struct ProtectedRoots {
     pub repositories: Vec<RegisteredRepository>,
     pub worktrees: Vec<OwnedWorktree>,
     pub app_data_root: Option<String>,
+    /// The store (and restore epoch) the registered roots were read from. Only roots read from
+    /// a store ([`ProtectedRoots::read`]) can honor a primary deletion permit, and only one
+    /// minted on that same store, epoch and registry revision.
+    store: Option<(StoreId, i64)>,
 }
 impl ProtectedRoots {
+    /// Reads the registered repositories from the store and binds the snapshot to that store's
+    /// identity and restore epoch.
+    pub fn read(
+        store: &dyn ApplicationStore,
+        worktrees: Vec<OwnedWorktree>,
+        app_data_root: Option<String>,
+    ) -> Result<Self, StorageError> {
+        read_snapshot(store, &ReadOptions::default(), |s| {
+            let repositories = s.authority().registered_repositories()?;
+            let mut roots = Self::new(repositories, worktrees.clone(), app_data_root.clone());
+            roots.store = Some((s.stamp().store_id.clone(), s.stamp().restore_epoch));
+            Ok(roots)
+        })
+    }
+    /// The store and restore epoch these roots were read from, if any.
+    pub fn store(&self) -> Option<&(StoreId, i64)> {
+        self.store.as_ref()
+    }
     /// Builds the registry snapshot; its revision digests every registered root and worktree.
     pub fn new(
         repositories: Vec<RegisteredRepository>,
@@ -154,6 +179,7 @@ impl ProtectedRoots {
             repositories,
             worktrees,
             app_data_root,
+            store: None,
         }
     }
 }
@@ -171,10 +197,18 @@ pub enum DestructiveKind {
     /// Move a tree away from its location (`mv`): for protection it destroys the location like
     /// a recursive removal. Never executed by the destructive executor.
     Move,
+    /// A recognized consequential operation whose exact effect is not modeled (`git reset
+    /// --hard`, `git gc`, `rsync` into a directory, a .NET delete call): refused when it touches
+    /// a protected root like a recursive removal, otherwise held for input, never allowed.
+    /// Never executed by the destructive executor.
+    Consequential,
 }
 impl DestructiveKind {
     fn recursive(self) -> bool {
-        matches!(self, Self::RemoveTree | Self::EraseContents | Self::Move)
+        matches!(
+            self,
+            Self::RemoveTree | Self::EraseContents | Self::Move | Self::Consequential
+        )
     }
     fn follows(self) -> bool {
         !matches!(self, Self::Unlink)
@@ -271,6 +305,10 @@ pub enum InputNeeded {
     /// A protected root (registered repository, its Git directory, home, application data)
     /// could not be resolved, so nothing can be checked against it.
     UnresolvedProtectedRoot,
+    /// A command contains a consequential program or verb that the structured analysis did not
+    /// fully model (the lexical backstop), or a recognized consequential operation that is not
+    /// refused but cannot be allowed.
+    UnmodeledConsequentialCommand,
 }
 impl InputNeeded {
     pub fn as_str(self) -> &'static str {
@@ -282,6 +320,7 @@ impl InputNeeded {
             Self::UnresolvedWorkingDirectory => "UnresolvedWorkingDirectory",
             Self::OpaqueCommand => "OpaqueCommand",
             Self::UnresolvedProtectedRoot => "UnresolvedProtectedRoot",
+            Self::UnmodeledConsequentialCommand => "UnmodeledConsequentialCommand",
         }
     }
 }
@@ -646,6 +685,15 @@ pub fn preflight(
             }
         }
     }
+    if plan.kind == DestructiveKind::Consequential {
+        // Not refused, but its exact effect is not modeled: never allowed by default.
+        return decide(
+            PreflightVerdict::NeedsInput(InputNeeded::UnmodeledConsequentialCommand),
+            plan.targets.first().map(String::as_str),
+            Vec::new(),
+            Vec::new(),
+        );
+    }
     decide(PreflightVerdict::Allowed, None, checked, protected_ids)
 }
 
@@ -693,7 +741,13 @@ fn classify(
         let id = &repo.id;
         if hits(&repo.root) {
             if let IntendedScope::PrimaryRepositoryDeletion(permit) = &plan.scope {
-                let exact = kind == DestructiveKind::RemoveTree
+                // The permit must come from the same store, restore epoch and registry revision
+                // the roots were read from: a permit minted elsewhere matches nothing here.
+                let same_store = roots.store.as_ref().is_some_and(|(store, epoch)| {
+                    store == permit.store_id() && *epoch == permit.restore_epoch()
+                }) && roots.revision == permit.registry_revision();
+                let exact = same_store
+                    && kind == DestructiveKind::RemoveTree
                     && r.entry_kind == EntryKind::Directory
                     && permit.repository_id() == id
                     && r.entry.identity.is_some()

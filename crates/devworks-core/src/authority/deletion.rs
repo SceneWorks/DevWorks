@@ -10,6 +10,14 @@
 //! kind and never satisfies the confirmation. Filesystem roots stay blocked even with a permit,
 //! network remotes are never deleted and no automatic backup or undo is implied.
 //!
+//! A permit is bound to the store, restore epoch and protected-root registry revision it was
+//! spent on, and the preflight honors it only against roots read from that same store
+//! ([`super::destructive::ProtectedRoots::read`]); a permit minted on any other store (one a
+//! caller opened or fabricated) matches nothing. The store trait is not sealed: its production
+//! implementation lives in another crate, so a seal would only be a convention, and anyone in
+//! the process who can open stores can also touch the filesystem directly. The binding closes
+//! the confusion on the supported path, which is what the guard promises.
+//!
 //! The confirming steps take the store and run their own unit of work: they are a dedicated
 //! user-ingress path, not something an operation handler (which only ever holds the gateway's
 //! handler view of a transaction) can reach.
@@ -25,7 +33,7 @@ use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, EventFilter, GrantKind, StorageError, WriteOptions,
     WriteTransaction, run_write,
 };
-use crate::protocol::{ActorId, Id, ProjectId};
+use crate::protocol::{ActorId, Id, ProjectId, StoreId};
 use serde_json::{Value, json};
 
 /// History aggregate of a repository deletion (`aggregate_id` = repository ID).
@@ -48,8 +56,22 @@ pub struct PrimaryDeletionPermit {
     identity: FileIdentity,
     grant_id: Id,
     actor: ActorId,
+    store_id: StoreId,
+    restore_epoch: i64,
+    registry_revision: String,
 }
 impl PrimaryDeletionPermit {
+    /// The store the confirmation was spent on.
+    pub fn store_id(&self) -> &StoreId {
+        &self.store_id
+    }
+    pub fn restore_epoch(&self) -> i64 {
+        self.restore_epoch
+    }
+    /// The protected-root registry revision the confirmed preview was prepared against.
+    pub fn registry_revision(&self) -> &str {
+        &self.registry_revision
+    }
     pub fn repository_id(&self) -> &Id {
         &self.repository_id
     }
@@ -336,11 +358,15 @@ pub fn authorize(
             "RepositoryDeletionAuthorized",
             json!({"grantId": grant.id.as_str(), "previewDigest": current.digest}),
         )?;
+        let store = tx.store();
         Ok(PrimaryDeletionPermit {
             repository_id: current.repository_id.clone(),
             identity: current.identity,
             grant_id: grant.id,
             actor: ctx.principal().clone(),
+            store_id: store.store_id.clone(),
+            restore_epoch: store.restore_epoch,
+            registry_revision: current.registry_revision.clone(),
         })
     })
 }

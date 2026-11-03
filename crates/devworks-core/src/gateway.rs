@@ -673,11 +673,21 @@ fn unit_of_work(
     let savepoint = tx.savepoint()?;
     let outcome = handler.decide(ctx, command, &mut HandlerTx::new(tx, ingress));
     let decided = match outcome {
-        Ok(decided) => {
+        Ok(mut decided) => {
             if let Err(e) = check_decision(command, &decided) {
                 tx.rollback_to(savepoint)?;
                 return Ok(Unit::Contract(e));
             }
+            // Receipts are persisted and returned: secrets are redacted first, so the reply and
+            // any replay carry the same redacted decision. One that cannot be redacted is
+            // refused with every write undone, never stored unredacted.
+            decided.decision = match crate::authority::redact::redact_decision(decided.decision) {
+                Ok(d) => d,
+                Err(e) => {
+                    tx.rollback_to(savepoint)?;
+                    return Ok(Unit::Contract(e));
+                }
+            };
             if matches!(decided.decision, DomainDecision::Refused { .. }) {
                 // Receipt-only decisions do not mutate work (step 5): every write the use case
                 // made is undone and only the receipt and its CommandDecided history remain.
@@ -757,15 +767,14 @@ fn unit_of_work(
     })?;
     let committed_sequence = Revision::new(sequence)
         .map_err(|_| StorageError::InvalidRecord("non-positive committed sequence".into()))?;
+    let decision = decided.decision;
     let receipt = Receipt {
         command_id,
         committed_sequence,
         accepted_at_ms,
         request_digest: command.fingerprint.as_str().to_owned(),
         operation_id: decided.operation_id,
-        // Receipts are persisted and returned: credential-shaped content is redacted first, so
-        // the reply and any replay carry the same redacted decision.
-        decision: crate::authority::redact::redact_decision(decided.decision),
+        decision,
     };
     tx.receipts().record(
         &command.identity,

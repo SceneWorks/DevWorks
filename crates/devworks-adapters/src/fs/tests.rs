@@ -891,3 +891,356 @@ fn windows_device_names_and_streams_are_not_plain_components() {
         assert!(!unsafe_name(name), "{name}");
     }
 }
+
+/// The verification probe's argv cases. None may come back allowed or as plain residual risk.
+#[cfg(unix)]
+mod probe {
+    use super::*;
+
+    struct Fixture {
+        s: Scratch,
+        roots: ProtectedRoots,
+        repo: String,
+        work: String,
+        wt: String,
+    }
+    fn fixture() -> Fixture {
+        let s = Scratch::new("probe");
+        let repo = s.0.join("repo");
+        std::fs::create_dir_all(repo.join(".git/objects/aa")).unwrap();
+        std::fs::create_dir_all(repo.join(".git/worktrees/wt")).unwrap();
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(repo.join("keep"), "k").unwrap();
+        std::fs::create_dir_all(s.0.join("caf\u{e9}/.git")).unwrap();
+        std::fs::create_dir_all(s.0.join("wt/src")).unwrap();
+        std::fs::write(
+            s.0.join("wt/.git"),
+            format!("gitdir: {}\n", repo.join(".git/worktrees/wt").display()),
+        )
+        .unwrap();
+        std::fs::write(s.0.join("wt/src/a.rs"), "x").unwrap();
+        std::fs::create_dir_all(s.0.join("work")).unwrap();
+        let roots = ProtectedRoots::new(
+            vec![
+                RegisteredRepository {
+                    id: id("repo-a"),
+                    location: s.p("repo"),
+                    revision: 1,
+                },
+                RegisteredRepository {
+                    id: id("repo-b"),
+                    location: s.p("caf\u{e9}"),
+                    revision: 1,
+                },
+            ],
+            vec![OwnedWorktree {
+                id: id("wt-a"),
+                repository_id: id("repo-a"),
+                location: s.p("wt"),
+                stopped: true,
+                active_users: 0,
+            }],
+            None,
+        );
+        Fixture {
+            repo: s.p("repo"),
+            work: s.p("work"),
+            wt: s.p("wt"),
+            roots,
+            s,
+        }
+    }
+
+    /// `true` when the assessment (and every plan's preflight) let the command through.
+    fn allowed(f: &Fixture, argv: &[String], cwd: &str) -> Option<String> {
+        let fs = NativeFilesystem::new();
+        match assess_command(argv, Some(cwd)) {
+            ShellAssessment::Destructive { plans, .. } => {
+                let verdicts: Vec<_> = plans
+                    .iter()
+                    .map(|p| preflight(&fs, &f.roots, p).verdict)
+                    .collect();
+                verdicts
+                    .iter()
+                    .all(|v| *v == PreflightVerdict::Allowed)
+                    .then(|| format!("ALLOWED {verdicts:?}"))
+            }
+            ShellAssessment::NoRecognizedDestruction { .. } => Some("NO_RECOGNIZED".into()),
+            ShellAssessment::NeedsInput(_) | ShellAssessment::ProtectedBranch { .. } => None,
+        }
+    }
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    const POSIX: &[&str] = &[
+        "rm -rf {R}",
+        "rm -rf \"$(printf {R})\"",
+        "bash -c \"bash -c 'rm -rf {R}'\"",
+        "env -i rm -rf {R}",
+        "command -p rm -rf {R}",
+        "\\rm -rf {R}",
+        "/bin/rm -rf {R}",
+        "busybox rm -rf {R}",
+        "perl -e 'use File::Path; rmtree(\"{R}\")'",
+        "python3 -c 'import shutil; shutil.rmtree(\"{R}\")'",
+        "git -C {R} clean -fdx",
+        "git --git-dir={R}/.git gc --prune=now",
+        "rm -rf -- {R}",
+        "rm -r -f {R}/",
+        "rm -rf {R}/.",
+        "rm -rf {R}/..",
+        "rm -rf {B}//repo//",
+        "rm -rf {B}/rep*",
+        "rm -rf {R}/.git/*",
+        "rm -rf {R}/*",
+        ": > {R}/.git/HEAD",
+        "dd if=/dev/zero of={R}/.git/HEAD",
+        "unlink {R}/.git/HEAD",
+        "shred -u {R}/.git/HEAD",
+        "find -L {R} -delete",
+        "find {R} -delete",
+        "find {B} -name repo -exec rm -rf {} +",
+        "rsync -a --delete {B}/work/ {R}/",
+        "git worktree remove --force {R}",
+        "git clean -ffdx {R}",
+        "mv {R} {B}/gone",
+        "mv -t {B}/gone {R}",
+        "if true; then rm -rf {R}; fi",
+        "{ rm -rf {R}; }",
+        "f() { rm -rf {R}; }; f",
+        "[ -d {R} ] && rm -rf {R}",
+        "rm -rf {R} & wait",
+        "nohup rm -rf {R}",
+        "exec -a x rm -rf {R}",
+        "timeout -k 5 10 rm -rf {R}",
+        "nice -n5 rm -rf {R}",
+        "echo {R} | xargs rm -rf",
+        "rm -rf $'{R}'",
+        "cd {B} && rm -rf repo",
+        "rm -rf {B}/{repo,x}",
+        "echo rm -rf {R} | sh",
+        "bash -c -- 'rm -rf {R}'",
+        "bash -c -e 'rm -rf {R}'",
+        "bash -O extglob -c 'rm -rf {R}'",
+        "time -p rm -rf {R}",
+        "sudo -iu root rm -rf {R}",
+        "sudo -Eu root rm -rf {R}",
+        "env -iu FOO rm -rf {R}",
+        "doas -nu root rm -rf {R}",
+        "trap 'rm -rf {R}' EXIT",
+        "bash <<< 'rm -rf {R}'",
+        "bash <(echo rm -rf {R})",
+        "/bin/r? -rf {R}",
+        "/bin/r[m] -rf {R}",
+        "rm -rf ~michael",
+        "rm -rf ~+/x",
+        "zsh -c 'rm -rf {B}/re(po|zz)'",
+        "fish --command 'rm -rf {R}'",
+        "csh -c 'rm -rf {R}'",
+        "tcsh -c 'rm -rf {R}'",
+        "mv -ft {B}/gone {R}",
+        "GIT_WORK_TREE={R} git clean -fdx",
+        "git --work-tree={R} clean -fdx",
+        "git --git-dir={R}/.git --work-tree={R} clean -fdx",
+        "git push origin '+refs/heads/*:refs/heads/*'",
+        "git push -f origin @",
+        "git push -f origin main",
+        "git push origin +HEAD:Main",
+        "git push origin :refs/heads/MAIN",
+        "git -c alias.p='push -f' p origin main",
+        "git -c alias.x='!rm -rf {R}' x",
+        "cp /dev/null {R}/.git/HEAD",
+        "echo x | tee {R}/.git/HEAD",
+        "truncate -s 0 {R}/.git/HEAD",
+        "mv {B}/work/x {R}/.git/HEAD",
+        "ln -sfn /tmp {R}/.git/HEAD",
+        "git -C {R} reset --hard",
+        "git -C {R} rm -rf .",
+        "git -C {R} update-ref -d refs/heads/main",
+        "git -C {R} branch -D main",
+        "alias x='rm -rf {R}'; x",
+        "node -e 'require(\"fs\").rmSync(\"{R}\", {recursive: true})'",
+        "ruby -e 'require \"fileutils\"; FileUtils.rm_rf(\"{R}\")'",
+    ];
+    const POWERSHELL: &[&str] = &[
+        "Remove-Item {R} -Recurse -Force",
+        "ri -r {R}",
+        "rd -r {R}",
+        "del -r {R}",
+        "erase -r {R}",
+        "rmdir -r {R}",
+        "rm -r {R}",
+        "Remove-Item -Path {R} -Recurse",
+        "Remove-Item -LiteralPath {R} -Recurse",
+        "Remove-Item -Path:{R} -Recurse",
+        "[IO.Directory]::Delete('{R}', $true)",
+        "[System.IO.Directory]::Delete(\"{R}\", $true)",
+        "[IO.File]::WriteAllText('{R}/.git/HEAD', 'x')",
+        "Get-Item {R} | Remove-Item -Recurse",
+        "if (1) { Remove-Item {R} -Recurse }",
+        "& { Remove-Item {R} -Recurse }",
+        "try { Remove-Item {R} -Recurse } catch {}",
+        "1 | ForEach-Object { Remove-Item {R} -Recurse }",
+        "foreach ($i in 1) { Remove-Item {R} -Recurse }",
+        "Remove-Item {R},{B}/x -Recurse",
+        "Rename-Item {R} gone",
+        "Move-Item {R} {B}/gone",
+        "Clear-Content {R}/.git/HEAD",
+        "Set-Content {R}/.git/HEAD x",
+        "'x' | Out-File {R}/.git/HEAD",
+        "Copy-Item {B}/work/x {R}/.git/HEAD",
+    ];
+    const CMD: &[&str] = &[
+        "del /s /q {R}",
+        "rd /s /q {R}",
+        "rmdir /S /Q {R}",
+        "rd /s/q {B}",
+        "del /f/s/q {B}",
+        "if exist {R} rd /s /q {R}",
+        "if 1==1 rd /s /q {R}",
+        "(rd /s /q {R})",
+        "for %d in ({R}) do rd /s /q %d",
+        "move {R} {B}/gone",
+        "ren {R} gone",
+        "copy nul {R}/.git/HEAD",
+    ];
+
+    #[test]
+    fn verification_probe_cases_are_never_allowed() {
+        let f = fixture();
+        let b = f.s.p("");
+        let b = b.trim_end_matches('/');
+        let sub = |s: &str| s.replace("{R}", &f.repo).replace("{B}", b);
+        let mut leaks = Vec::new();
+        for case in POSIX {
+            let s = sub(case);
+            if let Some(v) = allowed(&f, &argv(&["sh", "-c", &s]), &f.work) {
+                leaks.push(format!("sh -c {case}: {v}"));
+            }
+        }
+        for case in POWERSHELL {
+            let s = sub(case);
+            for shell in ["pwsh", "powershell"] {
+                for flag in ["-Command", "-CommandWithArgs"] {
+                    if let Some(v) = allowed(&f, &argv(&[shell, flag, &s]), &f.work) {
+                        leaks.push(format!("{shell} {flag} {case}: {v}"));
+                    }
+                }
+            }
+        }
+        for case in CMD {
+            let s = sub(case);
+            let mut a = argv(&["cmd", "/c"]);
+            a.extend(s.split(' ').map(str::to_owned));
+            if let Some(v) = allowed(&f, &a, &f.work) {
+                leaks.push(format!("cmd /c {case}: {v}"));
+            }
+        }
+        let joined = argv(&["cmd", "/crd", "/s", "/q", &f.repo]);
+        if let Some(v) = allowed(&f, &joined, &f.work) {
+            leaks.push(format!("cmd /crd: {v}"));
+        }
+        // `git clean` excludes take a value; the target is still the repository.
+        for case in [
+            "git clean -fdx",
+            "git clean -fdx -e keep",
+            "git clean -fdx --exclude=keep",
+        ] {
+            if let Some(v) = allowed(&f, &argv(&["sh", "-c", case]), &f.repo) {
+                leaks.push(format!("{case} in the repository: {v}"));
+            }
+        }
+        // Case and Unicode-normalization aliases resolve to the same directory only on
+        // filesystems that fold them; there they must be refused too.
+        if std::path::Path::new(&format!("{b}/REPO")).exists() {
+            for case in ["rm -rf {B}/REPO", "rm -rf {B}/REPO/.GIT/objects"] {
+                if let Some(v) = allowed(&f, &argv(&["sh", "-c", &sub(case)]), &f.work) {
+                    leaks.push(format!("{case}: {v}"));
+                }
+            }
+        }
+        if std::path::Path::new(&format!("{b}/cafe\u{301}")).exists() {
+            let case = "rm -rf {B}/cafe\u{301}";
+            if let Some(v) = allowed(&f, &argv(&["sh", "-c", &sub(case)]), &f.work) {
+                leaks.push(format!("{case}: {v}"));
+            }
+        }
+        assert!(
+            leaks.is_empty(),
+            "{} leaks:\n{}",
+            leaks.len(),
+            leaks.join("\n")
+        );
+    }
+
+    #[test]
+    fn commands_without_consequential_tokens_stay_residual_and_cleanup_stays_allowed() {
+        let f = fixture();
+        for case in [
+            "ls -la",
+            "echo hello",
+            "cargo build --release",
+            "python3 tools/gen.py",
+            "sh scripts/check.sh",
+            "grep -r TODO src",
+        ] {
+            assert!(
+                matches!(
+                    assess_command(&argv(&["sh", "-c", case]), Some(&f.work)),
+                    ShellAssessment::NoRecognizedDestruction { .. }
+                ),
+                "{case}"
+            );
+        }
+        // Modeled commands with ordinary targets are still precise plans.
+        for (case, cwd) in [
+            ("git clean -fdx", &f.wt),
+            ("rm -rf target", &f.work),
+            ("git status", &f.repo),
+        ] {
+            match assess_command(&argv(&["sh", "-c", case]), Some(cwd)) {
+                ShellAssessment::Destructive { plans, .. } => {
+                    for p in &plans {
+                        assert_eq!(
+                            preflight(&NativeFilesystem::new(), &f.roots, p).verdict,
+                            PreflightVerdict::Allowed,
+                            "{case}"
+                        );
+                    }
+                }
+                ShellAssessment::NoRecognizedDestruction { .. } => {}
+                other => panic!("{case}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_backstop_is_what_holds_the_unmodeled_forms() {
+        use devworks_core::authority::shell::assess_structured_only;
+        let f = fixture();
+        // Without the backstop, these forms come back as nothing destructive.
+        for case in [
+            "trap 'rm -rf {R}' EXIT",
+            "alias x='rm -rf {R}'; x",
+            "eval 'rm -rf {R}'",
+            "echo 'git clean -fdx'",
+        ] {
+            let a = argv(&["sh", "-c", &case.replace("{R}", &f.repo)]);
+            assert!(
+                matches!(
+                    assess_structured_only(&a, Some(&f.work)),
+                    ShellAssessment::NoRecognizedDestruction { .. }
+                ),
+                "{case}"
+            );
+            assert!(
+                matches!(
+                    assess_command(&a, Some(&f.work)),
+                    ShellAssessment::NeedsInput(InputNeeded::UnmodeledConsequentialCommand)
+                ),
+                "{case}"
+            );
+        }
+    }
+}

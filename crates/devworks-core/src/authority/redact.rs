@@ -56,6 +56,22 @@ const SENSITIVE_PARTS: [&str; 8] = [
 ];
 /// Field-name suffixes that mark a value as sensitive (`accessToken`, `Authorization`, ...).
 const SENSITIVE_SUFFIXES: [&str; 3] = ["token", "authorization", "cookie"];
+/// Field-name suffixes of references and metadata about a secret, never the secret itself
+/// (`credentialRevision`, `credentialRef`, `secretId`, ...).
+const METADATA_SUFFIXES: [&str; 12] = [
+    "revision",
+    "ref",
+    "refs",
+    "generation",
+    "id",
+    "ids",
+    "count",
+    "digest",
+    "hash",
+    "kind",
+    "version",
+    "estimate",
+];
 
 /// Redacts known values and recognizable credential shapes.
 #[derive(Clone, Debug, Default)]
@@ -96,10 +112,13 @@ impl Redactor {
             Value::Object(map) => {
                 let mut out = Map::new();
                 for (k, v) in map {
-                    // A secret reference under a credential field is kept: it is not a secret.
-                    let reference = SecretRef::from_setting(v).is_some()
-                        || v.as_str().is_some_and(is_secret_ref);
-                    let redacted = if sensitive(k) && !v.is_null() && !reference {
+                    // Only a secret-valued field is replaced wholesale: a non-empty string that
+                    // is not a secret reference. Numbers, objects and references are kept
+                    // (their strings are still checked for known secret patterns).
+                    let secret_value = v
+                        .as_str()
+                        .is_some_and(|s| !s.is_empty() && !is_secret_ref(s));
+                    let redacted = if sensitive(k) && secret_value {
                         Value::String(REDACTED.into())
                     } else {
                         self.redact_json(v)
@@ -120,6 +139,7 @@ fn sensitive(field: &str) -> bool {
         .collect::<String>()
         .to_lowercase();
     !norm.is_empty()
+        && !METADATA_SUFFIXES.iter().any(|s| norm.ends_with(s))
         && (SENSITIVE_PARTS.iter().any(|s| norm.contains(s))
             || SENSITIVE_SUFFIXES.iter().any(|s| norm.ends_with(s)))
 }
@@ -250,7 +270,9 @@ fn redact_word(word: &str) -> String {
     if is_secret_ref(word) {
         return word.to_owned();
     }
-    if looks_like_credential(word) || (word.len() >= 32 && looks_random(word)) {
+    // Known secret shapes only (token prefixes, private keys): no shape guessing, which
+    // rewrote paths, branch names and digests.
+    if looks_like_credential(word) {
         return REDACTED.into();
     }
     word.to_owned()
@@ -264,27 +286,17 @@ fn redact_word_tail(tail: &str) -> String {
     }
 }
 
-/// A domain decision with credential-shaped content redacted, for receipts (persisted and
-/// returned). A decision that would no longer decode after redaction is kept as it was; its
-/// use case is responsible for not echoing secrets (settings refuse credentials outright).
+/// A domain decision with secrets redacted, for receipts (persisted and returned): typed
+/// secret-valued fields and known secret patterns only. A decision whose redacted form no
+/// longer decodes is refused (`Err`), never stored unredacted.
 pub fn redact_decision(
     decision: crate::protocol::results::DomainDecision,
-) -> crate::protocol::results::DomainDecision {
-    let Ok(value) = serde_json::to_value(&decision) else {
-        return decision;
-    };
+) -> Result<crate::protocol::results::DomainDecision, String> {
+    let value = serde_json::to_value(&decision).map_err(|e| e.to_string())?;
     let redacted = Redactor::new().redact_json(&value);
     if redacted == value {
-        return decision;
+        return Ok(decision);
     }
-    serde_json::from_value(redacted).unwrap_or(decision)
-}
-
-/// Long unbroken base64/hex-like runs with mixed character classes (likely opaque credentials).
-fn looks_random(word: &str) -> bool {
-    word.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'+' | b'/' | b'='))
-        && word.bytes().any(|b| b.is_ascii_digit())
-        && word.bytes().any(|b| b.is_ascii_uppercase())
-        && word.bytes().any(|b| b.is_ascii_lowercase())
+    serde_json::from_value(redacted)
+        .map_err(|_| "the decision carries a secret in a field that cannot hold a redaction".into())
 }

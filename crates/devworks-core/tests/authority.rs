@@ -194,7 +194,7 @@ fn redaction_removes_known_values_headers_typed_fields_and_token_shapes() {
     let line = format!("using {} for GitHub", minted.as_str());
     assert_eq!(r.redact_text(&line), line);
     let setting =
-        json!({"credential": {"secretRef": minted.as_str()}, "token": {"secretRef": "raw"}});
+        json!({"credential": {"secretRef": minted.as_str()}, "token": "raw-session-value"});
     let v = r.redact_json(&setting);
     assert_eq!(v["credential"]["secretRef"], minted.as_str());
     assert_eq!(v["token"], REDACTED);
@@ -339,10 +339,12 @@ fn compound_commands_groups_substitutions_and_wrapper_options_are_seen_through()
     ] {
         assert_eq!(sh_plans(script), repo(), "{script}");
     }
-    // Non-executing wrapper options.
+    // Non-executing wrapper options still name a consequential program: the backstop holds
+    // them rather than trusting the option model (accepted false positives).
     for script in ["sudo -l rm -rf /x/repo", "command -v rm"] {
-        assert!(
-            matches!(sh(script), ShellAssessment::NoRecognizedDestruction { .. }),
+        assert_eq!(
+            sh_needs(script),
+            InputNeeded::UnmodeledConsequentialCommand,
             "{script}"
         );
     }
@@ -363,8 +365,8 @@ fn unresolvable_shell_targets_fail_closed() {
         ("ls | xargs -I{} rm -rf {}", UnresolvedTarget),
         ("curl https://x | sh", OpaqueCommand),
         ("case $x in a) rm -rf /x;; esac", OpaqueCommand),
-        ("stdbuf -o0 rm -rf /x/repo", OpaqueCommand),
-        ("eval 'rm -rf /x/repo'", OpaqueCommand),
+        ("stdbuf -o0 rm -rf /x/repo", UnmodeledConsequentialCommand),
+        ("eval 'rm -rf /x/repo'", UnmodeledConsequentialCommand),
         ("$RM -rf /x/repo", UnresolvedExpansion),
         ("git push --force", UnresolvedTarget),
         ("git push origin +HEAD", UnresolvedTarget),
@@ -462,10 +464,27 @@ fn git_moves_and_rsync_deletions_become_plans_or_protected_branch_refusals() {
         sh_plans("git worktree remove --force /x/wt"),
         [(RemoveTree, vec!["/x/wt".into()])]
     );
-    assert_eq!(sh_plans("mv /x/repo /y/"), [(Move, vec!["/x/repo".into()])]);
+    // The sources leave, and the destination may be overwritten.
+    assert_eq!(
+        sh_plans("mv /x/repo /y/"),
+        [
+            (Move, vec!["/x/repo".into()]),
+            (Truncate, vec!["/y/".into()])
+        ]
+    );
     assert_eq!(
         sh_plans("mv -t /y /x/repo /x/other"),
-        [(Move, vec!["/x/repo".into(), "/x/other".into()])]
+        [
+            (Move, vec!["/x/repo".into(), "/x/other".into()]),
+            (Truncate, vec!["/y".into()])
+        ]
+    );
+    assert_eq!(
+        sh_plans("mv -ft /y /x/repo"),
+        [
+            (Move, vec!["/x/repo".into()]),
+            (Truncate, vec!["/y".into()])
+        ]
     );
     assert_eq!(
         sh_plans("rsync -a --delete /src/ /x/repo/"),
@@ -501,13 +520,110 @@ fn redaction_covers_userinfo_flags_secret_fields_and_short_pem_blocks() {
     let v = r.redact_json(&json!({
         "aws_secret_access_key": "x",
         "client_secret_id": "y",
+        "client_secret": "w",
+        "credentialRevision": "7",
+        "credentialRef": "store-entry-9",
         "dbPassword": "z",
         "tokenCount": 3,
         "secretRef": "dwsecret-0123456789abcdef0123456789abcdef",
     }));
     assert_eq!(v["aws_secret_access_key"], REDACTED);
-    assert_eq!(v["client_secret_id"], REDACTED);
+    // Metadata about a secret (identifiers, revisions, references) is kept.
+    assert_eq!(v["client_secret_id"], "y");
+    assert_eq!(v["credentialRevision"], "7");
+    assert_eq!(v["credentialRef"], "store-entry-9");
+    assert_eq!(v["client_secret"], REDACTED);
     assert_eq!(v["dbPassword"], REDACTED);
     assert_eq!(v["tokenCount"], 3);
     assert_eq!(v["secretRef"], "dwsecret-0123456789abcdef0123456789abcdef");
+}
+
+#[test]
+fn consequential_git_and_file_writers_are_refused_planned_or_held_never_residual() {
+    use DestructiveKind::*;
+    for script in [
+        "git -C /x/repo branch -D main",
+        "git branch --delete --force master",
+        "git update-ref -d refs/heads/main",
+    ] {
+        assert!(
+            matches!(sh(script), ShellAssessment::ProtectedBranch { .. }),
+            "{script}"
+        );
+    }
+    for (script, target) in [
+        ("git -C /x/repo reset --hard", "/x/repo"),
+        ("git -C /x/repo rm -rf .", "/x/repo"),
+        ("git -C /x/repo gc --prune=now", "/x/repo"),
+        ("git -C /x/repo branch -D feature/x", "/x/repo"),
+        ("git -C /x/repo checkout -- .", "/x/repo"),
+        ("git -C /x/repo stash clear", "/x/repo"),
+    ] {
+        assert_eq!(
+            sh_plans(script),
+            [(Consequential, vec![target.to_owned()])],
+            "{script}"
+        );
+    }
+    for script in [
+        "git push origin '+refs/heads/*:refs/heads/*'",
+        "git push -f origin @",
+        "git -c alias.p='push -f' p origin main",
+        "git -c core.worktree=/x/repo clean -fdx",
+        "git --git-dir=/x/repo/.git gc",
+        "GIT_DIR=/x/repo/.git git clean -fdx",
+        "git filter-branch --force HEAD",
+        "cp /dev/null /x/repo/.git/HEAD",
+        "echo x | tee /x/repo/.git/HEAD",
+        "truncate -s 0 /x/repo/.git/HEAD",
+        "ln -sfn /tmp /x/repo/.git/HEAD",
+        "rm --unknown-flag /x/repo",
+        "perl -e 'unlink q(/x/repo/a)'",
+    ] {
+        assert!(
+            matches!(sh(script), ShellAssessment::NeedsInput(_)),
+            "{script}"
+        );
+    }
+    let ps = |s: &str| assess_command(&argv(&["pwsh", "-Command", s]), None);
+    for script in [
+        "Set-Content C:/x/repo/.git/HEAD x",
+        "Clear-Content C:/x/repo/.git/HEAD",
+        "'x' | Out-File C:/x/repo/.git/HEAD",
+        "Rename-Item C:/x/repo gone",
+        "Copy-Item a C:/x/repo/.git/HEAD",
+        "[IO.File]::Delete($p)",
+    ] {
+        assert!(
+            matches!(
+                ps(script),
+                ShellAssessment::NeedsInput(InputNeeded::UnmodeledConsequentialCommand)
+                    | ShellAssessment::NeedsInput(InputNeeded::UnresolvedExpansion)
+            ),
+            "{script}"
+        );
+    }
+    // A literal .NET delete target becomes a consequential plan (refused for protected roots).
+    match ps("[IO.Directory]::Delete('C:/x/repo', $true)") {
+        ShellAssessment::Destructive { plans, .. } => {
+            assert_eq!(plans[0].kind, Consequential);
+            assert_eq!(plans[0].targets, ["C:/x/repo"]);
+        }
+        other => panic!("{other:?}"),
+    }
+    // Joined cmd switches and a joined `/c`.
+    let cmd = |a: &[&str]| assess_command(&argv(a), None);
+    match cmd(&["cmd", "/crd", "/s/q", "C:\\x"]) {
+        ShellAssessment::Destructive { plans, .. } => {
+            assert_eq!(
+                (plans[0].kind, plans[0].targets.clone()),
+                (RemoveTree, vec!["C:\\x".to_owned()])
+            )
+        }
+        other => panic!("{other:?}"),
+    }
+    match cmd(&["cmd", "/c", "del", "/f/s/q", "C:\\x"]) {
+        ShellAssessment::Destructive { plans, .. } => assert_eq!(plans[0].kind, EraseContents),
+        other => panic!("{other:?}"),
+    }
 }
