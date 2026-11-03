@@ -245,16 +245,19 @@ fn outcome_kind(o: &ToolOutcome) -> (&'static str, Option<&OperationId>) {
 }
 
 /// Whether `reference` names a live artifact version with exactly that identity which work of
-/// `scope_project` may see (owned or shared); without a project, what the invocation sees.
+/// `scope_project` may see (owned or shared); without a project, what the invocation sees at
+/// workspace level (every project's artifacts and the workspace artifacts its principal belongs
+/// to the audience of). A receipt reply resolves only for its receipt's audience.
 pub fn reference_resolves(
     tx: &mut dyn WriteTransaction,
+    ctx: &crate::context::InvocationContext,
     scope_project: Option<&crate::protocol::ProjectId>,
-    ctx_project: Option<&crate::protocol::ProjectId>,
     reference: &ArtifactRef,
 ) -> Result<bool, StorageError> {
     if reference.validate().is_err() {
         return Ok(false);
     }
+    let viewer = crate::services::artifacts::Viewer::resolve(tx.authority(), ctx)?;
     let read = tx.artifacts();
     let Some(artifact) = read.artifact(&reference.artifact_id)? else {
         return Ok(false);
@@ -273,11 +276,8 @@ pub fn reference_resolves(
     {
         return Ok(false);
     }
-    let scope = scope_project.or(ctx_project);
-    Ok(match scope {
-        None => true,
-        Some(p) => &artifact.current_project_id == p || read.shares(&artifact.id)?.contains(p),
-    })
+    let scope = scope_project.or(ctx.project_id());
+    crate::services::artifacts::visible_in(read, &viewer, &artifact, scope)
 }
 
 /// Every artifact reference an entry names.
@@ -458,7 +458,6 @@ fn write_batch(
     }
 
     let now = tx.now_ms();
-    let ctx_project = ctx.project_id().cloned();
     let mut kinds: std::collections::BTreeMap<&'static str, i64> = Default::default();
     // Links to the session's work root are written after the batch event (they carry its
     // sequence); collected here as (kind, entry ID, summary, body).
@@ -470,12 +469,7 @@ fn write_batch(
             refuse!(BatchRefusal::DuplicateEntry(entry.entry_id.clone()))
         }
         for (what, reference) in references(&entry.body) {
-            if !reference_resolves(
-                tx,
-                session.project_id.as_ref(),
-                ctx_project.as_ref(),
-                reference,
-            )? {
+            if !reference_resolves(tx, ctx, session.project_id.as_ref(), reference)? {
                 refuse!(BatchRefusal::UnknownReference(what))
             }
         }
@@ -632,18 +626,13 @@ fn write_batch(
     let first = presented;
     let last = first + b.entries.len() as i64 - 1;
     if let Some(checkpoint) = &batch.checkpoint
-        && !reference_resolves(
-            tx,
-            session.project_id.as_ref(),
-            ctx_project.as_ref(),
-            checkpoint,
-        )?
+        && !reference_resolves(tx, ctx, session.project_id.as_ref(), checkpoint)?
     {
         refuse!(BatchRefusal::UnknownReference("checkpoint"))
     }
     for s in &batch.context_sources {
         if let Some(a) = &s.artifact
-            && !reference_resolves(tx, session.project_id.as_ref(), ctx_project.as_ref(), a)?
+            && !reference_resolves(tx, ctx, session.project_id.as_ref(), a)?
         {
             refuse!(BatchRefusal::UnknownReference("context_source"))
         }

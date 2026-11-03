@@ -35,6 +35,13 @@
 //! from its last page's cursor. Lineage records have no actor, time, repository or revision
 //! fields, so their summaries carry them.
 //!
+//! `history.command_receipt` looks up the caller's own receipt and, once its durable typed reply
+//! is published after commit ([`crate::services::artifacts::replies`]), returns the `Recorded`
+//! observation with that reply artifact and schema. Until then it is typed `ViewUnavailable`:
+//! pending (retry the same query), held behind a delivery an operator resolves (retry after that
+//! blocker clears) or abandoned (never retried). A caller that can no longer see the reply is
+//! denied.
+//!
 //! # Retained CodeGraph behavior
 //!
 //! `WorkController.Changes`, `WorkViewsController.ItemChanges` and the `changes` work tool map to
@@ -65,8 +72,10 @@ use crate::protocol::shared::{Event, EventBody, Query, RevisionKind, Subject};
 use crate::protocol::support::{BoundedList, BoundedText, Page, Text, Url};
 use crate::protocol::{
     CommandId, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, Protocol, RequestKey,
-    RootId,
+    RetryAdvice, RootId,
 };
+use crate::services::artifacts::Viewer;
+use crate::services::artifacts::replies::{ObservationGap, recorded_observation};
 use crate::services::cursor::CursorBinding;
 use crate::services::sessions::{
     Failure, Refusal, content, counter, label, not_found, project_visible, query_fault, rev,
@@ -88,8 +97,16 @@ pub const OPERATIONS: [&str; 7] = [
 ];
 /// History aggregate of a recorded link (`aggregate_id` = link ID).
 pub const LINK_AGGREGATE: &str = "history_link";
-/// Fault target kind of a receipt whose typed reply has no durable reply artifact.
+/// Fault target kind of a recorded receipt whose durable reply artifact is still being published
+/// (`ViewUnavailable`, retry the same query) or is no longer visible to the caller
+/// (`PermissionDenied`).
 pub const RECEIPT_REPLY_UNAVAILABLE: &str = "receipt_reply_artifact";
+/// Fault target kind of a recorded receipt whose reply publication is held or failed: the target
+/// is the delivery an operator resolves (`ViewUnavailable`, retry after that blocker clears).
+pub const RECEIPT_REPLY_HELD: &str = "receipt_reply_held";
+/// Fault target kind of a recorded receipt whose reply will never be published (its delivery was
+/// cancelled or dismissed, or no intent exists): `ViewUnavailable`, never retried.
+pub const RECEIPT_REPLY_ABANDONED: &str = "receipt_reply_abandoned";
 
 /// Link kinds other items record through [`record_link`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,7 +235,7 @@ pub fn record_link(
             let Some(a) = &new.artifact else {
                 return invalid("artifact");
             };
-            if !reference_resolves(tx, Some(&root.project_id), ctx.project_id(), a)? {
+            if !reference_resolves(tx, ctx, Some(&root.project_id), a)? {
                 return Ok(Err(not_found("artifact_version", &a.version_id)));
             }
             (
@@ -653,16 +670,49 @@ impl HistoryService {
                     state: ReceiptLookupState::NotFound,
                 },
             }),
-            // The recorded contract requires a `Recorded` observation to carry the exact
-            // durable reply artifact and schema; receipts are kept in the receipt ledger and no
-            // reply artifact is published for them, so the reply is reported unavailable rather
-            // than guessed. The command is not re-run and the receipt is unchanged.
-            Some(LedgerEntry::Current(stored)) => Err(Refusal::new(
-                DomainErrorCode::ViewUnavailable,
-                RECEIPT_REPLY_UNAVAILABLE,
-                Some(stored.receipt.command_id.0),
-            )
-            .into()),
+            Some(LedgerEntry::Current(stored)) => {
+                let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
+                match recorded_observation(snapshot, &viewer, &identity, &stored)? {
+                    Ok(value) => Ok(OperationResult::HistoryCommandReceipt { value }),
+                    // The recorded rules require a `Recorded` observation to carry its durable
+                    // typed reply and forbid a reply on any other state; `StatusUnknown` is local
+                    // admission uncertainty (a lost commit acknowledgment), and this receipt is
+                    // committed. While its reply is being published after commit the view is
+                    // typed as unavailable for now: the same query is retried. Nothing is
+                    // guessed, re-run or changed.
+                    Err(ObservationGap::Pending) => Err(Refusal::new(
+                        DomainErrorCode::ViewUnavailable,
+                        RECEIPT_REPLY_UNAVAILABLE,
+                        Some(stored.receipt.command_id.0),
+                    )
+                    .retry(RetryAdvice::SameCommand)
+                    .into()),
+                    // Publication waits behind a held or failed delivery: retrying the query
+                    // changes nothing until that delivery (named here) is resolved.
+                    Err(ObservationGap::Held(delivery)) => Err(Refusal::new(
+                        DomainErrorCode::ViewUnavailable,
+                        RECEIPT_REPLY_HELD,
+                        Some(delivery),
+                    )
+                    .retry(RetryAdvice::AfterBlockerClears)
+                    .into()),
+                    // The reply will never be published: no retry is advised.
+                    Err(ObservationGap::Abandoned) => Err(Refusal::new(
+                        DomainErrorCode::ViewUnavailable,
+                        RECEIPT_REPLY_ABANDONED,
+                        Some(stored.receipt.command_id.0),
+                    )
+                    .into()),
+                    // Access is rechecked before an old receipt is published: a caller that can
+                    // no longer see its reply is denied rather than handed it.
+                    Err(ObservationGap::Denied) => Err(Refusal::new(
+                        DomainErrorCode::PermissionDenied,
+                        RECEIPT_REPLY_UNAVAILABLE,
+                        Some(stored.receipt.command_id.0),
+                    )
+                    .into()),
+                }
+            }
             Some(LedgerEntry::Incompatible { .. }) => {
                 Err(Refusal::new(DomainErrorCode::SchemaMismatch, "command_receipt", None).into())
             }

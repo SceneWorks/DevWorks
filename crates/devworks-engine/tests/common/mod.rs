@@ -234,6 +234,7 @@ pub fn consumer(name: &str, handler: Arc<dyn DeliveryHandler>) -> Consumer {
             max_delay_ms: 10_000,
             max_attempts: 3,
         },
+        max_in_flight: None,
     }
 }
 

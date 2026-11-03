@@ -5,8 +5,8 @@
 //! retained blobs).
 use super::{
     ArtifactService, AuthorizedScope, BLOB_AGGREGATE, Failure, Refusal, StagedFile, StagingRef,
-    authorized_scope, check_quota, complete_operation, conflict, event, file_failure, new_version,
-    origin_links, put_staged_blob, rev, visible, visible_artifact,
+    Viewer, authorized_scope, check_quota, complete_operation, conflict, event, file_failure,
+    new_version, origin_links, put_staged_blob, require_explicit, rev, visible, visible_artifact,
 };
 use crate::authority::destructive::{
     self, BlockReason, DestructiveKind, EffectPlan, EntryKind, FilesystemResolver, InputNeeded,
@@ -394,10 +394,11 @@ impl ArtifactService {
         let hold = self.readers.acquire(&grant.digest);
         let live = read_snapshot(store, &ReadOptions::default(), |s| {
             let read = s.artifacts();
+            let viewer = Viewer::resolve(s.authority(), ctx)?;
             let Some(a) = read.artifact(&grant.artifact_id)? else {
                 return Ok(None);
             };
-            if a.state != ArtifactState::Live || !visible(read, ctx, &a)? {
+            if a.state != ArtifactState::Live || !visible(read, &viewer, &a)? {
                 return Ok(None);
             }
             Ok(read
@@ -990,7 +991,9 @@ impl ArtifactService {
         media_type: &str,
         staged: &StagedFile,
     ) -> Result<StoredVersion, Failure> {
-        let mut artifact = visible_artifact(tx.artifacts(), ctx, artifact_id)?;
+        let viewer = Viewer::resolve(tx.authority(), ctx)?;
+        let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
+        require_explicit(&artifact)?;
         if expected_revision.get() != artifact.revision {
             return Err(conflict(
                 RevisionDimension::Artifact,
@@ -1025,7 +1028,7 @@ impl ArtifactService {
         artifact.current_version_id = Some(version.id.clone());
         artifact.revision += 1;
         tx.artifacts().update_artifact(&artifact)?;
-        check_quota(tx, &artifact.current_project_id)?;
+        check_quota(tx, &artifact.scope)?;
         complete_operation(
             tx,
             &staged.operation_id,
@@ -1056,7 +1059,9 @@ impl ArtifactService {
         target: &ProjectId,
         expected_scope_revision: &Revision,
     ) -> Result<MutationSummary, Failure> {
-        let mut artifact = visible_artifact(tx.artifacts(), ctx, artifact_id)?;
+        let viewer = Viewer::resolve(tx.authority(), ctx)?;
+        let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
+        require_explicit(&artifact)?;
         if expected_scope_revision.get() != artifact.scope_revision {
             return Err(conflict(
                 RevisionDimension::Scope,
@@ -1080,7 +1085,7 @@ impl ArtifactService {
                 Refusal::new(DomainErrorCode::NotFound, "project", Some(target.0.clone())).into(),
             );
         }
-        if target == &artifact.current_project_id
+        if artifact.scope.project() == Some(target)
             || !tx.artifacts().add_share(artifact_id, target)?
         {
             return Ok(MutationSummary {
@@ -1118,10 +1123,11 @@ impl ArtifactService {
         reference: &ArtifactRef,
     ) -> Result<VersionResolution, StorageError> {
         let read = snapshot.artifacts();
+        let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
         let Some(a) = read.artifact(&reference.artifact_id)? else {
             return Ok(VersionResolution::NotFound);
         };
-        if !visible(read, ctx, &a)? {
+        if !visible(read, &viewer, &a)? {
             return Ok(VersionResolution::NotFound);
         }
         let Some(v) = read.version(&reference.version_id)? else {
@@ -1150,10 +1156,11 @@ impl ArtifactService {
         artifact_id: &Id,
     ) -> Result<Option<ArtifactDetail>, StorageError> {
         let read = snapshot.artifacts();
+        let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
         let Some(a) = read.artifact(artifact_id)? else {
             return Ok(None);
         };
-        if !visible(read, ctx, &a)? {
+        if !visible(read, &viewer, &a)? {
             return Ok(None);
         }
         Ok(Some(ArtifactDetail {
@@ -1172,13 +1179,14 @@ impl ArtifactService {
         subject: &Subject,
     ) -> Result<Vec<(StoredArtifact, ArtifactLink)>, StorageError> {
         let read = snapshot.artifacts();
+        let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
         let mut out = Vec::new();
         for link in read.linked_to(&SubjectKey::of(subject))? {
             let Some(v) = read.version(&link.version_id)? else {
                 continue;
             };
             if let Some(a) = read.artifact(&v.artifact_id)?
-                && visible(read, ctx, &a)?
+                && visible(read, &viewer, &a)?
             {
                 out.push((a, link));
             }
