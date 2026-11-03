@@ -140,6 +140,9 @@ pub struct OperationDescriptor {
     /// Value type carried by this operation's `OperationResult` variant.
     pub result_type: &'static str,
     result_schema: fn() -> Schema,
+    /// The register binds an `OperationCompletion` contract for asynchronous outcomes. Only such
+    /// an operation may answer a command with `Accepted` (a durable operation still running).
+    pub completion: bool,
     pub schema_revision: SchemaRevision,
 }
 impl OperationDescriptor {

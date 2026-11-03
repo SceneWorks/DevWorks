@@ -161,3 +161,48 @@ fn every_binding_publishes_strict_input_and_result_schemas() {
     }
     assert_eq!(count, 358);
 }
+
+#[test]
+fn completion_binding_and_action_dependent_classification_match_the_register() {
+    // Every command binds an asynchronous completion contract in the register; no query does.
+    for d in registry::all() {
+        assert_eq!(
+            d.completion,
+            d.binding(Mode::Command).is_some(),
+            "{}",
+            d.name
+        );
+    }
+    // Exactly the two recorded action-dependent commands exist, and their recorded fixtures
+    // classify to a concrete effect before authority (AD69).
+    let dependent: Vec<_> = registry::all()
+        .iter()
+        .filter(|d| {
+            d.modes
+                .iter()
+                .any(|b| b.effect == EffectClass::ActionDependent)
+        })
+        .map(|d| d.name)
+        .collect();
+    assert_eq!(dependent, ["github.account", "browser.sessions"]);
+    let fixtures = json("docs/architecture/contracts/domain-fixtures.json");
+    for name in dependent {
+        let raw = fixtures
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == format!("input-{name}-Command"))
+            .and_then(|f| f["raw"].as_str())
+            .expect("command fixture");
+        let decoded = devworks_core::admission::decode(
+            devworks_core::admission::Selection {
+                operation: name,
+                mode: Mode::Command,
+            },
+            raw.as_bytes(),
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_ne!(decoded.effect, EffectClass::ActionDependent, "{name}");
+        assert!(decoded.action.is_some(), "{name}");
+    }
+}

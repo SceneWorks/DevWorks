@@ -12,12 +12,16 @@
 //! 4. caller identity member (`queryId` for a Query, `requestKey` for a Command);
 //! 5. strict typed decode into the selected input type (unknown members rejected), nested bounds
 //!    and the recorded pure cross-field rules;
-//! 6. normalization and the intent [`Fingerprint`].
+//! 6. normalization and the intent [`Fingerprint`];
+//! 7. effective-action classification: an `ActionDependent` binding is resolved to the effect
+//!    class of the action the typed input selects (AD69), so authority and receipt admission see
+//!    the concrete effect. An unclassified action-dependent binding is refused (fail closed).
 use crate::fingerprint::{self, Fingerprint};
 use crate::framing::{self, FrameError};
-use crate::operations::OperationInput;
+use crate::operations::{OperationInput, browser, github};
+use crate::protocol::records::{AccountAction, BrowserSessionAction};
 use crate::protocol::{CONTRACT, Id, QueryId, RequestKey};
-use crate::registry::{self, Envelope, Mode, ModeBinding, OperationDescriptor};
+use crate::registry::{self, EffectClass, Envelope, Mode, ModeBinding, OperationDescriptor};
 use serde_json::{Map, Value};
 use std::fmt;
 
@@ -106,6 +110,10 @@ pub struct DecodedRequest {
     pub key: CallerKey,
     pub input: OperationInput,
     pub fingerprint: Fingerprint,
+    /// Effective effect class (never `ActionDependent`).
+    pub effect: EffectClass,
+    /// Effective action label for action-dependent bindings.
+    pub action: Option<&'static str>,
 }
 impl DecodedRequest {
     pub fn mode(&self) -> Mode {
@@ -189,13 +197,54 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
     }
     let fingerprint = fingerprint::compute(descriptor, binding.mode, &decoded.normalized)
         .map_err(|e| refuse(AdmissionError::Fingerprint(e.to_string())))?;
+    let (effect, action) = effective_effect(binding, &decoded.input).map_err(refuse)?;
     Ok(DecodedRequest {
         descriptor,
         binding,
         key,
         input: decoded.input,
         fingerprint,
+        effect,
+        action,
     })
+}
+
+/// Resolves the effect class a typed input actually requests. For every binding other than
+/// `ActionDependent` this is the registered class. The two action-dependent commands are
+/// classified here from their typed action (AD69); any other action-dependent binding is refused.
+pub fn effective_effect(
+    binding: &ModeBinding,
+    input: &OperationInput,
+) -> Result<(EffectClass, Option<&'static str>), AdmissionError> {
+    if binding.effect != EffectClass::ActionDependent {
+        return Ok((binding.effect, None));
+    }
+    let classified = match input {
+        OperationInput::Github(github::Input::AccountCommand(i)) => Some(match i.action {
+            // Native host credential flows talk to GitHub.
+            AccountAction::BeginSignIn => (EffectClass::External, "BeginSignIn"),
+            AccountAction::CompleteSignIn => (EffectClass::External, "CompleteSignIn"),
+            AccountAction::Refresh => (EffectClass::External, "Refresh"),
+            AccountAction::Disconnect => (EffectClass::External, "Disconnect"),
+            // Refused earlier as a Command by the recorded cross-field rule (inspection is the
+            // Query); classified for exhaustiveness only.
+            AccountAction::Inspect => (EffectClass::ReadOnly, "Inspect"),
+        }),
+        // Creating or closing an owned browser profile/process tree is a journaled command.
+        OperationInput::Browser(browser::Input::SessionsCommand(i)) => Some(match i.action {
+            BrowserSessionAction::Create { .. } => (EffectClass::Journaled, "Create"),
+            BrowserSessionAction::Close { .. } => (EffectClass::Journaled, "Close"),
+        }),
+        _ => None,
+    };
+    classified
+        .map(|(effect, action)| (effect, Some(action)))
+        .ok_or_else(|| {
+            AdmissionError::Rule(format!(
+                "{} has no effective-action classification",
+                input.operation()
+            ))
+        })
 }
 
 /// Best-effort caller identity, used only to address a reply; it is still validated as an opaque ID.

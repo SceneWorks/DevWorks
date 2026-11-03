@@ -5,14 +5,16 @@
 //!
 //! * **Dependencies point inward.** Core depends only on serde, serde_json, schemars and sha2.
 //!   It has no UI, database-driver, HTTP or async-runtime dependency; persistence, authority,
-//!   clocks and identifiers are reached through the object-safe traits in [`ports`], which later
-//!   items implement (SQLite receipts, host authority) and tests replace with deterministic
-//!   substitutes. There is no global mutable state.
+//!   clocks and identifiers are reached through the object-safe `Send + Sync` traits in [`ports`].
+//!   `devworks-adapters::storage::sqlite` implements [`ports::storage`]; host authority is a later
+//!   item; tests replace both with deterministic substitutes. There is no global mutable state.
 //! * **One admission path (ARCH-02).** [`gateway::Gateway`] is the only way to reach a use case:
 //!   handlers receive [`gateway::AdmittedQuery`]/[`gateway::AdmittedCommand`], which only the
 //!   gateway can construct after strict framing, version, selected-operation/mode, typed decode,
 //!   cross-field rules, fingerprinting, authority and receipt checks. A UI action and an agent
 //!   tool therefore share validation, revision checks, attribution and receipts by construction.
+//!   A command's receipt lookup, use-case decision, history, outbox and receipt commit run as one
+//!   unit of work on the storage write owner ([`ports::storage::WriteTransaction`]).
 //! * **Selection by the host, not the body.** The operation registry ([`registry`]) is keyed by
 //!   the operation the host adapter selected. A body is decoded directly into that operation's
 //!   input type; its discriminator can only confirm the selection. The probe's single large

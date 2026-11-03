@@ -7,13 +7,13 @@ use devworks_core::admission::{self, AdmissionError, Selection};
 use devworks_core::framing::FrameError;
 use devworks_core::gateway::GatewayFailure;
 use devworks_core::operations::{OperationInput, runs};
-use devworks_core::ports::{
-    AuthorityDenial, Decided, HandlerFailure, QueryAnswer, ReceiptStoreError,
-};
+use devworks_core::ports::storage::{StorageError, Unavailable};
+use devworks_core::ports::{AuthorityDenial, Decided, HandlerFailure, QueryAnswer};
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, DomainQueryReply};
 use devworks_core::protocol::*;
-use devworks_core::registry::Mode;
+use devworks_core::registry::{EffectClass, Mode};
 use serde_json::json;
+use std::sync::Arc;
 
 const EDIT: &str = r#"{"mode":"Command","protocol":"1.0-draft.1","requestKey":"key-1","body":{"kind":"projects.edit","projectId":"project-a","expectedRevision":"1","changes":{}}}"#;
 const START: &str = r#"{"protocol":"1.0-draft.1","requestKey":"key-start","command":{"kind":"runs.start","rootId":"root-a","expectedWorkRevision":"1","expectedControlRevision":"1"}}"#;
@@ -24,7 +24,7 @@ fn refusal(operation: &str, mode: Mode, raw: &str) -> AdmissionError {
         .error
 }
 
-fn applied_edit() -> Commands {
+fn applied_edit() -> Arc<Commands> {
     Commands::new(|_| {
         Ok(Decided {
             decision: DomainDecision::Applied {
@@ -61,7 +61,7 @@ fn unknown_contract_version_is_rejected_before_authority_or_receipts() {
             &context("user-a"),
             "projects.edit",
             forged.as_bytes(),
-            &handler,
+            handler.clone(),
         )
         .unwrap();
     assert_eq!(
@@ -71,7 +71,7 @@ fn unknown_contract_version_is_rejected_before_authority_or_receipts() {
     assert_eq!(
         (
             h.authority.calls.get(),
-            h.receipts.touched(),
+            h.store.touched(),
             handler.calls.get()
         ),
         (0, 0, 0)
@@ -179,14 +179,14 @@ fn selected_operation_and_mode_are_enforced_before_decoding() {
     ] {
         let reply = h
             .gateway()
-            .command(&context("user-a"), op, raw.as_bytes(), &handler)
+            .command(&context("user-a"), op, raw.as_bytes(), handler.clone())
             .unwrap();
         assert_eq!(rejected_code(&reply).0, &Rejection::InvalidRequest);
     }
     assert_eq!(
         (
             h.authority.calls.get(),
-            h.receipts.touched(),
+            h.store.touched(),
             handler.calls.get()
         ),
         (0, 0, 0)
@@ -370,7 +370,7 @@ fn framing_rejects_hostile_frames_before_any_interpretation() {
         &context("user-a"),
         "projects.edit",
         duplicate.as_bytes(),
-        &handler,
+        handler.clone(),
     );
     assert!(matches!(
         reply,
@@ -382,7 +382,7 @@ fn framing_rejects_hostile_frames_before_any_interpretation() {
     assert_eq!(
         (
             h.authority.calls.get(),
-            h.receipts.touched(),
+            h.store.touched(),
             handler.calls.get()
         ),
         (0, 0, 0)
@@ -402,7 +402,7 @@ fn permission_denial_precedes_receipt_access() {
             &context("agent-a"),
             "projects.edit",
             EDIT.as_bytes(),
-            &handler,
+            handler.clone(),
         )
         .unwrap();
     assert_eq!(
@@ -412,7 +412,7 @@ fn permission_denial_precedes_receipt_access() {
     assert_eq!(
         (
             h.authority.calls.get(),
-            h.receipts.touched(),
+            h.store.touched(),
             handler.calls.get()
         ),
         (1, 0, 0)
@@ -424,11 +424,11 @@ fn permission_denial_precedes_receipt_access() {
             &context("agent-a"),
             "runs.start",
             START.as_bytes(),
-            &handler,
+            handler.clone(),
         )
         .unwrap();
     assert_eq!(rejected_code(&reply).0, &Rejection::InvalidTarget);
-    assert_eq!(h.receipts.touched(), 0);
+    assert_eq!(h.store.touched(), 0);
 }
 
 #[test]
@@ -438,7 +438,7 @@ fn same_command_replays_and_changed_intent_conflicts_without_effects() {
     let ctx = context("user-a");
     let first = h
         .gateway()
-        .command(&ctx, "projects.edit", EDIT.as_bytes(), &handler)
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
         .unwrap();
     let CommandReply::Recorded {
         receipt,
@@ -454,7 +454,7 @@ fn same_command_replays_and_changed_intent_conflicts_without_effects() {
         "requestKey": "key-1", "protocol": "1.0-draft.1", "mode": "Command" }"#;
     let second = h
         .gateway()
-        .command(&ctx, "projects.edit", reordered.as_bytes(), &handler)
+        .command(&ctx, "projects.edit", reordered.as_bytes(), handler.clone())
         .unwrap();
     let CommandReply::Recorded {
         receipt: replayed,
@@ -476,7 +476,7 @@ fn same_command_replays_and_changed_intent_conflicts_without_effects() {
     let changed = EDIT.replace(r#""expectedRevision":"1""#, r#""expectedRevision":"2""#);
     let third = h
         .gateway()
-        .command(&ctx, "projects.edit", changed.as_bytes(), &handler)
+        .command(&ctx, "projects.edit", changed.as_bytes(), handler.clone())
         .unwrap();
     assert_eq!(
         rejected_code(&third),
@@ -488,8 +488,8 @@ fn same_command_replays_and_changed_intent_conflicts_without_effects() {
     assert_eq!(
         (
             handler.calls.get(),
-            h.receipts.commits.get(),
-            h.receipts.rows.borrow().len()
+            h.store.recorded.get(),
+            h.store.receipt_count()
         ),
         (1, 1, 1)
     );
@@ -498,7 +498,7 @@ fn same_command_replays_and_changed_intent_conflicts_without_effects() {
     let fresh = EDIT.replace("key-1", "key-2");
     assert!(matches!(
         h.gateway()
-            .command(&ctx, "projects.edit", fresh.as_bytes(), &handler)
+            .command(&ctx, "projects.edit", fresh.as_bytes(), handler.clone())
             .unwrap(),
         CommandReply::Recorded {
             replayed: false,
@@ -516,11 +516,10 @@ fn receipt_identity_is_scoped_to_actor_and_host_namespace() {
         context("user-a"),
         context("user-b"),
         context_in("user-a", "tool-call-7", 0),
-        context_in("user-a", "ui-main", 1),
     ] {
         let reply = h
             .gateway()
-            .command(&ctx, "projects.edit", EDIT.as_bytes(), &handler)
+            .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
             .unwrap();
         assert!(
             matches!(
@@ -533,11 +532,36 @@ fn receipt_identity_is_scoped_to_actor_and_host_namespace() {
             "{ctx:?}"
         );
     }
-    // Another principal, another tool namespace and a restored epoch never see the first receipt.
+    // Another principal and another tool namespace never see the first receipt.
+    assert_eq!((handler.calls.get(), h.store.receipt_count()), (3, 3));
+
+    // An invocation bound to an earlier/other restore epoch is not current authority: it is
+    // refused on the write owner without replaying or minting anything.
+    let reply = h
+        .gateway()
+        .command(
+            &context_in("user-a", "ui-main", 1),
+            "projects.edit",
+            EDIT.as_bytes(),
+            handler.clone(),
+        )
+        .unwrap();
     assert_eq!(
-        (handler.calls.get(), h.receipts.rows.borrow().len()),
-        (4, 4)
+        rejected_code(&reply),
+        (&Rejection::PermissionDenied, &RetryAdvice::Never)
     );
+    // An unregistered principal cannot attribute a receipt.
+    let reply = h
+        .gateway()
+        .command(
+            &context("stranger"),
+            "projects.edit",
+            EDIT.as_bytes(),
+            handler.clone(),
+        )
+        .unwrap();
+    assert_eq!(rejected_code(&reply).0, &Rejection::PermissionDenied);
+    assert_eq!((handler.calls.get(), h.store.receipt_count()), (3, 3));
 }
 
 #[test]
@@ -545,85 +569,318 @@ fn storage_failures_and_lost_acknowledgments_have_typed_outcomes() {
     let h = Harness::new();
     let handler = applied_edit();
     let ctx = context("user-a");
-    h.receipts
-        .lookup_error
-        .set(Some(ReceiptStoreError::Unavailable));
+    // Not admitted by the write owner: nothing ran, the same command may be retried.
+    h.store.refuse_next.set(Some(StorageError::Busy));
     let reply = h
         .gateway()
-        .command(&ctx, "projects.edit", EDIT.as_bytes(), &handler)
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
         .unwrap();
     assert_eq!(
         rejected_code(&reply),
         (&Rejection::StorageUnavailable, &RetryAdvice::SameCommand)
     );
     assert_eq!(handler.calls.get(), 0);
-    h.receipts.lookup_error.set(None);
 
-    let failing = Commands::new(|_| Err(HandlerFailure::StorageUnavailable));
+    // A storage failure inside the use case rolls back the whole command: no receipt or history.
+    let failing = Commands::new(|_| {
+        Err(HandlerFailure::Storage(StorageError::unavailable(
+            Unavailable::DiskFull,
+            "injected",
+        )))
+    });
     let reply = h
         .gateway()
-        .command(&ctx, "projects.edit", EDIT.as_bytes(), &failing)
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), failing.clone())
         .unwrap();
     assert_eq!(
         rejected_code(&reply),
         (&Rejection::StorageUnavailable, &RetryAdvice::SameCommand)
     );
-    assert_eq!(h.receipts.commits.get(), 0);
+    assert_eq!(
+        (h.store.receipt_count(), h.store.event_kinds().len()),
+        (0, 0)
+    );
 
-    h.receipts
-        .commit_error
-        .set(Some(ReceiptStoreError::AcknowledgmentLost));
+    // The commit happened but its acknowledgment was lost.
+    h.store
+        .lose_next_ack
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     let reply = h
         .gateway()
-        .command(&ctx, "projects.edit", EDIT.as_bytes(), &handler)
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
         .unwrap();
     assert!(
         matches!(&reply, CommandReply::CommandStatusUnknown { request_key, .. } if request_key.0.as_str() == "key-1")
     );
-    h.receipts.commit_error.set(None);
+    // Resolution: resubmitting the exact command/key finds the committed receipt.
+    let reply = h
+        .gateway()
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
+        .unwrap();
+    assert!(matches!(
+        reply,
+        CommandReply::Recorded { replayed: true, .. }
+    ));
+    assert_eq!((handler.calls.get(), h.store.receipt_count()), (1, 1));
 }
 
 #[test]
-fn a_concurrent_commit_resolves_to_replay_or_conflict() {
+fn a_losing_duplicate_never_runs_the_use_case() {
+    // Receipt lookup, decision and commit form one serialized unit of work, so of two identical
+    // concurrent commands exactly one decides; the other replays the winner's receipt.
+    let h = Arc::new(Harness::new());
+    let handler = applied_edit();
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let (h, handler, barrier) = (h.clone(), handler.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                h.gateway()
+                    .command(
+                        &context("user-a"),
+                        "projects.edit",
+                        EDIT.as_bytes(),
+                        handler,
+                    )
+                    .unwrap()
+            })
+        })
+        .collect();
+    let replies: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert_eq!(
+        handler.calls.get(),
+        1,
+        "the losing duplicate must not decide"
+    );
+    let ids: Vec<_> = replies
+        .iter()
+        .map(|r| match r {
+            CommandReply::Recorded {
+                receipt, replayed, ..
+            } => (receipt.command_id.clone(), *replayed),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(ids[0].0, ids[1].0);
+    assert_ne!(ids[0].1, ids[1].1);
+    assert_eq!(h.store.receipt_count(), 1);
+}
+
+#[test]
+fn a_stored_receipt_is_not_disclosed_once_authority_denies() {
+    let h = Harness::new();
+    let handler = applied_edit();
+    let ctx = context("user-a");
+    h.gateway()
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
+        .unwrap();
+    let touched = h.store.touched();
+    h.authority
+        .deny
+        .set(Some(AuthorityDenial::PermissionDenied));
+    let reply = h
+        .gateway()
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
+        .unwrap();
+    // A denial, not the historical receipt: replay revalidates current access first.
+    assert_eq!(
+        rejected_code(&reply),
+        (&Rejection::PermissionDenied, &RetryAdvice::Never)
+    );
+    assert!(!format!("{reply:?}").contains("command_id"));
+    assert_eq!(h.store.touched(), touched, "the store was not consulted");
+}
+
+#[test]
+fn incompatible_stored_receipts_are_a_visible_hold_not_a_conflict() {
+    let agers: [fn(&MemoryStore); 2] = [|s| s.age_receipts("0.9-draft"), |s| s.rebind_receipts(2)];
+    for age in agers {
+        let h = Harness::new();
+        let handler = applied_edit();
+        let ctx = context("user-a");
+        h.gateway()
+            .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
+            .unwrap();
+        age(&h.store);
+        for _ in 0..2 {
+            let reply = h
+                .gateway()
+                .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
+                .unwrap();
+            assert_eq!(
+                rejected_code(&reply),
+                (&Rejection::UnsupportedSchema, &RetryAdvice::ResolveReceipt)
+            );
+        }
+        assert_eq!(
+            handler.calls.get(),
+            1,
+            "an incompatible record never redispatches"
+        );
+        // One durable, diagnosable hold record per receipt identity.
+        let holds = h
+            .store
+            .event_kinds()
+            .iter()
+            .filter(|k| *k == "ReceiptIncompatible")
+            .count();
+        assert_eq!(holds, 1);
+    }
+}
+
+#[test]
+fn a_revision_conflict_undoes_partial_writes_and_is_a_durable_refusal() {
     let h = Harness::new();
     let ctx = context("user-a");
+    let conflicting = Commands::new(|_| {
+        Err(HandlerFailure::Storage(StorageError::conflict(
+            RevisionDimension::Work,
+            "project",
+            id("project-a"),
+            revision(1),
+            revision(3),
+        )))
+    });
+    let reply = h
+        .gateway()
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), conflicting.clone())
+        .unwrap();
+    let CommandReply::Recorded {
+        receipt,
+        replayed: false,
+        ..
+    } = &reply
+    else {
+        panic!("{reply:?}")
+    };
+    let DomainDecision::Refused { fault } = &receipt.decision else {
+        panic!("{receipt:?}")
+    };
+    assert!(matches!(fault.code, DomainErrorCode::RevisionConflict));
+    assert_eq!(fault.current_revision, Some(revision(3)));
+    // Exact retry replays the committed conflict decision.
+    let again = h
+        .gateway()
+        .command(&ctx, "projects.edit", EDIT.as_bytes(), conflicting.clone())
+        .unwrap();
+    assert!(matches!(
+        again,
+        CommandReply::Recorded { replayed: true, .. }
+    ));
+    assert_eq!(conflicting.calls.get(), 1);
+    assert_eq!(h.store.event_kinds(), vec!["CommandDecided".to_owned()]);
+}
+
+#[test]
+fn action_dependent_commands_reach_authority_with_their_effective_effect() {
+    let h = Harness::new();
+    let sign_in = r#"{"mode":"Command","protocol":"1.0-draft.1","requestKey":"k-gh","body":{"kind":"github.account","action":"BeginSignIn"}}"#;
+    let refresh = sign_in.replace("BeginSignIn", "Refresh");
+    let close = r#"{"mode":"Command","protocol":"1.0-draft.1","requestKey":"k-br","body":{"kind":"browser.sessions","action":{"kind":"Close","sessionId":"s-1","expectedRevision":"1"}}}"#;
+    h.authority
+        .deny
+        .set(Some(AuthorityDenial::PermissionDenied));
     let handler = applied_edit();
-    // Record the winner through a different gateway call so the stored receipt is genuine.
-    let winner_h = Harness::new();
-    winner_h
-        .gateway()
-        .command(&ctx, "projects.edit", EDIT.as_bytes(), &handler)
-        .unwrap();
-    let winner = winner_h
-        .receipts
-        .rows
-        .borrow()
-        .values()
-        .next()
-        .cloned()
-        .unwrap();
+    for (op, raw, effect, action) in [
+        (
+            "github.account",
+            sign_in.to_owned(),
+            EffectClass::External,
+            "BeginSignIn",
+        ),
+        ("github.account", refresh, EffectClass::External, "Refresh"),
+        (
+            "browser.sessions",
+            close.to_owned(),
+            EffectClass::Journaled,
+            "Close",
+        ),
+    ] {
+        let decoded = admission::decode(
+            Selection {
+                operation: op,
+                mode: Mode::Command,
+            },
+            raw.as_bytes(),
+        )
+        .unwrap_or_else(|e| panic!("{op}: {e:?}"));
+        assert_eq!((decoded.effect, decoded.action), (effect, Some(action)));
+        h.gateway()
+            .command(&context("user-a"), op, raw.as_bytes(), handler.clone())
+            .unwrap();
+        assert_eq!(h.authority.last_effect.get(), Some((effect, Some(action))));
+    }
+    assert_eq!(h.store.touched(), 0);
+}
 
-    *h.receipts.race.borrow_mut() = Some(winner.clone());
-    let reply = h
-        .gateway()
-        .command(&ctx, "projects.edit", EDIT.as_bytes(), &handler)
-        .unwrap();
-    assert!(
-        matches!(&reply, CommandReply::Recorded { replayed: true, receipt, .. } if receipt.command_id == winner.receipt.command_id)
+#[test]
+fn accepted_requires_an_asynchronous_completion_contract() {
+    // projects.edit is a Local command: there is no asynchronous operation to report.
+    let h = Harness::new();
+    let accepted = Commands::new(|_| {
+        Ok(Decided {
+            decision: DomainDecision::Accepted {
+                operation_id: OperationId(id("op-1")),
+            },
+            operation_id: Some(OperationId(id("op-1"))),
+        })
+    });
+    let outcome = h.gateway().command(
+        &context("user-a"),
+        "projects.edit",
+        EDIT.as_bytes(),
+        accepted.clone(),
     );
+    assert!(
+        matches!(&outcome, Err(GatewayFailure::HandlerContract(e)) if e.contains("Accepted")),
+        "{outcome:?}"
+    );
+    assert_eq!(h.store.receipt_count(), 0);
+}
 
-    *h.receipts.race.borrow_mut() = Some(winner);
-    let changed = EDIT.replace(r#""changes":{}"#, r#""changes":{"name":"other"}"#);
+#[test]
+fn query_stamps_must_match_the_invocation_snapshot() {
+    let h = Harness::new();
+    let get = r#"{"mode":"Query","protocol":"1.0-draft.1","queryId":"q-1","body":{"kind":"projects.get","projectId":"project-a"}}"#;
+    let project = json!({"id":"project-a","revision":"2","name":"n","description":"d","repositoryIds":[],"lifecycle":"Active","accessMode":"Full"});
+    for (field, value) in [
+        ("storeId", json!("store-b")),
+        ("restoreEpoch", json!("1")),
+        ("sequence", json!("9")),
+    ] {
+        let mut s = serde_json::to_value(stamp()).unwrap();
+        s[field] = value;
+        let bad: ReadStamp = serde_json::from_value(s).unwrap();
+        let p = project.clone();
+        let handler = Queries::new(move |_| {
+            Ok(QueryAnswer {
+                stamp: bad.clone(),
+                result: result("projects.get", p.clone()),
+            })
+        });
+        let outcome =
+            h.gateway()
+                .query(&context("user-a"), "projects.get", get.as_bytes(), &handler);
+        assert!(
+            matches!(outcome, Err(GatewayFailure::HandlerContract(_))),
+            "{field}: {outcome:?}"
+        );
+    }
+    // A caller bound to another restore epoch is refused before the use case runs.
+    let handler = Queries::new(move |_| unreachable!("stale epoch must not reach the use case"));
     let reply = h
         .gateway()
-        .command(
-            &context("user-a"),
-            "projects.edit",
-            changed.replace("key-1", "key-9").as_bytes(),
+        .query(
+            &context_in("user-a", "ui-main", 3),
+            "projects.get",
+            get.as_bytes(),
             &handler,
         )
         .unwrap();
-    assert_eq!(rejected_code(&reply).0, &Rejection::IdempotencyConflict);
+    assert!(
+        matches!(&reply, DomainQueryReply::Rejected { fault, .. } if matches!(fault.code, DomainErrorCode::PermissionDenied))
+    );
 }
 
 #[test]
@@ -640,14 +897,17 @@ fn use_cases_cannot_record_another_operations_result() {
             operation_id: None,
         })
     });
-    let outcome = h
-        .gateway()
-        .command(&context("user-a"), "projects.edit", EDIT.as_bytes(), &wrong);
+    let outcome = h.gateway().command(
+        &context("user-a"),
+        "projects.edit",
+        EDIT.as_bytes(),
+        wrong.clone(),
+    );
     assert!(
         matches!(outcome, Err(GatewayFailure::HandlerContract(_))),
         "{outcome:?}"
     );
-    assert_eq!(h.receipts.commits.get(), 0);
+    assert_eq!(h.store.recorded.get(), 0);
 
     let unknown_without_operation = Commands::new(|_| {
         let mut f = fault(DomainErrorCode::OutcomeUnknown);
@@ -661,10 +921,10 @@ fn use_cases_cannot_record_another_operations_result() {
         &context("user-a"),
         "projects.edit",
         EDIT.as_bytes(),
-        &unknown_without_operation,
+        unknown_without_operation.clone(),
     );
     assert!(matches!(outcome, Err(GatewayFailure::HandlerContract(_))));
-    assert_eq!(h.receipts.commits.get(), 0);
+    assert_eq!(h.store.recorded.get(), 0);
 }
 
 #[test]
@@ -684,7 +944,12 @@ fn root_control_commands_reach_the_use_case_as_their_selected_typed_input() {
     });
     let reply = h
         .gateway()
-        .command(&context("user-a"), "runs.start", START.as_bytes(), &seen)
+        .command(
+            &context("user-a"),
+            "runs.start",
+            START.as_bytes(),
+            seen.clone(),
+        )
         .unwrap();
     let CommandReply::Recorded { receipt, .. } = reply else {
         panic!()
@@ -715,9 +980,10 @@ fn queries_never_touch_receipts_and_publish_only_their_own_result() {
         .query(&context("user-a"), "projects.get", get.as_bytes(), &handler)
         .unwrap();
     assert!(
-        matches!(&reply, DomainQueryReply::Result { query_id, stamp, .. } if query_id.0.as_str() == "q-1" && stamp.sequence.as_str() == "7")
+        matches!(&reply, DomainQueryReply::Result { query_id, stamp, .. } if query_id.0.as_str() == "q-1" && stamp.sequence.as_str() == "0")
     );
-    assert_eq!(h.receipts.touched(), 0);
+    // Queries read one snapshot and never submit a write or form a receipt.
+    assert_eq!((h.store.submits.get(), h.store.reads.get()), (0, 1));
 
     let mislabeled = Queries::new(move |_| {
         Ok(QueryAnswer {

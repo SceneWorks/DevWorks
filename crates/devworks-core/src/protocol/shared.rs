@@ -400,7 +400,7 @@ impl QueryRequest {
         Ok(())
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum OperationState {
     IntentRecorded,
     Preflighted,

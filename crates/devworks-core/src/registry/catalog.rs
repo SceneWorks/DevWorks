@@ -91,6 +91,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ProjectRecord>",
         result_schema: schema_of::<Page<ProjectRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -112,6 +113,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -133,6 +135,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -154,6 +157,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -175,6 +179,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -196,6 +201,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -217,6 +223,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -238,6 +245,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -259,6 +267,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -280,6 +289,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -301,6 +311,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -322,6 +333,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -343,6 +355,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -364,6 +377,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -385,6 +399,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -406,6 +421,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -427,6 +443,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -448,6 +465,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -469,6 +487,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -490,6 +509,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -511,6 +531,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -532,6 +553,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GitLink",
         result_schema: schema_of::<GitLink>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -553,6 +575,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GitLink",
         result_schema: schema_of::<GitLink>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -574,6 +597,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -595,6 +619,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -616,6 +641,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -637,6 +663,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -658,6 +685,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -679,6 +707,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -700,6 +729,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -721,6 +751,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -742,6 +773,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -763,6 +795,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -784,6 +817,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -805,6 +839,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<StatusRecord>",
         result_schema: schema_of::<Page<StatusRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -826,6 +861,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "StatusRecord",
         result_schema: schema_of::<StatusRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -847,6 +883,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "StatusRecord",
         result_schema: schema_of::<StatusRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -868,6 +905,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<StatusRecord>",
         result_schema: schema_of::<Page<StatusRecord>>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -889,6 +927,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -910,6 +949,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ClaimRecord",
         result_schema: schema_of::<ClaimRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -931,6 +971,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ClaimRecord",
         result_schema: schema_of::<ClaimRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -952,6 +993,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ClaimRecord",
         result_schema: schema_of::<ClaimRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -973,6 +1015,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ClaimRecord",
         result_schema: schema_of::<ClaimRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -996,6 +1039,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RootSnapshot",
         result_schema: schema_of::<RootSnapshot>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1019,6 +1063,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RootSnapshot",
         result_schema: schema_of::<RootSnapshot>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1042,6 +1087,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RootSnapshot",
         result_schema: schema_of::<RootSnapshot>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1063,6 +1109,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1086,6 +1133,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RootSnapshot",
         result_schema: schema_of::<RootSnapshot>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1107,6 +1155,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1130,6 +1179,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "EligibilitySnapshot",
         result_schema: schema_of::<EligibilitySnapshot>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1151,6 +1201,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AgentRecord",
         result_schema: schema_of::<AgentRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1172,6 +1223,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AgentRecord",
         result_schema: schema_of::<AgentRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1193,6 +1245,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AgentMessage",
         result_schema: schema_of::<AgentMessage>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1214,6 +1267,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<AgentMessage>",
         result_schema: schema_of::<Page<AgentMessage>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1235,6 +1289,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AgentMessage",
         result_schema: schema_of::<AgentMessage>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1256,6 +1311,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "CheckpointRecord",
         result_schema: schema_of::<CheckpointRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1277,6 +1333,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<SessionRecord>",
         result_schema: schema_of::<Page<SessionRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1298,6 +1355,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1318,6 +1376,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "TranscriptPage",
         result_schema: schema_of::<TranscriptPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1339,6 +1398,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ContextSource>",
         result_schema: schema_of::<Page<ContextSource>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1359,6 +1419,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1380,6 +1441,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ContextSource>",
         result_schema: schema_of::<Page<ContextSource>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1401,6 +1463,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1422,6 +1485,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1443,6 +1507,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ScreenContext",
         result_schema: schema_of::<ScreenContext>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1466,6 +1531,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<Event>",
         result_schema: schema_of::<Page<Event>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1487,6 +1553,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<LineageRecord>",
         result_schema: schema_of::<Page<LineageRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1508,6 +1575,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<GitLink>",
         result_schema: schema_of::<Page<GitLink>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1529,6 +1597,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<EvidenceLink>",
         result_schema: schema_of::<Page<EvidenceLink>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1552,6 +1621,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1573,6 +1643,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<UsageItem>",
         result_schema: schema_of::<Page<UsageItem>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1596,6 +1667,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReceiptObservation",
         result_schema: schema_of::<ReceiptObservation>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1619,6 +1691,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1642,6 +1715,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1665,6 +1739,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1688,6 +1763,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1711,6 +1787,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1734,6 +1811,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1757,6 +1835,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1780,6 +1859,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1803,6 +1883,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1826,6 +1907,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1849,6 +1931,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1872,6 +1955,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1895,6 +1979,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1918,6 +2003,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1941,6 +2027,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1964,6 +2051,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -1987,6 +2075,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2010,6 +2099,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2033,6 +2123,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2054,6 +2145,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<RepositoryRecord>",
         result_schema: schema_of::<Page<RepositoryRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2075,6 +2167,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2096,6 +2189,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2119,6 +2213,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2140,6 +2235,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2163,6 +2259,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2184,6 +2281,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RepositoryIndexStatus",
         result_schema: schema_of::<RepositoryIndexStatus>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2205,6 +2303,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<IndexRunRecord>",
         result_schema: schema_of::<Page<IndexRunRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2226,6 +2325,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2247,6 +2347,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2268,6 +2369,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2289,6 +2391,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2310,6 +2413,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2331,6 +2435,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ClusterRecord>",
         result_schema: schema_of::<Page<ClusterRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2352,6 +2457,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ClusterRecord",
         result_schema: schema_of::<ClusterRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2373,6 +2479,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2394,6 +2501,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2415,6 +2523,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2436,6 +2545,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2457,6 +2567,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2478,6 +2589,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2499,6 +2611,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2520,6 +2633,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2541,6 +2655,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2562,6 +2677,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2583,6 +2699,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<SchemaConnection>",
         result_schema: schema_of::<Page<SchemaConnection>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2604,6 +2721,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<SchemaObject>",
         result_schema: schema_of::<Page<SchemaObject>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2625,6 +2743,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<SchemaRelation>",
         result_schema: schema_of::<Page<SchemaRelation>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2646,6 +2765,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2667,6 +2787,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2688,6 +2809,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2709,6 +2831,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "SchemaConnection",
         result_schema: schema_of::<SchemaConnection>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2730,6 +2853,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DbReadResult",
         result_schema: schema_of::<DbReadResult>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2751,6 +2875,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DbWriteResult",
         result_schema: schema_of::<DbWriteResult>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2772,6 +2897,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DbWriteResult",
         result_schema: schema_of::<DbWriteResult>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2793,6 +2919,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DbWriteResult",
         result_schema: schema_of::<DbWriteResult>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2814,6 +2941,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "SchemaConnection",
         result_schema: schema_of::<SchemaConnection>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2835,6 +2963,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<KnowledgeClaim>",
         result_schema: schema_of::<Page<KnowledgeClaim>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2856,6 +2985,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2877,6 +3007,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2898,6 +3029,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2919,6 +3051,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2940,6 +3073,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2961,6 +3095,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -2982,6 +3117,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3003,6 +3139,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3024,6 +3161,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3045,6 +3183,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3066,6 +3205,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3087,6 +3227,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3108,6 +3249,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3129,6 +3271,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3150,6 +3293,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3171,6 +3315,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3192,6 +3337,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3213,6 +3359,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ArtifactRef",
         result_schema: schema_of::<ArtifactRef>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3234,6 +3381,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3255,6 +3403,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3276,6 +3425,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3297,6 +3447,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3318,6 +3469,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<KnowledgeClaim>",
         result_schema: schema_of::<Page<KnowledgeClaim>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3339,6 +3491,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DreamRun",
         result_schema: schema_of::<DreamRun>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3360,6 +3513,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<DreamRun>",
         result_schema: schema_of::<Page<DreamRun>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3381,6 +3535,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DreamRun",
         result_schema: schema_of::<DreamRun>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3412,6 +3567,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         ],
         result_type: "DreamSettingsRecord",
         result_schema: schema_of::<DreamSettingsRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3443,6 +3599,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         ],
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3464,6 +3621,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3485,6 +3643,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3506,6 +3665,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3527,6 +3687,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3548,6 +3709,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<DocumentRecord>",
         result_schema: schema_of::<Page<DocumentRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3571,6 +3733,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3591,6 +3754,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RetrievalPage",
         result_schema: schema_of::<RetrievalPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3614,6 +3778,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3637,6 +3802,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3658,6 +3824,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3679,6 +3846,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3702,6 +3870,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3725,6 +3894,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3748,6 +3918,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ArtifactRecord",
         result_schema: schema_of::<ArtifactRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3771,6 +3942,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ArtifactRecord>",
         result_schema: schema_of::<Page<ArtifactRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3794,6 +3966,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ArtifactReadContent",
         result_schema: schema_of::<ArtifactReadContent>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3817,6 +3990,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ArtifactPreview",
         result_schema: schema_of::<ArtifactPreview>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3840,6 +4014,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ArtifactExport",
         result_schema: schema_of::<ArtifactExport>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3863,6 +4038,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3883,6 +4059,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3904,6 +4081,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3925,6 +4103,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3946,6 +4125,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3967,6 +4147,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -3988,6 +4169,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4009,6 +4191,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4030,6 +4213,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4051,6 +4235,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4072,6 +4257,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4093,6 +4279,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4114,6 +4301,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4135,6 +4323,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4156,6 +4345,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4177,6 +4367,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4198,6 +4389,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4219,6 +4411,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ArtifactRef>",
         result_schema: schema_of::<Page<ArtifactRef>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4240,6 +4433,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4261,6 +4455,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4282,6 +4477,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4303,6 +4499,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4324,6 +4521,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4345,6 +4543,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4366,6 +4565,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4387,6 +4587,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4408,6 +4609,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4429,6 +4631,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ProposalRecord>",
         result_schema: schema_of::<Page<ProposalRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4450,6 +4653,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4471,6 +4675,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4492,6 +4697,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4513,6 +4719,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<NotificationRecord>",
         result_schema: schema_of::<Page<NotificationRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4534,6 +4741,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "NotificationRecord",
         result_schema: schema_of::<NotificationRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4555,6 +4763,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "NotificationRecord",
         result_schema: schema_of::<NotificationRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4586,6 +4795,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         ],
         result_type: "NotificationSettingsRecord",
         result_schema: schema_of::<NotificationSettingsRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4607,6 +4817,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GitInspection",
         result_schema: schema_of::<GitInspection>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4628,6 +4839,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GitInspection",
         result_schema: schema_of::<GitInspection>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4649,6 +4861,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ArtifactRef>",
         result_schema: schema_of::<Page<ArtifactRef>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4672,6 +4885,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GitInspection",
         result_schema: schema_of::<GitInspection>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4695,6 +4909,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GitInspection",
         result_schema: schema_of::<GitInspection>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4718,6 +4933,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GitLink",
         result_schema: schema_of::<GitLink>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4741,6 +4957,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DeliverySnapshot",
         result_schema: schema_of::<DeliverySnapshot>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4764,6 +4981,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4785,6 +5003,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ReviewRecord>",
         result_schema: schema_of::<Page<ReviewRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4806,6 +5025,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReviewRecord",
         result_schema: schema_of::<ReviewRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4827,6 +5047,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReviewRecord",
         result_schema: schema_of::<ReviewRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4848,6 +5069,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ReviewFinding>",
         result_schema: schema_of::<Page<ReviewFinding>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4869,6 +5091,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReviewFinding",
         result_schema: schema_of::<ReviewFinding>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4890,6 +5113,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReviewFinding",
         result_schema: schema_of::<ReviewFinding>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4911,6 +5135,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReviewReadiness",
         result_schema: schema_of::<ReviewReadiness>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4932,6 +5157,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReleaseRecord",
         result_schema: schema_of::<ReleaseRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4955,6 +5181,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReleaseRecord",
         result_schema: schema_of::<ReleaseRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -4978,6 +5205,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReleaseRecord",
         result_schema: schema_of::<ReleaseRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5001,6 +5229,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ReleaseRecord",
         result_schema: schema_of::<ReleaseRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5032,6 +5261,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         ],
         result_type: "GithubAccountState",
         result_schema: schema_of::<GithubAccountState>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5053,6 +5283,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<RepositoryRecord>",
         result_schema: schema_of::<Page<RepositoryRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5074,6 +5305,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<GithubObservation>",
         result_schema: schema_of::<Page<GithubObservation>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5095,6 +5327,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5116,6 +5349,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<GithubObservation>",
         result_schema: schema_of::<Page<GithubObservation>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5137,6 +5371,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<GithubObservation>",
         result_schema: schema_of::<Page<GithubObservation>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5158,6 +5393,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ResourceRecord>",
         result_schema: schema_of::<Page<ResourceRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5179,6 +5415,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "LeaseRecord",
         result_schema: schema_of::<LeaseRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5200,6 +5437,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "LeaseRecord",
         result_schema: schema_of::<LeaseRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5221,6 +5459,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "LeaseRecord",
         result_schema: schema_of::<LeaseRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5242,6 +5481,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<LeaseRecord>",
         result_schema: schema_of::<Page<LeaseRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5263,6 +5503,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<LeaseRecord>",
         result_schema: schema_of::<Page<LeaseRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5294,6 +5535,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         ],
         result_type: "Page<BrowserSession>",
         result_schema: schema_of::<Page<BrowserSession>>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5315,6 +5557,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "BrowserSnapshot",
         result_schema: schema_of::<BrowserSnapshot>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5336,6 +5579,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "BrowserSnapshot",
         result_schema: schema_of::<BrowserSnapshot>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5357,6 +5601,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "BrowserObservation",
         result_schema: schema_of::<BrowserObservation>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5378,6 +5623,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "BrowserObservation",
         result_schema: schema_of::<BrowserObservation>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5399,6 +5645,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ArtifactRef",
         result_schema: schema_of::<ArtifactRef>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5420,6 +5667,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<BrowserObservation>",
         result_schema: schema_of::<Page<BrowserObservation>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5441,6 +5689,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<BrowserObservation>",
         result_schema: schema_of::<Page<BrowserObservation>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5462,6 +5711,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5483,6 +5733,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DesktopCapture",
         result_schema: schema_of::<DesktopCapture>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5504,6 +5755,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5525,6 +5777,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5546,6 +5799,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5567,6 +5821,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProcessRecord",
         result_schema: schema_of::<ProcessRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5588,6 +5843,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProcessOutput",
         result_schema: schema_of::<ProcessOutput>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5609,6 +5865,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProcessRecord",
         result_schema: schema_of::<ProcessRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5630,6 +5887,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProcessRecord",
         result_schema: schema_of::<ProcessRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5651,6 +5909,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5672,6 +5931,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<WebResult>",
         result_schema: schema_of::<Page<WebResult>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5693,6 +5953,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "WebDocument",
         result_schema: schema_of::<WebDocument>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5714,6 +5975,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ContainerCapability>",
         result_schema: schema_of::<Page<ContainerCapability>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5735,6 +5997,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ContainerImage",
         result_schema: schema_of::<ContainerImage>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5756,6 +6019,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ContainerImage",
         result_schema: schema_of::<ContainerImage>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5777,6 +6041,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ContainerRecord",
         result_schema: schema_of::<ContainerRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5798,6 +6063,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ContainerRecord",
         result_schema: schema_of::<ContainerRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5819,6 +6085,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProcessRecord",
         result_schema: schema_of::<ProcessRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5840,6 +6107,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ContainerRecord",
         result_schema: schema_of::<ContainerRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5861,6 +6129,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ArtifactRef",
         result_schema: schema_of::<ArtifactRef>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5882,6 +6151,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ContainerRecord",
         result_schema: schema_of::<ContainerRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5903,6 +6173,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<JobRecord>",
         result_schema: schema_of::<Page<JobRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5924,6 +6195,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5945,6 +6217,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5966,6 +6239,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -5987,6 +6261,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "JobRun",
         result_schema: schema_of::<JobRun>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6008,6 +6283,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "JobInspection",
         result_schema: schema_of::<JobInspection>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6029,6 +6305,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "JobRun",
         result_schema: schema_of::<JobRun>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6050,6 +6327,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6071,6 +6349,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6092,6 +6371,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<SettingEntry>",
         result_schema: schema_of::<Page<SettingEntry>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6113,6 +6393,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ValidationReport",
         result_schema: schema_of::<ValidationReport>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6134,6 +6415,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<SettingEntry>",
         result_schema: schema_of::<Page<SettingEntry>>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6155,6 +6437,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<SettingEntry>",
         result_schema: schema_of::<Page<SettingEntry>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6176,6 +6459,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<RouteModel>",
         result_schema: schema_of::<Page<RouteModel>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6197,6 +6481,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ConnectionRecord>",
         result_schema: schema_of::<Page<ConnectionRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6218,6 +6503,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RouteChoice",
         result_schema: schema_of::<RouteChoice>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6239,6 +6525,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RouteChoice",
         result_schema: schema_of::<RouteChoice>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6260,6 +6547,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RouteAvailability",
         result_schema: schema_of::<RouteAvailability>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6281,6 +6569,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "UsageReport",
         result_schema: schema_of::<UsageReport>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6302,6 +6591,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6323,6 +6613,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ModelPriceStatus>",
         result_schema: schema_of::<Page<ModelPriceStatus>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6344,6 +6635,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6365,6 +6657,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PriceRecord",
         result_schema: schema_of::<PriceRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6386,6 +6679,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6407,6 +6701,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<DecisionModel>",
         result_schema: schema_of::<Page<DecisionModel>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6428,6 +6723,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "DecisionResult",
         result_schema: schema_of::<DecisionResult>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6449,6 +6745,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<McpServer>",
         result_schema: schema_of::<Page<McpServer>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6470,6 +6767,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "McpServer",
         result_schema: schema_of::<McpServer>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6491,6 +6789,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "McpServer",
         result_schema: schema_of::<McpServer>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6512,6 +6811,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<McpCapability>",
         result_schema: schema_of::<Page<McpCapability>>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6533,6 +6833,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "McpServer",
         result_schema: schema_of::<McpServer>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6554,6 +6855,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<McpResource>",
         result_schema: schema_of::<Page<McpResource>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6575,6 +6877,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<McpPrompt>",
         result_schema: schema_of::<Page<McpPrompt>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6596,6 +6899,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<McpCapability>",
         result_schema: schema_of::<Page<McpCapability>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6617,6 +6921,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<PackageRecord>",
         result_schema: schema_of::<Page<PackageRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6640,6 +6945,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6661,6 +6967,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6684,6 +6991,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6707,6 +7015,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6730,6 +7039,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6751,6 +7061,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6772,6 +7083,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6795,6 +7107,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6818,6 +7131,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6839,6 +7153,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<HelpTopic>",
         result_schema: schema_of::<Page<HelpTopic>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6860,6 +7175,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "HelpTopic",
         result_schema: schema_of::<HelpTopic>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6881,6 +7197,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<HelpTopic>",
         result_schema: schema_of::<Page<HelpTopic>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6902,6 +7219,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<HelpTopic>",
         result_schema: schema_of::<Page<HelpTopic>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6923,6 +7241,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6944,6 +7263,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6965,6 +7285,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "BackupRecord",
         result_schema: schema_of::<BackupRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -6986,6 +7307,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "BackupRecord",
         result_schema: schema_of::<BackupRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7007,6 +7329,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7028,6 +7351,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<UpdateRecord>",
         result_schema: schema_of::<Page<UpdateRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7049,6 +7373,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "UpdateRecord",
         result_schema: schema_of::<UpdateRecord>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7070,6 +7395,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7091,6 +7417,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Diagnostic",
         result_schema: schema_of::<Diagnostic>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7112,6 +7439,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<RepositoryRecord>",
         result_schema: schema_of::<Page<RepositoryRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7133,6 +7461,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RepositoryRecord",
         result_schema: schema_of::<RepositoryRecord>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7154,6 +7483,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7175,6 +7505,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7196,6 +7527,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RepositoryText",
         result_schema: schema_of::<RepositoryText>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7217,6 +7549,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "RepositoryText",
         result_schema: schema_of::<RepositoryText>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7238,6 +7571,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<RepositoryRecord>",
         result_schema: schema_of::<Page<RepositoryRecord>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7259,6 +7593,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<QueueDelivery>",
         result_schema: schema_of::<Page<QueueDelivery>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7280,6 +7615,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "QueueDelivery",
         result_schema: schema_of::<QueueDelivery>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7301,6 +7637,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "QueueDelivery",
         result_schema: schema_of::<QueueDelivery>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7322,6 +7659,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ConsumerStatus",
         result_schema: schema_of::<ConsumerStatus>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7343,6 +7681,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "QueueDelivery",
         result_schema: schema_of::<QueueDelivery>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7364,6 +7703,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ImportRun",
         result_schema: schema_of::<ImportRun>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7385,6 +7725,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7406,6 +7747,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ImportRun",
         result_schema: schema_of::<ImportRun>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7427,6 +7769,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<ImportRun>",
         result_schema: schema_of::<Page<ImportRun>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7448,6 +7791,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "ImportRun",
         result_schema: schema_of::<ImportRun>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7469,6 +7813,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PrunePreview",
         result_schema: schema_of::<PrunePreview>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7490,6 +7835,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PrunePreview",
         result_schema: schema_of::<PrunePreview>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7511,6 +7857,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PrunePreview",
         result_schema: schema_of::<PrunePreview>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7532,6 +7879,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "PrunePreview",
         result_schema: schema_of::<PrunePreview>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7553,6 +7901,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7574,6 +7923,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "McpInboundStatus",
         result_schema: schema_of::<McpInboundStatus>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7595,6 +7945,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "McpInboundStatus",
         result_schema: schema_of::<McpInboundStatus>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7616,6 +7967,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "Page<McpClientAccess>",
         result_schema: schema_of::<Page<McpClientAccess>>,
+        completion: false,
         schema_revision: SchemaRevision::INITIAL,
     },
     OperationDescriptor {
@@ -7637,6 +7989,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         }],
         result_type: "McpClientAccess",
         result_schema: schema_of::<McpClientAccess>,
+        completion: true,
         schema_revision: SchemaRevision::INITIAL,
     },
 ];
