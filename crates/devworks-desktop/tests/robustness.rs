@@ -1145,6 +1145,125 @@ fn a_save_held_past_the_quiesce_bound_is_confirmed_at_the_next_launch() {
     );
 }
 
+#[test]
+fn a_save_prepared_after_close_is_kept_as_an_upload_and_stored_afresh() {
+    let root = Root::new("prepared-after-close");
+    let engine = start(&root);
+    let real = engine.backend();
+    // Preparing reads the largest-file setting: held, the preparation is still running at close.
+    let prepare = Gate::new("settings.read_effective");
+    let script = Script::default();
+    script
+        .files
+        .lock()
+        .unwrap()
+        .push(vec![root.file("late.txt", b"late")]);
+    let mut h = harness(
+        shell_over(prepare.over(real.clone()), &root, script),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().unwrap();
+    prepare.close();
+    h.get_by_role_and_label(Role::Button, ATTACH_LABEL).click();
+    step_until(&mut h, "the save is being prepared", |s| {
+        s.chat.draft().is_some_and(|d| {
+            d.attachments
+                .iter()
+                .any(|a| matches!(a.state, AttachState::Storing))
+        })
+    });
+    h.state_mut().request_close();
+    h.step();
+    // The preparation answers after the client closed: its frame is never admitted.
+    prepare.open();
+    step_until(&mut h, "the window closed", |s| {
+        matches!(s.lifecycle(), Lifecycle::Closed)
+    });
+    let memory = h.state().memory();
+    let draft = &memory.drafts[&session];
+    assert!(
+        draft.unconfirmed.is_empty(),
+        "never admitted: no frame to confirm"
+    );
+    assert_eq!(draft.uploads.len(), 1, "prepared afresh at the next launch");
+    drop(h);
+    let saves = LoseAcks::over(real.clone(), "artifacts.save", 0);
+    let mut h = harness(
+        shell_over(saves.clone(), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let draft = &h.state().chat.drafts[&session];
+    assert!(
+        matches!(draft.attachments[0].state, AttachState::Stored(_)),
+        "{:?}",
+        draft.attachments[0].state
+    );
+    assert_eq!(workspace_artifacts(&*real), ["late.txt"]);
+    assert_eq!(saves.request_keys().len(), 1, "one fresh save");
+}
+
+#[test]
+fn a_refused_paste_survives_close_as_failed_and_is_stored_on_retry() {
+    let root = Root::new("refused-paste-restart");
+    let engine = start(&root);
+    let real = engine.backend();
+    let quota = |revision: &str, bytes: u64| {
+        let d = devworks_core::settings::catalog::descriptor(
+            devworks_core::settings::catalog::ARTIFACT_QUOTA_KEY,
+        )
+        .unwrap();
+        let body = serde_json::json!({"scope": {"kind": "Workspace"},
+            "expectedRevision": revision, "entries": [
+            {"key": d.key, "value": {"schema": d.schema_ref(), "value": bytes}}]});
+        ops::settings_saved(real.command(
+            "settings.save_revision",
+            &ops::command_frame(&*real, "settings.save_revision", body),
+        ))
+        .expect("the quota is saved");
+    };
+    quota("1", 1);
+    let mut h = harness(
+        shell_over(real.clone(), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().unwrap();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    let pasted = egui::ColorImage::new([3, 3], vec![egui::Color32::GREEN; 9]);
+    h.event(egui::Event::PasteImage(Arc::new(pasted)));
+    settle(&mut h);
+    let h = relaunch(h, real.clone(), &root, Script::default());
+    let a = &h.state().chat.drafts[&session].attachments;
+    assert_eq!(a.len(), 1, "the failed paste is still in its draft");
+    assert!(
+        matches!(a[0].state, AttachState::Failed(_)),
+        "{:?}",
+        a[0].state
+    );
+    let (name, path) = (a[0].name.clone(), a[0].path.clone().unwrap());
+    assert!(path.is_file(), "with its file");
+    let mut h = h;
+    quota("2", 0);
+    click(&mut h, Role::Button, &format!("Retry upload of {name}"));
+    let a = &h.state().chat.drafts[&session].attachments;
+    assert!(
+        matches!(a[0].state, AttachState::Stored(_)),
+        "{:?}",
+        a[0].state
+    );
+    assert!(!path.exists(), "the shell's own file goes once stored");
+    assert_eq!(workspace_artifacts(&*real), [name]);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Bounded layouts
 

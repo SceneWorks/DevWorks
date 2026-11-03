@@ -9,7 +9,8 @@
 //! effort (DW-17), Current's app-wide work status (DW-12, DW-14) and conversation dates for
 //! history grouping (the session record carries none yet).
 use crate::memory::{
-    DraftMemory, PendingUpload, SidebarTab, StoredAttachment, UnconfirmedAttachment,
+    DraftMemory, FailedAttachment, PendingUpload, SidebarTab, StoredAttachment,
+    UnconfirmedAttachment,
 };
 use crate::ops::Failure;
 use crate::theme;
@@ -189,6 +190,20 @@ impl Draft {
                         path: a.path.clone()?,
                         owned: a.owned,
                     })
+                })
+                .collect(),
+            failed: self
+                .attachments
+                .iter()
+                .filter_map(|a| match &a.state {
+                    AttachState::Failed(error) => Some(FailedAttachment {
+                        name: a.name.clone(),
+                        media_type: a.media_type.clone(),
+                        path: a.path.clone(),
+                        owned: a.owned,
+                        error: error.clone(),
+                    }),
+                    _ => None,
                 })
                 .collect(),
         }
@@ -476,6 +491,7 @@ pub enum ChatAction {
     CloseSidebar,
     /// Resubmit an attachment's unconfirmed save frame.
     ConfirmAttachment(u64),
+    RetryAttachment(u64),
 }
 
 /// Which surface renders the conversation.
@@ -950,6 +966,17 @@ fn attachment_chip(ui: &mut Ui, a: &Attachment, actions: &mut Vec<ChatAction>) {
                             .clicked()
                         {
                             actions.push(ChatAction::ConfirmAttachment(a.local));
+                        }
+                    }
+                    if matches!(a.state, AttachState::Failed(_)) && a.path.is_some() {
+                        let label = format!("Retry upload of {}", a.name);
+                        if ui
+                            .small_button("Retry")
+                            .on_hover_text(&label)
+                            .widget_info_labeled(&label)
+                            .clicked()
+                        {
+                            actions.push(ChatAction::RetryAttachment(a.local));
                         }
                     }
                     if let Some(note) = &a.preview_note {

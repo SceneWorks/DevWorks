@@ -235,6 +235,20 @@ impl Shell {
                     preview_note: None,
                 });
             }
+            // Saves that failed: shown failed with their file, retried on request.
+            for a in &d.failed {
+                let local = chat.next_local();
+                draft.attachments.push(Attachment {
+                    local,
+                    name: a.name.clone(),
+                    media_type: a.media_type.clone(),
+                    path: a.path.clone(),
+                    owned: a.owned,
+                    state: AttachState::Failed(a.error.clone()),
+                    preview: None,
+                    preview_note: None,
+                });
+            }
             chat.drafts.insert(key.clone(), draft);
         }
         chat.scrolls = Scrolls::restoring(&memory.scroll);
@@ -706,6 +720,21 @@ impl Shell {
     }
 
     /// Starts storing every attachment of the selected conversation's draft that waits.
+    /// Stores a failed attachment afresh from its file (a new save, never the failed one).
+    fn retry_attachment(&mut self, local: u64) {
+        let Some(a) = self.chat.attachment_mut(local) else {
+            return;
+        };
+        if !matches!(a.state, AttachState::Failed(_)) || a.path.is_none() {
+            return;
+        }
+        a.state = AttachState::WaitingForConversation;
+        match self.chat.owner(local) {
+            Some(key) if key != chat::NEW_DRAFT => self.store_waiting(&key),
+            _ => self.start_session(StartReason::ForDraft),
+        }
+    }
+
     fn store_pending(&mut self) {
         if let Some(session) = self.chat.selected.clone() {
             self.store_waiting(&session);
@@ -896,10 +925,12 @@ impl Shell {
                     // The frame is in the state before it is admitted: a close from here on
                     // keeps it, and the next launch confirms this same request.
                     a.state = AttachState::Saving(frame.clone());
-                    if !self.submit_save(Slot::Attach(key, local), &label, frame.clone(), owned)
+                    // Not submitted (closing): nothing was admitted, and its upload ticket lives
+                    // only in this process, so the next launch prepares a fresh one.
+                    if !self.submit_save(Slot::Attach(key, local), &label, frame, owned)
                         && let Some(a) = self.chat.attachment_mut(local)
                     {
-                        a.state = AttachState::Unconfirmed(frame);
+                        a.state = AttachState::Storing;
                     }
                 } else if let Some(r) = self.chat.removed.remove(&local) {
                     // Removed while it was being prepared: nothing was admitted.
@@ -1286,6 +1317,7 @@ impl Shell {
                 }
                 ChatAction::CloseSidebar => self.coordinator_open = false,
                 ChatAction::ConfirmAttachment(local) => self.confirm_attachment(local),
+                ChatAction::RetryAttachment(local) => self.retry_attachment(local),
             }
         }
         let _ = ctx;
@@ -1469,6 +1501,7 @@ impl Shell {
                         || !d.attachments.is_empty()
                         || !d.unconfirmed.is_empty()
                         || !d.uploads.is_empty()
+                        || !d.failed.is_empty()
                 })
                 .collect(),
             routes: self.routes.clone(),

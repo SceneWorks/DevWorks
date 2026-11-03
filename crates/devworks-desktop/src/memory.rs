@@ -55,6 +55,9 @@ pub struct DraftMemory {
     /// prepared): stored at the next launch.
     #[serde(default)]
     pub uploads: Vec<PendingUpload>,
+    /// Attachments whose save failed: kept with their file, shown failed, and retried on request.
+    #[serde(default)]
+    pub failed: Vec<FailedAttachment>,
 }
 
 /// An attachment whose save never started: its file, stored at the next launch.
@@ -66,6 +69,18 @@ pub struct PendingUpload {
     /// The shell created `path` (a pasted image).
     #[serde(default)]
     pub owned: bool,
+}
+
+/// An attachment whose save failed (refused, or never possible): restored as failed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FailedAttachment {
+    pub name: String,
+    pub media_type: String,
+    pub path: Option<PathBuf>,
+    /// The shell created `path` (a pasted image).
+    #[serde(default)]
+    pub owned: bool,
+    pub error: String,
 }
 
 /// A command whose outcome was not known at close.
@@ -203,6 +218,7 @@ mod tests {
                 attachments: Vec::new(),
                 unconfirmed: Vec::new(),
                 uploads: Vec::new(),
+                failed: Vec::new(),
             },
         );
         m.save(&path).unwrap();
