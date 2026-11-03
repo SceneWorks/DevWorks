@@ -726,3 +726,126 @@ fn a_quarantined_corrupt_artifact_at_boot_needs_attention() {
     drop(parts);
     rt.block_on(app.shutdown());
 }
+
+fn rejected(
+    code: Rejection,
+    retry: devworks_core::protocol::RetryAdvice,
+) -> devworks_core::gateway::CommandOutcome {
+    Ok(CommandReply::Rejected {
+        protocol: devworks_core::protocol::Protocol::Draft1,
+        request_key: devworks_core::protocol::RequestKey(id("transient")),
+        code,
+        retry,
+        correlation_id: devworks_core::protocol::CorrelationId(id("correlation-fixture")),
+    })
+}
+
+#[test]
+fn a_retryable_save_rejection_keeps_the_staged_file_for_the_retry() {
+    use devworks_core::protocol::RetryAdvice;
+    let h = Harness::new();
+    let rt = runtime();
+    drop(h.open());
+    seed_root(&h, "root-a");
+    let (composition, parts) = compose(&h, Vec::new());
+    let app = rt.block_on(boot(composition)).expect("boot");
+    let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
+        Some(ProjectId(id("project-a"))),
+        None,
+        None,
+    );
+    // The save is refused transiently (the store was busy) and records no receipt.
+    let outcome = parts
+        .diagnostics
+        .export(&user, &LogQuery::default(), "transient", |_| {
+            rejected(Rejection::StorageUnavailable, RetryAdvice::SameCommand)
+        })
+        .expect("submitted");
+    assert!(matches!(outcome, Ok(CommandReply::Rejected { .. })));
+    assert_eq!(
+        staged_files(&h).len(),
+        1,
+        "the staged file stays for the retry"
+    );
+    // The retry resubmits the recorded command, whose source still resolves, and saves.
+    let (saved, replayed) = saved_artifact(
+        app.export_diagnostics(&user, &LogQuery::default(), "transient")
+            .expect("exported"),
+    );
+    assert!(!replayed);
+    assert_eq!(saved.media_type, "application/json");
+    assert!(staged_files(&h).is_empty(), "{:?}", staged_files(&h));
+    // A rejection the same command cannot overcome releases the file at once.
+    let outcome = parts
+        .diagnostics
+        .export(&user, &LogQuery::default(), "final", |_| {
+            rejected(Rejection::PermissionDenied, RetryAdvice::Never)
+        })
+        .expect("submitted");
+    assert!(matches!(outcome, Ok(CommandReply::Rejected { .. })));
+    assert!(staged_files(&h).is_empty(), "{:?}", staged_files(&h));
+    // An unknown outcome keeps it too (until the sweep, once its ticket expired).
+    let outcome = parts
+        .diagnostics
+        .export(&user, &LogQuery::default(), "unknown", |_| {
+            Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+                "artifacts.save".into(),
+            ))
+        })
+        .expect("submitted");
+    assert!(outcome.is_err());
+    assert_eq!(staged_files(&h).len(), 1);
+    rt.block_on(app.shutdown());
+}
+
+#[test]
+fn an_abandoned_export_claim_is_taken_over() {
+    let h = Harness::new();
+    let rt = runtime();
+    drop(h.open());
+    seed_root(&h, "root-a");
+    let (composition, parts) = compose(&h, Vec::new());
+    let app = rt.block_on(boot(composition)).expect("boot");
+    let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
+        Some(ProjectId(id("project-a"))),
+        None,
+        None,
+    );
+    // An earlier process claimed the key and stopped before staging: its claim is pending and
+    // older than the takeover age.
+    let scope = devworks_core::context::ScopeKey::of(&user)
+        .as_str()
+        .to_owned();
+    let stale = ExportIntent {
+        actor: user.principal().clone(),
+        scope_key: scope.clone(),
+        request_key: "orphaned".into(),
+        project_id: ProjectId(id("project-a")),
+        selection_sha256: devworks_core::fingerprint::sha256_hex(
+            json!({"selection": format!("{:?}", LogQuery::default()), "projectId": "project-a"})
+                .to_string()
+                .as_bytes(),
+        ),
+        command: None,
+        claim: "dead-claimant".into(),
+        created_at_ms: h.now() - 10 * 60 * 1000,
+    };
+    write(&*parts.sqlite, move |tx| {
+        tx.diagnostics().claim_export_intent(&stale).map(|_| ())
+    })
+    .unwrap();
+    let (saved, replayed) = saved_artifact(
+        app.export_diagnostics(&user, &LogQuery::default(), "orphaned")
+            .expect("exported after takeover"),
+    );
+    assert!(!replayed);
+    assert_eq!(saved.media_type, "application/json");
+    let intent = read(&*parts.sqlite, |s| {
+        s.diagnostics()
+            .export_intent(user.principal(), &scope, "orphaned")
+    })
+    .expect("intent");
+    assert_ne!(intent.claim, "dead-claimant");
+    assert!(intent.command.is_some());
+    rt.block_on(app.shutdown());
+}

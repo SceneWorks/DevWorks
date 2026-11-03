@@ -716,11 +716,14 @@ fn indexing_checks(
         };
         let Some(d) = latest else {
             out.push(
-                unavailable(channel, "No run has been recorded on this channel yet.").metric(
+                unavailable(
+                    channel,
+                    "No run is retained on this channel: none was recorded, or the last one is older than the log retention window.",
+                ).metric(
                     MetricReading::new(
                         "failuresLast24h",
                         Some("count"),
-                        Metric::Unavailable("no run has been recorded".into()),
+                        Metric::Unavailable("no run is retained".into()),
                     ),
                 ),
             );

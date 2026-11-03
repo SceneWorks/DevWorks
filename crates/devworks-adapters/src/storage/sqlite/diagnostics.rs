@@ -259,10 +259,16 @@ fn stats(conn: &Connection) -> Result<DiagnosticStats, StorageError> {
             |r| r.get(0),
         )
         .optional())?;
+    let pruned_through: i64 = db(conn.query_row(
+        "SELECT pruned_through FROM diagnostic_retention WHERE singleton=1",
+        [],
+        |r| r.get(0),
+    ))?;
     Ok(DiagnosticStats {
         records,
         latest_sequence: latest.unwrap_or(0),
         oldest_recorded_at_ms: oldest,
+        pruned_through,
     })
 }
 
@@ -393,14 +399,31 @@ impl DiagnosticRepository for Unit<'_> {
         if keep_at_most < 0 {
             return Err(invalid("the record cap is non-negative"));
         }
+        // The highest sequence each removal takes raises the retention boundary first.
+        let expired_through: Option<i64> = db(self.conn.query_row(
+            "SELECT max(sequence) FROM diagnostic_records WHERE recorded_at < ?1",
+            [older_than_ms],
+            |r| r.get(0),
+        ))?;
         let expired = db(self.conn.execute(
             "DELETE FROM diagnostic_records WHERE recorded_at < ?1",
             [older_than_ms],
         ))? as i64;
+        let capped_through: Option<i64> = db(self.conn.query_row(
+            "SELECT max(sequence) FROM (SELECT sequence FROM diagnostic_records ORDER BY sequence DESC LIMIT -1 OFFSET ?1)",
+            [keep_at_most],
+            |r| r.get(0),
+        ))?;
         let over_cap = db(self.conn.execute(
             "DELETE FROM diagnostic_records WHERE sequence IN (SELECT sequence FROM diagnostic_records ORDER BY sequence DESC LIMIT -1 OFFSET ?1)",
             [keep_at_most],
         ))? as i64;
+        if let Some(through) = expired_through.max(capped_through) {
+            db(self.conn.execute(
+                "UPDATE diagnostic_retention SET pruned_through=max(pruned_through, ?1) WHERE singleton=1",
+                [through],
+            ))?;
+        }
         db(self.conn.execute(
             "DELETE FROM diagnostic_exports WHERE created_at < ?1",
             [older_than_ms],

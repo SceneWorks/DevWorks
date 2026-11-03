@@ -1534,3 +1534,159 @@ fn an_export_fits_its_byte_limit_as_written_and_counts_what_it_omits() {
     assert!(!document["health"].as_array().unwrap().is_empty());
     assert!(!String::from_utf8_lossy(&export.bytes).contains("zq9x"));
 }
+
+/// One `workspace.logs` page (or its fault) at revision 2.
+fn logs_page(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    after: i64,
+    order: &str,
+    limit: u32,
+    cursor: Option<&str>,
+) -> Result<DiagnosticPage, DomainFault> {
+    let mut page = json!({"limit": limit});
+    if let Some(c) = cursor {
+        page["cursor"] = json!(c);
+    }
+    match fx.query_at(
+        ctx,
+        "workspace.logs",
+        json!({"page": page, "afterSequence": after.to_string(), "order": order}),
+        Some(2),
+    ) {
+        DomainQueryReply::Result {
+            result: OperationResult::WorkspaceLogs { value },
+            ..
+        } => Ok(value),
+        DomainQueryReply::Rejected { fault, .. } => Err(fault),
+        other => panic!("{other:?}"),
+    }
+}
+fn sequences(p: &DiagnosticPage) -> Vec<i64> {
+    p.items
+        .0
+        .iter()
+        .map(|e| e.sequence.as_ref().unwrap().get())
+        .collect()
+}
+
+#[test]
+fn log_cursors_expire_when_retention_removes_their_unread_range() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // Sequences 1..=6 are old, 7..=10 recent.
+    for i in 1..=10 {
+        let at = if i <= 6 { T0 } else { T0 + 20 * 86_400_000 };
+        fx.h.clock.0.store(at, Ordering::SeqCst);
+        assert_eq!(
+            fx.log(LogEntry::new(
+                "client",
+                "r",
+                Severity::Info,
+                format!("r{i}")
+            )),
+            i
+        );
+    }
+    // Pages and a tail position read before retention runs.
+    let up = logs_page(&fx, &user, 0, "Ascending", 3, None).unwrap();
+    assert_eq!(sequences(&up), [1, 2, 3]);
+    let up_cursor = up.next_cursor.unwrap().0;
+    let down = logs_page(&fx, &user, 0, "Descending", 3, None).unwrap();
+    assert_eq!(sequences(&down), [10, 9, 8]);
+    let down_cursor = down.next_cursor.unwrap().0;
+    // Retention removes 1..=6, records that neither cursor has read.
+    fx.h.clock.0.store(T0 + 31 * 86_400_000, Ordering::SeqCst);
+    assert_eq!(fx.svc.prune().unwrap().expired, 6);
+    let expired = |r: Result<DiagnosticPage, DomainFault>| match r {
+        Err(f) => assert_eq!(f.code, DomainErrorCode::CursorExpired),
+        Ok(p) => panic!("a page over a pruned range: {:?}", sequences(&p)),
+    };
+    // Oldest first: continuing would skip 4..=6.
+    expired(logs_page(&fx, &user, 0, "Ascending", 3, Some(&up_cursor)));
+    // Newest first: continuing would end at 7 and look complete.
+    expired(logs_page(
+        &fx,
+        &user,
+        0,
+        "Descending",
+        3,
+        Some(&down_cursor),
+    ));
+    // Tailing from a position inside the pruned range, oldest first or newest first.
+    expired(logs_page(&fx, &user, 2, "Ascending", 3, None));
+    expired(logs_page(&fx, &user, 2, "Descending", 3, None));
+    let native = fx.svc.logs(
+        &user,
+        &devworks_core::services::diagnostics::LogQuery {
+            after_sequence: 2,
+            ..Default::default()
+        },
+        10,
+    );
+    assert!(
+        matches!(native, Err(StorageError::CursorExpired)),
+        "{native:?}"
+    );
+    // At the boundary, from the start, and with cursors issued after the pass, reads continue.
+    let at_boundary = logs_page(&fx, &user, 6, "Ascending", 10, None).unwrap();
+    assert_eq!(&sequences(&at_boundary)[..4], [7, 8, 9, 10]);
+    let fresh = logs_page(&fx, &user, 0, "Ascending", 2, None).unwrap();
+    assert_eq!(sequences(&fresh), [7, 8]);
+    let next = logs_page(
+        &fx,
+        &user,
+        0,
+        "Ascending",
+        2,
+        Some(&fresh.next_cursor.unwrap().0),
+    )
+    .unwrap();
+    assert_eq!(sequences(&next), [9, 10]);
+    let fresh_down = logs_page(&fx, &user, 0, "Descending", 2, None).unwrap();
+    let rest = logs_page(
+        &fx,
+        &user,
+        0,
+        "Descending",
+        10,
+        Some(&fresh_down.next_cursor.unwrap().0),
+    )
+    .unwrap();
+    assert_eq!(*sequences(&rest).last().unwrap(), 7);
+    // The boundary survives a restart.
+    let fx = fx.restart();
+    let user = fx.user();
+    expired(logs_page(&fx, &user, 2, "Ascending", 3, None));
+}
+
+#[test]
+fn a_health_cursor_expires_when_the_checks_change() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let first = match result(fx.query_at(
+        &user,
+        "workspace.diagnostics",
+        json!({"page": {"limit": 3}}),
+        Some(2),
+    )) {
+        OperationResult::WorkspaceDiagnostics { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let cursor = first.next_cursor.unwrap().0;
+    // A health source registered between pages shifts every later check's position.
+    fx.svc.register_source(Arc::new(|_now: i64| {
+        vec![HealthCheck::new(
+            "boot.recovery",
+            HealthState::Healthy,
+            "added between pages",
+        )]
+    }));
+    let fault = query_fault(fx.query_at(
+        &user,
+        "workspace.diagnostics",
+        json!({"page": {"limit": 3, "cursor": cursor}}),
+        Some(2),
+    ));
+    assert_eq!(fault.code, DomainErrorCode::CursorExpired);
+}

@@ -1,7 +1,7 @@
 -- Retained diagnostic log records (LOG-01..03, OPS-01): host work, the UI, agent tools and
 -- packages write diagnostics here, apart from history events, transcripts and model history.
--- Additive: two new tables (the log and export intents) and their indexes; it references no
--- table of migration 11.
+-- Additive: three new tables (the log, its retention boundary and export intents) and their
+-- indexes; it references no table of migration 11.
 -- `sequence` is AUTOINCREMENT so a sequence is never reused after pruning: readers tail the log
 -- by "strictly after sequence N".
 CREATE TABLE diagnostic_records (
@@ -68,6 +68,14 @@ CREATE TABLE diagnostic_records (
         json_valid(recovery_json) AND json_type(recovery_json) = 'array'
     )
 ) STRICT;
+-- The retention boundary: the highest sequence retention ever removed. A log cursor records it,
+-- and a continuation whose unread range retention removed since expires (CursorExpired) instead
+-- of silently skipping the gap.
+CREATE TABLE diagnostic_retention (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    pruned_through INTEGER NOT NULL CHECK (pruned_through >= 0)
+) STRICT;
+INSERT INTO diagnostic_retention(singleton, pruned_through) VALUES (1, 0);
 -- The durable intent of each diagnostic export, by receipt identity: the selection and
 -- destination it exported and the exact `artifacts.save` command it submitted, so a retry with
 -- the request key resubmits that command (the gateway replays its receipt under current

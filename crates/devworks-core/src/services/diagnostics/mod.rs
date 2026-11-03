@@ -170,7 +170,7 @@ pub const EXPORT_CLAIM_STALE_MS: i64 = 5 * 60 * 1000;
 /// Format identifier of an export document.
 pub const EXPORT_FORMAT: &str = "devworks.diagnostics-export/1";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
-const CURSOR_VERSION: &str = "l1";
+const CURSOR_VERSION: &str = "l2";
 
 /// `component` is `prefix` or lies beneath it (`indexing.repository` under `indexing`).
 pub fn under(component: &str, prefix: &str) -> bool {
@@ -1009,6 +1009,10 @@ impl DiagnosticService {
             let Some(audience) = audience(s.authority(), ctx)? else {
                 return Ok(None);
             };
+            let pruned = s.diagnostics().diagnostic_stats()?.pruned_through;
+            if retention_gap(query.descending, query.after_sequence, None, pruned) {
+                return Err(StorageError::CursorExpired);
+            }
             let rows = s
                 .diagnostics()
                 .diagnostics(&query.filter(audience), limit.clamp(1, 500))?;
@@ -1192,8 +1196,9 @@ impl DiagnosticService {
     /// `IdempotencyConflict`; nothing is staged. A retry after the staged file's ticket expired
     /// is refused by the save (its source no longer resolves): export again under a new key.
     ///
-    /// **Staging.** Once the save is decided (recorded or rejected) the staged file is released;
-    /// a file whose outcome is unknown stays for a retry and is swept after its ticket expires.
+    /// **Staging.** Once the save has a durable outcome, or a rejection the same command cannot
+    /// overcome, the staged file is released; after a retryable rejection or an unknown outcome
+    /// it stays for the retry and is swept after its ticket expires.
     pub fn export(
         &self,
         ctx: &InvocationContext,
@@ -1253,8 +1258,15 @@ impl DiagnosticService {
                 return conflict();
             }
             if let Some(command) = &stored.command {
-                // The claimant's command: replayed (or decided once) by the gateway.
-                return Ok(submit(command.as_bytes()));
+                // The claimant's command: replayed (or decided once) by the gateway. Once it is
+                // settled its staged file (if this process staged it) is no longer needed.
+                let outcome = submit(command.as_bytes());
+                if save_settled(&outcome)
+                    && let Some(source) = staged_source(command)
+                {
+                    staging.release(&source);
+                }
+                return Ok(outcome);
             }
             if self.now().saturating_sub(stored.created_at_ms) > EXPORT_CLAIM_STALE_MS {
                 let (from, takeover) = (stored.claim.clone(), mine.clone());
@@ -1325,13 +1337,31 @@ impl DiagnosticService {
             }
         }
         let outcome = submit(frame.as_bytes());
-        if matches!(
-            outcome,
-            Ok(CommandReply::Recorded { .. } | CommandReply::Rejected { .. })
-        ) {
+        if save_settled(&outcome) {
             staging.release(&source);
         }
         Ok(outcome)
+    }
+}
+
+/// The staged source an export's recorded `artifacts.save` command names.
+fn staged_source(command: &str) -> Option<crate::protocol::data::ArtifactSource> {
+    let v: Value = serde_json::from_str(command).ok()?;
+    serde_json::from_value(v.get("command")?.get("source")?.clone()).ok()
+}
+
+/// Whether a save's outcome no longer needs its staged file: it has a durable outcome (a
+/// receipt), or it was rejected in a way the same command cannot overcome. A rejection the
+/// same command may still pass (`SameCommand`, `AfterBlockerClears`), an unknown commit or a
+/// gateway failure keeps the file for the retry; the sweep removes it once its ticket expires.
+fn save_settled(outcome: &CommandOutcome) -> bool {
+    match outcome {
+        Ok(CommandReply::Recorded { .. }) => true,
+        Ok(CommandReply::Rejected { retry, .. }) => !matches!(
+            retry,
+            RetryAdvice::SameCommand | RetryAdvice::AfterBlockerClears
+        ),
+        _ => false,
     }
 }
 
@@ -1444,24 +1474,56 @@ enum CursorError {
     Malformed,
     Stale,
 }
-fn encode_cursor(sequence: i64, binding: &str) -> BoundedText<1, 4096> {
-    BoundedText(format!("{CURSOR_VERSION}.{sequence}.{binding}"))
+/// A continuation: its position, the retention boundary when it was issued, and the binding of
+/// its store, restore epoch, filter and audience.
+fn encode_cursor(position: i64, boundary: i64, binding: &str) -> BoundedText<1, 4096> {
+    BoundedText(format!("{CURSOR_VERSION}.{position}.{boundary}.{binding}"))
 }
-fn decode_cursor(raw: &str, binding: &str) -> Result<i64, CursorError> {
+fn decode_cursor(raw: &str, binding: &str) -> Result<(i64, i64), CursorError> {
     let parts: Vec<&str> = raw.split('.').collect();
-    let [version, sequence, bound] = parts.as_slice() else {
+    let [version, position, boundary, bound] = parts.as_slice() else {
         return Err(CursorError::Malformed);
     };
     if *version != CURSOR_VERSION {
         return Err(CursorError::Malformed);
     }
-    let sequence = sequence
+    let position = position
+        .parse::<i64>()
+        .map_err(|_| CursorError::Malformed)?;
+    let boundary = boundary
         .parse::<i64>()
         .map_err(|_| CursorError::Malformed)?;
     if *bound != binding {
         return Err(CursorError::Stale);
     }
-    Ok(sequence)
+    Ok((position, boundary))
+}
+
+/// Whether retention removed part of a log read's unread range (shared contracts: return
+/// `CursorExpired` rather than pretend a page is complete). `pruned_through` is the current
+/// retention boundary.
+///
+/// * Oldest first, the unread range starts after the cursor position (or `afterSequence`): it
+///   lost records when the boundary passed that position. Reading from 0 means "from the oldest
+///   retained record" and never expires.
+/// * Newest first, the unread range lies between `afterSequence` and the cursor: it lost
+///   records when the boundary passed `afterSequence` since the cursor was issued, or (a first
+///   page) when the boundary already lies above a nonzero `afterSequence`.
+fn retention_gap(
+    descending: bool,
+    after: i64,
+    cursor: Option<(i64, i64)>,
+    pruned_through: i64,
+) -> bool {
+    if descending {
+        match cursor {
+            Some((_, issued)) => pruned_through > issued && pruned_through > after,
+            None => after > 0 && pruned_through > after,
+        }
+    } else {
+        let from = cursor.map_or(after, |(position, _)| position.max(after));
+        from > 0 && pruned_through > from
+    }
 }
 
 impl QueryHandler for DiagnosticService {
@@ -1501,8 +1563,23 @@ impl QueryHandler for DiagnosticService {
                     q.digest(&audience)
                 );
                 let mut filter = q.filter(audience);
-                if let Some(c) = &i.page.cursor {
-                    let at = decode_cursor(&c.0, &binding).map_err(cursor_error)?;
+                let stats = snapshot.diagnostics().diagnostic_stats().map_err(storage)?;
+                let cursor = match &i.page.cursor {
+                    Some(c) => Some(decode_cursor(&c.0, &binding).map_err(cursor_error)?),
+                    None => None,
+                };
+                if retention_gap(
+                    filter.descending,
+                    filter.after_sequence,
+                    cursor,
+                    stats.pruned_through,
+                ) {
+                    return Err(fault(
+                        DomainErrorCode::CursorExpired,
+                        RetryAdvice::RefreshAndNewRequest,
+                    ));
+                }
+                if let Some((at, _)) = cursor {
                     if filter.descending {
                         filter.before_sequence = Some(at);
                     } else {
@@ -1530,9 +1607,13 @@ impl QueryHandler for DiagnosticService {
                             .is_empty()
                     });
                 rows.truncate(usize::from(limit));
-                let next_cursor = (has_more && !rows.is_empty())
-                    .then(|| encode_cursor(rows.last().map_or(0, |r| r.sequence), &binding));
-                let stats = snapshot.diagnostics().diagnostic_stats().map_err(storage)?;
+                let next_cursor = (has_more && !rows.is_empty()).then(|| {
+                    encode_cursor(
+                        rows.last().map_or(0, |r| r.sequence),
+                        stats.pruned_through,
+                        &binding,
+                    )
+                });
                 let items = rows
                     .iter()
                     .map(entry)
@@ -1558,19 +1639,23 @@ impl QueryHandler for DiagnosticService {
                             .is_none_or(|p| under(&c.component, &p.0))
                     })
                     .collect();
+                // The offset is meaningful only over the same list of checks: a source or
+                // consumer that appeared or went away since the cursor was issued expires it.
+                let components: Vec<&str> = checks.iter().map(|c| c.component.as_str()).collect();
                 let binding = sha256_hex(
                     format!(
-                        "{}|{}|{}",
+                        "{}|{}|{}|{}",
                         stamp.store_id.0.as_str(),
                         stamp.restore_epoch,
-                        i.component.as_ref().map_or("", |c| c.0.as_str())
+                        i.component.as_ref().map_or("", |c| c.0.as_str()),
+                        components.join(",")
                     )
                     .as_bytes(),
                 )[..16]
                     .to_owned();
                 let start = match &i.page.cursor {
                     Some(c) => {
-                        usize::try_from(decode_cursor(&c.0, &binding).map_err(cursor_error)?)
+                        usize::try_from(decode_cursor(&c.0, &binding).map_err(cursor_error)?.0)
                             .unwrap_or(usize::MAX)
                     }
                     None => 0,
@@ -1578,7 +1663,8 @@ impl QueryHandler for DiagnosticService {
                 let limit = usize::try_from(i.page.limit.get()).unwrap_or(500).min(500);
                 let page: Vec<&HealthCheck> = checks.iter().skip(start).take(limit).collect();
                 let end = start + page.len();
-                let next_cursor = (end < checks.len()).then(|| encode_cursor(end as i64, &binding));
+                let next_cursor =
+                    (end < checks.len()).then(|| encode_cursor(end as i64, 0, &binding));
                 let items = page
                     .into_iter()
                     .map(|c| {

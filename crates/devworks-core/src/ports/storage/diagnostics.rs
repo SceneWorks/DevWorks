@@ -115,6 +115,10 @@ pub struct DiagnosticStats {
     /// Highest sequence ever assigned (0 before the first record); survives pruning.
     pub latest_sequence: i64,
     pub oldest_recorded_at_ms: Option<i64>,
+    /// Highest sequence retention ever removed (0 before the first removal): the retention
+    /// boundary a log cursor checks, so a continuation whose unread range was pruned expires
+    /// visibly instead of skipping the gap.
+    pub pruned_through: i64,
 }
 
 /// What one retention pass removed.
@@ -196,8 +200,9 @@ pub trait DiagnosticRepository: DiagnosticRead {
     /// Removes a pending intent held by `intent.claim` (its export could not be staged).
     fn release_export_intent(&mut self, intent: &ExportIntent) -> Result<bool, StorageError>;
     /// Removes records recorded before `older_than_ms`, then the oldest records beyond
-    /// `keep_at_most`, and export intents created before `older_than_ms`. The sequence counter
-    /// is never reset.
+    /// `keep_at_most`, and export intents created before `older_than_ms`, and raises the
+    /// retention boundary ([`DiagnosticStats::pruned_through`]) to the highest sequence removed.
+    /// The sequence counter is never reset.
     fn prune_diagnostics(
         &mut self,
         older_than_ms: i64,
