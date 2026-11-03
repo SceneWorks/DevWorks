@@ -226,7 +226,8 @@ pub struct DispatcherConfig {
     pub sweep_interval: Duration,
     /// A wall-clock advance exceeding the monotonic advance by more than this is a sleep/wake.
     pub wake_jump_ms: i64,
-    /// Rows per recovery transaction (1..=500).
+    /// Rows per recovery or eligibility transaction, and per page when observing unknown
+    /// outcomes (1..=500).
     pub recovery_batch: u16,
 }
 impl DispatcherConfig {
@@ -249,6 +250,8 @@ pub struct RecoveryReport {
     pub classified: Vec<(OperationId, OperationState)>,
     pub requeued: Vec<Id>,
     pub held: Vec<Id>,
+    /// Prior-boot claims settled `Cancelled` because their cancellation was requested.
+    pub cancelled: Vec<Id>,
 }
 
 /// What one pass did.
@@ -418,9 +421,10 @@ impl Dispatcher {
                 store::recover_prior_boots(tx, limit)
             })
             .await?;
-            let n = out.requeued.len() + out.held.len();
+            let n = out.requeued.len() + out.held.len() + out.cancelled.len();
             report.requeued.extend(out.requeued);
             report.held.extend(out.held);
+            report.cancelled.extend(out.cancelled);
             if n < usize::from(limit) {
                 break;
             }

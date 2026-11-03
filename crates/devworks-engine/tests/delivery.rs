@@ -910,6 +910,14 @@ fn cancel_during_dispatch_then_not_applied_cancels_instead_of_retrying() {
         gate.send(true).unwrap();
         d.idle().await;
     });
+    // Settled by the attempt that saw NotApplied, not left ready for another attempt.
+    let settled = entry(&*s, &queued.id);
+    assert_eq!(
+        settled.state,
+        QueueState::Cancelled,
+        "{:?}",
+        settled.last_error
+    );
     h.advance(3_600_000);
     rt.block_on(d.run_until_idle()).unwrap();
     assert_eq!(fx.executed(), 1, "effect re-dispatched after cancellation");
@@ -975,6 +983,8 @@ fn a_cancel_request_survives_a_hold_and_wins_over_a_later_retry() {
             ),
             "{reply:?}"
         );
+        // The resolution itself cancels it: nothing is made ready for another dispatch.
+        assert_eq!(entry(&*s, &queued.id).state, QueueState::Cancelled);
         h.advance(3_600_000);
         rt.block_on(d.run_until_idle()).unwrap();
         assert_eq!(entry(&*s, &queued.id).state, QueueState::Cancelled);
@@ -1261,4 +1271,44 @@ fn an_undetected_sleep_holds_the_live_effect_and_never_re_executes_it() {
     assert_eq!(entry(&*s, &queued.id).state, QueueState::Completed);
     assert_eq!(fx.executed(), 1, "an effect was re-executed");
     assert_eq!(recorder.seen().len(), 1);
+}
+
+/// A claim whose cancellation was requested before its process died is settled `Cancelled` by
+/// the next boot's recovery, with its undispatched operation, instead of being redelivered.
+#[test]
+fn a_cancel_requested_before_a_crash_is_honoured_by_recovery() {
+    let h = Harness::new();
+    let s = h.open();
+    let queued = write(&*s, |tx| {
+        let op = intent(tx)?;
+        enqueue_tx(tx, "work", None, Some(op), json!({}))
+    })
+    .unwrap();
+    let ghost = ClaimRequest {
+        consumer: "work".into(),
+        owner: id("ghost"),
+        lease_ms: 3_600_000,
+        limit: 1,
+    };
+    write(&*s, move |tx| tx.queue().claim_ready(&ghost)).unwrap();
+    let qid = queued.id.clone();
+    write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+    drop(s);
+    let s = h.open();
+    let recorder = Recorder::ok();
+    let fx = Effects::new(EffectResult::Completed(json!({})));
+    let mut c = consumer("work", recorder.clone());
+    c.effect = Some(fx.executor());
+    let d = dispatcher(&h, s.clone(), vec![c]);
+    let rt = runtime();
+    let report = rt.block_on(d.recover()).unwrap();
+    assert_eq!(report.cancelled, std::slice::from_ref(&queued.id));
+    rt.block_on(d.run_until_idle()).unwrap();
+    assert_eq!(entry(&*s, &queued.id).state, QueueState::Cancelled);
+    let op = queued.operation_id.clone().unwrap();
+    assert_eq!(
+        read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+        OperationState::CancelledBeforeDispatch
+    );
+    assert_eq!((fx.executed(), recorder.seen().len()), (0, 0));
 }
