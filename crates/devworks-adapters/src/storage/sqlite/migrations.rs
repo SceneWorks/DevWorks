@@ -95,7 +95,7 @@ pub const MIGRATIONS: &[Migration] = &[
 ];
 /// Recorded checksum of migration 7; a test fails if the shipped text changes.
 pub const MIGRATION_0007_SHA256: &str =
-    "4db48098da3df6c1dbc88b6241909dc3068507be43127d2d3a332caf88bd362d";
+    "2863f135528fc5a7c7499515872eb17a5acbddd1874fbd108d91ad2cd1253077";
 /// Recorded checksum of migration 6; a test fails if the shipped text changes.
 pub const MIGRATION_0006_SHA256: &str =
     "7a2ebf3518bed204be5592dcdee4ad203b1971efc421c26535a1a6478571e768";

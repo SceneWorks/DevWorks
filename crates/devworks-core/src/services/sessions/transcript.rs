@@ -14,17 +14,20 @@
 //!
 //! * the batch receipt is checked before the sequence CAS: an equal replay returns the original
 //!   receipt unchanged (even after the session closed), a changed payload under that batch ID is
-//!   refused;
+//!   refused. Batch identities are scoped per session, so another session's batch is never
+//!   revealed or matched;
 //! * the expected next sequence must equal the session's; a lower one is stale, a higher one a
 //!   gap; entries are contiguous with unique identities;
 //! * a different context epoch needs an explicit boundary — the batch's first entry is
 //!   `ContextEpochChanged` from the current epoch to the next — and a boundary inside the current
-//!   epoch is refused. Compaction therefore adds an epoch that references its immutable snapshot;
-//!   the original transcript stays exactly as it was. Late native observations bound to an older
-//!   epoch are kept as evidence;
+//!   epoch is refused, as is a boundary while emitted calls still lack their initial response.
+//!   Compaction therefore adds an epoch that references its immutable snapshot (with an epoch
+//!   identity; the provider cache key is the router's); the original transcript stays exactly as
+//!   it was. Late native observations bound to an older epoch are kept as evidence;
 //! * a tool call is keyed `(attempt, native call)` with its recorded ordinal and is recorded once;
 //!   an initial response must match a durable call and appears once. Later outcomes are
-//!   `OperationUpdate` entries: separate facts, never a rewrite;
+//!   `OperationUpdate` entries: separate facts, never a rewrite. Every operation an entry names
+//!   must belong to the session's project;
 //! * provider-native blocks, attachments, arguments, results, snapshots and checkpoints are
 //!   referenced by artifact identity and must resolve to a live version with the same digest,
 //!   length and media type that the session may see. Nothing is copied or rewritten.
@@ -37,7 +40,7 @@ use crate::jcs;
 use crate::ports::IdKind;
 use crate::ports::storage::{
     ApplicationStore, NewEvent, StorageError, StoredBatch, StoredCheckpoint, StoredContextSource,
-    StoredEntry, StoredEpoch, StoredLink, StoredToolCall, StoredUsage, WriteOptions,
+    StoredEntry, StoredEpoch, StoredLink, StoredSession, StoredToolCall, StoredUsage, WriteOptions,
     WriteTransaction, run_write,
 };
 use crate::protocol::provider::{
@@ -171,6 +174,9 @@ pub enum BatchRefusal {
     },
     /// A boundary inside the current epoch, or more than one boundary.
     DuplicateBoundary,
+    /// A context boundary while emitted tool calls still lack their initial response: compaction
+    /// or a provider change must not cut an unresolved tool exchange.
+    UnresolvedToolCalls,
     DuplicateEntry(Id),
     /// The `(attempt, native call)` key or its ordinal is already recorded.
     DuplicateCall,
@@ -363,7 +369,7 @@ pub fn append_session_batch(
     }
     let digest = batch_digest(actor, batch)?;
     let b = &batch.batch;
-    if let Some(prior) = tx.sessions().batch(&b.batch_id)? {
+    if let Some(prior) = tx.sessions().batch(&b.session_id, &b.batch_id)? {
         return Ok(if prior.payload_digest == digest {
             BatchOutcome::Replayed(BatchReceipt::of(&prior))
         } else {
@@ -443,6 +449,9 @@ fn write_batch(
                 current: session.context_epoch,
                 presented: epoch
             }),
+        }
+        if !tx.sessions().pending_calls(&session.id, 1)?.is_empty() {
+            refuse!(BatchRefusal::UnresolvedToolCalls)
         }
     } else if boundaries > 0 {
         refuse!(BatchRefusal::DuplicateBoundary)
@@ -538,7 +547,7 @@ fn write_batch(
                 }
                 let (name, operation) = outcome_kind(outcome);
                 if let Some(op) = operation
-                    && tx.operations().operation(op)?.is_none()
+                    && !operation_in_scope(tx, &session, op)?
                 {
                     refuse!(BatchRefusal::UnknownOperation(op.clone()))
                 }
@@ -580,7 +589,7 @@ fn write_batch(
                     epoch: next_epoch.get(),
                     previous_epoch: previous_epoch.get(),
                     reason: reason.to_owned(),
-                    cache_key: cache_key(&session.id, next_epoch.get(), context),
+                    identity: epoch_identity(&session.id, next_epoch.get(), context),
                     context: snapshot,
                     sequence,
                     created_at_ms: now,
@@ -602,7 +611,7 @@ fn write_batch(
                 revision,
                 ..
             } => {
-                if tx.operations().operation(operation_id)?.is_none() {
+                if !operation_in_scope(tx, &session, operation_id)? {
                     refuse!(BatchRefusal::UnknownOperation(operation_id.clone()))
                 }
                 pending_links.push((
@@ -779,8 +788,32 @@ pub fn session_link(
         .map(|l| l.id))
 }
 
-/// Cache identity of an epoch: the session, epoch number and immutable snapshot digest (CACHE-02).
-pub fn cache_key(session: &Id, epoch: i64, context: &ArtifactRef) -> String {
+/// Whether `operation` exists and belongs to the session's scope: an operation of a work root
+/// in the session's project, or one without a root for a workspace session. Another project's
+/// operation is reported unknown, so its existence is not disclosed.
+pub fn operation_in_scope(
+    tx: &mut dyn WriteTransaction,
+    session: &StoredSession,
+    operation: &OperationId,
+) -> Result<bool, StorageError> {
+    let Some(op) = tx.operations().operation(operation)? else {
+        return Ok(false);
+    };
+    Ok(match &op.root_id {
+        Some(root) => match tx.sessions().work_root(root)? {
+            Some(w) => session.project_id.as_ref() == Some(&w.project_id),
+            None => false,
+        },
+        None => session.project_id.is_none(),
+    })
+}
+
+/// Identity of an epoch's context: the session, epoch number and the immutable snapshot's digest
+/// and length. Equal snapshots in different sessions or epochs have different identities. This
+/// is not the provider prompt-cache key: that also binds instruction and tool-schema revisions,
+/// the route binding and the reusable prefix, and belongs to the router's attempt envelope
+/// (`AttemptEnvelope.context_digest`/`cache_epoch`).
+pub fn epoch_identity(session: &Id, epoch: i64, context: &ArtifactRef) -> String {
     sha256_hex(
         format!(
             "{}|{epoch}|{}|{}",
@@ -819,7 +852,9 @@ impl SessionWriter<'_> {
             }
             // A writer may always recover the receipt of its own identical committed batch,
             // even after its session closed or its authority was revoked.
-            if let Some(prior) = tx.sessions().batch(&batch.batch.batch_id)?
+            if let Some(prior) = tx
+                .sessions()
+                .batch(&batch.batch.session_id, &batch.batch.batch_id)?
                 && prior.actor == *ctx.principal()
                 && prior.payload_digest == batch_digest(ctx.principal(), &batch)?
             {

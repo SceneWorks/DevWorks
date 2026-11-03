@@ -22,7 +22,20 @@
 //! and checkpoints stay readable. `sessions.append_message` appends exactly one user message
 //! (text and attachments that resolve to visible artifact versions) at the session's next
 //! sequence and current epoch; a public message cannot write a host notice, a tool result, an
-//! actor or an epoch.
+//! actor or an epoch. Only the user (a human principal) or the session's own agent or creator
+//! may message or end a session, and an agent only from an invocation bound to that session.
+//! A human's Home session is bound to the configured workspace coordinator agent, so the
+//! runtime writes its turns. Workspace scope lists Home sessions only; Home and the sidebar
+//! resolve the same open Home session by that scope.
+//!
+//! # Native material
+//!
+//! Provider-native continuation items are restricted transport material: `sessions.transcript`
+//! returns their references only to the session's creator, its agent or the host, omits them for
+//! everyone else, and records an attributed `NativeMaterialViewed` event (its own unit of work)
+//! before serving them; a view that cannot be recorded is not served. The transcript page always
+//! carries a continuation, including at its tail, so a view polls for new entries (the live
+//! wake-up hint is the shell's event channel, not this query).
 //!
 //! # Retained CodeGraph behavior
 //!
@@ -35,12 +48,12 @@
 pub mod transcript;
 pub mod turn;
 
-use crate::context::InvocationContext;
+use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, sessions as ops};
 use crate::ports::storage::{
-    NewEvent, ReadSnapshot, SessionPosition, SessionScope, StorageError, StoredLink, StoredSession,
-    WorkRoot, WriteTransaction,
+    ApplicationStore, NewEvent, ReadSnapshot, SessionPosition, SessionScope, StorageError,
+    StoredLink, StoredSession, WorkRoot, WriteOptions, WriteTransaction, run_write,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
@@ -54,8 +67,8 @@ use crate::protocol::records::{ContextSource, SessionRecord};
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{
-    CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, ProjectId, Protocol,
-    RetryAdvice, Revision, RevisionDimension, RootId,
+    ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, ProjectId,
+    Protocol, RetryAdvice, Revision, RevisionDimension, RootId,
 };
 use crate::services::cursor::CursorBinding;
 use serde_json::json;
@@ -334,6 +347,12 @@ pub fn append_refusal(r: &BatchRefusal) -> Refusal {
                 .retry(RetryAdvice::RefreshAndNewRequest)
         }
         BatchRefusal::Unauthorized(_) => Refusal::new(PermissionDenied, "session_writer", None),
+        // The same batch identity with another payload: the contract's conflict, like a reused
+        // request key with a different intent.
+        BatchRefusal::PayloadChanged => Refusal::new(Conflict, "transcript_batch", None)
+            .retry(RetryAdvice::RefreshAndNewRequest),
+        BatchRefusal::UnresolvedToolCalls => Refusal::new(Conflict, "unresolved_tool_calls", None)
+            .retry(RetryAdvice::AfterBlockerClears),
         _ => Refusal::new(InvalidArgument, "transcript_batch", None),
     }
 }
@@ -343,14 +362,100 @@ pub fn append_refusal(r: &BatchRefusal) -> Refusal {
 
 pub struct SessionService {
     ids: Arc<dyn IdSource>,
+    /// Records the view audit of served native material (its own small unit of work).
+    audit: Arc<dyn ApplicationStore>,
+    /// The workspace coordinator agent a human's Home session is bound to, when configured.
+    coordinator: Option<ActorId>,
 }
 
+/// History kind of a transcript read that served restricted native material.
+pub const NATIVE_VIEWED: &str = "NativeMaterialViewed";
+/// Fault target kind of a session command from a principal that may not act on the session.
+pub const SESSION_PRINCIPAL: &str = "session_principal";
+
 impl SessionService {
-    pub fn new(ids: Arc<dyn IdSource>) -> Self {
-        Self { ids }
+    pub fn new(ids: Arc<dyn IdSource>, audit: Arc<dyn ApplicationStore>) -> Self {
+        Self {
+            ids,
+            audit,
+            coordinator: None,
+        }
+    }
+    /// Binds every Home (workspace, no work root) session a human starts to `coordinator`, the
+    /// agent that conducts it, so the host runtime may append its turns.
+    pub fn with_coordinator(mut self, coordinator: ActorId) -> Self {
+        self.coordinator = Some(coordinator);
+        self
     }
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
+    }
+
+    /// Who may message or end a session: the user (a human principal, by human ingress), or its
+    /// own agent or creator — and an agent only from an invocation bound to that session. A
+    /// public message never changes its actor or role; it is attributed to its principal.
+    fn may_act(
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        session: &StoredSession,
+    ) -> Result<(), Failure> {
+        let denied = || {
+            Failure::from(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                SESSION_PRINCIPAL,
+                Some(session.id.clone()),
+            ))
+        };
+        let principal = ctx.principal();
+        let registered = tx.actors().actor_kind(principal)?;
+        if registered != Some(ctx.principal_kind()) {
+            return Err(denied());
+        }
+        if ctx.principal_kind() == PrincipalKind::Human {
+            return Ok(());
+        }
+        if principal != &session.agent_id && principal != &session.created_by {
+            return Err(denied());
+        }
+        if ctx.principal_kind() == PrincipalKind::Agent && ctx.session_id() != Some(&session.id) {
+            return Err(denied());
+        }
+        Ok(())
+    }
+
+    /// Records one attributed `NativeMaterialViewed` event for a transcript page that serves
+    /// native items, in its own unit of work (a read never writes through its snapshot).
+    fn audit_native_view(
+        &self,
+        ctx: &InvocationContext,
+        query: &AdmittedQuery,
+        session: &StoredSession,
+        sequences: Vec<i64>,
+    ) -> Result<(), Failure> {
+        let (ctx, s) = (ctx.clone(), session.clone());
+        let query_id = query.query_id().0.as_str().to_owned();
+        run_write(&*self.audit, WriteOptions::default(), move |tx| {
+            if &tx.store().store_id != ctx.store_id() {
+                return Err(StorageError::ScopeDenied);
+            }
+            session_event(
+                tx,
+                &ctx,
+                &s,
+                NATIVE_VIEWED,
+                json!({"sequences": sequences, "queryId": query_id}),
+            )
+            .map(|_| ())
+        })?;
+        Ok(())
+    }
+
+    /// Whether the invocation may receive the session's restricted native material: its creator,
+    /// its agent or the host.
+    fn native_owner(ctx: &InvocationContext, session: &StoredSession) -> bool {
+        ctx.principal_kind() == PrincipalKind::Host
+            || ctx.principal() == &session.created_by
+            || ctx.principal() == &session.agent_id
     }
 
     fn start(
@@ -383,11 +488,26 @@ impl SessionService {
                 _ => return Err(not_found("root", &root.0).into()),
             }
         }
+        // A human's Home session is conducted by the workspace coordinator; any other session by
+        // the principal that started it (assignment sessions are bound by their own item).
+        let agent_id = match &self.coordinator {
+            Some(c)
+                if ctx.principal_kind() == PrincipalKind::Human
+                    && input.root_id.is_none()
+                    && project.is_none() =>
+            {
+                if tx.actors().actor_kind(c)? != Some(PrincipalKind::Agent) {
+                    return Err(not_found("coordinator", &c.0).into());
+                }
+                c.clone()
+            }
+            _ => ctx.principal().clone(),
+        };
         let now = tx.now_ms();
         let session = StoredSession {
             id: tx.new_id(IdKind::Session),
             conversation_id: tx.new_id(IdKind::Conversation),
-            agent_id: ctx.principal().clone(),
+            agent_id,
             project_id: project,
             root_id: input.root_id.clone(),
             title: input.title.0.clone(),
@@ -432,6 +552,7 @@ impl SessionService {
         input: &ops::EndInput,
     ) -> Result<DomainDecision, Failure> {
         let mut session = visible_session(tx.sessions(), ctx, &input.session_id)?;
+        Self::may_act(tx, ctx, &session)?;
         if input.expected_revision.get() != session.revision {
             return Err(StorageError::conflict(
                 RevisionDimension::Work,
@@ -489,6 +610,7 @@ impl SessionService {
         input: &SessionCommandRequest,
     ) -> Result<DomainDecision, Failure> {
         let session = visible_session(tx.sessions(), ctx, &input.session_id)?;
+        Self::may_act(tx, ctx, &session)?;
         if session.closed() {
             return Err(Refusal::new(
                 DomainErrorCode::Conflict,
@@ -556,9 +678,14 @@ impl SessionService {
                 }
                 SessionScope::Project(project_id.clone())
             }
+            // Workspace scope is the Home sessions; a project-bound invocation has none.
             DataScope::Workspace => match ctx.project_id() {
-                Some(p) => SessionScope::Project(p.clone()),
-                None => SessionScope::All,
+                Some(_) => {
+                    return Err(
+                        Refusal::new(DomainErrorCode::PermissionDenied, "scope", None).into(),
+                    );
+                }
+                None => SessionScope::Workspace,
             },
         };
         let scope_part = match &scope {
@@ -635,8 +762,19 @@ impl SessionService {
             return Err(StorageError::CursorExpired.into());
         }
         let rows = read.entries(&session.id, after, input.limit)?;
+        let owner = Self::native_owner(ctx, &session);
         let mut entries = Vec::with_capacity(rows.len());
+        let mut native = Vec::new();
         for e in &rows {
+            // Provider-native continuation items are restricted transport material: only the
+            // session's creator, its agent and the host receive their references. Everyone
+            // else gets the transcript without them (a sequence gap, never altered content).
+            if e.kind == "NativeItem" {
+                if !owner {
+                    continue;
+                }
+                native.push(e.sequence);
+            }
             entries.push(TranscriptEntry {
                 entry_id: e.entry_id.clone(),
                 sequence: rev(e.sequence),
@@ -644,6 +782,11 @@ impl SessionService {
                     StorageError::IncompatibleSchema("stored transcript entry".into())
                 })?,
             });
+        }
+        if !native.is_empty() {
+            // Every view of native material is audited before it is served; a view that cannot
+            // be recorded is not served.
+            self.audit_native_view(ctx, query, &session, native)?;
         }
         let last = rows.last().map_or(after, |e| e.sequence);
         let page = TranscriptPage {
@@ -792,7 +935,14 @@ impl SessionService {
             let Some(record) = snapshot.operations().operation(&op)? else {
                 continue;
             };
-            if crate::ports::storage::is_terminal(record.state) {
+            // Only operations of the session's own scope (never another project's).
+            let in_scope = match &record.root_id {
+                Some(r) => read
+                    .work_root(r)?
+                    .is_some_and(|w| session.project_id.as_ref() == Some(&w.project_id)),
+                None => session.project_id.is_none(),
+            };
+            if !in_scope || crate::ports::storage::is_terminal(record.state) {
                 continue;
             }
             items.push(ContextSource {

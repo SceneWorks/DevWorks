@@ -256,7 +256,7 @@ fn entry_of(raw: EntryRaw) -> Result<StoredEntry, StorageError> {
 }
 
 const BATCH_COLUMNS: &str = "batch_id,session_id,payload_digest,actor_id,context_epoch,first_seq,last_seq,event_id,committed_seq,accepted_at";
-fn batch(conn: &Connection, id: &Id) -> Result<Option<StoredBatch>, StorageError> {
+fn batch(conn: &Connection, session: &Id, id: &Id) -> Result<Option<StoredBatch>, StorageError> {
     type Raw = (
         String,
         String,
@@ -270,9 +270,9 @@ fn batch(conn: &Connection, id: &Id) -> Result<Option<StoredBatch>, StorageError
         i64,
     );
     let raw: Option<Raw> = db(db(conn.prepare_cached(&format!(
-        "SELECT {BATCH_COLUMNS} FROM transcript_batches WHERE batch_id=?1"
+        "SELECT {BATCH_COLUMNS} FROM transcript_batches WHERE session_id=?1 AND batch_id=?2"
     )))?
-    .query_row([id.as_str()], |r| {
+    .query_row([session.as_str(), id.as_str()], |r| {
         Ok((
             r.get(0)?,
             r.get(1)?,
@@ -363,7 +363,7 @@ fn calls(
 fn epoch(conn: &Connection, session: &Id, epoch: i64) -> Result<Option<StoredEpoch>, StorageError> {
     type Raw = (String, i64, i64, String, String, String, i64, i64);
     let raw: Option<Raw> = db(db(conn.prepare_cached(
-        "SELECT session_id,epoch,previous_epoch,reason,context_json,cache_key,seq,created_at FROM session_context_epochs WHERE session_id=?1 AND epoch=?2",
+        "SELECT session_id,epoch,previous_epoch,reason,context_json,identity,seq,created_at FROM session_context_epochs WHERE session_id=?1 AND epoch=?2",
     ))?
     .query_row(params![session.as_str(), epoch], |r| {
         Ok((
@@ -385,7 +385,7 @@ fn epoch(conn: &Connection, session: &Id, epoch: i64) -> Result<Option<StoredEpo
             previous_epoch: p,
             reason,
             context: json_of(&ctx)?,
-            cache_key: key,
+            identity: key,
             sequence: seq,
             created_at_ms: at,
         })
@@ -481,8 +481,8 @@ fn usage(
     limit: u16,
 ) -> Result<Vec<(SequenceKey, StoredUsage)>, StorageError> {
     let n = bounded(limit)?;
-    // The usage key orders observations by (committed sequence, batch, ordinal); `id` encodes
-    // `batch:ordinal` with a zero-padded ordinal so it compares in that order.
+    // One batch append is one committed sequence, so (committed sequence, ordinal) orders the
+    // observations; `id` is the zero-padded ordinal so it compares in that order.
     let (seq, id) = after.map_or((-1, String::new()), |k| (k.sequence, k.id.clone()));
     type Raw = (
         String,
@@ -495,8 +495,8 @@ fn usage(
     );
     let mut stmt = db(conn.prepare_cached(
         "SELECT batch_id,ordinal,session_id,project_id,root_id,committed_seq,item_json FROM session_usage
-         WHERE root_id=?1 AND (committed_seq>?2 OR (committed_seq=?2 AND batch_id||':'||printf('%06d',ordinal)>?3))
-         ORDER BY committed_seq,batch_id,ordinal LIMIT ?4",
+         WHERE root_id=?1 AND (committed_seq>?2 OR (committed_seq=?2 AND printf('%06d',ordinal)>?3))
+         ORDER BY committed_seq,ordinal LIMIT ?4",
     ))?;
     let rows = db(stmt.query_map(params![root.0.as_str(), seq, id, n], |r| {
         Ok((
@@ -515,7 +515,7 @@ fn usage(
             let key = SequenceKey {
                 sequence: c,
                 source: 3,
-                id: format!("{b}:{o:06}"),
+                id: format!("{o:06}"),
             };
             Ok((
                 key,
@@ -676,12 +676,16 @@ fn lineage(
         source: 0,
         id: String::new(),
     });
-    // One keyset over three sources: the work hierarchy (sequence 0), the root's links and its
-    // command/artifact history facts, ordered by (sequence, source, id).
+    // One keyset over three sources: the work hierarchy, the root's links and its command and
+    // artifact history facts, ordered by (sequence, source, id). A related work item is keyed by
+    // the first history fact attached to it (its creation), so work added after a pager passed
+    // earlier positions still appears on a later page.
     let sql = format!(
         "SELECT seq,src,id FROM (
-           SELECT 0 AS seq,0 AS src,id FROM work_items WHERE id=(SELECT parent_feature_id FROM work_items WHERE id=?1)
-           UNION ALL SELECT 0,0,id FROM work_items WHERE parent_feature_id=?1
+           SELECT coalesce((SELECT min(e.seq) FROM events e WHERE e.root_id=w.id),0) AS seq,0 AS src,w.id AS id
+             FROM work_items w WHERE w.id=(SELECT parent_feature_id FROM work_items WHERE id=?1)
+           UNION ALL SELECT coalesce((SELECT min(e.seq) FROM events e WHERE e.root_id=w.id),0),0,w.id
+             FROM work_items w WHERE w.parent_feature_id=?1
            UNION ALL SELECT seq,1,id FROM history_links WHERE root_id=?1
            UNION ALL SELECT seq,2,id FROM events WHERE root_id=?1 AND aggregate_kind IN ({LINEAGE_EVENT_AGGREGATES})
          ) WHERE seq>?2 OR (seq=?2 AND (src>?3 OR (src=?3 AND id>?4)))
@@ -742,7 +746,8 @@ fn root_events(
     let n = bounded(limit)?;
     let mut stmt = db(conn.prepare_cached(&format!(
         "SELECT {EVENT_COLUMNS} FROM events WHERE root_id=?1 AND seq>?2
-         AND kind IN (SELECT value FROM json_each(?3)) ORDER BY seq LIMIT ?4"
+         AND kind IN (SELECT value FROM json_each(?3))
+         AND json_extract(payload_json,'$.subject.kind') IS NOT NULL ORDER BY seq LIMIT ?4"
     )))?;
     let rows = db(stmt.query_map(
         params![root.0.as_str(), after, kinds_json(kinds), n],
@@ -795,8 +800,30 @@ macro_rules! session_reads {
                     params![session.as_str(), entry_id.as_str()],
                 )
             }
-            fn batch(&self, batch_id: &Id) -> Result<Option<StoredBatch>, StorageError> {
-                batch(self.conn, batch_id)
+            fn batch(
+                &self,
+                session: &Id,
+                batch_id: &Id,
+            ) -> Result<Option<StoredBatch>, StorageError> {
+                batch(self.conn, session, batch_id)
+            }
+            fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError> {
+                exists(
+                    self.conn,
+                    "SELECT 1 FROM projects WHERE id=?1",
+                    [project.0.as_str()],
+                )
+            }
+            fn project_has_repository(
+                &self,
+                project: &ProjectId,
+                repository: &Id,
+            ) -> Result<bool, StorageError> {
+                exists(
+                    self.conn,
+                    "SELECT 1 FROM project_repositories WHERE project_id=?1 AND repository_id=?2",
+                    params![project.0.as_str(), repository.as_str()],
+                )
             }
             fn tool_call(
                 &self,
@@ -1051,7 +1078,7 @@ impl SessionRepository for Unit<'_> {
     }
 
     fn insert_batch(&mut self, b: &StoredBatch) -> Result<(), StorageError> {
-        if batch(self.conn, &b.batch_id)?.is_some() {
+        if batch(self.conn, &b.session_id, &b.batch_id)?.is_some() {
             return Err(StorageError::Duplicate {
                 kind: "transcript_batch",
                 id: b.batch_id.as_str().to_owned(),
@@ -1139,7 +1166,7 @@ impl SessionRepository for Unit<'_> {
 
     fn insert_epoch(&mut self, e: &StoredEpoch) -> Result<(), StorageError> {
         db(db(self.conn.prepare_cached(
-            "INSERT INTO session_context_epochs(session_id,epoch,previous_epoch,reason,context_json,cache_key,seq,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            "INSERT INTO session_context_epochs(session_id,epoch,previous_epoch,reason,context_json,identity,seq,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         ))?
         .execute(params![
             e.session_id.as_str(),
@@ -1147,7 +1174,7 @@ impl SessionRepository for Unit<'_> {
             e.previous_epoch,
             e.reason,
             json_text(&e.context),
-            e.cache_key,
+            e.identity,
             e.sequence,
             e.created_at_ms
         ]))?;

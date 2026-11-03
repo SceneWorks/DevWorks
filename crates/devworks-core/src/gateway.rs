@@ -92,6 +92,7 @@ pub struct AdmittedCommand {
     effect: EffectClass,
     action: Option<&'static str>,
     prepared: Option<Prepared>,
+    targets: Vec<Id>,
 }
 impl AdmittedCommand {
     pub fn descriptor(&self) -> &'static OperationDescriptor {
@@ -384,6 +385,7 @@ impl Gateway<'_> {
             effect: decoded.effect,
             action: decoded.action,
             prepared: None,
+            targets: decoded.targets,
         };
         // Preparation runs only for an admitted, currently authorized command and before its unit
         // of work; it never records a receipt, so a failure here is retryable with the same key.
@@ -785,14 +787,14 @@ fn unit_of_work(
     let event_id = EventId(tx.new_id(IdKind::Event));
     let accepted_at_ms = crate::protocol::Counter::new(tx.now_ms())
         .map_err(|_| StorageError::InvalidRecord("transaction clock before epoch".into()))?;
-    // The decision carries the invocation's host-resolved work scope (HISTORY-02), so a work
-    // item's history shows the commands decided in it. A lineage the store cannot resolve (a
-    // root or project that does not exist) keeps the fact unattached rather than losing it.
-    let decided_event = |lineage: bool| NewEvent {
-        id: event_id.clone(),
+    // The decision is attached to the work it acted on (HISTORY-02), so a work item's history
+    // shows every command decided on it, from the UI or an agent alike.
+    let scope = decision_scope(tx, ctx, &command.targets, decided.operation_id.as_ref())?;
+    let sequence = tx.history().append(NewEvent {
+        id: event_id,
         actor: ctx.principal().clone(),
-        project_id: lineage.then(|| ctx.project_id().cloned()).flatten(),
-        root_id: lineage.then(|| ctx.root_id().cloned()).flatten(),
+        project_id: scope.project,
+        root_id: scope.root,
         operation_id: decided.operation_id.clone(),
         aggregate_kind: "command".into(),
         aggregate_id: command_id.0.as_str().to_owned(),
@@ -803,24 +805,9 @@ fn unit_of_work(
             "contract": CONTRACT,
             "requestDigest": command.fingerprint.as_str(),
             "decision": decision_kind(&decided.decision),
+            "subject": scope.subject,
         }),
-    };
-    let sequence = if ctx.project_id().is_some() || ctx.root_id().is_some() {
-        let savepoint = tx.savepoint()?;
-        match tx.history().append(decided_event(true)) {
-            Ok(seq) => {
-                tx.release(savepoint)?;
-                seq
-            }
-            Err(StorageError::NotFound { .. }) => {
-                tx.rollback_to(savepoint)?;
-                tx.history().append(decided_event(false))?
-            }
-            Err(e) => return Err(e),
-        }
-    } else {
-        tx.history().append(decided_event(false))?
-    };
+    })?;
     let committed_sequence = Revision::new(sequence)
         .map_err(|_| StorageError::InvalidRecord("non-positive committed sequence".into()))?;
     let decision = decided.decision;
@@ -843,6 +830,78 @@ fn unit_of_work(
         },
     )?;
     Ok(Unit::Recorded(receipt))
+}
+
+/// Where a decision belongs in history.
+struct DecisionScope {
+    project: Option<crate::protocol::ProjectId>,
+    root: Option<crate::protocol::RootId>,
+    /// The decision's real subject and its revision dimension and value after the decision
+    /// (`{"kind","id","dimension","revision"}`), or `null` when the command names no existing
+    /// work item or operation (a creation, a session or settings command).
+    subject: serde_json::Value,
+}
+
+/// Resolves a decision's scope inside its transaction, after the use case decided:
+///
+/// 1. the first work item the input names as its target ([`admission::work_targets`]) that
+///    exists and lies in the invocation's project (any project for a workspace invocation) —
+///    the decision's subject is that work item at its current work revision;
+/// 2. otherwise the invocation's host-resolved lineage root, if it exists in that project — the
+///    decision is attached to it, with no claimed subject;
+/// 3. the project is the root's, or else the invocation's project when it exists; a missing
+///    root never drops a resolvable project.
+///
+/// A decision with a durable operation names that operation and its revision as its subject
+/// when no work target exists.
+fn decision_scope(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    targets: &[Id],
+    operation: Option<&crate::protocol::OperationId>,
+) -> Result<DecisionScope, StorageError> {
+    let in_scope = |p: &crate::protocol::ProjectId| ctx.project_id().is_none_or(|c| c == p);
+    for t in targets {
+        if let Some(w) = tx
+            .sessions()
+            .work_root(&crate::protocol::RootId(t.clone()))?
+            && in_scope(&w.project_id)
+        {
+            return Ok(DecisionScope {
+                subject: json!({"kind": "root", "id": w.id.0.as_str(), "dimension": "Work",
+                    "revision": w.revision}),
+                project: Some(w.project_id),
+                root: Some(w.id),
+            });
+        }
+    }
+    let subject = match operation {
+        Some(op) => match tx.operations().operation(op)? {
+            Some(o) => json!({"kind": "operation", "id": op.0.as_str(),
+                "dimension": "Operation", "revision": o.revision}),
+            None => serde_json::Value::Null,
+        },
+        None => serde_json::Value::Null,
+    };
+    if let Some(root) = ctx.root_id()
+        && let Some(w) = tx.sessions().work_root(root)?
+        && in_scope(&w.project_id)
+    {
+        return Ok(DecisionScope {
+            project: Some(w.project_id),
+            root: Some(w.id),
+            subject,
+        });
+    }
+    let project = match ctx.project_id() {
+        Some(p) if tx.sessions().project_exists(p)? => Some(p.clone()),
+        _ => None,
+    };
+    Ok(DecisionScope {
+        project,
+        root: None,
+        subject,
+    })
 }
 
 /// History kinds only the gateway may write.

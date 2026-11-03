@@ -121,8 +121,10 @@ pub struct StoredEpoch {
     pub reason: String,
     /// The immutable context snapshot (`ArtifactRef` JSON).
     pub context: Value,
-    /// Cache identity of the epoch: SHA-256 over the session, epoch and snapshot digest.
-    pub cache_key: String,
+    /// Identity of the epoch's context: SHA-256 over the session, epoch and the immutable
+    /// snapshot's digest and length. It identifies what the epoch's requests start from; the
+    /// provider cache key (instruction/tool-schema revisions, binding) is the router's.
+    pub identity: String,
     /// Transcript sequence of the boundary entry.
     pub sequence: i64,
     pub created_at_ms: i64,
@@ -226,7 +228,8 @@ pub struct SequenceKey {
 /// One row of a work root's lineage, in committed-sequence order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LineageRow {
-    /// A parent feature or child task/issue of the root (sequence 0).
+    /// A parent feature or child task/issue of the root, keyed by the committed sequence of the
+    /// first history fact attached to that work item (0 for work with no history at all).
     Work {
         key: SequenceKey,
         work: WorkRoot,
@@ -269,7 +272,15 @@ pub trait SessionRead {
         limit: u16,
     ) -> Result<Vec<StoredEntry>, StorageError>;
     fn entry_exists(&self, session: &Id, entry_id: &Id) -> Result<bool, StorageError>;
-    fn batch(&self, batch_id: &Id) -> Result<Option<StoredBatch>, StorageError>;
+    /// The receipt of `batch_id` in `session` (batch identities are scoped per session).
+    fn batch(&self, session: &Id, batch_id: &Id) -> Result<Option<StoredBatch>, StorageError>;
+    fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError>;
+    /// Whether `repository` is a member of `project`.
+    fn project_has_repository(
+        &self,
+        project: &ProjectId,
+        repository: &Id,
+    ) -> Result<bool, StorageError>;
     fn tool_call(
         &self,
         session: &Id,
@@ -325,7 +336,7 @@ pub trait SessionRead {
         target_id: &str,
         limit: u16,
     ) -> Result<Vec<StoredLink>, StorageError>;
-    /// The root's lineage: its parent feature and child work (sequence 0), its history links,
+    /// The root's lineage: its parent feature and child work (see [`LineageRow::Work`]), its links,
     /// and its command and artifact history facts, in committed-sequence order after `after`.
     fn lineage(
         &self,
@@ -333,8 +344,8 @@ pub trait SessionRead {
         after: Option<&SequenceKey>,
         limit: u16,
     ) -> Result<Vec<LineageRow>, StorageError>;
-    /// History events attached to `root` whose kind is in `kinds`, sequence greater than
-    /// `after`, at most `limit`.
+    /// History events attached to `root` whose kind is in `kinds` and that name their subject
+    /// (`payload.subject`), sequence greater than `after`, at most `limit`.
     fn root_events(
         &self,
         root: &RootId,
@@ -352,7 +363,7 @@ pub trait SessionRepository: SessionRead {
     fn update_session(&mut self, session: &StoredSession) -> Result<(), StorageError>;
     /// Appends an entry; its `(session, sequence)` and `(session, entry_id)` are unique.
     fn insert_entry(&mut self, entry: &StoredEntry) -> Result<(), StorageError>;
-    /// Records a batch receipt; its batch ID is unique.
+    /// Records a batch receipt; its batch ID is unique within its session.
     fn insert_batch(&mut self, batch: &StoredBatch) -> Result<(), StorageError>;
     /// Records a durable call; `(session, attempt, native call)` and `(session, attempt,
     /// ordinal)` are unique.

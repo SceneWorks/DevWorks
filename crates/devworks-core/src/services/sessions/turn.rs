@@ -11,16 +11,22 @@
 //!   assembled in recorded ordinal order, whatever order they arrived in. A call observed before
 //!   EOF, an incomplete, failed or cancelled turn is retained by the assembler but never written
 //!   as a durable call.
-//! * Streamed text is a preview until [`TurnAssembler::entries`] puts it into a batch; it is
-//!   persisted as ordered `AssistantAttempt` chunks of at most 64 KiB, marked interrupted unless
-//!   the turn completed (or ended ready for tools). Provider-native continuation items are kept
-//!   by artifact reference with their exact binding.
+//! * Streamed text is a preview until [`TurnAssembler::take`] moves it into a batch. Content
+//!   blocks keep their structure (CACHE-03): each content block's text is its own ordered run
+//!   of `AssistantAttempt` chunks of at most 64 KiB, and native continuation items keep their
+//!   position among the blocks. A tool-only turn writes no assistant text.
+//! * `take` is incremental: it returns only what was not taken before (the flushed watermark),
+//!   so a long stream can be flushed while it runs without duplicating text. Chunks flushed
+//!   before the terminal event are not marked interrupted (the outcome is not known yet); the
+//!   final take marks the last chunk — or, when the turn ended interrupted with nothing left, an
+//!   empty marker — `interrupted`. After a crash mid-stream the runtime appends
+//!   [`interruption_marker`], since the turn will never end.
 //!
 //! Endpoint wire decoding, broker admission and result assembly are the transport and tool-turn
 //! owners'; this assembler only decides what of a normalized turn is durable.
 use crate::protocol::provider::{
-    CompleteToolCall, NativeBinding, ProviderBody, ProviderEvent, TranscriptBatch, TranscriptBody,
-    TranscriptEntry, TurnOutcome,
+    ArtifactRef, CompleteToolCall, NativeBinding, ProviderBody, ProviderEvent, TranscriptBatch,
+    TranscriptBody, TranscriptEntry, TurnOutcome,
 };
 use crate::protocol::{AttemptId, Counter, Id, Protocol, Revision};
 
@@ -43,16 +49,26 @@ pub enum StreamRefusal {
     TerminalMismatch,
 }
 
+/// Content not yet taken, in arrival order.
+#[derive(Clone, Debug)]
+enum Item {
+    Text { block: i64, text: String },
+    Native(ArtifactRef),
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TurnAssembler {
     request: Option<Id>,
     attempt: Option<AttemptId>,
     binding: Option<NativeBinding>,
     next: i64,
-    text: String,
+    /// Content after the flushed watermark.
+    pending: Vec<Item>,
+    preview: String,
     calls: Vec<CompleteToolCall>,
-    natives: Vec<crate::protocol::provider::ArtifactRef>,
     terminal: Option<TurnOutcome>,
+    calls_taken: bool,
+    finished: bool,
 }
 
 impl TurnAssembler {
@@ -102,10 +118,26 @@ impl TurnAssembler {
         self.binding = Some(e.binding.clone());
         self.next = presented;
         match &e.event {
-            ProviderBody::TextDelta { text, .. } => self.text.push_str(text),
+            ProviderBody::TextDelta { block_index, text } => {
+                let block = block_index.get();
+                self.preview.push_str(text);
+                // Deltas of a content block extend that block, even when another block's
+                // deltas arrived in between.
+                match self
+                    .pending
+                    .iter_mut()
+                    .find(|i| matches!(i, Item::Text { block: b, .. } if *b == block))
+                {
+                    Some(Item::Text { text: t, .. }) => t.push_str(text),
+                    _ => self.pending.push(Item::Text {
+                        block,
+                        text: text.clone(),
+                    }),
+                }
+            }
             ProviderBody::ToolCallComplete { tool_call } => self.calls.push(tool_call.clone()),
             ProviderBody::NativeContinuation { artifact, .. } => {
-                self.natives.push(artifact.clone())
+                self.pending.push(Item::Native(artifact.clone()))
             }
             ProviderBody::Terminal { outcome, .. } => self.terminal = Some(outcome.clone()),
             ProviderBody::Usage { .. } | ProviderBody::Heartbeat => {}
@@ -120,44 +152,64 @@ impl TurnAssembler {
     pub fn terminal(&self) -> Option<&TurnOutcome> {
         self.terminal.as_ref()
     }
-    /// The streamed text so far: a preview, not durable until appended.
+    /// All streamed text so far: a preview, durable only once taken and appended.
     pub fn preview(&self) -> &str {
-        &self.text
+        &self.preview
     }
     /// Complete calls observed so far, in arrival order (retained even when not dispatchable).
     pub fn observed_calls(&self) -> &[CompleteToolCall] {
         &self.calls
     }
 
-    /// The durable entries of the turn as it stands: visible text chunks (interrupted unless the
-    /// turn completed or ended ready for tools), native continuation items, and the complete
-    /// calls in ordinal order only when the turn is ready. Empty before the first event.
-    pub fn entries(&self) -> Vec<TranscriptBody> {
-        let (Some(request), Some(attempt), Some(binding)) =
-            (&self.request, &self.attempt, &self.binding)
-        else {
+    /// The durable entries not taken before (see the module documentation), advancing the
+    /// flushed watermark: text chunks per content block and native items in arrival order, then
+    /// — once the turn is ready — the complete calls in ordinal order.
+    pub fn take(&mut self) -> Vec<TranscriptBody> {
+        let (Some(request), Some(attempt), Some(binding)) = (
+            self.request.clone(),
+            self.attempt.clone(),
+            self.binding.clone(),
+        ) else {
             return Vec::new();
         };
-        let interrupted = !matches!(
-            self.terminal,
-            Some(TurnOutcome::Completed | TurnOutcome::ToolCallsReady)
-        );
+        if self.finished {
+            return Vec::new();
+        }
+        let interrupted = match &self.terminal {
+            None => None,
+            Some(TurnOutcome::Completed | TurnOutcome::ToolCallsReady) => Some(false),
+            Some(_) => Some(true),
+        };
         let mut out = Vec::new();
-        for chunk in chunks(&self.text) {
-            out.push(TranscriptBody::AssistantAttempt {
-                request_id: request.clone(),
-                attempt_id: attempt.clone(),
-                visible_text: chunk.to_owned(),
-                interrupted,
-            });
+        for item in std::mem::take(&mut self.pending) {
+            match item {
+                Item::Text { text, .. } => {
+                    for chunk in chunks(&text) {
+                        out.push(TranscriptBody::AssistantAttempt {
+                            request_id: request.clone(),
+                            attempt_id: attempt.clone(),
+                            visible_text: chunk.to_owned(),
+                            interrupted: false,
+                        });
+                    }
+                }
+                Item::Native(artifact) => out.push(TranscriptBody::NativeItem {
+                    binding: binding.clone(),
+                    artifact,
+                }),
+            }
         }
-        for artifact in &self.natives {
-            out.push(TranscriptBody::NativeItem {
-                binding: binding.clone(),
-                artifact: artifact.clone(),
-            });
+        if interrupted == Some(true) {
+            match out
+                .iter_mut()
+                .rev()
+                .find(|b| matches!(b, TranscriptBody::AssistantAttempt { .. }))
+            {
+                Some(TranscriptBody::AssistantAttempt { interrupted, .. }) => *interrupted = true,
+                _ => out.push(interruption_marker(request.clone(), attempt.clone())),
+            }
         }
-        if self.tools_ready() {
+        if self.tools_ready() && !self.calls_taken {
             let mut calls = self.calls.clone();
             calls.sort_by_key(|c| c.call.ordinal.get());
             out.extend(
@@ -165,8 +217,23 @@ impl TurnAssembler {
                     .into_iter()
                     .map(|tool_call| TranscriptBody::ToolCallRecorded { tool_call }),
             );
+            self.calls_taken = true;
+        }
+        if interrupted.is_some() {
+            self.finished = true;
         }
         out
+    }
+}
+
+/// The entry that records an attempt as interrupted when its stream can no longer end (a crash
+/// or restart after a partial flush): an empty, interrupted assistant attempt.
+pub fn interruption_marker(request_id: Id, attempt_id: AttemptId) -> TranscriptBody {
+    TranscriptBody::AssistantAttempt {
+        request_id,
+        attempt_id,
+        visible_text: String::new(),
+        interrupted: true,
     }
 }
 

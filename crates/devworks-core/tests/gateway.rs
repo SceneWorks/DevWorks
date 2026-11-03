@@ -1158,3 +1158,24 @@ fn checked_increment_never_wraps() {
     assert!(Counter::new(i64::MAX).unwrap().checked_next().is_none());
     assert!(Revision::new(0).is_err() && Counter::new(-1).is_err());
 }
+
+#[test]
+fn a_commands_work_targets_come_from_its_selected_input_in_priority_order() {
+    // Task edits name the work item they change before any feature they mention.
+    let t = admission::work_targets(&json!({"featureId": "f-1", "workId": "t-1"}));
+    assert_eq!(t, [id("t-1"), id("f-1")]);
+    // Root-control envelopes name their root inside `command`.
+    let t = admission::work_targets(&json!({"command": {"kind": "runs.start", "rootId": "r-1"}}));
+    assert_eq!(t, [id("r-1")]);
+    // Creations name no target; values that are not opaque IDs are ignored.
+    assert!(admission::work_targets(&json!({"title": "x", "rootId": "not an id"})).is_empty());
+    let decoded = admission::decode(
+        Selection {
+            operation: "runs.start",
+            mode: Mode::Command,
+        },
+        START.as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(decoded.targets, [id("root-a")]);
+}

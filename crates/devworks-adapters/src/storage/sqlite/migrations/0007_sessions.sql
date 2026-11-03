@@ -24,12 +24,12 @@ ALTER TABLE transcript_chunks ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX transcript_entry_identity ON transcript_chunks(session_id,entry_id)
  WHERE entry_id IS NOT NULL;
 CREATE TABLE transcript_batches (
- batch_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions,
+ session_id TEXT NOT NULL REFERENCES sessions, batch_id TEXT NOT NULL,
  payload_digest TEXT NOT NULL, actor_id TEXT NOT NULL REFERENCES actors,
  context_epoch INTEGER NOT NULL, first_seq INTEGER NOT NULL CHECK(first_seq>0),
  last_seq INTEGER NOT NULL, event_id TEXT NOT NULL REFERENCES events(id),
  committed_seq INTEGER NOT NULL, accepted_at INTEGER NOT NULL,
- CHECK(last_seq>=first_seq)
+ PRIMARY KEY(session_id,batch_id), CHECK(last_seq>=first_seq)
 ) STRICT;
 CREATE TABLE session_tool_calls (
  session_id TEXT NOT NULL REFERENCES sessions, attempt_id TEXT NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE session_context_epochs (
  session_id TEXT NOT NULL REFERENCES sessions, epoch INTEGER NOT NULL CHECK(epoch>0),
  previous_epoch INTEGER NOT NULL, reason TEXT NOT NULL
   CHECK(reason IN ('Compaction','ProviderChange','InstructionAdoption')),
- context_json TEXT NOT NULL CHECK(json_valid(context_json)), cache_key TEXT NOT NULL,
+ context_json TEXT NOT NULL CHECK(json_valid(context_json)), identity TEXT NOT NULL,
  seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
  PRIMARY KEY(session_id,epoch), CHECK(previous_epoch=epoch-1),
  FOREIGN KEY(session_id,seq) REFERENCES transcript_chunks(session_id,seq)
@@ -62,15 +62,17 @@ CREATE TABLE session_context_sources (
 ) STRICT;
 CREATE TABLE session_checkpoints (
  session_id TEXT NOT NULL REFERENCES sessions, seq INTEGER NOT NULL,
- batch_id TEXT NOT NULL REFERENCES transcript_batches,
+ batch_id TEXT NOT NULL,
  artifact_json TEXT NOT NULL CHECK(json_valid(artifact_json)), created_at INTEGER NOT NULL,
- PRIMARY KEY(session_id,seq), FOREIGN KEY(session_id,seq) REFERENCES transcript_chunks(session_id,seq)
+ PRIMARY KEY(session_id,seq), FOREIGN KEY(session_id,seq) REFERENCES transcript_chunks(session_id,seq),
+ FOREIGN KEY(session_id,batch_id) REFERENCES transcript_batches(session_id,batch_id)
 ) STRICT;
 CREATE TABLE session_usage (
- batch_id TEXT NOT NULL REFERENCES transcript_batches, ordinal INTEGER NOT NULL CHECK(ordinal>0),
- session_id TEXT NOT NULL REFERENCES sessions, project_id TEXT REFERENCES projects,
+ session_id TEXT NOT NULL REFERENCES sessions, batch_id TEXT NOT NULL,
+ ordinal INTEGER NOT NULL CHECK(ordinal>0), project_id TEXT REFERENCES projects,
  root_id TEXT REFERENCES work_items, committed_seq INTEGER NOT NULL,
- item_json TEXT NOT NULL CHECK(json_valid(item_json)), PRIMARY KEY(batch_id,ordinal)
+ item_json TEXT NOT NULL CHECK(json_valid(item_json)), PRIMARY KEY(session_id,batch_id,ordinal),
+ FOREIGN KEY(session_id,batch_id) REFERENCES transcript_batches(session_id,batch_id)
 ) STRICT;
 CREATE INDEX session_usage_root ON session_usage(root_id,committed_seq,batch_id,ordinal);
 CREATE TABLE history_links (

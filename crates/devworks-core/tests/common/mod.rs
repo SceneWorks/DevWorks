@@ -475,8 +475,9 @@ fn nope<T>() -> Result<T, StorageError> {
     ))
 }
 impl OperationRead for Unsupported {
+    // No journal in memory: the gateway finds no operation to name as a decision's subject.
     fn operation(&self, _: &OperationId) -> Result<Option<OperationRecord>, StorageError> {
-        nope()
+        Ok(None)
     }
     fn unresolved(&self, _: u16) -> Result<Vec<OperationRecord>, StorageError> {
         nope()
@@ -979,8 +980,10 @@ impl ArtifactRepository for Unsupported {
     }
 }
 impl SessionRead for Unsupported {
+    // The in-memory store holds no work items or projects: the gateway resolves no command
+    // target or lineage against it.
     fn work_root(&self, _: &RootId) -> Result<Option<WorkRoot>, StorageError> {
-        nope()
+        Ok(None)
     }
     fn session(&self, _: &Id) -> Result<Option<StoredSession>, StorageError> {
         nope()
@@ -1000,7 +1003,13 @@ impl SessionRead for Unsupported {
     fn entry_exists(&self, _: &Id, _: &Id) -> Result<bool, StorageError> {
         nope()
     }
-    fn batch(&self, _: &Id) -> Result<Option<StoredBatch>, StorageError> {
+    fn batch(&self, _: &Id, _: &Id) -> Result<Option<StoredBatch>, StorageError> {
+        nope()
+    }
+    fn project_exists(&self, _: &ProjectId) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+    fn project_has_repository(&self, _: &ProjectId, _: &Id) -> Result<bool, StorageError> {
         nope()
     }
     fn tool_call(&self, _: &Id, _: &Id, _: &str) -> Result<Option<StoredToolCall>, StorageError> {

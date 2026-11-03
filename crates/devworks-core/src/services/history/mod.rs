@@ -25,19 +25,27 @@
 //! root's scope revision; any change expires them (`CursorExpired`). The gateway re-checks the
 //! authorization's fences on a fresh snapshot before a page is published.
 //!
-//! `history.events` publishes the facts the recorded `Event` contract can carry for a root: the
-//! `CommandDecided` decision of every command invoked in that work scope. Other facts appear in
-//! `history.work_lineage`, never as an event body the contract does not define.
+//! `history.events` publishes the facts the recorded `Event` contract can type for a root: the
+//! `CommandDecided` decision of every command whose target was that work item (or whose durable
+//! operation it names), with that real subject and its revision dimension and value after the
+//! decision. A decision attached to the root only by the invoking agent's lineage has no
+//! knowable aggregate the `Subject` union can express, so it appears in `history.work_lineage`
+//! instead of as an event with a fabricated aggregate. A `Page<Event>` cannot carry a
+//! continuation at its tail (its recorded rule ties `nextCursor` to `hasMore`); a poller resumes
+//! from its last page's cursor. Lineage records have no actor, time, repository or revision
+//! fields, so their summaries carry them.
 //!
 //! # Retained CodeGraph behavior
 //!
-//! `WorkController.Changes`, `WorkViewsController.RecentChanges`/`ItemChanges` and the `changes`
-//! work tool map to `history.events`; `WorkViewsController.GitHubEvidence` to `history.git_links`.
-//! `AdminMcpHubController.Audit`, the `AdminReportsController` usage/activity/filter reports and
-//! the `McpToolInvocationRecordedConsumer` map to `history.tool_usage`: usage observations are
-//! appended atomically with their session batch, replacing the message-bus consumer, and are
-//! read per work root. Price classification, budgets and workspace-wide report filters are the
-//! usage item's (`router.usage`); this service persists and serves the attributed observations.
+//! `WorkController.Changes`, `WorkViewsController.ItemChanges` and the `changes` work tool map to
+//! `history.events` of the item; `WorkViewsController.GitHubEvidence` to `history.git_links`. A
+//! project-wide feed (`RecentChanges`, `changes` without an item) has no recorded input: every
+//! history query is root-scoped. `AdminMcpHubController.Audit`, the `AdminReportsController`
+//! reports and the `McpToolInvocationRecordedConsumer` map to `history.tool_usage`, whose
+//! recorded result (`UsageItem`) is inference usage: the attributed observations are appended
+//! with their session batch and read per root; tool-invocation facts (tool name, success,
+//! duration, error) have no field there. Price classification, budgets and report filters are
+//! the usage item's (`router.usage`).
 use crate::context::{InvocationContext, ReceiptIdentity};
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, history as ops};
@@ -128,7 +136,10 @@ pub struct NewHistoryLink {
     pub git: Option<GitFacts>,
     /// Required for `Evidence`: the immutable evidence artifact version.
     pub artifact: Option<ArtifactRef>,
-    /// What the link points at (a review run, decision record, ...); defaults per kind.
+    /// `(target kind, target ID)` the link points at. Required for `Review`, `Decision` and
+    /// `Outcome` (a review run, decision record, ...); ignored for the other kinds, whose target
+    /// is fixed: `Git`/`PullRequest` target the head commit, `Evidence` the artifact version and
+    /// `Correction` the superseded link.
     pub target: Option<(String, String)>,
     pub summary: String,
     /// The earlier link this one corrects or reverses (it stays unchanged).
@@ -184,6 +195,13 @@ pub fn record_link(
                 || (new.kind == LinkKind::PullRequest && g.pull_request_url.is_none())
             {
                 return invalid("git");
+            }
+            // The repository must be a member of the work's project.
+            if !tx
+                .sessions()
+                .project_has_repository(&root.project_id, &g.repository_id)?
+            {
+                return Ok(Err(not_found("repository", &g.repository_id)));
             }
             (
                 "commit".to_owned(),
@@ -269,6 +287,40 @@ pub fn record_link(
     };
     tx.sessions().insert_link(&link)?;
     Ok(Ok(link))
+}
+
+/// A lineage summary with the attribution the record has no fields for (HISTORY-02): what
+/// happened, by whom, when (UTC ms) and at which committed sequence.
+fn attributed(what: &str, actor: &crate::protocol::ActorId, at_ms: i64, sequence: i64) -> String {
+    format!(
+        "{what} - by {} at {at_ms} (sequence {sequence})",
+        actor.0.as_str()
+    )
+}
+
+/// The recorded subject of a decision (`payload.subject`): a work item at its work revision or
+/// an operation at its operation revision.
+fn decision_subject(payload: &Value) -> Result<(Subject, RevisionKind, i64), Failure> {
+    let s = &payload["subject"];
+    let id = s["id"]
+        .as_str()
+        .and_then(|i| Id::new(i).ok())
+        .ok_or_else(|| stored("decision subject"))?;
+    let revision = s["revision"]
+        .as_i64()
+        .filter(|r| *r > 0)
+        .ok_or_else(|| stored("decision subject revision"))?;
+    match (s["kind"].as_str(), s["dimension"].as_str()) {
+        (Some("root"), Some("Work")) => {
+            Ok((Subject::Root(RootId(id)), RevisionKind::Work, revision))
+        }
+        (Some("operation"), Some("Operation")) => Ok((
+            Subject::Operation(crate::protocol::OperationId(id)),
+            RevisionKind::Operation,
+            revision,
+        )),
+        _ => Err(stored("decision subject kind")),
+    }
 }
 
 #[derive(Deserialize)]
@@ -371,21 +423,22 @@ impl HistoryService {
                     let command = CommandId(
                         Id::new(e.aggregate_id.clone()).map_err(|_| stored("command event"))?,
                     );
+                    // The decision's real subject at its revision after the decision.
+                    let (aggregate, kind, revision) = decision_subject(&e.payload)?;
                     Ok((
                         key,
                         Event {
                             protocol: Protocol::Draft1,
                             event_id: e.id.clone(),
                             sequence: rev(e.sequence),
-                            // The decision's subject is the work it was decided in.
-                            aggregate: Subject::Root(root.id.clone()),
-                            aggregate_revision: rev(e.aggregate_revision),
-                            aggregate_revision_kind: RevisionKind::Work,
+                            aggregate,
+                            aggregate_revision: rev(revision),
+                            aggregate_revision_kind: kind,
                             actor_id: e.actor.clone(),
                             occurred_at_ms: counter(e.created_at_ms),
                             command_id: Some(command.clone()),
                             project_id: e.project_id.clone(),
-                            root_id: Some(root.id.clone()),
+                            root_id: e.root_id.clone(),
                             event: EventBody::CommandDecided {
                                 command_id: command,
                             },
@@ -405,45 +458,68 @@ impl HistoryService {
 
     fn lineage_record(row: LineageRow, root: &WorkRoot) -> Result<LineageRecord, Failure> {
         Ok(match row {
-            LineageRow::Work { work, .. } => {
+            LineageRow::Work { work, key } => {
                 let parent = root.parent_feature_id.as_ref() == Some(&work.id);
+                let first = if key.sequence > 0 {
+                    format!("; first recorded at sequence {}", key.sequence)
+                } else {
+                    String::new()
+                };
                 LineageRecord {
                     id: work.id.0.clone(),
                     parent_id: None,
                     kind: label(if parent { "parent_feature" } else { &work.kind }, "work"),
                     related_id: work.id.0.clone(),
-                    summary: content(&work.title),
+                    summary: content(&format!(
+                        "{} ({} in project {}, work revision {}{first})",
+                        work.title,
+                        work.kind,
+                        work.project_id.0.as_str(),
+                        work.revision
+                    )),
                 }
             }
             LineageRow::Link { link, .. } => {
                 let related = Id::new(link.target_id.clone()).unwrap_or_else(|_| link.id.clone());
-                let summary = match &link.supersedes_id {
+                let mut what = match &link.supersedes_id {
                     Some(prior) => format!("Supersedes {}: {}", prior.as_str(), link.summary),
                     None => link.summary.clone(),
                 };
+                if let Some(repo) = &link.repository_id {
+                    what.push_str(&format!(" [repository {}", repo.as_str()));
+                    if let Some(r) = &link.revision {
+                        what.push_str(&format!(" at {r}"));
+                    }
+                    what.push(']');
+                }
                 LineageRecord {
                     id: link.id.clone(),
                     parent_id: link.supersedes_id.clone().or(link.parent_id.clone()),
                     kind: label(&link.kind, "link"),
                     related_id: related,
-                    summary: content(&summary),
+                    summary: content(&attributed(
+                        &what,
+                        &link.actor,
+                        link.created_at_ms,
+                        link.sequence,
+                    )),
                 }
             }
             LineageRow::Event { event, .. } => {
-                let (kind, summary) = match event.aggregate_kind.as_str() {
+                let (kind, what) = match event.aggregate_kind.as_str() {
                     "command" => (
                         "command",
                         format!(
-                            "{} {} by {}",
+                            "{} {}",
                             event.payload["operation"].as_str().unwrap_or("command"),
-                            event.payload["decision"].as_str().unwrap_or(""),
-                            event.actor.0.as_str()
+                            event.payload["decision"].as_str().unwrap_or("")
                         ),
                     ),
-                    _ => (
-                        "artifact",
-                        format!("{} by {}", event.kind, event.actor.0.as_str()),
-                    ),
+                    _ => ("artifact", format!("{} {}", event.kind, event.aggregate_id)),
+                };
+                let what = match event.operation_id.as_ref() {
+                    Some(op) => format!("{what} (operation {})", op.0.as_str()),
+                    None => what,
                 };
                 LineageRecord {
                     id: event.id.0.clone(),
@@ -451,7 +527,12 @@ impl HistoryService {
                     kind: label(kind, "event"),
                     related_id: Id::new(event.aggregate_id.clone())
                         .map_err(|_| stored("lineage event"))?,
-                    summary: content(&summary),
+                    summary: content(&attributed(
+                        &what,
+                        &event.actor,
+                        event.created_at_ms,
+                        event.sequence,
+                    )),
                 }
             }
         })
