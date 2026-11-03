@@ -1,0 +1,1799 @@
+//! Sessions, transcript batches and work lineage end to end on the real SQLite store: the
+//! session lifecycle through the gateway with receipts, the session writer's atomic batches
+//! (duplicate replay, stale/gap refusal, crash before and after commit), compaction epochs that
+//! keep the original transcript, separate operation updates, bounded scoped history pages with
+//! cursor expiry, lineage in both directions, corrections that preserve priors, reviewer/agent
+//! scope, bounded briefings, the retained CodeGraph endpoint mapping and the recorded native
+//! stream/transcript scenarios. Deterministic temporary stores and an injected clock; no
+//! inference.
+use super::{Harness, T0};
+use crate::storage::sqlite::{MIGRATION_0007_SHA256, MIGRATIONS, SqliteStore};
+use devworks_core::authority::HostAuthority;
+use devworks_core::authority::service as auth;
+use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
+use devworks_core::gateway::Gateway;
+use devworks_core::ports::storage::*;
+use devworks_core::protocol::provider::{
+    ProviderEvent, TranscriptBatch, TranscriptBody, TranscriptPage,
+};
+use devworks_core::protocol::records::{
+    ContextSource, EvidenceLink, GitLink, LineageRecord, ReceiptLookupState, SessionRecord,
+    UsageItem,
+};
+use devworks_core::protocol::results::{
+    DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
+};
+use devworks_core::protocol::shared::Event;
+use devworks_core::protocol::support::Page;
+use devworks_core::protocol::{
+    ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, OperationId, ProjectId,
+    Rejection, Revision, RootId,
+};
+use devworks_core::services::UseCases;
+use devworks_core::services::history::{
+    GitFacts, HistoryService, LinkKind, NewHistoryLink, RECEIPT_REPLY_UNAVAILABLE, record_link,
+};
+use devworks_core::services::sessions::transcript::{
+    AppendPath, BatchOutcome, BatchReceipt, BatchRefusal, ContextSourceInput, SessionBatch,
+    SessionWriter, SourceDisposition, append_session_batch,
+};
+use devworks_core::services::sessions::turn::{TEXT_CHUNK, TurnAssembler, batch_of};
+use devworks_core::services::sessions::{
+    BRIEFING_LIMIT, EPOCH_CHANGED, SESSION_CLOSED, SessionService,
+};
+use devworks_core::settings::catalog::AgentRole;
+use serde_json::{Value, json};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+fn id(s: &str) -> Id {
+    Id::new(s).unwrap()
+}
+fn actor(s: &str) -> ActorId {
+    ActorId(id(s))
+}
+fn project(s: &str) -> ProjectId {
+    ProjectId(id(s))
+}
+fn root(s: &str) -> RootId {
+    RootId(id(s))
+}
+const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+fn art() -> Value {
+    json!({"artifactId": "artifact-a", "versionId": "version-a", "sha256": DIGEST,
+        "byteLength": "2", "mediaType": "application/json"})
+}
+fn art_b() -> Value {
+    json!({"artifactId": "artifact-b", "versionId": "version-b", "sha256": DIGEST,
+        "byteLength": "2", "mediaType": "application/json"})
+}
+fn binding() -> Value {
+    json!({"connectionId": "connection-a", "accountRevision": "1",
+        "endpointProfile": "OpenAiResponses", "modelId": "model-a", "contextEpoch": "0"})
+}
+fn call(native: &str, ordinal: u32) -> Value {
+    json!({"call": {"attemptId": "attempt-a", "nativeCallId": native, "ordinal": ordinal.to_string()},
+        "capabilityId": "core/read",
+        "inputSchema": {"schemaId": "core/object", "revision": "1", "sha256": DIGEST},
+        "arguments": art(), "nativeItem": art()})
+}
+fn key(native: &str, ordinal: u32) -> Value {
+    json!({"attemptId": "attempt-a", "nativeCallId": native, "ordinal": ordinal.to_string()})
+}
+fn entry(entry_id: &str, seq: i64, body: Value) -> Value {
+    json!({"entryId": entry_id, "sequence": seq.to_string(), "body": body})
+}
+fn tbatch(
+    batch: &str,
+    session: &str,
+    epoch: i64,
+    next: i64,
+    entries: Vec<Value>,
+) -> TranscriptBatch {
+    serde_json::from_value(json!({"protocol": "1.0-draft.1", "batchId": batch,
+        "sessionId": session, "contextEpoch": epoch.to_string(),
+        "expectedNextSequence": next.to_string(), "entries": entries}))
+    .unwrap()
+}
+fn text(t: &str) -> Value {
+    json!({"kind": "UserMessage", "content": [{"kind": "Text", "text": t}]})
+}
+fn usage(request: &str) -> UsageItem {
+    serde_json::from_value(json!({"requestId": request, "purpose": "Conversation",
+        "modelId": "model-a", "inputTokens": "10", "outputTokens": "5", "cacheReadTokens": "4",
+        "cacheWriteTokens": "0", "amountUsd": "0.01", "priceKind": "Reported",
+        "priceOrigin": "ProviderReported", "incomplete": false}))
+    .unwrap()
+}
+
+const ACTORS: [(&str, PrincipalKind); 8] = [
+    ("user-a", PrincipalKind::Human),
+    ("user-b", PrincipalKind::Human),
+    ("agent-a", PrincipalKind::Agent),
+    ("agent-p", PrincipalKind::Agent),
+    ("reviewer-a", PrincipalKind::Agent),
+    ("agent-t", PrincipalKind::Agent),
+    ("agent-b", PrincipalKind::Agent),
+    ("package-a", PrincipalKind::Package),
+];
+
+struct Fx {
+    h: Harness,
+    store: Arc<SqliteStore>,
+    cases: UseCases,
+    n: Arc<AtomicU64>,
+}
+
+impl Fx {
+    fn new() -> Self {
+        let fx = Self::open(Harness::new(), Arc::new(AtomicU64::new(0)));
+        fx.store
+            .with_writer_connection(move |c| {
+                super::super::conn::db(c.execute_batch(&format!(
+                    "INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
+                     INSERT INTO projects VALUES('project-b','B','Active',1,1,1);
+                     INSERT INTO repositories VALUES('repo-a','/repos/a',1);
+                     INSERT INTO work_items VALUES('root-a','project-a','feature',NULL,NULL,NULL,'Feature A',1,0,3,1,1,'{{}}');
+                     INSERT INTO work_items VALUES('task-a','project-a','task','root-a',NULL,NULL,'Task A',1,0,1,1,1,'{{}}');
+                     INSERT INTO work_items VALUES('root-b','project-b','feature',NULL,NULL,NULL,'Feature B',1,0,1,1,1,'{{}}');
+                     INSERT INTO blobs(digest,byte_count,relative_path,state) VALUES('{DIGEST}',2,'artifacts/aa/{DIGEST}','Present');
+                     INSERT INTO artifacts(id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,current_version_id,state,created_at) VALUES('artifact-a','project-a','root-a','Context',1,'project-a',1,NULL,'Live',1);
+                     INSERT INTO artifact_versions VALUES('version-a','artifact-a',1,'{DIGEST}','application/json',1,NULL,'{{}}');
+                     UPDATE artifacts SET current_version_id='version-a' WHERE id='artifact-a';
+                     INSERT INTO artifacts(id,origin_project_id,origin_work_id,title,revision,current_project_id,scope_revision,current_version_id,state,created_at) VALUES('artifact-b','project-b',NULL,'Other',1,'project-b',1,NULL,'Live',1);
+                     INSERT INTO artifact_versions VALUES('version-b','artifact-b',1,'{DIGEST}','application/json',1,NULL,'{{}}');"
+                )))
+            })
+            .unwrap();
+        fx.write(|tx| {
+            for (a, k) in ACTORS {
+                tx.actors().register(&actor(a), k, a)?;
+            }
+            Ok(())
+        });
+        let user = fx.user();
+        for (who, kind, role, project, tools) in [
+            (
+                "agent-a",
+                PrincipalKind::Agent,
+                Some(AgentRole::Worker),
+                None,
+                None,
+            ),
+            (
+                "agent-p",
+                PrincipalKind::Agent,
+                Some(AgentRole::Worker),
+                Some("project-a"),
+                None,
+            ),
+            (
+                "reviewer-a",
+                PrincipalKind::Agent,
+                Some(AgentRole::CodeReviewer),
+                None,
+                None,
+            ),
+            (
+                "agent-t",
+                PrincipalKind::Agent,
+                Some(AgentRole::Worker),
+                None,
+                Some(vec!["settings".to_owned()]),
+            ),
+            (
+                "agent-b",
+                PrincipalKind::Agent,
+                Some(AgentRole::Worker),
+                Some("project-b"),
+                None,
+            ),
+            ("package-a", PrincipalKind::Package, None, None, None),
+        ] {
+            let by = user.clone();
+            let binding = NewPrincipalBinding {
+                actor: actor(who),
+                kind,
+                role,
+                project_id: project.map(self::project),
+                tool_families: tools,
+                bound_by: actor("user-a"),
+            };
+            fx.write(move |tx| {
+                auth::bind_principal(tx, &by, binding, None)
+                    .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+            });
+        }
+        for op in ["op-b", "op-c"] {
+            fx.write(move |tx| {
+                tx.operations().record_intent(NewOperation {
+                    id: OperationId(id(op)),
+                    root_id: Some(root("root-a")),
+                    assignment_id: None,
+                    capability: "core.read".into(),
+                    schema_version: 1,
+                    args_digest: "d".into(),
+                    payload: json!({}),
+                })
+            });
+        }
+        fx
+    }
+
+    fn open(h: Harness, n: Arc<AtomicU64>) -> Self {
+        let store = Arc::new(h.store());
+        let cases = UseCases::new()
+            .with_sessions(Arc::new(SessionService::new(h.ids.clone())))
+            .with_history(Arc::new(HistoryService::new(h.ids.clone())));
+        Self { h, store, cases, n }
+    }
+    /// A process restart: every handle is dropped, then the store is reopened.
+    fn restart(self) -> Self {
+        let Fx { h, store, cases, n } = self;
+        drop((cases, store));
+        Self::open(h, n)
+    }
+
+    fn ctx(&self, who: &str, kind: PrincipalKind, project: Option<&str>) -> InvocationContext {
+        let info = self.store.info();
+        HostIngress::new(&*self.store)
+            .context(
+                actor(who),
+                kind,
+                id("invocation-1"),
+                id("ui-main"),
+                Counter::new(info.restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_lineage(project.map(self::project), None, None)
+    }
+    fn user(&self) -> InvocationContext {
+        self.ctx("user-a", PrincipalKind::Human, None)
+    }
+    /// An agent working on `root-a` in `project-a`, bound to `session`.
+    fn worker(&self, who: &str, session: &str) -> InvocationContext {
+        self.ctx(who, PrincipalKind::Agent, Some("project-a"))
+            .with_lineage(Some(project("project-a")), Some(root("root-a")), None)
+            .with_session(id(session))
+    }
+    fn write<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
+    ) -> T {
+        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+    }
+    fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
+        read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
+    }
+    fn key(&self) -> String {
+        format!("key-{}", self.n.fetch_add(1, Ordering::SeqCst))
+    }
+    fn authority(&self) -> HostAuthority<'_> {
+        HostAuthority {
+            store: &*self.store,
+            clock: &*self.h.clock,
+            protected_branches: &[],
+        }
+    }
+    fn raw_command(&self, ctx: &InvocationContext, op: &str, frame: Value) -> DomainCommandReply {
+        let authority = self.authority();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*self.store,
+            ids: &*self.h.ids,
+        };
+        self.cases
+            .command(&gateway, ctx, op, frame.to_string().as_bytes())
+            .expect("addressable")
+    }
+    fn command_keyed(
+        &self,
+        ctx: &InvocationContext,
+        op: &str,
+        key: &str,
+        mut body: Value,
+    ) -> DomainCommandReply {
+        body["kind"] = json!(op);
+        self.raw_command(
+            ctx,
+            op,
+            json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key, "body": body}),
+        )
+    }
+    fn command(&self, ctx: &InvocationContext, op: &str, body: Value) -> DomainCommandReply {
+        let key = self.key();
+        self.command_keyed(ctx, op, &key, body)
+    }
+    fn raw_query(&self, ctx: &InvocationContext, op: &str, frame: Value) -> DomainQueryReply {
+        let authority = self.authority();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*self.store,
+            ids: &*self.h.ids,
+        };
+        self.cases
+            .query(&gateway, ctx, op, frame.to_string().as_bytes())
+            .expect("addressable")
+    }
+    fn query(&self, ctx: &InvocationContext, op: &str, mut body: Value) -> DomainQueryReply {
+        body["kind"] = json!(op);
+        self.raw_query(
+            ctx,
+            op,
+            json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-1", "body": body}),
+        )
+    }
+    fn start(&self, ctx: &InvocationContext, scope: Value, root: Option<&str>) -> SessionRecord {
+        let mut body = json!({"scope": scope, "title": "Work chat"});
+        if let Some(r) = root {
+            body["rootId"] = json!(r);
+        }
+        match applied(self.command(ctx, "sessions.start", body)) {
+            OperationResult::SessionsStart { value } => value,
+            other => panic!("{other:?}"),
+        }
+    }
+    fn work_session(&self) -> SessionRecord {
+        self.start(
+            &self.user(),
+            json!({"kind": "Project", "projectId": "project-a"}),
+            Some("root-a"),
+        )
+    }
+    /// A session `session-a` conducted by `agent-a` on `root-a` (recorded scenarios name it).
+    fn seed_session(&self, session: &str, agent: &str, root_id: Option<&str>) {
+        let (session, agent, root_id) = (id(session), actor(agent), root_id.map(self::root));
+        self.write(move |tx| {
+            tx.sessions().insert_session(&StoredSession {
+                conversation_id: id(&format!("conversation-{}", session.as_str())),
+                id: session,
+                agent_id: agent.clone(),
+                project_id: Some(project("project-a")),
+                root_id,
+                title: "Seeded".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: agent,
+                created_at_ms: T0,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })
+        });
+    }
+    fn append(&self, ctx: &InvocationContext, batch: SessionBatch) -> BatchOutcome {
+        SessionWriter {
+            store: &*self.store,
+        }
+        .append(ctx, batch, WriteOptions::default())
+        .expect("append")
+    }
+    fn session(&self, s: &str) -> StoredSession {
+        let s = id(s);
+        self.read(|r| r.sessions().session(&s)).expect("session")
+    }
+    fn transcript(
+        &self,
+        ctx: &InvocationContext,
+        session: &str,
+        after: Option<&str>,
+    ) -> TranscriptPage {
+        let mut frame = json!({"protocol": "1.0-draft.1", "queryId": "q-t", "sessionId": session,
+            "limit": 50});
+        if let Some(a) = after {
+            frame["after"] = json!(a);
+        }
+        match result(self.raw_query(ctx, "sessions.transcript", frame)) {
+            OperationResult::SessionsTranscript { value } => value,
+            other => panic!("{other:?}"),
+        }
+    }
+    fn events(
+        &self,
+        ctx: &InvocationContext,
+        root_id: &str,
+        after: Option<&str>,
+    ) -> DomainQueryReply {
+        let mut q = json!({"kind": "history.events", "rootId": root_id, "limit": 50});
+        if let Some(a) = after {
+            q["after"] = json!(a);
+        }
+        self.raw_query(
+            ctx,
+            "history.events",
+            json!({"protocol": "1.0-draft.1", "queryId": "q-e", "query": q}),
+        )
+    }
+    fn lineage(
+        &self,
+        ctx: &InvocationContext,
+        root_id: &str,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> DomainQueryReply {
+        let mut page = json!({"limit": limit});
+        if let Some(c) = cursor {
+            page["cursor"] = json!(c);
+        }
+        self.query(
+            ctx,
+            "history.work_lineage",
+            json!({"rootId": root_id, "page": page}),
+        )
+    }
+}
+
+fn recorded(reply: DomainCommandReply) -> (DomainDecision, bool) {
+    match reply {
+        CommandReply::Recorded {
+            receipt, replayed, ..
+        } => (receipt.decision, replayed),
+        other => panic!("expected a recorded decision, got {other:?}"),
+    }
+}
+fn applied(reply: DomainCommandReply) -> OperationResult {
+    match recorded(reply).0 {
+        DomainDecision::Applied { result } | DomainDecision::NoChange { result } => result,
+        other => panic!("expected an applied decision, got {other:?}"),
+    }
+}
+fn refused(reply: DomainCommandReply) -> DomainFault {
+    match recorded(reply).0 {
+        DomainDecision::Refused { fault } => fault,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+fn rejected(reply: DomainCommandReply) -> Rejection {
+    match reply {
+        CommandReply::Rejected { code, .. } => code,
+        other => panic!("expected a rejection, got {other:?}"),
+    }
+}
+fn result(reply: DomainQueryReply) -> OperationResult {
+    match reply {
+        DomainQueryReply::Result { result, .. } => result,
+        other => panic!("expected a result, got {other:?}"),
+    }
+}
+fn fault(reply: DomainQueryReply) -> DomainFault {
+    match reply {
+        DomainQueryReply::Rejected { fault, .. } => fault,
+        other => panic!("expected a fault, got {other:?}"),
+    }
+}
+fn kind_of(f: &DomainFault) -> &str {
+    f.target_kind.as_ref().map_or("", |k| k.0.as_str())
+}
+fn accepted(o: BatchOutcome) -> BatchReceipt {
+    match o {
+        BatchOutcome::Accepted(r) => r,
+        other => panic!("expected an accepted batch, got {other:?}"),
+    }
+}
+fn refusal(o: BatchOutcome) -> BatchRefusal {
+    match o {
+        BatchOutcome::Refused(r) => r,
+        other => panic!("expected a refused batch, got {other:?}"),
+    }
+}
+fn lineage_page(reply: DomainQueryReply) -> Page<LineageRecord> {
+    match result(reply) {
+        OperationResult::HistoryWorkLineage { value } => value,
+        other => panic!("{other:?}"),
+    }
+}
+fn kinds(t: &TranscriptPage) -> Vec<String> {
+    t.entries
+        .iter()
+        .map(|e| {
+            serde_json::to_value(&e.body).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+fn calls_and_response(session: &str) -> TranscriptBatch {
+    tbatch(
+        "batch-calls",
+        session,
+        0,
+        1,
+        vec![
+            entry(
+                "c-a",
+                1,
+                json!({"kind": "ToolCallRecorded", "toolCall": call("call:a", 0)}),
+            ),
+            entry(
+                "c-b",
+                2,
+                json!({"kind": "ToolCallRecorded", "toolCall": call("call:b", 1)}),
+            ),
+            entry(
+                "r-b",
+                3,
+                json!({"kind": "ToolResponseRecorded", "call": key("call:b", 1),
+                    "outcome": {"kind": "ApprovalRequired", "approvalId": "approval-a", "operationId": "op-b"}}),
+            ),
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Lifecycle
+
+#[test]
+fn sessions_start_and_end_through_the_gateway_with_receipts() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let start = json!({"scope": {"kind": "Project", "projectId": "project-a"}, "rootId": "root-a",
+        "title": "Plan the feature"});
+    let first = fx.command_keyed(&user, "sessions.start", "start-1", start.clone());
+    let OperationResult::SessionsStart { value: started } = applied(first) else {
+        panic!()
+    };
+    assert_eq!((started.revision.get(), started.closed), (1, false));
+    assert_eq!(started.root_id, Some(root("root-a")));
+    // A retried start (lost reply, restart) replays its receipt: no duplicate session.
+    let fx = fx.restart();
+    let (decision, replayed) =
+        recorded(fx.command_keyed(&user, "sessions.start", "start-1", start));
+    assert!(replayed);
+    let DomainDecision::Applied {
+        result: OperationResult::SessionsStart { value: again },
+    } = decision
+    else {
+        panic!()
+    };
+    assert_eq!(again.id, started.id);
+    let listed = match result(fx.query(
+        &user,
+        "sessions.list",
+        json!({"scope": {"kind": "Workspace"}, "page": {"limit": 50}}),
+    )) {
+        OperationResult::SessionsList { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(listed.items.0.len(), 1);
+
+    // End needs the current revision; ending twice is NoChange; appends after end are refused.
+    let sid = started.id.as_str().to_owned();
+    let stale = refused(fx.command(
+        &user,
+        "sessions.end",
+        json!({"sessionId": sid, "expectedRevision": "9"}),
+    ));
+    assert_eq!(stale.code, DomainErrorCode::RevisionConflict);
+    let OperationResult::SessionsEnd { value: ended } = applied(fx.command(
+        &user,
+        "sessions.end",
+        json!({"sessionId": sid, "expectedRevision": "1"}),
+    )) else {
+        panic!()
+    };
+    assert_eq!((ended.revision.get(), ended.closed), (2, true));
+    let (decision, _) = recorded(fx.command(
+        &user,
+        "sessions.end",
+        json!({"sessionId": sid, "expectedRevision": "2"}),
+    ));
+    assert!(matches!(decision, DomainDecision::NoChange { .. }));
+    let closed = refused(fx.raw_command(
+        &user,
+        "sessions.append_message",
+        json!({"protocol": "1.0-draft.1", "requestKey": "msg-closed", "sessionId": sid,
+            "expectedSessionRevision": "2", "content": [{"kind": "Text", "text": "late"}]}),
+    ));
+    assert_eq!(
+        (closed.code, kind_of(&closed)),
+        (DomainErrorCode::Conflict, SESSION_CLOSED)
+    );
+    let closed_only = match result(fx.query(
+        &user,
+        "sessions.list",
+        json!({"scope": {"kind": "Project", "projectId": "project-a"}, "page": {"limit": 5},
+            "closed": false}),
+    )) {
+        OperationResult::SessionsList { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert!(closed_only.items.0.is_empty());
+    // The session's start and end are lineage of its work.
+    let page = lineage_page(fx.lineage(&user, "root-a", 50, None));
+    let kinds: Vec<&str> = page.items.0.iter().map(|l| l.kind.0.as_str()).collect();
+    assert!(
+        kinds.contains(&"session") && kinds.contains(&"session_end"),
+        "{kinds:?}"
+    );
+}
+
+#[test]
+fn append_message_saves_one_user_message_with_resolved_attachments() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let s = fx.work_session();
+    let sid = s.id.as_str().to_owned();
+    let frame = |key: &str, revision: &str, content: Value| {
+        json!({"protocol": "1.0-draft.1", "requestKey": key, "sessionId": sid,
+            "expectedSessionRevision": revision, "content": content})
+    };
+    let OperationResult::SessionsAppendMessage { value } = applied(fx.raw_command(
+        &user,
+        "sessions.append_message",
+        frame(
+            "m-1",
+            "1",
+            json!([{"kind": "Text", "text": "Hello"}, {"kind": "Attachment", "artifact": art()}]),
+        ),
+    )) else {
+        panic!()
+    };
+    assert_eq!(value.revision.get(), 2);
+    // A stale expected revision is a durable conflict; a reference with another digest, or one
+    // the session's project cannot see, is NotFound and nothing is appended.
+    let stale = refused(fx.raw_command(
+        &user,
+        "sessions.append_message",
+        frame("m-2", "1", json!([{"kind": "Text", "text": "again"}])),
+    ));
+    assert_eq!(stale.code, DomainErrorCode::RevisionConflict);
+    let mut wrong = art();
+    wrong["byteLength"] = json!("3");
+    for bad in [wrong, art_b()] {
+        let f = refused(fx.raw_command(
+            &user,
+            "sessions.append_message",
+            frame(
+                &fx.key(),
+                "2",
+                json!([{"kind": "Attachment", "artifact": bad}]),
+            ),
+        ));
+        assert_eq!(
+            (f.code, kind_of(&f)),
+            (DomainErrorCode::NotFound, "attachment")
+        );
+    }
+    let page = fx.transcript(&user, &sid, None);
+    assert_eq!(kinds(&page), ["UserMessage"]);
+    assert_eq!(page.entries[0].sequence.get(), 1);
+    assert!(!page.has_more);
+    // A public message cannot carry a host notice, a tool result or an epoch change.
+    let session = fx.session(&sid);
+    let notice = tbatch(
+        "notice",
+        &sid,
+        0,
+        session.next_sequence,
+        vec![entry(
+            "n-1",
+            session.next_sequence,
+            json!({"kind": "HostNotice", "source": "screen", "artifact": art()}),
+        )],
+    );
+    let ctx = user.clone();
+    let out = fx.write(move |tx| {
+        append_session_batch(
+            tx,
+            &ctx,
+            &actor("user-a"),
+            &SessionBatch::entries(notice),
+            AppendPath::UserMessage,
+        )
+    });
+    assert!(matches!(refusal(out), BatchRefusal::NotAllowed(_)));
+}
+
+// ---------------------------------------------------------------------------------------------
+// The session writer
+
+#[test]
+fn a_batch_commits_entries_calls_responses_checkpoint_and_usage_together() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    let mut batch = SessionBatch::entries(calls_and_response("session-a"));
+    batch.checkpoint = Some(serde_json::from_value(art()).unwrap());
+    batch.usage = vec![usage("request-a")];
+    let receipt = accepted(fx.append(&worker, batch.clone()));
+    assert_eq!(
+        (
+            receipt.first_sequence,
+            receipt.last_sequence,
+            receipt.next_sequence()
+        ),
+        (1, 3, 4)
+    );
+    let s = fx.session("session-a");
+    assert_eq!(
+        (s.next_sequence, s.checkpoint_sequence, s.revision),
+        (4, 3, 1)
+    );
+    let sid = id("session-a");
+    let (pending, waiting) = fx.read(|r| {
+        Ok((
+            r.sessions().pending_calls(&sid, 10)?,
+            r.sessions().linked_operations(&sid, 10)?,
+        ))
+    });
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].native_call_id, "call:a");
+    assert_eq!(waiting[0].operation_id, Some(OperationId(id("op-b"))));
+    // Duplicate replay returns the original receipt and writes nothing.
+    assert_eq!(
+        fx.append(&worker, batch.clone()),
+        BatchOutcome::Replayed(receipt.clone())
+    );
+    assert_eq!(fx.session("session-a").next_sequence, 4);
+    // A changed payload under the same batch identity is refused.
+    let mut changed = batch;
+    changed.usage.clear();
+    assert_eq!(
+        refusal(fx.append(&worker, changed)),
+        BatchRefusal::PayloadChanged
+    );
+    // Stale and gap sequences are typed refusals.
+    let stale = tbatch("b-stale", "session-a", 0, 3, vec![entry("x", 3, text("x"))]);
+    assert_eq!(
+        refusal(fx.append(&worker, SessionBatch::entries(stale))),
+        BatchRefusal::StaleSequence {
+            expected: 4,
+            presented: 3
+        }
+    );
+    let gap = tbatch("b-gap", "session-a", 0, 6, vec![entry("y", 6, text("y"))]);
+    assert_eq!(
+        refusal(fx.append(&worker, SessionBatch::entries(gap))),
+        BatchRefusal::SequenceGap {
+            expected: 4,
+            presented: 6
+        }
+    );
+    // The usage observation is attributed to the session's work.
+    let usage = match result(fx.query(
+        &fx.user(),
+        "history.tool_usage",
+        json!({"rootId": "root-a", "page": {"limit": 10}}),
+    )) {
+        OperationResult::HistoryToolUsage { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(usage.items.0.len(), 1);
+    assert_eq!(usage.items.0[0].request_id, id("request-a"));
+}
+
+#[test]
+fn a_failed_tail_leaves_no_prefix() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    // A valid call followed by a response to an unknown call, then an unknown reference.
+    let orphan = tbatch(
+        "bad-1",
+        "session-a",
+        0,
+        1,
+        vec![
+            entry(
+                "c-a",
+                1,
+                json!({"kind": "ToolCallRecorded", "toolCall": call("call:a", 0)}),
+            ),
+            entry(
+                "r-x",
+                2,
+                json!({"kind": "ToolResponseRecorded", "call": key("call:x", 5),
+                    "outcome": {"kind": "Failed", "code": "failed"}}),
+            ),
+        ],
+    );
+    assert_eq!(
+        refusal(fx.append(&worker, SessionBatch::entries(orphan))),
+        BatchRefusal::MissingCall
+    );
+    let mut missing = art();
+    missing["versionId"] = json!("version-z");
+    let unknown = tbatch(
+        "bad-2",
+        "session-a",
+        0,
+        1,
+        vec![
+            entry("u-a", 1, text("Hello")),
+            entry(
+                "n-a",
+                2,
+                json!({"kind": "NativeItem", "binding": binding(), "artifact": missing}),
+            ),
+        ],
+    );
+    assert_eq!(
+        refusal(fx.append(&worker, SessionBatch::entries(unknown))),
+        BatchRefusal::UnknownReference("native_item")
+    );
+    let sid = id("session-a");
+    let (entries, pending, batch) = fx.read(|r| {
+        Ok((
+            r.sessions().entries(&sid, 0, 10)?,
+            r.sessions().pending_calls(&sid, 10)?,
+            r.sessions().batch(&id("bad-1"))?,
+        ))
+    });
+    assert!(entries.is_empty() && pending.is_empty() && batch.is_none());
+    assert_eq!(fx.session("session-a").next_sequence, 1);
+}
+
+#[test]
+fn crash_before_and_after_commit() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    let batch = SessionBatch::entries(calls_and_response("session-a"));
+    // Crash before commit: the unit of work dies after appending; nothing remains.
+    let (ctx, b) = (worker.clone(), batch.clone());
+    let crashed = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+        accepted(append_session_batch(
+            tx,
+            &ctx,
+            &actor("agent-a"),
+            &b,
+            AppendPath::Runtime,
+        )?);
+        Err::<(), _>(StorageError::unavailable(
+            Unavailable::Io,
+            "simulated crash",
+        ))
+    });
+    assert!(crashed.is_err());
+    let fx = fx.restart();
+    assert_eq!(fx.session("session-a").next_sequence, 1);
+    let receipt = accepted(fx.append(&worker, batch.clone()));
+    // Crash after commit: the reopened store replays the original receipt; history is intact.
+    let fx = fx.restart();
+    assert_eq!(fx.append(&worker, batch), BatchOutcome::Replayed(receipt));
+    let page = fx.transcript(&fx.user(), "session-a", None);
+    assert_eq!(
+        kinds(&page),
+        [
+            "ToolCallRecorded",
+            "ToolCallRecorded",
+            "ToolResponseRecorded"
+        ]
+    );
+}
+
+#[test]
+fn compaction_adds_an_epoch_and_keeps_the_original_transcript() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    let user = fx.user();
+    accepted(fx.append(
+        &worker,
+        SessionBatch::entries(tbatch(
+            "e0",
+            "session-a",
+            0,
+            1,
+            vec![entry("u-1", 1, text("one")), entry("u-2", 2, text("two"))],
+        )),
+    ));
+    // A different epoch without an explicit boundary, and a boundary inside the epoch, refuse.
+    let implicit = tbatch(
+        "e1-bad",
+        "session-a",
+        1,
+        3,
+        vec![entry("u-3", 3, text("three"))],
+    );
+    assert!(matches!(
+        refusal(fx.append(&worker, SessionBatch::entries(implicit))),
+        BatchRefusal::EpochBoundaryRequired {
+            current: 0,
+            presented: 1
+        }
+    ));
+    let boundary = json!({"kind": "ContextEpochChanged", "previousEpoch": "0", "nextEpoch": "1",
+        "reason": "Compaction", "context": art()});
+    let duplicate = tbatch(
+        "e0-bad",
+        "session-a",
+        0,
+        3,
+        vec![entry("b-0", 3, boundary.clone())],
+    );
+    assert_eq!(
+        refusal(fx.append(&worker, SessionBatch::entries(duplicate))),
+        BatchRefusal::DuplicateBoundary
+    );
+    let mut compaction = SessionBatch::entries(tbatch(
+        "e1",
+        "session-a",
+        1,
+        3,
+        vec![entry("b-1", 3, boundary)],
+    ));
+    compaction.context_sources = (0..3)
+        .map(|i| ContextSourceInput {
+            source_id: id(&format!("source-{i}")),
+            kind: "instruction".into(),
+            source_revision: 1,
+            artifact: (i == 0).then(|| serde_json::from_value(art()).unwrap()),
+            token_estimate: 100,
+            disposition: if i == 2 {
+                SourceDisposition::Omitted
+            } else {
+                SourceDisposition::Included
+            },
+        })
+        .collect();
+    accepted(fx.append(&worker, compaction));
+    let s = fx.session("session-a");
+    assert_eq!((s.context_epoch, s.revision), (1, 2));
+    // The original transcript is still there, entry for entry.
+    let page = fx.transcript(&user, "session-a", None);
+    assert_eq!(
+        kinds(&page),
+        ["UserMessage", "UserMessage", "ContextEpochChanged"]
+    );
+    let sid = id("session-a");
+    let epoch = fx.read(|r| r.sessions().epoch(&sid, 1)).expect("epoch");
+    assert_eq!((epoch.previous_epoch, epoch.sequence), (0, 3));
+    // An old-epoch batch is refused after the switch; late old-bound evidence is kept.
+    let old = tbatch(
+        "e0-late",
+        "session-a",
+        0,
+        4,
+        vec![entry("late", 4, text("late"))],
+    );
+    assert!(matches!(
+        refusal(fx.append(&worker, SessionBatch::entries(old))),
+        BatchRefusal::EpochBoundaryRequired { .. }
+    ));
+    let evidence = tbatch(
+        "e1-evidence",
+        "session-a",
+        1,
+        4,
+        vec![entry(
+            "old-native",
+            4,
+            json!({"kind": "NativeItem", "binding": binding(), "artifact": art()}),
+        )],
+    );
+    accepted(fx.append(&worker, SessionBatch::entries(evidence)));
+    // Briefings and sources are bound to the current epoch.
+    let stale = fault(fx.query(
+        &user,
+        "sessions.context_sources",
+        json!({"sessionId": "session-a", "expectedContextEpoch": "0", "page": {"limit": 10}}),
+    ));
+    assert_eq!(
+        (stale.code, kind_of(&stale)),
+        (DomainErrorCode::SourceChanged, EPOCH_CHANGED)
+    );
+    let sources = match result(fx.query(
+        &user,
+        "sessions.context_sources",
+        json!({"sessionId": "session-a", "expectedContextEpoch": "1", "page": {"limit": 10}}),
+    )) {
+        OperationResult::SessionsContextSources { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let names: Vec<&str> = sources.items.0.iter().map(|s| s.kind.0.as_str()).collect();
+    assert_eq!(names, ["instruction", "instruction", "instruction:omitted"]);
+}
+
+#[test]
+fn operation_updates_are_separate_facts_and_responses_are_written_once() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    accepted(fx.append(
+        &worker,
+        SessionBatch::entries(calls_and_response("session-a")),
+    ));
+    let second = tbatch(
+        "again",
+        "session-a",
+        0,
+        4,
+        vec![entry(
+            "r-b-2",
+            4,
+            json!({"kind": "ToolResponseRecorded", "call": key("call:b", 1),
+                "outcome": {"kind": "Completed", "artifacts": []}}),
+        )],
+    );
+    assert_eq!(
+        refusal(fx.append(&worker, SessionBatch::entries(second))),
+        BatchRefusal::SecondResponse
+    );
+    let update = |op: &str, b: &str| {
+        tbatch(
+            b,
+            "session-a",
+            0,
+            4,
+            vec![entry(
+                b,
+                4,
+                json!({"kind": "OperationUpdate", "operationId": op, "revision": "2", "artifact": art()}),
+            )],
+        )
+    };
+    assert_eq!(
+        refusal(fx.append(&worker, SessionBatch::entries(update("op-z", "u-z")))),
+        BatchRefusal::UnknownOperation(OperationId(id("op-z")))
+    );
+    accepted(fx.append(&worker, SessionBatch::entries(update("op-b", "u-b"))));
+    let page = fx.transcript(&fx.user(), "session-a", None);
+    // The initial ApprovalRequired response is unchanged; the outcome is a later entry.
+    let response = serde_json::to_value(&page.entries[2].body).unwrap();
+    assert_eq!(response["outcome"]["kind"], "ApprovalRequired");
+    assert_eq!(kinds(&page)[3], "OperationUpdate");
+}
+
+// ---------------------------------------------------------------------------------------------
+// History
+
+#[test]
+fn history_pages_are_bounded_scoped_and_cursors_expire() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let agent = fx
+        .ctx("agent-p", PrincipalKind::Agent, Some("project-a"))
+        .with_lineage(Some(project("project-a")), Some(root("root-a")), None);
+    // Commands decided in the work scope carry it into history.
+    for _ in 0..3 {
+        fx.start(
+            &agent,
+            json!({"kind": "Project", "projectId": "project-a"}),
+            Some("root-a"),
+        );
+    }
+    let first = match result(fx.events(&user, "root-a", None)) {
+        OperationResult::HistoryEvents { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(first.items.0.len(), 3);
+    assert!(
+        first
+            .items
+            .0
+            .iter()
+            .all(|e: &Event| e.root_id == Some(root("root-a")) && e.actor_id == actor("agent-p"))
+    );
+    // Lineage in pages of two, in committed-sequence order.
+    let mut cursor = None;
+    let mut seen = Vec::new();
+    loop {
+        let page = lineage_page(fx.lineage(&user, "root-a", 2, cursor.as_deref()));
+        assert!(page.items.0.len() <= 2);
+        seen.extend(page.items.0.iter().map(|l| l.id.as_str().to_owned()));
+        match page.next_cursor {
+            Some(c) => cursor = Some(c.0),
+            None => break,
+        }
+    }
+    // task-a, three session links and three command decisions.
+    assert_eq!(seen.len(), 7, "{seen:?}");
+    let page = lineage_page(fx.lineage(&user, "root-a", 2, None));
+    let c = page.next_cursor.unwrap().0;
+    // Another principal, a changed root scope or a forged cursor cannot continue the list.
+    let other = fx.ctx("user-b", PrincipalKind::Human, None);
+    assert_eq!(
+        fault(fx.lineage(&other, "root-a", 2, Some(&c))).code,
+        DomainErrorCode::CursorExpired
+    );
+    let forged = format!("{}0", &c[..c.len() - 1]);
+    assert_eq!(
+        fault(fx.lineage(&user, "root-a", 2, Some(&forged))).code,
+        DomainErrorCode::CursorExpired
+    );
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute(
+                "UPDATE work_items SET scope_revision=2 WHERE id='root-a'",
+                [],
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        fault(fx.lineage(&user, "root-a", 2, Some(&c))).code,
+        DomainErrorCode::CursorExpired
+    );
+    // A project-b agent does not learn that project-a work exists.
+    let outsider = fx.ctx("agent-b", PrincipalKind::Agent, Some("project-b"));
+    assert_eq!(
+        fault(fx.lineage(&outsider, "root-a", 2, None)).code,
+        DomainErrorCode::NotFound
+    );
+    assert_eq!(
+        fault(fx.events(&outsider, "root-a", None)).code,
+        DomainErrorCode::NotFound
+    );
+    // Revoked authority is refused at once.
+    let by = user.clone();
+    fx.write(move |tx| {
+        let rev = tx
+            .authority()
+            .principal(&actor("agent-p"))?
+            .unwrap()
+            .revision;
+        auth::revoke_principal(tx, &by, &actor("agent-p"), rev)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert_eq!(
+        fault(fx.lineage(&agent, "root-a", 2, None)).code,
+        DomainErrorCode::PermissionDenied
+    );
+}
+
+#[test]
+fn lineage_navigates_from_work_to_sessions_and_tool_actions_and_back() {
+    let fx = Fx::new();
+    let user = fx.user();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    // A work session started by an agent in that work links to its root, and the command that
+    // started it is attached to the root; the seeded runtime session carries the calls.
+    let agent = fx
+        .ctx("agent-p", PrincipalKind::Agent, Some("project-a"))
+        .with_lineage(Some(project("project-a")), Some(root("root-a")), None);
+    let s = fx.start(
+        &agent,
+        json!({"kind": "Project", "projectId": "project-a"}),
+        Some("root-a"),
+    );
+    let worker = fx.worker("agent-a", "session-a");
+    accepted(fx.append(
+        &worker,
+        SessionBatch::entries(calls_and_response("session-a")),
+    ));
+    let page = lineage_page(fx.lineage(&user, "root-a", 50, None));
+    let kinds: Vec<&str> = page.items.0.iter().map(|l| l.kind.0.as_str()).collect();
+    assert_eq!(kinds[0], "task", "{kinds:?}");
+    assert!(
+        kinds.contains(&"session") && kinds.contains(&"command"),
+        "{kinds:?}"
+    );
+    assert_eq!(kinds.iter().filter(|k| **k == "tool_call").count(), 2);
+    assert_eq!(kinds.iter().filter(|k| **k == "tool_response").count(), 1);
+    // From the task, its feature.
+    let task = lineage_page(fx.lineage(&user, "task-a", 50, None));
+    assert_eq!(task.items.0[0].kind.0, "parent_feature");
+    assert_eq!(task.items.0[0].related_id, id("root-a"));
+    // From the session (and from a tool call entry) back to the work.
+    let back = s.id.clone();
+    let links = fx.read(|r| r.sessions().links_to("session", back.as_str(), 10));
+    assert_eq!(links[0].root_id, root("root-a"));
+    let call_links = fx.read(|r| r.sessions().links_to("transcript_entry", "c-a", 10));
+    assert_eq!(
+        (call_links[0].root_id.clone(), call_links[0].kind.as_str()),
+        (root("root-a"), "tool_call")
+    );
+    let OperationResult::SessionsGet { value } =
+        result(fx.query(&user, "sessions.get", json!({"sessionId": s.id.as_str()})))
+    else {
+        panic!()
+    };
+    assert_eq!(value.root_id, Some(root("root-a")));
+}
+
+#[test]
+fn corrections_preserve_prior_records() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let git = |hex: char, supersedes: Option<Id>| NewHistoryLink {
+        root_id: root("root-a"),
+        kind: LinkKind::PullRequest,
+        git: Some(GitFacts {
+            repository_id: id("repo-a"),
+            worktree_id: None,
+            branch: Some("feature/a".into()),
+            pull_request_url: Some("https://example.test/pr/1".into()),
+            head: serde_json::from_value(
+                json!({"format": "Sha1", "hex": hex.to_string().repeat(40)}),
+            )
+            .unwrap(),
+        }),
+        artifact: None,
+        target: None,
+        summary: "Pull request opened".into(),
+        supersedes,
+    };
+    let ctx = user.clone();
+    let first = fx.write(move |tx| Ok(record_link(tx, &ctx, git('a', None))?.expect("recorded")));
+    let ctx = user.clone();
+    let prior = first.id.clone();
+    let second =
+        fx.write(move |tx| Ok(record_link(tx, &ctx, git('b', Some(prior)))?.expect("recorded")));
+    let ctx = user.clone();
+    let evidence = fx.write(move |tx| {
+        Ok(record_link(
+            tx,
+            &ctx,
+            NewHistoryLink {
+                root_id: root("root-a"),
+                kind: LinkKind::Evidence,
+                git: None,
+                artifact: Some(serde_json::from_value(art()).unwrap()),
+                target: None,
+                summary: "Test run".into(),
+                supersedes: None,
+            },
+        )?
+        .expect("recorded"))
+    });
+    let ctx = user.clone();
+    let reversed = evidence.id.clone();
+    fx.write(move |tx| {
+        Ok(record_link(
+            tx,
+            &ctx,
+            NewHistoryLink {
+                root_id: root("root-a"),
+                kind: LinkKind::Correction,
+                git: None,
+                artifact: None,
+                target: None,
+                summary: "Run was against the wrong head".into(),
+                supersedes: Some(reversed),
+            },
+        )?
+        .expect("recorded"))
+    });
+    // Evidence from another project cannot be linked.
+    let ctx = user.clone();
+    let foreign = fx.write(move |tx| {
+        record_link(
+            tx,
+            &ctx,
+            NewHistoryLink {
+                root_id: root("root-a"),
+                kind: LinkKind::Evidence,
+                git: None,
+                artifact: Some(serde_json::from_value(art_b()).unwrap()),
+                target: None,
+                summary: "Foreign".into(),
+                supersedes: None,
+            },
+        )
+    });
+    assert!(foreign.is_err());
+    let git_links = match result(fx.query(
+        &user,
+        "history.git_links",
+        json!({"rootId": "root-a", "page": {"limit": 10}}),
+    )) {
+        OperationResult::HistoryGitLinks { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let heads: Vec<&str> = git_links
+        .items
+        .0
+        .iter()
+        .map(|g: &GitLink| g.head.hex.as_str())
+        .collect();
+    assert_eq!(heads, ["a".repeat(40), "b".repeat(40)]);
+    let evidence_links = match result(fx.query(
+        &user,
+        "history.evidence_links",
+        json!({"rootId": "root-a", "page": {"limit": 10}}),
+    )) {
+        OperationResult::HistoryEvidenceLinks { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(evidence_links.items.0.len(), 1);
+    assert_eq!(evidence_links.items.0[0].id, evidence.id);
+    let _: &EvidenceLink = &evidence_links.items.0[0];
+    let lineage = lineage_page(fx.lineage(&user, "root-a", 50, None));
+    let correction = lineage
+        .items
+        .0
+        .iter()
+        .find(|l| l.kind.0 == "correction")
+        .unwrap();
+    assert_eq!(correction.parent_id, Some(evidence.id.clone()));
+    let replacement = lineage.items.0.iter().find(|l| l.id == second.id).unwrap();
+    assert_eq!(replacement.parent_id, Some(first.id.clone()));
+    assert!(lineage.items.0.iter().any(|l| l.id == first.id));
+}
+
+#[test]
+fn operation_status_and_command_receipts_are_scoped() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let status = |ctx: &InvocationContext, op: &str| {
+        fx.raw_query(
+            ctx,
+            "history.operation_status",
+            json!({"protocol": "1.0-draft.1", "queryId": "q-o",
+                "query": {"kind": "history.operation_status", "operationId": op}}),
+        )
+    };
+    let OperationResult::HistoryOperationStatus { value } = result(status(&user, "op-b")) else {
+        panic!()
+    };
+    assert_eq!(
+        value.state,
+        devworks_core::protocol::OperationState::IntentRecorded
+    );
+    let outsider = fx.ctx("agent-b", PrincipalKind::Agent, Some("project-b"));
+    assert_eq!(
+        fault(status(&outsider, "op-b")).code,
+        DomainErrorCode::NotFound
+    );
+
+    let receipt = |ctx: &InvocationContext, key: &str| {
+        fx.raw_query(
+            ctx,
+            "history.command_receipt",
+            json!({"protocol": "1.0-draft.1", "queryId": "q-r",
+                "query": {"kind": "history.command_receipt", "requestKey": key}}),
+        )
+    };
+    let OperationResult::HistoryCommandReceipt { value } = result(receipt(&user, "never")) else {
+        panic!()
+    };
+    assert!(matches!(value.state, ReceiptLookupState::NotFound));
+    fx.command_keyed(
+        &user,
+        "sessions.start",
+        "start-r",
+        json!({"scope": {"kind": "Workspace"}, "title": "Home"}),
+    );
+    // The receipt exists, but the contract's Recorded state needs a durable reply artifact,
+    // which receipts do not have: reported unavailable, never guessed.
+    let f = fault(receipt(&user, "start-r"));
+    assert_eq!(
+        (f.code, kind_of(&f)),
+        (DomainErrorCode::ViewUnavailable, RECEIPT_REPLY_UNAVAILABLE)
+    );
+    // Another principal's lookup of the same key is its own (absent) receipt.
+    let other = fx.ctx("user-b", PrincipalKind::Human, None);
+    let OperationResult::HistoryCommandReceipt { value } = result(receipt(&other, "start-r"))
+    else {
+        panic!()
+    };
+    assert!(matches!(value.state, ReceiptLookupState::NotFound));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Authority and scope
+
+#[test]
+fn reviewer_and_agent_scope_denials() {
+    let fx = Fx::new();
+    let s = fx.work_session();
+    let sid = s.id.as_str().to_owned();
+    let workspace = json!({"scope": {"kind": "Workspace"}, "title": "x"});
+    // A code reviewer reads but never writes, under any profile.
+    let reviewer = fx.ctx("reviewer-a", PrincipalKind::Agent, None);
+    assert_eq!(
+        rejected(fx.command(&reviewer, "sessions.start", workspace.clone())),
+        Rejection::PermissionDenied
+    );
+    result(fx.query(&reviewer, "sessions.get", json!({"sessionId": sid})));
+    // An agent without the sessions family selected is refused.
+    let tools = fx.ctx("agent-t", PrincipalKind::Agent, None);
+    let f = fault(fx.query(&tools, "sessions.get", json!({"sessionId": sid})));
+    assert_eq!(kind_of(&f), "authority:ToolNotSelected");
+    // A project-b agent cannot see or act on project-a sessions, or open a Home session.
+    let outsider = fx.ctx("agent-b", PrincipalKind::Agent, Some("project-b"));
+    assert_eq!(
+        fault(fx.query(&outsider, "sessions.get", json!({"sessionId": sid}))).code,
+        DomainErrorCode::NotFound
+    );
+    let f = fault(fx.query(
+        &outsider,
+        "sessions.list",
+        json!({"scope": {"kind": "Project", "projectId": "project-a"}, "page": {"limit": 5}}),
+    ));
+    assert_eq!(f.code, DomainErrorCode::PermissionDenied);
+    assert_eq!(
+        refused(fx.command(&outsider, "sessions.start", workspace)).code,
+        DomainErrorCode::PermissionDenied
+    );
+    let f = refused(fx.command(
+        &outsider,
+        "sessions.end",
+        json!({"sessionId": sid, "expectedRevision": "1"}),
+    ));
+    assert_eq!(f.code, DomainErrorCode::NotFound);
+    // The session writer accepts only the host runtime for the bound session's agent.
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let batch = || {
+        SessionBatch::entries(tbatch(
+            "w-1",
+            "session-a",
+            0,
+            1,
+            vec![entry("w", 1, text("w"))],
+        ))
+    };
+    let package = fx
+        .ctx("package-a", PrincipalKind::Package, Some("project-a"))
+        .with_session(id("session-a"));
+    assert_eq!(
+        refusal(fx.append(&package, batch())),
+        BatchRefusal::Unauthorized("HostOnly")
+    );
+    let foreign = fx.worker("agent-p", "session-a");
+    assert_eq!(
+        refusal(fx.append(&foreign, batch())),
+        BatchRefusal::Unauthorized("NotSessionAgent")
+    );
+    let unbound = fx.worker("agent-a", "session-other");
+    assert_eq!(
+        refusal(fx.append(&unbound, batch())),
+        BatchRefusal::Unauthorized("ForeignSession")
+    );
+    let worker = fx.worker("agent-a", "session-a");
+    let receipt = accepted(fx.append(&worker, batch()));
+    let by = fx.user();
+    fx.write(move |tx| {
+        let rev = tx
+            .authority()
+            .principal(&actor("agent-a"))?
+            .unwrap()
+            .revision;
+        auth::revoke_principal(tx, &by, &actor("agent-a"), rev)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    let next = SessionBatch::entries(tbatch(
+        "w-2",
+        "session-a",
+        0,
+        2,
+        vec![entry("w2", 2, text("w"))],
+    ));
+    assert_eq!(
+        refusal(fx.append(&worker, next)),
+        BatchRefusal::Unauthorized("PrincipalRevoked")
+    );
+    // A revoked writer may still recover its own committed receipt.
+    assert_eq!(fx.append(&worker, batch()), BatchOutcome::Replayed(receipt));
+}
+
+#[test]
+fn the_briefing_is_bounded_and_continues_through_context_sources() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    let mut batch = SessionBatch::entries(calls_and_response("session-a"));
+    batch.checkpoint = Some(serde_json::from_value(art()).unwrap());
+    batch.context_sources = (0..40)
+        .map(|i| ContextSourceInput {
+            source_id: id(&format!("source-{i}")),
+            kind: "retrieved".into(),
+            source_revision: 1,
+            artifact: None,
+            token_estimate: 10,
+            disposition: SourceDisposition::Included,
+        })
+        .collect();
+    accepted(fx.append(&worker, batch));
+    let user = fx.user();
+    let brief = match result(fx.query(
+        &user,
+        "sessions.briefing",
+        json!({"sessionId": "session-a", "expectedContextEpoch": "0"}),
+    )) {
+        OperationResult::SessionsBriefing { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(brief.items.0.len(), BRIEFING_LIMIT);
+    let names: Vec<&str> = brief
+        .items
+        .0
+        .iter()
+        .map(|s: &ContextSource| s.kind.0.as_str())
+        .collect();
+    assert_eq!(
+        &names[..4],
+        [
+            "work:feature",
+            "checkpoint",
+            "pending_call:core/read",
+            "operation:ApprovalRequired"
+        ]
+    );
+    let rest = match result(fx.query(
+        &user,
+        "sessions.context_sources",
+        json!({"sessionId": "session-a", "expectedContextEpoch": "0",
+            "page": {"limit": 50, "cursor": brief.next_cursor.unwrap().0}}),
+    )) {
+        OperationResult::SessionsContextSources { value } => value,
+        other => panic!("{other:?}"),
+    };
+    // 28 recorded sources fit in the briefing; the remaining 12 continue here.
+    assert_eq!(rest.items.0.len(), 12);
+    assert!(!rest.has_more);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Retained CodeGraph entries and migration
+
+#[test]
+fn retained_codegraph_entries_map_to_registered_operations() {
+    let fx = Fx::new();
+    let plan: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs/architecture/implementation-plan.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let slices = plan["slices"].as_array().unwrap();
+    let slice = slices.iter().find(|s| s["key"] == "sessions").unwrap();
+    let owned: Vec<&str> = slice["ownedOperations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o.as_str().unwrap())
+        .collect();
+    let entries: std::collections::HashMap<&str, &Value> = plan["sourceEntries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["id"].as_str().unwrap(), e))
+        .collect();
+    let ids = slice["sourceEntryIds"].as_array().unwrap();
+    assert_eq!(ids.len(), 37);
+    for entry_id in ids {
+        let e = entries[entry_id.as_str().unwrap()];
+        assert!(
+            matches!(e["disposition"].as_str(), Some("native" | "adapt")),
+            "{entry_id}"
+        );
+        for op in e["targetOperations"].as_array().unwrap() {
+            let op = op.as_str().unwrap();
+            if owned.contains(&op) {
+                assert!(
+                    fx.cases.has_query(op) || fx.cases.has_command(op),
+                    "{op} not registered"
+                );
+            } else {
+                // Owned by another item (run control, usage, work views): it is not advertised
+                // here, and that item is recorded as its owner.
+                assert!(!fx.cases.has_query(op) && !fx.cases.has_command(op), "{op}");
+                assert!(
+                    slices.iter().any(|s| s["key"] != "sessions"
+                        && s["ownedOperations"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|o| o == op)),
+                    "{op} has no owner"
+                );
+            }
+        }
+    }
+    for op in owned {
+        assert!(fx.cases.has_query(op) || fx.cases.has_command(op), "{op}");
+    }
+}
+
+#[test]
+fn the_session_migration_is_recorded_and_keeps_the_floors() {
+    let m = MIGRATIONS
+        .iter()
+        .find(|m| m.version == 7)
+        .expect("session migration");
+    assert_eq!(
+        m.checksum(),
+        MIGRATION_0007_SHA256,
+        "an applied migration was edited"
+    );
+    assert_eq!((m.minimum_reader, m.minimum_writer), (5, 5));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Recorded native scenarios (docs/architecture/contracts/provider-package-scenarios.json)
+
+fn scenarios() -> Vec<Value> {
+    serde_json::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs/architecture/contracts/provider-package-scenarios.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn recorded_transcript_scenarios_replay_through_the_session_writer() {
+    let cases: Vec<Value> = scenarios()
+        .into_iter()
+        .filter(|s| s["kind"] == "Transcript")
+        .collect();
+    assert_eq!(cases.len(), 4);
+    for case in cases {
+        let fx = Fx::new();
+        fx.seed_session("session-a", "agent-a", Some("root-a"));
+        let worker = fx.worker("agent-a", "session-a");
+        let batches = case["batches"].as_array().unwrap();
+        let expected = case["expected"].as_array().unwrap();
+        let next = case["expectedNext"].as_array().unwrap();
+        assert_eq!(batches.len(), expected.len());
+        for (i, b) in batches.iter().enumerate() {
+            let batch: TranscriptBatch = serde_json::from_value(b.clone()).unwrap();
+            let state = match fx.append(&worker, SessionBatch::entries(batch)) {
+                BatchOutcome::Accepted(_) => "Accepted",
+                BatchOutcome::Replayed(_) => "Replayed",
+                BatchOutcome::Refused(_) => "Rejected",
+            };
+            assert_eq!(state, expected[i], "{} step {i}", case["id"]);
+            assert_eq!(
+                fx.session("session-a").next_sequence,
+                next[i].as_i64().unwrap(),
+                "{} step {i}",
+                case["id"]
+            );
+        }
+        // What was accepted is exactly what the durable transcript holds, in order.
+        let page = fx.transcript(&fx.user(), "session-a", None);
+        assert_eq!(
+            page.entries.len() as i64,
+            fx.session("session-a").next_sequence - 1
+        );
+    }
+}
+
+#[test]
+fn recorded_stream_scenarios_decide_what_becomes_durable() {
+    let cases: Vec<Value> = scenarios()
+        .into_iter()
+        .filter(|s| s["kind"] == "Stream")
+        .collect();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let mut turn = TurnAssembler::new();
+        let events = case["events"].as_array().unwrap();
+        for (i, e) in events.iter().enumerate() {
+            let event: ProviderEvent = serde_json::from_value(e.clone()).unwrap();
+            let ok = turn.accept(&event).is_ok();
+            assert_eq!(ok, case["expectedAccept"][i], "{} step {i}", case["id"]);
+            assert_eq!(
+                turn.tools_ready(),
+                case["expectedReady"][i],
+                "{} step {i}",
+                case["id"]
+            );
+        }
+        let bodies = turn.entries();
+        if bodies.is_empty() {
+            // Nothing accepted (foreign opaque state): nothing to persist.
+            assert!(
+                case["expectedAccept"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|a| a == false)
+            );
+            continue;
+        }
+        let fx = Fx::new();
+        fx.seed_session("session-a", "agent-a", Some("root-a"));
+        let worker = fx.worker("agent-a", "session-a");
+        let mut n = 0;
+        let batch = batch_of(&id("session-a"), id("turn-1"), 0, 1, bodies, || {
+            n += 1;
+            id(&format!("e-{n}"))
+        });
+        accepted(fx.append(&worker, SessionBatch::entries(batch)));
+        let page = fx.transcript(&fx.user(), "session-a", None);
+        let calls: Vec<String> = page
+            .entries
+            .iter()
+            .filter_map(|e| match &e.body {
+                TranscriptBody::ToolCallRecorded { tool_call } => {
+                    Some(tool_call.call.native_call_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let ready = turn.tools_ready();
+        if ready {
+            // Assembled in recorded ordinal order, whatever order they arrived in.
+            assert_eq!(calls, ["call:a", "call:b"], "{}", case["id"]);
+        } else {
+            assert!(
+                calls.is_empty(),
+                "{}: unready calls must not become durable",
+                case["id"]
+            );
+        }
+        let TranscriptBody::AssistantAttempt { interrupted, .. } = &page.entries[0].body else {
+            panic!("{}", case["id"])
+        };
+        let completed = matches!(
+            turn.terminal(),
+            Some(
+                devworks_core::protocol::provider::TurnOutcome::Completed
+                    | devworks_core::protocol::provider::TurnOutcome::ToolCallsReady
+            )
+        );
+        assert_eq!(*interrupted, !completed, "{}", case["id"]);
+    }
+}
+
+#[test]
+fn long_streamed_text_is_persisted_as_ordered_bounded_chunks() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    let mut turn = TurnAssembler::new();
+    let delta = "é".repeat(20_000);
+    for i in 1..=4 {
+        let e: ProviderEvent = serde_json::from_value(json!({"protocol": "1.0-draft.1",
+            "requestId": "request-a", "attemptId": "attempt-a", "binding": binding(),
+            "sequence": i.to_string(), "event": {"kind": "TextDelta", "blockIndex": "0", "text": delta}}))
+        .unwrap();
+        turn.accept(&e).unwrap();
+    }
+    // Before the batch, the streamed text is only a preview: nothing durable moved.
+    assert_eq!(fx.session("session-a").next_sequence, 1);
+    let bodies = turn.entries();
+    let mut n = 0;
+    let batch = batch_of(&id("session-a"), id("turn-1"), 0, 1, bodies, || {
+        n += 1;
+        id(&format!("e-{n}"))
+    });
+    accepted(fx.append(&worker, SessionBatch::entries(batch)));
+    let page = fx.transcript(&fx.user(), "session-a", None);
+    let mut joined = String::new();
+    for e in &page.entries {
+        let TranscriptBody::AssistantAttempt {
+            visible_text,
+            interrupted,
+            ..
+        } = &e.body
+        else {
+            panic!()
+        };
+        assert!(visible_text.len() <= TEXT_CHUNK && *interrupted);
+        joined.push_str(visible_text);
+    }
+    assert!(page.entries.len() > 1);
+    assert_eq!(joined, delta.repeat(4));
+}
+
+#[test]
+fn a_command_decision_keeps_resolvable_work_scope_and_is_never_lost_without_it() {
+    let fx = Fx::new();
+    let scoped = fx
+        .user()
+        .with_lineage(Some(project("project-a")), Some(root("root-a")), None);
+    let start = json!({"scope": {"kind": "Project", "projectId": "project-a"}, "title": "t"});
+    fx.command(&scoped, "sessions.start", start.clone());
+    // A lineage the store cannot resolve leaves the decision unattached, still recorded.
+    let dangling =
+        fx.user()
+            .with_lineage(Some(project("project-a")), Some(root("root-gone")), None);
+    fx.command(&dangling, "sessions.start", start);
+    let decided = fx.read(|r| {
+        Ok(r.history()
+            .page(&EventFilter::All, 0, 500)?
+            .events
+            .into_iter()
+            .filter(|e| e.kind == "CommandDecided")
+            .map(|e| (e.project_id, e.root_id))
+            .collect::<Vec<_>>())
+    });
+    let n = decided.len();
+    assert_eq!(
+        decided[n - 2..],
+        [
+            (Some(project("project-a")), Some(root("root-a"))),
+            (None, None)
+        ]
+    );
+}

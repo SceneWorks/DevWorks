@@ -344,6 +344,9 @@ impl ReadSnapshot for MemSnapshot {
     fn artifacts(&self) -> &dyn ArtifactRead {
         &self.unsupported
     }
+    fn sessions(&self) -> &dyn SessionRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -403,6 +406,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
+        &mut self.unsupported
+    }
+    fn sessions(&mut self) -> &mut dyn SessionRepository {
         &mut self.unsupported
     }
 }
@@ -969,6 +975,134 @@ impl ArtifactRepository for Unsupported {
         _: &str,
         _: Option<&str>,
     ) -> Result<bool, StorageError> {
+        nope()
+    }
+}
+impl SessionRead for Unsupported {
+    fn work_root(&self, _: &RootId) -> Result<Option<WorkRoot>, StorageError> {
+        nope()
+    }
+    fn session(&self, _: &Id) -> Result<Option<StoredSession>, StorageError> {
+        nope()
+    }
+    fn sessions(
+        &self,
+        _: &SessionScope,
+        _: Option<bool>,
+        _: Option<&SessionPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredSession>, StorageError> {
+        nope()
+    }
+    fn entries(&self, _: &Id, _: i64, _: u16) -> Result<Vec<StoredEntry>, StorageError> {
+        nope()
+    }
+    fn entry_exists(&self, _: &Id, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn batch(&self, _: &Id) -> Result<Option<StoredBatch>, StorageError> {
+        nope()
+    }
+    fn tool_call(&self, _: &Id, _: &Id, _: &str) -> Result<Option<StoredToolCall>, StorageError> {
+        nope()
+    }
+    fn ordinal_taken(&self, _: &Id, _: &Id, _: i64) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn pending_calls(&self, _: &Id, _: u16) -> Result<Vec<StoredToolCall>, StorageError> {
+        nope()
+    }
+    fn linked_operations(&self, _: &Id, _: u16) -> Result<Vec<StoredToolCall>, StorageError> {
+        nope()
+    }
+    fn epoch(&self, _: &Id, _: i64) -> Result<Option<StoredEpoch>, StorageError> {
+        nope()
+    }
+    fn context_sources(
+        &self,
+        _: &Id,
+        _: i64,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredContextSource>, StorageError> {
+        nope()
+    }
+    fn latest_checkpoint(&self, _: &Id) -> Result<Option<StoredCheckpoint>, StorageError> {
+        nope()
+    }
+    fn usage(
+        &self,
+        _: &RootId,
+        _: Option<&SequenceKey>,
+        _: u16,
+    ) -> Result<Vec<(SequenceKey, StoredUsage)>, StorageError> {
+        nope()
+    }
+    fn link(&self, _: &Id) -> Result<Option<StoredLink>, StorageError> {
+        nope()
+    }
+    fn links(
+        &self,
+        _: &RootId,
+        _: &[&str],
+        _: Option<&SequenceKey>,
+        _: u16,
+    ) -> Result<Vec<StoredLink>, StorageError> {
+        nope()
+    }
+    fn links_to(&self, _: &str, _: &str, _: u16) -> Result<Vec<StoredLink>, StorageError> {
+        nope()
+    }
+    fn lineage(
+        &self,
+        _: &RootId,
+        _: Option<&SequenceKey>,
+        _: u16,
+    ) -> Result<Vec<LineageRow>, StorageError> {
+        nope()
+    }
+    fn root_events(
+        &self,
+        _: &RootId,
+        _: &[&str],
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<EventRecord>, StorageError> {
+        nope()
+    }
+}
+impl SessionRepository for Unsupported {
+    fn insert_session(&mut self, _: &StoredSession) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_session(&mut self, _: &StoredSession) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_entry(&mut self, _: &StoredEntry) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_batch(&mut self, _: &StoredBatch) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_tool_call(&mut self, _: &StoredToolCall) -> Result<(), StorageError> {
+        nope()
+    }
+    fn record_response(&mut self, _: &StoredToolCall) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_epoch(&mut self, _: &StoredEpoch) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_context_source(&mut self, _: &StoredContextSource) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_checkpoint(&mut self, _: &StoredCheckpoint) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_usage(&mut self, _: &StoredUsage) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_link(&mut self, _: &StoredLink) -> Result<(), StorageError> {
         nope()
     }
 }

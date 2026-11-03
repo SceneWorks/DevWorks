@@ -80,7 +80,22 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_writer: 5,
         sql: include_str!("migrations/0006_artifacts.sql"),
     },
+    // Additive columns (all defaulted or nullable), tables and indexes. It keeps the highest
+    // floors so far (5/5), because applying a migration overwrites both store floors and a lower
+    // value would re-admit builds that migration 5 refuses. No higher floor is needed: builds 6
+    // and older never read or write sessions, transcript entries or any of the new tables (no
+    // earlier build has a session repository), and the defaulted columns leave their results
+    // unchanged.
+    Migration {
+        version: 7,
+        minimum_reader: 5,
+        minimum_writer: 5,
+        sql: include_str!("migrations/0007_sessions.sql"),
+    },
 ];
+/// Recorded checksum of migration 7; a test fails if the shipped text changes.
+pub const MIGRATION_0007_SHA256: &str =
+    "4db48098da3df6c1dbc88b6241909dc3068507be43127d2d3a332caf88bd362d";
 /// Recorded checksum of migration 6; a test fails if the shipped text changes.
 pub const MIGRATION_0006_SHA256: &str =
     "7a2ebf3518bed204be5592dcdee4ad203b1971efc421c26535a1a6478571e768";

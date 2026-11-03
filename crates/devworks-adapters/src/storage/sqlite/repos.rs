@@ -232,8 +232,8 @@ fn lookup_receipt(
     }
 }
 
-const EVENT_COLUMNS: &str = "seq,id,actor_id,project_id,root_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json";
-fn event_row(r: &Row<'_>) -> rusqlite::Result<[Option<String>; 12]> {
+pub(crate) const EVENT_COLUMNS: &str = "seq,id,actor_id,project_id,root_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json";
+pub(crate) fn event_row(r: &Row<'_>) -> rusqlite::Result<[Option<String>; 12]> {
     let mut out: [Option<String>; 12] = Default::default();
     for (i, slot) in out.iter_mut().enumerate() {
         *slot = match r.get_ref(i)? {
@@ -244,7 +244,7 @@ fn event_row(r: &Row<'_>) -> rusqlite::Result<[Option<String>; 12]> {
     }
     Ok(out)
 }
-fn event_of(raw: [Option<String>; 12]) -> Result<EventRecord, StorageError> {
+pub(crate) fn event_of(raw: [Option<String>; 12]) -> Result<EventRecord, StorageError> {
     let [
         seq,
         id,
@@ -980,6 +980,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn artifacts(&self) -> &dyn ArtifactRead {
         self
     }
+    fn sessions(&self) -> &dyn SessionRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1176,6 +1179,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
+        self
+    }
+    fn sessions(&mut self) -> &mut dyn SessionRepository {
         self
     }
 }

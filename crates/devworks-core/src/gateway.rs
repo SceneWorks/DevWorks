@@ -31,7 +31,8 @@ use crate::ports::storage::{
     EventPage, EventRecord, GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead,
     LedgerEntry, NewAuthorityGrant, NewEvent, NewGrant, NewPrincipalBinding, OperationJournal,
     PackageHandlerLedger, PrincipalBinding, ReadOptions, RegisteredRepository, RevisionConflict,
-    Savepoint, StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
+    Savepoint, SessionRepository, StorageError, StoreInfo, WriteOptions, WriteTransaction,
+    read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
@@ -784,11 +785,14 @@ fn unit_of_work(
     let event_id = EventId(tx.new_id(IdKind::Event));
     let accepted_at_ms = crate::protocol::Counter::new(tx.now_ms())
         .map_err(|_| StorageError::InvalidRecord("transaction clock before epoch".into()))?;
-    let sequence = tx.history().append(NewEvent {
-        id: event_id,
+    // The decision carries the invocation's host-resolved work scope (HISTORY-02), so a work
+    // item's history shows the commands decided in it. A lineage the store cannot resolve (a
+    // root or project that does not exist) keeps the fact unattached rather than losing it.
+    let decided_event = |lineage: bool| NewEvent {
+        id: event_id.clone(),
         actor: ctx.principal().clone(),
-        project_id: None,
-        root_id: None,
+        project_id: lineage.then(|| ctx.project_id().cloned()).flatten(),
+        root_id: lineage.then(|| ctx.root_id().cloned()).flatten(),
         operation_id: decided.operation_id.clone(),
         aggregate_kind: "command".into(),
         aggregate_id: command_id.0.as_str().to_owned(),
@@ -800,7 +804,23 @@ fn unit_of_work(
             "requestDigest": command.fingerprint.as_str(),
             "decision": decision_kind(&decided.decision),
         }),
-    })?;
+    };
+    let sequence = if ctx.project_id().is_some() || ctx.root_id().is_some() {
+        let savepoint = tx.savepoint()?;
+        match tx.history().append(decided_event(true)) {
+            Ok(seq) => {
+                tx.release(savepoint)?;
+                seq
+            }
+            Err(StorageError::NotFound { .. }) => {
+                tx.rollback_to(savepoint)?;
+                tx.history().append(decided_event(false))?
+            }
+            Err(e) => return Err(e),
+        }
+    } else {
+        tx.history().append(decided_event(false))?
+    };
     let committed_sequence = Revision::new(sequence)
         .map_err(|_| StorageError::InvalidRecord("non-positive committed sequence".into()))?;
     let decision = decided.decision;
@@ -1023,6 +1043,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         self.inner.get_mut().artifacts()
+    }
+    fn sessions(&mut self) -> &mut dyn SessionRepository {
+        self.inner.get_mut().sessions()
     }
 }
 

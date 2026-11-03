@@ -28,6 +28,7 @@ mod configuration;
 mod conn;
 mod migrations;
 mod repos;
+mod sessions;
 mod writer;
 
 #[cfg(test)]
@@ -36,7 +37,7 @@ mod tests;
 pub use conn::{EXPECTED_VEC_VERSION, EffectiveSettings, MIN_SQLITE_VERSION};
 pub use migrations::{
     MIGRATION_0001_SHA256, MIGRATION_0002_SHA256, MIGRATION_0003_SHA256, MIGRATION_0004_SHA256,
-    MIGRATION_0005_SHA256, MIGRATION_0006_SHA256, MIGRATIONS, Migration,
+    MIGRATION_0005_SHA256, MIGRATION_0006_SHA256, MIGRATION_0007_SHA256, MIGRATIONS, Migration,
 };
 
 use conn::{Role, db};
