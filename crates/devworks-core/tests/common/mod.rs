@@ -1,0 +1,670 @@
+//! Deterministic port substitutes for gateway tests. They only store and count; every admission,
+//! replay and conflict decision under test is made by the production gateway. The in-memory
+//! store serializes writes under one lock (a sole write owner) and keeps receipts, history and
+//! actors; the journal, queue and grant repositories are exercised against real SQLite in
+//! `devworks-adapters`.
+#![allow(dead_code, clippy::result_large_err)]
+
+use devworks_core::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
+use devworks_core::gateway::{AdmittedCommand, AdmittedQuery, Gateway};
+use devworks_core::ports::storage::*;
+use devworks_core::ports::*;
+use devworks_core::protocol::results::OperationResult;
+use devworks_core::protocol::*;
+use devworks_core::registry::{EffectClass, SchemaRevision};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+pub fn id(s: &str) -> Id {
+    Id::new(s).expect("valid fixture id")
+}
+pub fn revision(n: i64) -> Revision {
+    Revision::new(n).expect("positive")
+}
+
+pub fn context(actor: &str) -> InvocationContext {
+    context_in(actor, "ui-main", 0)
+}
+pub fn context_in(actor: &str, namespace: &str, epoch: i64) -> InvocationContext {
+    InvocationContext::new(
+        ActorId(id(actor)),
+        PrincipalKind::Human,
+        id("invocation-1"),
+        id(namespace),
+        StoreId(id("store-a")),
+        Counter::new(epoch).expect("epoch"),
+        revision(1),
+    )
+}
+
+/// Thread-safe counter with the `.get()` reading the tests use.
+#[derive(Default)]
+pub struct Count(AtomicUsize);
+impl Count {
+    pub fn get(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+    pub fn bump(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+/// Thread-safe settable value.
+#[derive(Default)]
+pub struct Slot<T>(Mutex<T>);
+impl<T: Clone> Slot<T> {
+    pub fn get(&self) -> T {
+        self.0.lock().unwrap().clone()
+    }
+    pub fn set(&self, v: T) {
+        *self.0.lock().unwrap() = v;
+    }
+}
+
+pub struct FixedClock;
+impl Clock for FixedClock {
+    fn now_ms(&self) -> Counter {
+        Counter::new(1_700_000_000_000).expect("time")
+    }
+}
+
+#[derive(Default)]
+pub struct SeqIds(AtomicU64);
+impl IdSource for SeqIds {
+    fn next_id(&self, kind: IdKind) -> Id {
+        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+        id(&format!("{kind:?}-{n}").to_lowercase())
+    }
+}
+
+#[derive(Default)]
+pub struct Authority {
+    pub deny: Slot<Option<AuthorityDenial>>,
+    pub calls: Count,
+    pub last_effect: Slot<Option<(EffectClass, Option<&'static str>)>>,
+}
+impl AuthorityPort for Authority {
+    fn authorize(
+        &self,
+        _: &InvocationContext,
+        request: &AuthorityRequest<'_>,
+    ) -> Result<Authorization, AuthorityDenial> {
+        self.calls.bump();
+        self.last_effect.set(Some((request.effect, request.action)));
+        self.deny.get().map_or(Ok(Authorization::direct()), Err)
+    }
+}
+
+#[derive(Clone, Default)]
+struct MemState {
+    actors: HashMap<String, PrincipalKind>,
+    receipts: HashMap<ReceiptIdentity, LedgerEntry>,
+    events: Vec<EventRecord>,
+}
+
+/// In-memory [`ApplicationStore`] substitute with failure injection.
+pub struct MemoryStore {
+    state: Mutex<MemState>,
+    info: StoreInfo,
+    ids: SeqIds,
+    pub submits: Count,
+    pub reads: Count,
+    pub recorded: Count,
+    /// The next submission is not admitted with this error.
+    pub refuse_next: Slot<Option<StorageError>>,
+    /// The next successful commit reports a lost acknowledgment.
+    pub lose_next_ack: AtomicBool,
+}
+impl MemoryStore {
+    pub fn new(actors: &[&str]) -> Self {
+        let mut state = MemState::default();
+        for a in actors {
+            state.actors.insert((*a).to_owned(), PrincipalKind::Human);
+        }
+        Self {
+            state: Mutex::new(state),
+            info: StoreInfo {
+                store_id: StoreId(id("store-a")),
+                restore_epoch: 0,
+                boot_id: Some(id("boot-1")),
+                host_actor: ActorId(id("host")),
+                access: AccessMode::ReadWrite,
+            },
+            ids: SeqIds::default(),
+            submits: Count::default(),
+            reads: Count::default(),
+            recorded: Count::default(),
+            refuse_next: Slot::default(),
+            lose_next_ack: AtomicBool::new(false),
+        }
+    }
+    pub fn touched(&self) -> usize {
+        self.submits.get() + self.reads.get()
+    }
+    pub fn receipt_count(&self) -> usize {
+        self.state.lock().unwrap().receipts.len()
+    }
+    pub fn event_kinds(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .events
+            .iter()
+            .map(|e| e.kind.clone())
+            .collect()
+    }
+    /// Rewrites every stored receipt as if written under another contract revision.
+    pub fn age_receipts(&self, contract: &str) {
+        for entry in self.state.lock().unwrap().receipts.values_mut() {
+            if let LedgerEntry::Current(r) = entry {
+                *entry = LedgerEntry::Incompatible {
+                    operation: r.operation.clone(),
+                    contract: contract.to_owned(),
+                    schema_revision: r.schema_revision,
+                    fingerprint: Some(r.fingerprint.clone()),
+                    reason: "older contract".into(),
+                };
+            }
+        }
+    }
+    /// Rewrites every stored receipt's binding schema revision.
+    pub fn rebind_receipts(&self, schema_revision: u32) {
+        for entry in self.state.lock().unwrap().receipts.values_mut() {
+            if let LedgerEntry::Current(r) = entry {
+                r.schema_revision = SchemaRevision(schema_revision);
+            }
+        }
+    }
+}
+
+struct MemTx<'a> {
+    state: MemState,
+    saved: Vec<MemState>,
+    info: &'a StoreInfo,
+    ids: &'a SeqIds,
+    recorded: &'a Count,
+    unsupported: Unsupported,
+}
+impl ApplicationStore for MemoryStore {
+    fn info(&self) -> StoreInfo {
+        self.info.clone()
+    }
+    fn submit_write(
+        &self,
+        _: WriteOptions,
+        mut job: Box<dyn WriteJob>,
+    ) -> Result<(), StorageError> {
+        self.submits.bump();
+        if let Some(e) = self.refuse_next.get() {
+            self.refuse_next.set(None);
+            return Err(e);
+        }
+        // Holding the lock for the whole unit serializes writes like the sole write owner.
+        let mut guard = self.state.lock().unwrap();
+        let mut tx = MemTx {
+            state: guard.clone(),
+            saved: Vec::new(),
+            info: &self.info,
+            ids: &self.ids,
+            recorded: &self.recorded,
+            unsupported: Unsupported,
+        };
+        match job.run(&mut tx) {
+            Ok(()) => {
+                *guard = tx.state;
+                drop(guard);
+                if self.lose_next_ack.swap(false, Ordering::SeqCst) {
+                    job.finish(Err(StorageError::CommitUnknown));
+                } else {
+                    job.finish(Ok(()));
+                }
+            }
+            Err(e) => {
+                drop(guard);
+                job.finish(Err(e));
+            }
+        }
+        Ok(())
+    }
+    fn read(
+        &self,
+        _: &ReadOptions,
+        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.reads.bump();
+        let state = self.state.lock().unwrap().clone();
+        let snapshot = MemSnapshot {
+            stamp: SnapshotStamp {
+                store_id: self.info.store_id.clone(),
+                restore_epoch: self.info.restore_epoch,
+                committed_sequence: state.events.len() as i64,
+            },
+            state,
+            unsupported: Unsupported,
+        };
+        work(&snapshot)
+    }
+}
+
+struct MemSnapshot {
+    stamp: SnapshotStamp,
+    state: MemState,
+    unsupported: Unsupported,
+}
+
+fn mem_page(events: &[EventRecord], filter: &EventFilter, after: i64, limit: u16) -> EventPage {
+    let matching: Vec<EventRecord> = events
+        .iter()
+        .filter(|e| e.sequence > after)
+        .filter(|e| match filter {
+            EventFilter::All => true,
+            EventFilter::Aggregate { kind, id } => {
+                &e.aggregate_kind == kind && &e.aggregate_id == id
+            }
+            EventFilter::Root(r) => e.root_id.as_ref() == Some(r),
+        })
+        .cloned()
+        .collect();
+    let watermark = events.len() as i64;
+    let has_more = matching.len() > limit as usize;
+    let events: Vec<_> = matching.into_iter().take(limit as usize).collect();
+    EventPage {
+        next_after: if has_more {
+            events.last().map_or(after, |e| e.sequence)
+        } else {
+            watermark
+        },
+        events,
+        has_more,
+        watermark,
+    }
+}
+
+macro_rules! mem_reads {
+    ($t:ty) => {
+        impl ActorRead for $t {
+            fn actor_kind(&self, a: &ActorId) -> Result<Option<PrincipalKind>, StorageError> {
+                Ok(self.state.actors.get(a.0.as_str()).copied())
+            }
+        }
+        impl CommandLedgerRead for $t {
+            fn lookup(&self, i: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError> {
+                Ok(self.state.receipts.get(i).cloned())
+            }
+        }
+        impl HistoryRead for $t {
+            fn event(&self, id: &EventId) -> Result<Option<EventRecord>, StorageError> {
+                Ok(self.state.events.iter().find(|e| &e.id == id).cloned())
+            }
+            fn page(
+                &self,
+                f: &EventFilter,
+                after: i64,
+                limit: u16,
+            ) -> Result<EventPage, StorageError> {
+                Ok(mem_page(&self.state.events, f, after, limit))
+            }
+        }
+    };
+}
+mem_reads!(MemTx<'_>);
+mem_reads!(MemSnapshot);
+
+impl ReadSnapshot for MemSnapshot {
+    fn stamp(&self) -> &SnapshotStamp {
+        &self.stamp
+    }
+    fn actors(&self) -> &dyn ActorRead {
+        self
+    }
+    fn receipts(&self) -> &dyn CommandLedgerRead {
+        self
+    }
+    fn history(&self) -> &dyn HistoryRead {
+        self
+    }
+    fn operations(&self) -> &dyn OperationRead {
+        &self.unsupported
+    }
+    fn queue(&self) -> &dyn QueueRead {
+        &self.unsupported
+    }
+    fn grants(&self) -> &dyn GrantRead {
+        &self.unsupported
+    }
+}
+
+impl WriteTransaction for MemTx<'_> {
+    fn now_ms(&self) -> i64 {
+        FixedClock.now_ms().get()
+    }
+    fn new_id(&mut self, kind: IdKind) -> Id {
+        self.ids.next_id(kind)
+    }
+    fn store(&self) -> &StoreInfo {
+        self.info
+    }
+    fn committed_sequence(&self) -> Result<i64, StorageError> {
+        Ok(self.state.events.len() as i64)
+    }
+    fn savepoint(&mut self) -> Result<Savepoint, StorageError> {
+        self.saved.push(self.state.clone());
+        Ok(Savepoint::issue(MEM_TX, self.saved.len() as u32))
+    }
+    // SQLite semantics: unwinding an outer savepoint discards every inner one still open.
+    fn rollback_to(&mut self, sp: Savepoint) -> Result<(), StorageError> {
+        let depth = self.open(&sp)?;
+        self.state = self.saved[depth - 1].clone();
+        self.saved.truncate(depth - 1);
+        Ok(())
+    }
+    fn release(&mut self, sp: Savepoint) -> Result<(), StorageError> {
+        let depth = self.open(&sp)?;
+        self.saved.truncate(depth - 1);
+        Ok(())
+    }
+    fn actors(&mut self) -> &mut dyn ActorRegistry {
+        self
+    }
+    fn receipts(&mut self) -> &mut dyn CommandLedger {
+        self
+    }
+    fn history(&mut self) -> &mut dyn HistoryLog {
+        self
+    }
+    fn operations(&mut self) -> &mut dyn OperationJournal {
+        &mut self.unsupported
+    }
+    fn queue(&mut self) -> &mut dyn DurableQueue {
+        &mut self.unsupported
+    }
+    fn grants(&mut self) -> &mut dyn GrantLedger {
+        &mut self.unsupported
+    }
+}
+const MEM_TX: u64 = 7;
+impl MemTx<'_> {
+    fn open(&self, sp: &Savepoint) -> Result<usize, StorageError> {
+        let depth = sp.depth() as usize;
+        if sp.transaction() != MEM_TX || depth == 0 || depth > self.saved.len() {
+            return Err(StorageError::InvalidRecord(
+                "savepoint is not open in this transaction".into(),
+            ));
+        }
+        Ok(depth)
+    }
+}
+impl ActorRegistry for MemTx<'_> {
+    fn register(&mut self, a: &ActorId, k: PrincipalKind, _: &str) -> Result<(), StorageError> {
+        self.state.actors.insert(a.0.as_str().to_owned(), k);
+        Ok(())
+    }
+}
+impl CommandLedger for MemTx<'_> {
+    fn record(&mut self, i: &ReceiptIdentity, r: &StoredReceipt) -> Result<(), StorageError> {
+        self.recorded.bump();
+        if self.state.receipts.contains_key(i) {
+            return Err(StorageError::Duplicate {
+                kind: "command_receipt",
+                id: i.request_key().0.as_str().to_owned(),
+            });
+        }
+        self.state
+            .receipts
+            .insert(i.clone(), LedgerEntry::Current(r.clone()));
+        Ok(())
+    }
+}
+impl HistoryLog for MemTx<'_> {
+    fn append(&mut self, e: NewEvent) -> Result<i64, StorageError> {
+        let sequence = self.state.events.len() as i64 + 1;
+        self.state.events.push(EventRecord {
+            sequence,
+            id: e.id,
+            actor: e.actor,
+            project_id: e.project_id,
+            root_id: e.root_id,
+            operation_id: e.operation_id,
+            aggregate_kind: e.aggregate_kind,
+            aggregate_id: e.aggregate_id,
+            aggregate_revision: e.aggregate_revision,
+            kind: e.kind,
+            created_at_ms: FixedClock.now_ms().get(),
+            payload: e.payload,
+        });
+        Ok(sequence)
+    }
+}
+
+/// Repositories the in-memory substitute does not model.
+struct Unsupported;
+fn nope<T>() -> Result<T, StorageError> {
+    Err(StorageError::unavailable(
+        Unavailable::Io,
+        "not modelled by the in-memory substitute",
+    ))
+}
+impl OperationRead for Unsupported {
+    fn operation(&self, _: &OperationId) -> Result<Option<OperationRecord>, StorageError> {
+        nope()
+    }
+    fn unresolved(&self, _: u16) -> Result<Vec<OperationRecord>, StorageError> {
+        nope()
+    }
+}
+impl OperationJournal for Unsupported {
+    fn record_intent(&mut self, _: NewOperation) -> Result<OperationRecord, StorageError> {
+        nope()
+    }
+    fn begin_attempt(
+        &mut self,
+        _: &OperationId,
+        _: i64,
+        _: AttemptBinding,
+    ) -> Result<AttemptRecord, StorageError> {
+        nope()
+    }
+    fn transition(
+        &mut self,
+        _: &OperationId,
+        _: i64,
+        _: Option<&AttemptFence>,
+        _: OperationState,
+        _: Option<serde_json::Value>,
+    ) -> Result<OperationRecord, StorageError> {
+        nope()
+    }
+    fn observe(
+        &mut self,
+        _: &OperationId,
+        _: i64,
+        _: serde_json::Value,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn classify_interrupted(
+        &mut self,
+        _: u16,
+    ) -> Result<Vec<(OperationId, OperationState)>, StorageError> {
+        nope()
+    }
+}
+impl QueueRead for Unsupported {
+    fn entry(&self, _: &Id) -> Result<Option<QueueEntry>, StorageError> {
+        nope()
+    }
+    fn status(&self, _: &str) -> Result<QueueStatus, StorageError> {
+        nope()
+    }
+}
+impl DurableQueue for Unsupported {
+    fn enqueue(&mut self, _: NewQueueEntry) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn claim_ready(&mut self, _: &ClaimRequest) -> Result<Vec<QueueEntry>, StorageError> {
+        nope()
+    }
+    fn renew(&mut self, _: &Id, _: &QueueFence, _: i64) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn settle(
+        &mut self,
+        _: &Id,
+        _: &QueueFence,
+        _: Settlement,
+    ) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn fail(
+        &mut self,
+        _: &Id,
+        _: &QueueFence,
+        _: &str,
+        _: FailureDisposition,
+    ) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn cancel(&mut self, _: &Id) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn recover_claims(
+        &mut self,
+        _: ClaimRecovery,
+        _: u16,
+    ) -> Result<RecoveryOutcome, StorageError> {
+        nope()
+    }
+    fn requeue(&mut self, _: &Id, _: i64) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn compact(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+}
+impl GrantRead for Unsupported {
+    fn grant(&self, _: &Id) -> Result<Option<GrantRecord>, StorageError> {
+        nope()
+    }
+}
+impl GrantLedger for Unsupported {
+    fn issue(&mut self, _: NewGrant) -> Result<GrantRecord, StorageError> {
+        nope()
+    }
+    fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
+        nope()
+    }
+}
+
+/// Scripted command use case: returns its configured decision and counts calls.
+type DecideFn = dyn Fn(&AdmittedCommand) -> Result<Decided, HandlerFailure> + Send + Sync;
+type AnswerFn = dyn Fn(&AdmittedQuery) -> Result<QueryAnswer, DomainFault> + Send + Sync;
+
+pub struct Commands {
+    pub decide: Box<DecideFn>,
+    pub calls: Count,
+}
+impl Commands {
+    pub fn new(
+        f: impl Fn(&AdmittedCommand) -> Result<Decided, HandlerFailure> + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            decide: Box::new(f),
+            calls: Count::default(),
+        })
+    }
+}
+impl CommandHandler for Commands {
+    fn decide(
+        &self,
+        _: &InvocationContext,
+        command: &AdmittedCommand,
+        _: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        self.calls.bump();
+        (self.decide)(command)
+    }
+}
+
+pub struct Queries {
+    pub answer: Box<AnswerFn>,
+    pub calls: Count,
+}
+impl Queries {
+    pub fn new(
+        f: impl Fn(&AdmittedQuery) -> Result<QueryAnswer, DomainFault> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            answer: Box::new(f),
+            calls: Count::default(),
+        }
+    }
+}
+impl QueryHandler for Queries {
+    fn query(
+        &self,
+        _: &InvocationContext,
+        query: &AdmittedQuery,
+        _: &dyn ReadSnapshot,
+    ) -> Result<QueryAnswer, DomainFault> {
+        self.calls.bump();
+        (self.answer)(query)
+    }
+}
+
+pub fn fault(code: DomainErrorCode) -> DomainFault {
+    serde_json::from_value(serde_json::json!({
+        "code": code_name(code), "retry": "AfterBlockerClears", "correlationId": "corr-1", "blockerIds": ["hold-a"]
+    }))
+    .expect("fault")
+}
+fn code_name(code: DomainErrorCode) -> String {
+    serde_json::to_value(code)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// A read stamp matching the in-memory store at an empty history.
+pub fn stamp() -> ReadStamp {
+    serde_json::from_value(serde_json::json!({
+        "storeId": "store-a", "restoreEpoch": "0", "sequence": "0", "policyRevision": "1", "scopeRevision": "1"
+    }))
+    .expect("stamp")
+}
+
+pub fn result(operation: &str, value: serde_json::Value) -> OperationResult {
+    serde_json::from_value(serde_json::json!({"kind": operation, "value": value})).expect("result")
+}
+
+pub struct Harness {
+    pub authority: Authority,
+    pub store: MemoryStore,
+    pub ids: SeqIds,
+}
+impl Harness {
+    pub fn new() -> Self {
+        Self {
+            authority: Authority::default(),
+            store: MemoryStore::new(&["user-a", "user-b", "agent-a"]),
+            ids: SeqIds::default(),
+        }
+    }
+    pub fn gateway(&self) -> Gateway<'_> {
+        Gateway {
+            authority: &self.authority,
+            store: &self.store,
+            ids: &self.ids,
+        }
+    }
+}
+
+pub fn contracts_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/architecture/contracts")
+}
+pub fn repo_file(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(path)
+}

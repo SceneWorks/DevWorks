@@ -1,0 +1,21 @@
+[package]
+name = "devworks-adapters"
+description = "DevWorks infrastructure adapters; storage::sqlite implements the core persistence ports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Database-driver dependencies live only in this crate (STORE-09). The bundled SQLite (built from
+# C sources by libsqlite3-sys) must be 3.51.3 or newer; rusqlite 0.41.1 bundles 3.54.1, verified
+# again at startup together with compile options and the sqlite-vec identity.
+[dependencies]
+devworks-core = { path = "../devworks-core" }
+rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }
+serde_json.workspace = true
+sha2.workspace = true
+sqlite-vec = "=0.1.7"
+tokio = { version = "=1.54.1", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+devworks-core = { path = "../devworks-core", features = ["contract-suite"] }

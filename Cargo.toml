@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["crates/devworks-adapters", "crates/devworks-core", "crates/devworks-extension-protocol"]
+# Disposable probes and archived evaluation harnesses keep their own manifests and lockfiles.
+exclude = ["tools", "docs"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+schemars = "=1.2.3"
+semver = "=1.0.28"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
+sha2 = "=0.11.1"
