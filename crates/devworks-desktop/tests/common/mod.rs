@@ -111,18 +111,38 @@ pub fn harness(shell: Shell, w: f32, h: f32) -> Harness<'static, Shell> {
         .build_ui_state(|ui, shell: &mut Shell| shell.ui(ui), shell)
 }
 
+/// Longest time [`settle`] waits for the shell to stop repainting. A UI that never stops (a
+/// real repaint loop) fails at this bound with egui's repaint causes, never silently.
+pub const SETTLE_BOUND: Duration = Duration::from_secs(30);
+
 /// Runs frames until every request the shell made has been answered and applied, then lets
 /// the UI settle (which also runs the accessibility check: every input has a name).
+///
+/// Frames are not timed, but replies arrive from worker threads: while a request is in
+/// flight its spinner repaints every frame, so under load `Harness::run` can use up its frame
+/// budget before the reply lands (seen as "would have settled after N steps" with the spinner
+/// as the cause). A request can also start during that run (a runtime hint re-queries the
+/// visible transcript). So a run that exceeds the budget is retried after the requests in
+/// flight finish, until [`SETTLE_BOUND`]; only then is it a failure.
 pub fn settle(h: &mut Harness<'_, Shell>) {
-    for _ in 0..40 {
-        h.step();
-        assert!(h.state().wait_idle(), "requests finish");
-        h.step();
-        if h.state().client().is_none_or(|c| c.activities().is_empty()) {
-            break;
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        for _ in 0..40 {
+            h.step();
+            assert!(h.state().wait_idle(), "requests finish");
+            h.step();
+            if h.state().client().is_none_or(|c| c.activities().is_empty()) {
+                break;
+            }
+        }
+        match h.try_run() {
+            Ok(_) => return,
+            Err(e) if std::time::Instant::now() < deadline => {
+                let _ = e;
+            }
+            Err(e) => panic!("the shell never stopped repainting within {SETTLE_BOUND:?}: {e}"),
         }
     }
-    h.run();
 }
 
 /// Labels of every node with `role` in tree order.

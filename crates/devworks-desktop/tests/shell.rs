@@ -789,10 +789,10 @@ fn keyboard_focus_moves_through_controls_and_status_changes_are_announced() {
             .and_then(|n| n.accesskit_node().label())
     };
     h.key_press(Key::Tab);
-    h.run();
+    settle(&mut h);
     let first = focused(&h).expect("Tab focuses a named control");
     h.key_press(Key::Tab);
-    h.run();
+    settle(&mut h);
     let second = focused(&h).expect("Tab moves focus");
     assert_ne!(first, second);
     click(&mut h, Role::Button, "New Chat");
@@ -866,7 +866,7 @@ fn completion_cards_float_below_the_toolbar_without_moving_content_or_taking_foc
     settle(&mut h);
     h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
         .focus();
-    h.run();
+    settle(&mut h);
     let heading = h
         .get_by_role_and_label(Role::Label, "Workspace coordinator")
         .rect();
