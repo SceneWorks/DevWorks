@@ -155,11 +155,11 @@ fn names_decision(event: &crate::ports::storage::EventRecord, intent: &Intent) -
 }
 
 /// Whether a [`REPLY_CONSUMER`] delivery can never be honoured: its payload is not a publication
-/// intent, or it does not name its receipt's own `CommandDecided` decision. The decision and its
-/// receipt commit in one transaction and are retained together, so a delivery naming a present
-/// decision has a receipt whose reply is mandatory. Only an unhonourable delivery may be
-/// acknowledged as poison (`queue.resolve`); every other reply delivery is retried until
-/// published.
+/// intent, it does not name its receipt's own `CommandDecided` decision, or its receipt identity
+/// holds no receipt of that command (the cases [`ReceiptReplies::publish`] poisons). An
+/// incompatible receipt keeps its reply mandatory: publication holds until it can be read. Only
+/// an unhonourable delivery may be acknowledged as poison (`queue.resolve`); every other reply
+/// delivery is retried until published.
 pub(crate) fn unhonourable(
     tx: &mut dyn WriteTransaction,
     entry: &QueueEntry,
@@ -168,7 +168,12 @@ pub(crate) fn unhonourable(
         return Ok(true);
     };
     let event = tx.history().event(&entry.event_id)?;
-    Ok(!event.is_some_and(|e| names_decision(&e, &intent)))
+    if !event.is_some_and(|e| names_decision(&e, &intent)) {
+        return Ok(true);
+    }
+    Ok(!tx
+        .receipts()
+        .may_be_receipt_of(&intent.identity, &intent.command_id)?)
 }
 
 /// The publication intent a delivery carries.

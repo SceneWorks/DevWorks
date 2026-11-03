@@ -1998,7 +1998,10 @@ const FORGED_HISTORY: [(&str, &str); 13] = [
     (auth::PRINCIPAL_AGGREGATE, "Noted"),
     (auth::GRANT_AGGREGATE, "Noted"),
     (auth::DENIAL_AGGREGATE, "Noted"),
-    (deletion::DELETION_AGGREGATE, "Noted"),
+    (
+        devworks_core::authority::deletion::DELETION_AGGREGATE,
+        "Noted",
+    ),
     (
         devworks_core::services::artifacts::replies::REPLY_AGGREGATE,
         "Noted",

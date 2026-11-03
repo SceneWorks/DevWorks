@@ -1103,6 +1103,18 @@ impl CommandLedgerRead for HandlerTx<'_> {
     fn reply(&self, _: &ReceiptIdentity) -> Result<Option<ReceiptReply>, StorageError> {
         Err(ledger_owned())
     }
+    // Only the ownership answer passes through (queue resolution of reply deliveries needs it);
+    // the receipt itself stays unreadable to use cases.
+    fn may_be_receipt_of(
+        &self,
+        identity: &ReceiptIdentity,
+        command: &CommandId,
+    ) -> Result<bool, StorageError> {
+        self.inner
+            .borrow_mut()
+            .receipts()
+            .may_be_receipt_of(identity, command)
+    }
 }
 impl CommandLedger for HandlerTx<'_> {
     fn record(&mut self, _: &ReceiptIdentity, _: &StoredReceipt) -> Result<(), StorageError> {

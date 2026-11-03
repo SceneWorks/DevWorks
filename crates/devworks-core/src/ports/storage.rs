@@ -549,6 +549,20 @@ pub trait CommandLedgerRead {
     fn lookup(&self, identity: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError>;
     /// The published reply of the receipt at `identity`, if it was published.
     fn reply(&self, identity: &ReceiptIdentity) -> Result<Option<ReceiptReply>, StorageError>;
+    /// Whether the receipt at `identity` can be `command`'s, revealing nothing else of it: a
+    /// current receipt of that command, or an incompatible one (never disowned, since its command
+    /// cannot be read). `false` when there is no receipt or it is another command's.
+    fn may_be_receipt_of(
+        &self,
+        identity: &ReceiptIdentity,
+        command: &crate::protocol::CommandId,
+    ) -> Result<bool, StorageError> {
+        Ok(match self.lookup(identity)? {
+            None => false,
+            Some(LedgerEntry::Incompatible { .. }) => true,
+            Some(LedgerEntry::Current(stored)) => stored.receipt.command_id == *command,
+        })
+    }
 }
 pub trait CommandLedger: CommandLedgerRead {
     /// Inserts a decided receipt. Identity `(actor, scopeKey, requestKey)` is unique. Only the

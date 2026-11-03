@@ -5,10 +5,13 @@ mod common;
 use common::*;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::gateway::{Gateway, GatewayFailure};
+use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::QueueDelivery;
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
-use devworks_core::protocol::{CommandReply, DomainErrorCode, OperationState, Receipt, Rejection};
+use devworks_core::protocol::{
+    ActorId, CommandReply, DomainErrorCode, EventId, Id, OperationState, Receipt, Rejection,
+};
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::replies::REPLY_CONSUMER;
 use devworks_core::services::queue::REPLY_REQUIRED;
@@ -746,8 +749,43 @@ fn a_receipt_reply_is_never_cancelled_and_dismissed_only_when_it_cannot_be_honou
         ),
         "cancel even an unreadable reply delivery",
     );
-    let failed = fail_replies(&f, &[&genuine, &unreadable, &misdirected]);
-    let [genuine, unreadable, misdirected] = [&failed[0], &failed[1], &failed[2]];
+    // A well-formed intent naming a present `CommandDecided` decision under a receipt identity
+    // that holds no receipt of that command.
+    let mut payload = genuine.payload.clone();
+    payload["requestKey"] = json!("no-such-request");
+    payload["commandId"] = json!("command-without-receipt");
+    let actor = ActorId(Id::new(genuine.payload["actorId"].as_str().unwrap()).unwrap());
+    let misidentified = write(&*f.s, move |tx| {
+        let event_id = EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id: event_id.clone(),
+            actor,
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "command".into(),
+            aggregate_id: "command-without-receipt".into(),
+            aggregate_revision: 1,
+            kind: "CommandDecided".into(),
+            payload: json!({}),
+        })?;
+        let id = tx.new_id(IdKind::QueueEntry);
+        tx.queue().enqueue(NewQueueEntry {
+            id,
+            consumer: REPLY_CONSUMER.into(),
+            event_id,
+            root_id: None,
+            operation_id: None,
+            partition: None,
+            priority: 0,
+            ready_at_ms: 0,
+            payload,
+        })
+    })
+    .unwrap();
+    let failed = fail_replies(&f, &[&genuine, &unreadable, &misdirected, &misidentified]);
+    let [genuine, unreadable, misdirected, misidentified] =
+        [&failed[0], &failed[1], &failed[2], &failed[3]];
     assert!(failed.iter().all(|e| e.state == QueueState::Failed));
 
     // A failed reply that can still be published is not acknowledged away: it is retried.
@@ -783,7 +821,11 @@ fn a_receipt_reply_is_never_cancelled_and_dismissed_only_when_it_cannot_be_honou
     assert_eq!(entry(&*f.s, &genuine.id).state, QueueState::Ready);
 
     // Genuinely poisoned deliveries are acknowledged.
-    for (key, e) in [("r-6", unreadable), ("r-7", misdirected)] {
+    for (key, e) in [
+        ("r-6", unreadable),
+        ("r-7", misdirected),
+        ("r-8", misidentified),
+    ] {
         let (dismissed, _) = applied(&f.command(
             &f.operator,
             "queue.resolve",
