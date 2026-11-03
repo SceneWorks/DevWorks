@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/devworks-core", "crates/devworks-extension-protocol"]
+members = ["crates/devworks-adapters", "crates/devworks-core", "crates/devworks-extension-protocol"]
 # Disposable probes and archived evaluation harnesses keep their own manifests and lockfiles.
 exclude = ["tools", "docs"]
 
