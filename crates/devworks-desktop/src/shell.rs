@@ -1522,16 +1522,16 @@ impl Shell {
         }
     }
 
-    /// Requests whose outcome is not known yet, with what their replies settle, so the next
-    /// launch confirms them with their exact frames. (A save still running when the bounded
-    /// quiesce gives up is the one case not kept: its frame exists only in that request.)
+    /// Requests whose outcome is not known yet (including commands still running when the
+    /// bounded quiesce gave up), with what their replies settle, so the next launch confirms
+    /// them with their exact frames.
     fn pending_memory(&self) -> crate::memory::PendingMemory {
         use crate::memory::{PendingCommand, PendingMemory, RemovedMemory, SubmittedMemory};
         let commands: Vec<PendingCommand> = self
             .client
             .as_ref()
             .map(|c| {
-                c.unresolved()
+                c.unconfirmed()
                     .iter()
                     .map(|u| PendingCommand {
                         slot: u.slot.clone(),

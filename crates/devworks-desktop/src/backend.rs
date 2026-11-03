@@ -386,6 +386,25 @@ impl Client {
         &self.unresolved
     }
 
+    /// Every command whose outcome is not known: the unresolved ones and those still running
+    /// (newest per slot). A close keeps these, so the next launch confirms each exact frame.
+    pub fn unconfirmed(&self) -> Vec<Unresolved> {
+        let mut out = self.unresolved.clone();
+        for p in self.pending.iter().rev() {
+            if let Some((operation, frame)) = &p.command
+                && !out.iter().any(|u| u.slot == p.slot)
+            {
+                out.push(Unresolved {
+                    slot: p.slot.clone(),
+                    label: p.label.clone(),
+                    operation,
+                    frame: frame.clone(),
+                });
+            }
+        }
+        out
+    }
+
     /// Resubmits every unresolved command with its identical frame.
     pub fn resubmit_unresolved(&mut self) {
         for u in std::mem::take(&mut self.unresolved) {

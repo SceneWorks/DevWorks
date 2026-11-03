@@ -1331,6 +1331,62 @@ fn an_attachment_removed_while_saving_and_stored_during_close_is_deleted_at_the_
     );
 }
 
+#[test]
+fn a_message_held_past_the_quiesce_bound_is_confirmed_at_the_next_launch_not_sent_again() {
+    let root = Root::new("held-append");
+    let engine = start(&root);
+    let real = engine.backend();
+    // The append commits; its reply is held until after the window has closed.
+    let gate = Gate::holding_replies("sessions.append_message");
+    let mut h = harness(
+        shell_over(gate.over(real.clone()), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().unwrap();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .type_text("said once");
+    settle(&mut h);
+    gate.close();
+    h.get_by_role_and_label(Role::Button, SEND_LABEL).click();
+    step_until(&mut h, "the message is being saved", |s| {
+        s.chat.sending.is_some()
+    });
+    h.state_mut().request_close();
+    // Quiescing gives up at its bound with the append still in flight.
+    step_until(&mut h, "the window closed", |s| {
+        matches!(s.lifecycle(), Lifecycle::Closed)
+    });
+    gate.open();
+    drop(h);
+    let mut h = harness(
+        shell_over(real.clone(), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let page = ops::transcript_page(real.query(
+        "sessions.transcript",
+        &ops::transcript(&*real, &session, None),
+    ))
+    .unwrap();
+    assert_eq!(page.entries.len(), 1, "saved once");
+    assert!(
+        h.state()
+            .chat
+            .drafts
+            .get(&session)
+            .is_none_or(|d| d.text.is_empty()),
+        "the confirmed message left the draft"
+    );
+    assert!(h.state().chat.sending.is_none());
+}
+
 // ---------------------------------------------------------------------------------------------
 // Bounded layouts
 
