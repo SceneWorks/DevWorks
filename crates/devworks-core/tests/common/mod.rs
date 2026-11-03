@@ -333,6 +333,12 @@ impl ReadSnapshot for MemSnapshot {
     fn grants(&self) -> &dyn GrantRead {
         &self.unsupported
     }
+    fn packages(&self) -> &dyn PackageHandlerRead {
+        &self.unsupported
+    }
+    fn configuration(&self) -> &dyn ConfigurationRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -380,6 +386,12 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn grants(&mut self) -> &mut dyn GrantLedger {
+        &mut self.unsupported
+    }
+    fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
+        &mut self.unsupported
+    }
+    fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         &mut self.unsupported
     }
 }
@@ -497,6 +509,58 @@ impl QueueRead for Unsupported {
     fn status(&self, _: &str) -> Result<QueueStatus, StorageError> {
         nope()
     }
+    fn deliveries(
+        &self,
+        _: &DeliveryFilter,
+        _: Option<&DeliveryKey>,
+        _: u16,
+    ) -> Result<DeliveryPage, StorageError> {
+        nope()
+    }
+    fn progress(&self, _: &str) -> Result<ConsumerProgress, StorageError> {
+        nope()
+    }
+    fn checkpoint(&self, _: &str, _: Option<&str>) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn next_due_ms(&self, _: i64) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
+    fn awaiting_eligibility(
+        &self,
+        _: &str,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<QueueEntry>, StorageError> {
+        nope()
+    }
+}
+impl PackageHandlerRead for Unsupported {
+    fn package_state(&self, _: &str) -> Result<Option<PackageState>, StorageError> {
+        nope()
+    }
+    fn processing(
+        &self,
+        _: &str,
+        _: &Id,
+        _: &EventId,
+    ) -> Result<Option<ProcessingRecord>, StorageError> {
+        nope()
+    }
+}
+impl PackageHandlerLedger for Unsupported {
+    fn compare_and_set_state(
+        &mut self,
+        _: &str,
+        _: i64,
+        _: i64,
+        _: serde_json::Value,
+    ) -> Result<PackageState, StorageError> {
+        nope()
+    }
+    fn record_processing(&mut self, _: &ProcessingRecord) -> Result<(), StorageError> {
+        nope()
+    }
 }
 impl DurableQueue for Unsupported {
     fn enqueue(&mut self, _: NewQueueEntry) -> Result<QueueEntry, StorageError> {
@@ -541,6 +605,15 @@ impl DurableQueue for Unsupported {
     fn compact(&mut self, _: &Id) -> Result<(), StorageError> {
         nope()
     }
+    fn hold(&mut self, _: &Id, _: &QueueFence, _: &str) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn dismiss(&mut self, _: &Id, _: &str) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn reassert(&mut self, _: &Id, _: &QueueFence, _: i64) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
 }
 impl GrantRead for Unsupported {
     fn grant(&self, _: &Id) -> Result<Option<GrantRecord>, StorageError> {
@@ -552,6 +625,68 @@ impl GrantLedger for Unsupported {
         nope()
     }
     fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
+        nope()
+    }
+}
+
+impl ConfigurationRead for Unsupported {
+    fn scope_exists(&self, _: &ConfigScope) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn current(&self, _: &ConfigScope, _: &str) -> Result<Option<ConfigRevision>, StorageError> {
+        nope()
+    }
+    fn revision(
+        &self,
+        _: &ConfigScope,
+        _: &str,
+        _: i64,
+    ) -> Result<Option<ConfigRevision>, StorageError> {
+        nope()
+    }
+    fn history(
+        &self,
+        _: &ConfigScope,
+        _: &str,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<ConfigRevision>, StorageError> {
+        nope()
+    }
+    fn proposal(&self, _: &Id) -> Result<Option<ProposalRecord>, StorageError> {
+        nope()
+    }
+    fn proposals(
+        &self,
+        _: &ConfigScope,
+        _: &str,
+        _: Option<ProposalState>,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<ProposalRecord>, StorageError> {
+        nope()
+    }
+}
+impl ConfigurationRepository for Unsupported {
+    fn append_revision(
+        &mut self,
+        _: &ConfigScope,
+        _: &str,
+        _: i64,
+        _: i64,
+        _: serde_json::Value,
+    ) -> Result<ConfigRevision, StorageError> {
+        nope()
+    }
+    fn stage(&mut self, _: NewProposal) -> Result<ProposalRecord, StorageError> {
+        nope()
+    }
+    fn update_proposal(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: ProposalChange,
+    ) -> Result<ProposalRecord, StorageError> {
         nope()
     }
 }

@@ -140,6 +140,7 @@ macro_rules! int_bound {($n:ident,$lo:expr,$hi:expr)=>{
  impl<'de> Deserialize<'de> for $n{fn deserialize<D:Deserializer<'de>>(d:D)->Result<Self,D::Error>{let x=u32::deserialize(d)?;if !($lo..=$hi).contains(&x){return Err(D::Error::custom("integer bound"))}Ok(Self(x))}}
  impl JsonSchema for $n{fn schema_name()->Cow<'static,str>{stringify!($n).into()}fn json_schema(_: &mut SchemaGenerator)->Schema{json_schema!({"type":"integer","minimum":$lo,"maximum":$hi})}}
  impl Check for $n{fn check(&self)->Result<(),String>{Ok(())}}
+ impl $n{pub fn get(&self)->u32{self.0}}
 };}
 int_bound!(Limit, 1, 500);
 int_bound!(Depth, 0, 32);

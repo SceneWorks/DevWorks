@@ -22,6 +22,7 @@
 //!   the public API exposes rusqlite types, rows, statements or a generic execute-SQL.
 //! * **Async facade.** [`write_async`] wraps the same admission with a Tokio `oneshot`; dropping
 //!   the future stops waiting but never rolls back an admitted job.
+mod configuration;
 mod conn;
 mod migrations;
 mod repos;
@@ -31,7 +32,10 @@ mod writer;
 mod tests;
 
 pub use conn::{EXPECTED_VEC_VERSION, EffectiveSettings, MIN_SQLITE_VERSION};
-pub use migrations::{MIGRATION_0001_SHA256, MIGRATION_0002_SHA256, MIGRATIONS, Migration};
+pub use migrations::{
+    MIGRATION_0001_SHA256, MIGRATION_0002_SHA256, MIGRATION_0003_SHA256, MIGRATION_0004_SHA256,
+    MIGRATIONS, Migration,
+};
 
 use conn::{Role, db};
 use devworks_core::context::PrincipalKind;
