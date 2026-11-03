@@ -12,13 +12,14 @@ use crate::context::InvocationContext;
 use crate::fingerprint::Fingerprint;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::OperationInput;
-use crate::protocol::results::{DomainDecision, OperationResult};
+use crate::protocol::results::{DomainCommandReply, DomainDecision, OperationResult};
 use crate::protocol::{
     ActorId, Counter, DomainFault, Id, OperationId, ProjectId, ReadStamp, Receipt,
 };
 use crate::registry::{EffectClass, ModeBinding, OperationDescriptor, SchemaRevision};
 use std::any::Any;
 use std::fmt;
+use std::sync::Arc;
 use storage::{ApplicationStore, Cancellation, ReadSnapshot, StorageError, WriteTransaction};
 
 /// UTC wall clock in milliseconds.
@@ -207,10 +208,11 @@ impl From<StorageError> for HandlerFailure {
 }
 /// What a use case staged before its unit of work (see [`CommandHandler::prepare`]). Opaque to
 /// the gateway; the use case reads it back with [`crate::gateway::AdmittedCommand::prepared`].
-pub struct Prepared(Box<dyn Any + Send>);
+#[derive(Clone)]
+pub struct Prepared(Arc<dyn Any + Send + Sync>);
 impl Prepared {
-    pub fn new<T: Any + Send>(value: T) -> Self {
-        Self(Box::new(value))
+    pub fn new<T: Any + Send + Sync>(value: T) -> Self {
+        Self(Arc::new(value))
     }
     pub fn get<T: Any>(&self) -> Option<&T> {
         self.0.downcast_ref()
@@ -248,6 +250,20 @@ pub trait CommandHandler: Send + Sync {
         _env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, StorageError> {
         Ok(None)
+    }
+    /// Runs once the command's outcome is known, outside any transaction, when `prepare`
+    /// returned something: `reply` is the reply about to be returned (`None` when the use case
+    /// broke its contract and nothing was recorded). It resolves preparation the unit of work did
+    /// not commit (a refusal, replay, denial or rollback); it must be idempotent and fenced,
+    /// because crash recovery can race it, and it cannot change the reply. The default does
+    /// nothing.
+    fn settle(
+        &self,
+        _ctx: &InvocationContext,
+        _prepared: Option<&Prepared>,
+        _reply: Option<&DomainCommandReply>,
+        _env: &Preparation<'_>,
+    ) {
     }
     fn decide(
         &self,

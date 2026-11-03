@@ -21,6 +21,10 @@
 //! A crash before step 4 leaves a journaled operation and at most a staged or unreferenced file;
 //! [`ArtifactService::recover`] fails the operation and collects the files. Committed metadata
 //! never names a file that was not durably published; a file without metadata is never visible.
+//! When the process survives but step 4 does not commit (a refusal such as the in-transaction
+//! quota check, a replay, a denial or a rollback), [`CommandHandler::settle`] resolves the
+//! staging operation at once under its attempt fence ([`ArtifactService::abandon`]), so it never
+//! waits for the next boot and is never resolved twice.
 //!
 //! # Versions, references and deletion (AD 59)
 //!
@@ -67,10 +71,10 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, artifacts as ops};
 use crate::ports::files::{ArtifactFiles, ArtifactSources, FileFault, SourceOrigin, SourceRefusal};
 use crate::ports::storage::{
-    ArtifactLink, ArtifactState, AttemptBinding, BlobState, ConfigScope, ConfigurationRead,
-    LinkPurpose, ListPosition, NewEvent, NewOperation, ReadOptions, ReadSnapshot, StorageError,
-    StoredArtifact, StoredVersion, SubjectKey, Unavailable, WriteOptions, WriteTransaction,
-    read_snapshot, run_write,
+    ArtifactLink, ArtifactState, AttemptBinding, AttemptFence, BlobState, ConfigScope,
+    ConfigurationRead, LinkPurpose, ListPosition, NewEvent, NewOperation, ReadOptions,
+    ReadSnapshot, StorageError, StoredArtifact, StoredVersion, SubjectKey, Unavailable,
+    WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -457,6 +461,8 @@ pub struct StagedFile {
     pub origin: SourceOrigin,
     /// The resolved source handle (provenance).
     pub source: Value,
+    /// The staging attempt's journal fence: only this attempt's owner resolves the operation.
+    pub fence: AttemptFence,
 }
 
 fn source_json(source: &ArtifactSource) -> Value {
@@ -638,8 +644,9 @@ impl ArtifactService {
                 OperationState::Dispatching,
                 Some(json!({"step": "staging"})),
             )?;
-            Ok(id)
+            Ok((id, attempt.fence()))
         })?;
+        let (operation, fence) = operation;
         let staging_name = format!("{}.part", operation.0.as_str());
         let published = match self.files.publish(&staging_name, &bytes, &digest) {
             Ok(p) => p,
@@ -662,6 +669,7 @@ impl ArtifactService {
             relative_path: published.relative_path,
             origin: resolved.origin,
             source: source_json(source),
+            fence,
         }))
     }
 
@@ -760,6 +768,13 @@ fn put_staged_blob(
         if b.state == BlobState::Unlinking || (b.state != BlobState::Present && !in_place) {
             return Err(StorageError::Busy);
         }
+    } else if !files
+        .present(&staged.digest, staged.byte_count as u64)
+        .map_err(file_failure)?
+    {
+        // Another abandoned staging of the same bytes removed the unreferenced file after this
+        // one reused it: never record metadata for a file that is not in place (retry).
+        return Err(StorageError::Busy);
     }
     tx.artifacts()
         .put_blob(&staged.digest, staged.byte_count, &staged.relative_path)?;
@@ -1673,6 +1688,34 @@ impl CommandHandler for ArtifactService {
             },
         )?;
         Ok(Some(Prepared::new(staging)))
+    }
+
+    /// A save whose staged file the unit of work did not commit — refused (for example by the
+    /// in-transaction quota check), replayed, denied, rejected or rolled back — resolves its
+    /// staging operation now instead of at the next boot ([`ArtifactService::abandon`]). An
+    /// unknown commit outcome is left to recovery, which reads the durable record first.
+    fn settle(
+        &self,
+        _ctx: &InvocationContext,
+        prepared: Option<&Prepared>,
+        reply: Option<&crate::protocol::results::DomainCommandReply>,
+        env: &Preparation<'_>,
+    ) {
+        let Some(Staging::Staged(staged)) = prepared.and_then(|p| p.get::<Staging>()) else {
+            return;
+        };
+        let committed_or_unknown = match reply {
+            Some(crate::protocol::CommandReply::Recorded {
+                receipt, replayed, ..
+            }) => !replayed && !matches!(receipt.decision, DomainDecision::Refused { .. }),
+            Some(crate::protocol::CommandReply::CommandStatusUnknown { .. }) => true,
+            _ => false,
+        };
+        if !committed_or_unknown {
+            // Best effort: a failure here leaves the operation to recovery, which is fenced the
+            // same way, so nothing is ever resolved twice.
+            let _ = self.abandon(env.store, staged);
+        }
     }
 
     fn decide(

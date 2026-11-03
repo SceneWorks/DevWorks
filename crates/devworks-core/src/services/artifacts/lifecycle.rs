@@ -317,7 +317,9 @@ fn blob_event(
     Ok(())
 }
 
-fn unresolved_staging(s: &dyn ReadSnapshot) -> Result<Vec<OperationRecord>, StorageError> {
+pub(super) fn unresolved_staging(
+    s: &dyn ReadSnapshot,
+) -> Result<Vec<OperationRecord>, StorageError> {
     Ok(s.operations()
         .unresolved(500)?
         .into_iter()
@@ -667,6 +669,60 @@ impl ArtifactService {
             }
         }
         Ok(report)
+    }
+
+    /// Resolves a staging operation whose metadata was not committed: under the staging
+    /// attempt's journal fence, a still-`Dispatching` operation with no published version
+    /// becomes `Failed`, and its staged file and digest file become collectible. The digest file
+    /// is removed only when no blob row and no other in-flight staging names it (bytes another
+    /// artifact holds are never touched). Returns `false` when there was nothing to resolve
+    /// (already resolved, for example by recovery, or committed after all); calling it again is
+    /// a no-op.
+    pub fn abandon(
+        &self,
+        store: &dyn ApplicationStore,
+        staged: &StagedFile,
+    ) -> Result<bool, StorageError> {
+        let (op, fence) = (staged.operation_id.clone(), staged.fence.clone());
+        let resolved = run_write(store, WriteOptions::default(), move |tx| {
+            let Some(rec) = tx.operations().operation(&op)? else {
+                return Ok(false);
+            };
+            if rec.state != OperationState::Dispatching
+                || rec.latest_attempt().map(|a| a.fence()).as_ref() != Some(&fence)
+                || tx.artifacts().version_by_operation(&op)?.is_some()
+            {
+                return Ok(false);
+            }
+            tx.operations().transition(
+                &op,
+                rec.revision,
+                Some(&fence),
+                OperationState::Failed,
+                Some(json!({"abandoned": "the save was not committed"})),
+            )?;
+            Ok(true)
+        })?;
+        if !resolved {
+            return Ok(false);
+        }
+        let own = staged.operation_id.clone();
+        self.files
+            .remove_staged(&format!("{}.part", own.0.as_str()))
+            .map_err(file_failure)?;
+        let keep = read_snapshot(store, &ReadOptions::default(), |s| {
+            if s.artifacts().blob(&staged.digest)?.is_some() {
+                return Ok(true);
+            }
+            Ok(unresolved_staging(s)?.iter().any(|o| {
+                o.id != own
+                    && o.payload.get("digest").and_then(Value::as_str) == Some(&staged.digest)
+            }))
+        })?;
+        if !keep {
+            self.files.unlink(&staged.digest).map_err(file_failure)?;
+        }
+        Ok(true)
     }
 
     /// Removes every derived (rebuildable) payload; retained blobs are untouched.

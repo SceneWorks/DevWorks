@@ -386,9 +386,10 @@ impl Gateway<'_> {
         };
         // Preparation runs only for an admitted, currently authorized command and before its unit
         // of work; it never records a receipt, so a failure here is retryable with the same key.
+        let cancellation = options.cancellation.clone();
         let env = Preparation {
             store: self.store,
-            cancellation: options.cancellation.as_ref(),
+            cancellation: cancellation.as_ref(),
         };
         match handler.prepare(ctx, &admitted, &env) {
             Ok(prepared) => admitted.prepared = prepared,
@@ -401,6 +402,10 @@ impl Gateway<'_> {
                 return Ok(self.rejected(request_key, Rejection::StorageUnavailable, retry));
             }
         }
+        // The use case settles what it prepared once the outcome is known (for example a staged
+        // file whose metadata a refusal or rollback never committed).
+        let prepared = admitted.prepared.clone();
+        let settle = handler.clone();
         let owned_ctx = ctx.clone();
         // Only a command that entered as the user (or the host itself) may write authority
         // records through the seams, and only as that principal.
@@ -443,7 +448,10 @@ impl Gateway<'_> {
             Ok(Unit::Denied) => {
                 self.rejected(request_key, Rejection::PermissionDenied, RetryAdvice::Never)
             }
-            Ok(Unit::Contract(e)) => return Err(GatewayFailure::HandlerContract(e)),
+            Ok(Unit::Contract(e)) => {
+                settle.settle(ctx, prepared.as_ref(), None, &env);
+                return Err(GatewayFailure::HandlerContract(e));
+            }
             Err(StorageError::CommitUnknown) => CommandReply::CommandStatusUnknown {
                 protocol: Protocol::Draft1,
                 request_key,
@@ -461,6 +469,7 @@ impl Gateway<'_> {
                 RetryAdvice::SameCommand,
             ),
         };
+        settle.settle(ctx, prepared.as_ref(), Some(&reply), &env);
         validate_command_reply(&reply).map_err(GatewayFailure::HandlerContract)?;
         Ok(reply)
     }

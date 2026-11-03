@@ -60,9 +60,13 @@ fn project(s: &str) -> ProjectId {
 
 /// Host source handles: upload tickets, attachments and work-output handles mapped to files
 /// beneath one registered read root.
+/// A callback run once while a handle is resolved (inside the save's preparation).
+type OnResolve = Box<dyn FnOnce() + Send>;
+
 struct Sources {
     root: ReadRoot,
     handles: Mutex<HashMap<String, (String, SourceOrigin)>>,
+    on_resolve: Mutex<HashMap<String, OnResolve>>,
 }
 impl ArtifactSources for Sources {
     fn resolve(
@@ -77,6 +81,10 @@ impl ArtifactSources for Sources {
         };
         if key.as_str() == "denied" {
             return Err(SourceRefusal::PermissionDenied);
+        }
+        let hook = self.on_resolve.lock().unwrap().remove(key.as_str());
+        if let Some(hook) = hook {
+            hook();
         }
         let handles = self.handles.lock().unwrap();
         let (relative, origin) = handles.get(key.as_str()).ok_or(SourceRefusal::NotFound)?;
@@ -119,6 +127,7 @@ impl Fx {
                 location: src,
             },
             handles: Mutex::new(HashMap::new()),
+            on_resolve: Mutex::new(HashMap::new()),
         });
         let fx = Self::open(h, sources, Arc::new(AtomicU64::new(0)));
         fx.store
@@ -403,6 +412,27 @@ impl Fx {
                 .page(&EventFilter::All, 0, 500)
                 .map(|p| p.events)
         })
+    }
+    /// Every staging operation in creation order, whatever history references it.
+    fn staging_ops_all(&self) -> Vec<OperationRecord> {
+        let ids = self
+            .store
+            .with_writer_connection(|c| {
+                let mut s = super::super::conn::db(c.prepare(
+                    "SELECT id FROM operations WHERE capability=?1 ORDER BY created_at,rowid",
+                ))?;
+                let rows = super::super::conn::db(
+                    s.query_map([STAGE_CAPABILITY], |r| r.get::<_, String>(0)),
+                )?;
+                super::super::conn::db(rows.collect::<Result<Vec<_>, _>>())
+            })
+            .unwrap();
+        ids.into_iter()
+            .map(|i| {
+                let op = devworks_core::protocol::OperationId(id(&i));
+                self.read(|s| s.operations().operation(&op)).unwrap()
+            })
+            .collect()
     }
     fn staging_ops(&self) -> Vec<OperationRecord> {
         let mut out = Vec::new();
@@ -942,21 +972,30 @@ fn a_crash_at_any_publication_step_is_reconciled_without_visible_metadata() {
                 assert!(crashed.is_err(), "{s:?}");
             }
             None => {
-                // The bytes are published but the metadata transaction never commits.
-                let frame = fx.save_frame(
-                    &fx.key(),
-                    "project-a",
-                    "Crash",
-                    "text/plain",
-                    json!({"kind": "Upload", "ticketId": "t1"}),
-                    &bytes,
-                );
-                let options = WriteOptions {
-                    deadline_ms: Some(T0 - 1),
-                    ..WriteOptions::default()
+                // The bytes are published, then the process dies before the unit of work.
+                let env = Preparation {
+                    store: &*fx.store,
+                    cancellation: None,
                 };
-                let reply = fx.command_with(&user, "artifacts.save", frame, options);
-                assert_eq!(rejected(reply), Rejection::StorageUnavailable);
+                let expected = Digest::try_from(digest.clone()).unwrap();
+                let source = ArtifactSource::Upload {
+                    ticket_id: id("t1"),
+                };
+                let staged = fx
+                    .svc
+                    .stage(
+                        &env,
+                        &user,
+                        &StageRequest {
+                            project: &project("project-a"),
+                            source: &source,
+                            expected_digest: &expected,
+                            expected_bytes: bytes.len() as i64,
+                            request_digest: "crash",
+                        },
+                    )
+                    .unwrap();
+                assert!(matches!(staged, Staging::Staged(_)));
                 assert!(fx.blob_file(&digest).exists());
             }
         }
@@ -1611,4 +1650,147 @@ fn a_cancelled_save_stages_nothing_and_unselected_variants_are_rejected() {
             .expect("addressable");
         assert_eq!(fault(reply).code, DomainErrorCode::InvalidArgument, "{op}");
     }
+}
+
+/// Saves through a cloned registry and store from inside another save's preparation, so it
+/// commits between that save's quota pre-check and its unit of work.
+fn concurrent_save(fx: &Fx, handle: &str, bytes: &[u8]) -> OnResolve {
+    let (store, cases, ids, clock) = (
+        fx.store.clone(),
+        fx.cases.clone(),
+        fx.h.ids.clone(),
+        fx.h.clock.clone(),
+    );
+    let (user, frame) = (
+        fx.user(),
+        fx.save_frame(
+            &fx.key(),
+            "project-a",
+            "Concurrent",
+            "text/plain",
+            json!({"kind": "Upload", "ticketId": handle}),
+            bytes,
+        ),
+    );
+    Box::new(move || {
+        let authority = HostAuthority {
+            store: &*store,
+            clock: &*clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*store,
+            ids: &*ids,
+        };
+        let reply = cases
+            .command(
+                &gateway,
+                &user,
+                "artifacts.save",
+                frame.to_string().as_bytes(),
+            )
+            .unwrap();
+        saved(reply);
+    })
+}
+
+#[test]
+fn a_save_refused_after_staging_resolves_its_staging_without_a_restart() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let schema = serde_json::to_value(
+        descriptor("storage.artifactQuotaBytes")
+            .unwrap()
+            .schema_ref(),
+    )
+    .unwrap();
+    let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": fx.key(), "body": {
+        "kind": "settings.save_revision", "scope": {"kind": "Project", "projectId": "project-a"},
+        "expectedRevision": "1",
+        "entries": [{"key": "storage.artifactQuotaBytes", "value": {"schema": schema, "value": 15}}]}});
+    assert!(matches!(
+        recorded(fx.command(&user, "settings.save_revision", frame)).0,
+        DomainDecision::Applied { .. }
+    ));
+    let (racy, filler) = ([b'r'; 10], [b'f'; 10]);
+    fx.source("filler", "filler.bin", &filler, SourceOrigin::default());
+    fx.source("racy", "racy.bin", &racy, SourceOrigin::default());
+    // The quota pre-check passes (0 + 10 <= 15); a concurrent save then uses 10 bytes before
+    // this save's unit of work, whose in-transaction check refuses it after staging.
+    let hook = concurrent_save(&fx, "filler", &filler);
+    fx.sources
+        .on_resolve
+        .lock()
+        .unwrap()
+        .insert("racy".into(), hook);
+    let f = refused(fx.save(&user, "project-a", "Racy", "text/plain", "racy", &racy));
+    assert_eq!(
+        (f.code, target(&f)),
+        (DomainErrorCode::CapacityWait, QUOTA_TARGET)
+    );
+    // Resolved now, not at the next boot: the staging operation failed under its fence and the
+    // unreferenced file was collected; the concurrent artifact is untouched.
+    let ops = fx.staging_ops_all();
+    let racy_digest = sha256_hex(&racy);
+    let mine: Vec<_> = ops
+        .iter()
+        .filter(|o| o.payload["digest"] == racy_digest)
+        .collect();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].state, OperationState::Failed);
+    let resolutions = mine[0]
+        .latest_attempt()
+        .unwrap()
+        .observations
+        .iter()
+        .filter(|o| o.get("abandoned").is_some())
+        .count();
+    assert_eq!(resolutions, 1);
+    assert!(!fx.blob_file(&racy_digest).exists());
+    assert!(fx.files.staged().unwrap().is_empty());
+    assert!(fx.blob_file(&sha256_hex(&filler)).exists());
+    assert_eq!(list(&fx, &user, "project-a").len(), 1);
+    // Nothing is resolved twice: recovery in this boot and after a restart finds nothing.
+    assert_eq!(fx.svc.recover(&*fx.store).unwrap(), Default::default());
+    let fx = fx.restart();
+    let report = fx.svc.recover(&*fx.store).unwrap();
+    assert_eq!(report, Default::default(), "{report:?}");
+    let failed = mine[0].id.clone();
+    let op = fx.read(|s| s.operations().operation(&failed)).unwrap();
+    assert_eq!(op.revision, mine[0].revision, "not resolved again");
+}
+
+#[test]
+fn a_save_rejected_before_commit_resolves_its_staging_immediately() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let bytes = b"never committed";
+    fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
+    let frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "Late",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t1"}),
+        bytes,
+    );
+    // The unit of work is not admitted after staging (its deadline passed).
+    let options = WriteOptions {
+        deadline_ms: Some(T0 - 1),
+        ..WriteOptions::default()
+    };
+    let reply = fx.command_with(&user, "artifacts.save", frame.clone(), options);
+    assert_eq!(rejected(reply), Rejection::StorageUnavailable);
+    let ops = fx.staging_ops_all();
+    assert_eq!(ops.len(), 1);
+    assert_eq!(ops[0].state, OperationState::Failed);
+    assert!(!fx.blob_file(&sha256_hex(bytes)).exists());
+    // The same command then succeeds and its own staging completes.
+    saved(fx.command(&user, "artifacts.save", frame));
+    let states: Vec<_> = fx.staging_ops_all().iter().map(|o| o.state).collect();
+    assert_eq!(
+        states,
+        vec![OperationState::Failed, OperationState::ObservedComplete]
+    );
 }
