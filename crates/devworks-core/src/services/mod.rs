@@ -6,7 +6,10 @@
 //! registered use case is reported as [`GatewayFailure::NoUseCase`] before any store access, so
 //! nothing unimplemented is advertised or recorded.
 pub mod artifacts;
+pub mod cursor;
+pub mod history;
 pub mod queue;
+pub mod sessions;
 
 use crate::context::InvocationContext;
 use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, QueryOutcome};
@@ -96,6 +99,22 @@ impl UseCases {
     pub fn with_artifacts(mut self, service: Arc<artifacts::ArtifactService>) -> Self {
         for op in artifacts::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the sessions family (`ConversationService`).
+    pub fn with_sessions(mut self, service: Arc<sessions::SessionService>) -> Self {
+        for op in sessions::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the history family (`HistoryService`).
+    pub fn with_history(mut self, service: Arc<history::HistoryService>) -> Self {
+        for op in history::OPERATIONS {
+            self.register(op, Some(service.clone()), None);
         }
         self
     }

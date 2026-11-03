@@ -42,6 +42,11 @@ pub enum IdKind {
     ArtifactVersion,
     /// Host-issued artifact source handles (upload tickets).
     SourceHandle,
+    Session,
+    Conversation,
+    TranscriptEntry,
+    TranscriptBatch,
+    Link,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

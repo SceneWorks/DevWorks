@@ -3794,6 +3794,16 @@ fn revision_two_tags_are_saved_filtered_returned_only_at_revision_two_and_surviv
         .map(|e| e.payload["tags"].clone())
         .collect();
     assert!(published.contains(&json!(["evidence", "release"])));
+    // Each decision's history records the negotiated revision beside its decision subject.
+    let decided: Vec<Value> = fx
+        .events()
+        .into_iter()
+        .filter(|e| e.kind == "CommandDecided")
+        .map(|e| e.payload)
+        .collect();
+    assert!(decided.iter().all(|p| p.get("subject").is_some()));
+    let revisions: Vec<&Value> = decided.iter().map(|p| &p["schemaRevision"]).collect();
+    assert!(revisions.contains(&&json!(1)) && revisions.contains(&&json!(2)));
     let _ = (b, d);
 }
 

@@ -147,6 +147,8 @@ pub struct DecodedRequest {
     pub effect: EffectClass,
     /// Effective action label for action-dependent bindings.
     pub action: Option<&'static str>,
+    /// Work items the selected input names as its target, in priority order ([`work_targets`]).
+    pub targets: Vec<crate::protocol::Id>,
 }
 impl DecodedRequest {
     pub fn mode(&self) -> Mode {
@@ -232,6 +234,7 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
     let fingerprint = fingerprint::compute(descriptor, binding.mode, revision, &decoded.normalized)
         .map_err(|e| refuse(AdmissionError::Fingerprint(e.to_string())))?;
     let (effect, action) = effective_effect(binding, &decoded.input).map_err(refuse)?;
+    let targets = work_targets(&decoded.normalized);
     Ok(DecodedRequest {
         descriptor,
         binding,
@@ -241,6 +244,7 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
         revision,
         effect,
         action,
+        targets,
     })
 }
 
@@ -265,6 +269,33 @@ fn negotiated_revision(
             operation: descriptor.name,
             revision,
         })
+}
+
+/// Input members that name an existing work item a command acts on, in priority order: the
+/// recorded inputs name their target work as `workId` (task/issue edits), `taskId`, `issueId`,
+/// `rootId` (root controls, sessions, history) or `featureId`, at the top level of the
+/// normalized input or inside its `command` (root-control envelopes). Identity only: the
+/// gateway resolves each against current work items and the invocation's project, and an input
+/// that names none (a creation) has no target.
+pub const WORK_TARGET_MEMBERS: [&str; 5] = ["workId", "taskId", "issueId", "rootId", "featureId"];
+
+/// The work target identifiers of a normalized input ([`WORK_TARGET_MEMBERS`]).
+pub fn work_targets(normalized: &Value) -> Vec<crate::protocol::Id> {
+    let mut out = Vec::new();
+    let scopes = [Some(normalized), normalized.get("command")];
+    for member in WORK_TARGET_MEMBERS {
+        for scope in scopes.iter().flatten() {
+            if let Some(id) = scope
+                .get(member)
+                .and_then(Value::as_str)
+                .and_then(|s| crate::protocol::Id::new(s).ok())
+                && !out.contains(&id)
+            {
+                out.push(id);
+            }
+        }
+    }
+    out
 }
 
 /// Resolves the effect class a typed input actually requests. For every binding other than
