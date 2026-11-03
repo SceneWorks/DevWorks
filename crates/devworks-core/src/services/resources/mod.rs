@@ -1440,7 +1440,8 @@ fn settle(
     promote(tx, actor, res, report)
 }
 
-/// Grants waiters in priority/FIFO order while the head fits the free capacity.
+/// Grants waiters in priority/FIFO order while the head fits the free capacity. A waiter past its
+/// linger deadline was abandoned: it is expired here, whichever caller promotes, never granted.
 fn promote(
     tx: &mut dyn WriteTransaction,
     actor: &ActorId,
@@ -1465,6 +1466,18 @@ fn promote(
         let Some(mut head) = tx.resources().waiters(&res.id, None, 1)?.pop() else {
             return Ok(());
         };
+        if head.expires_at_ms <= now {
+            end(
+                tx,
+                actor,
+                &mut head,
+                LeaseEndReason::Expired,
+                "LeaseExpired",
+                json!({"waiting": true}),
+            )?;
+            report.expired += 1;
+            continue;
+        }
         if head.units > res.capacity - used {
             return Ok(());
         }

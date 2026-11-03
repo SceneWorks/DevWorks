@@ -990,6 +990,31 @@ fn ending_a_session_frees_its_leases() {
     assert_eq!(fx.stored(&blocker).phase, LeasePhase::Held);
 }
 
+#[test]
+fn ending_a_session_never_grants_a_waiter_past_its_linger() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", "project-a", "s-end");
+    let a_other = fx.agent("agent-a", "project-a", "s-other");
+    let c = fx.agent("agent-c", "project-a", "s-c");
+    lease(fx.acquire(&a, "queue", json!({"leaseMs": "3600000"})));
+    let abandoned = lease(fx.acquire(&a_other, "queue", json!({})));
+    assert_eq!(fx.stored(&abandoned).phase, LeasePhase::Waiting);
+    fx.h.set_now(T0 + 100_000);
+    let active = lease(fx.acquire(&c, "queue", json!({})));
+    // The first waiter stopped polling: its linger lapsed before any sweep ran.
+    fx.h.set_now(T0 + 130_000);
+    fx.write(|tx| {
+        devworks_core::services::resources::end_session_leases(tx, &actor("agent-a"), &id("s-end"))
+    });
+    let stale = fx.stored(&abandoned);
+    assert_eq!(
+        (stale.phase, stale.end_reason),
+        (LeasePhase::Released, Some(LeaseEndReason::Expired)),
+        "an abandoned waiter is expired, not granted"
+    );
+    assert_eq!(fx.stored(&active).phase, LeasePhase::Held);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Keep-awake through the existing setting
 
