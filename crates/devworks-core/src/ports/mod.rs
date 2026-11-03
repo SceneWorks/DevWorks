@@ -5,6 +5,7 @@
 //! Every port is `Send + Sync` and object-safe: ARCH-03 runs gateway calls off the UI thread,
 //! and command use cases execute on the storage write owner's thread, so the gateway hands them
 //! across threads. Core stays runtime-agnostic (no async runtime dependency).
+pub mod files;
 pub mod storage;
 
 use crate::context::InvocationContext;
@@ -16,7 +17,9 @@ use crate::protocol::{
     ActorId, Counter, DomainFault, Id, OperationId, ProjectId, ReadStamp, Receipt,
 };
 use crate::registry::{EffectClass, ModeBinding, OperationDescriptor, SchemaRevision};
-use storage::{ReadSnapshot, StorageError, WriteTransaction};
+use std::any::Any;
+use std::fmt;
+use storage::{ApplicationStore, Cancellation, ReadSnapshot, StorageError, WriteTransaction};
 
 /// UTC wall clock in milliseconds.
 pub trait Clock: Send + Sync {
@@ -34,6 +37,8 @@ pub enum IdKind {
     Store,
     Boot,
     Grant,
+    Artifact,
+    ArtifactVersion,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {
@@ -200,12 +205,50 @@ impl From<StorageError> for HandlerFailure {
         Self::Storage(e)
     }
 }
+/// What a use case staged before its unit of work (see [`CommandHandler::prepare`]). Opaque to
+/// the gateway; the use case reads it back with [`crate::gateway::AdmittedCommand::prepared`].
+pub struct Prepared(Box<dyn Any + Send>);
+impl Prepared {
+    pub fn new<T: Any + Send>(value: T) -> Self {
+        Self(Box::new(value))
+    }
+    pub fn get<T: Any>(&self) -> Option<&T> {
+        self.0.downcast_ref()
+    }
+}
+impl fmt::Debug for Prepared {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Prepared(..)")
+    }
+}
+
+/// What a preparation step may use: the store (for its own durable journal entries and
+/// snapshot reads) and the command's cancellation signal.
+pub struct Preparation<'a> {
+    pub store: &'a dyn ApplicationStore,
+    pub cancellation: Option<&'a Cancellation>,
+}
+
 /// Command use cases. `decide` runs synchronously on the sole write owner inside the command's
 /// transaction, after the receipt check and before the receipt is recorded: its reads are the
 /// current authoritative state and its writes (domain changes, history, outbox intents) commit
 /// atomically with the receipt or not at all. It must not await, call the network, run
 /// inference or invoke package/UI callbacks.
 pub trait CommandHandler: Send + Sync {
+    /// Bounded preparation outside any write transaction, after admission and current authority
+    /// and before the unit of work: for example staging and flushing a file whose metadata
+    /// `decide` then publishes (ARCH-03: preparation and observation happen before or after the
+    /// transactional handler). It must leave only recoverable, invisible state (journaled intent,
+    /// staged or unreferenced files), because the unit of work may still deny, replay or refuse
+    /// the command. An `Err` rejects the command without a receipt. The default prepares nothing.
+    fn prepare(
+        &self,
+        _ctx: &InvocationContext,
+        _command: &AdmittedCommand,
+        _env: &Preparation<'_>,
+    ) -> Result<Option<Prepared>, StorageError> {
+        Ok(None)
+    }
     fn decide(
         &self,
         ctx: &InvocationContext,

@@ -2132,6 +2132,9 @@ impl WriteTransaction for Lying<'_> {
     ) -> Result<&mut dyn GrantLedger, StorageError> {
         self.inner.grant_writes(capability, &actor("user-a"))
     }
+    fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
+        self.inner.artifacts()
+    }
 }
 
 fn seams_run(

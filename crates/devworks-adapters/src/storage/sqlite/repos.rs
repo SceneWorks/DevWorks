@@ -977,6 +977,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn authority(&self) -> &dyn AuthorityRead {
         self
     }
+    fn artifacts(&self) -> &dyn ArtifactRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1170,6 +1173,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn authority(&mut self) -> &mut dyn AuthorityLedger {
+        self
+    }
+    fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         self
     }
 }

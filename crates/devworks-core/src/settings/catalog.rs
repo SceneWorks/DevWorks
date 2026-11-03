@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 1;
+pub const CATALOG_REVISION: i64 = 2;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -637,9 +637,66 @@ fn build() -> Vec<SettingDescriptor> {
             Immediate,
             HarnessEnforced
         ),
+        setting!(
+            ARTIFACT_LOCATION_KEY,
+            "Artifact storage location",
+            "Artifact contents are managed files under the application data root (artifacts/, with in-flight files in staging/), outside repositories and disposable worktrees, with their metadata in the workspace store. Moving them is an explicit data-root relocation, never a side effect of a settings edit.",
+            Storage,
+            WORKSPACE,
+            ValueKind::Choice(&["applicationData"]),
+            "applicationData",
+            Immediate,
+            HarnessEnforced
+        ),
+        setting!(
+            ARTIFACT_RETENTION_KEY,
+            "Artifact retention",
+            "Artifacts are kept until they are explicitly deleted. Age, feature completion, worktree cleanup and storage pressure never remove them; only rebuildable previews are collected. Files still referenced elsewhere, being read or held by a backup stay until those references end.",
+            Storage,
+            WORKSPACE,
+            ValueKind::Choice(&["untilExplicitDeletion"]),
+            "untilExplicitDeletion",
+            Immediate,
+            HarnessEnforced
+        ),
+        setting!(
+            ARTIFACT_QUOTA_KEY,
+            "Artifact storage limit (bytes)",
+            "Bytes of artifact content a project may hold; 0 means no limit. Reaching it refuses new saves with a visible status and never deletes anything to make room. Engineering default.",
+            Storage,
+            INHERITED,
+            ValueKind::Integer {
+                min: 0,
+                max: i64::MAX
+            },
+            0,
+            NextAdmission
+        ),
+        setting!(
+            ARTIFACT_MAX_FILE_KEY,
+            "Largest artifact file (bytes)",
+            "Largest single file an artifact save or import reads. Larger sources are refused visibly. Engineering default.",
+            Storage,
+            WORKSPACE,
+            ValueKind::Integer {
+                min: 1,
+                max: 1_073_741_824
+            },
+            67_108_864,
+            NextAdmission
+        ),
     ]);
     all
 }
+
+/// Where artifact contents live (a harness policy shown for transparency).
+pub const ARTIFACT_LOCATION_KEY: &str = "storage.artifactLocation";
+/// Artifact retention: until explicit deletion (a harness policy; no automatic expiry).
+pub const ARTIFACT_RETENTION_KEY: &str = "storage.artifactRetention";
+/// Per-project artifact byte limit (0 = no limit).
+pub const ARTIFACT_QUOTA_KEY: &str = "storage.artifactQuotaBytes";
+/// Largest single artifact source file.
+pub const ARTIFACT_MAX_FILE_KEY: &str = "storage.artifactMaxFileBytes";
 
 /// Looks up a descriptor by key. Unknown keys fail closed at every caller.
 pub fn descriptor(key: &str) -> Option<&'static SettingDescriptor> {

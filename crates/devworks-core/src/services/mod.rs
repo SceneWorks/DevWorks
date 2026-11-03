@@ -5,6 +5,7 @@
 //! the same validation, authority, receipts and implementation (ARCH-02). An operation with no
 //! registered use case is reported as [`GatewayFailure::NoUseCase`] before any store access, so
 //! nothing unimplemented is advertised or recorded.
+pub mod artifacts;
 pub mod queue;
 
 use crate::context::InvocationContext;
@@ -86,6 +87,14 @@ impl UseCases {
     /// Registers the settings family (`ConfigurationService`).
     pub fn with_settings(mut self, service: Arc<settings::service::SettingsService>) -> Self {
         for op in settings::service::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the artifacts family (`ArtifactService`).
+    pub fn with_artifacts(mut self, service: Arc<artifacts::ArtifactService>) -> Self {
+        for op in artifacts::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

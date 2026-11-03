@@ -26,16 +26,16 @@ use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
-    ActorRegistry, AuthorityGrant, AuthorityLedger, AuthorityRead, CommandLedger,
-    CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter, EventPage, EventRecord,
-    GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead, LedgerEntry, NewAuthorityGrant,
-    NewEvent, NewGrant, NewPrincipalBinding, OperationJournal, PackageHandlerLedger,
-    PrincipalBinding, ReadOptions, RegisteredRepository, RevisionConflict, Savepoint, StorageError,
-    StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ActorRegistry, ArtifactRepository, AuthorityGrant, AuthorityLedger, AuthorityRead,
+    CommandLedger, CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter,
+    EventPage, EventRecord, GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead,
+    LedgerEntry, NewAuthorityGrant, NewEvent, NewGrant, NewPrincipalBinding, OperationJournal,
+    PackageHandlerLedger, PrincipalBinding, ReadOptions, RegisteredRepository, RevisionConflict,
+    Savepoint, StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
-    GrantUse, HandlerFailure, IdKind, IdSource, QueryHandler, StoredReceipt,
+    GrantUse, HandlerFailure, IdKind, IdSource, Preparation, Prepared, QueryHandler, StoredReceipt,
 };
 use crate::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, validate_command_reply,
@@ -90,6 +90,7 @@ pub struct AdmittedCommand {
     fingerprint: Fingerprint,
     effect: EffectClass,
     action: Option<&'static str>,
+    prepared: Option<Prepared>,
 }
 impl AdmittedCommand {
     pub fn descriptor(&self) -> &'static OperationDescriptor {
@@ -113,6 +114,10 @@ impl AdmittedCommand {
     }
     pub fn action(&self) -> Option<&'static str> {
         self.action
+    }
+    /// What the use case's [`CommandHandler::prepare`] staged for this command, if anything.
+    pub fn prepared<T: std::any::Any>(&self) -> Option<&T> {
+        self.prepared.as_ref().and_then(Prepared::get)
     }
 }
 
@@ -369,7 +374,7 @@ impl Gateway<'_> {
                 });
             }
         };
-        let admitted = AdmittedCommand {
+        let mut admitted = AdmittedCommand {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
             identity: ReceiptIdentity::bind(ctx, request_key.clone()),
@@ -377,7 +382,25 @@ impl Gateway<'_> {
             fingerprint: decoded.fingerprint,
             effect: decoded.effect,
             action: decoded.action,
+            prepared: None,
         };
+        // Preparation runs only for an admitted, currently authorized command and before its unit
+        // of work; it never records a receipt, so a failure here is retryable with the same key.
+        let env = Preparation {
+            store: self.store,
+            cancellation: options.cancellation.as_ref(),
+        };
+        match handler.prepare(ctx, &admitted, &env) {
+            Ok(prepared) => admitted.prepared = prepared,
+            Err(e) => {
+                // Same mapping as a write that was not admitted: nothing durable decided.
+                let retry = match e {
+                    StorageError::IncompatibleSchema(_) => RetryAdvice::Never,
+                    _ => RetryAdvice::SameCommand,
+                };
+                return Ok(self.rejected(request_key, Rejection::StorageUnavailable, retry));
+            }
+        }
         let owned_ctx = ctx.clone();
         // Only a command that entered as the user (or the host itself) may write authority
         // records through the seams, and only as that principal.
@@ -984,6 +1007,9 @@ impl WriteTransaction for HandlerTx<'_> {
             return Err(authority_owned());
         }
         self.inner.get_mut().authority_writes(capability, actor)
+    }
+    fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
+        self.inner.get_mut().artifacts()
     }
 }
 

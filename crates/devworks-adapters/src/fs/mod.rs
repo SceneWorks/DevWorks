@@ -22,6 +22,7 @@ use devworks_core::authority::destructive::{
 use std::fs::Metadata;
 use std::path::{Component, Path, PathBuf};
 
+pub mod artifacts;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
