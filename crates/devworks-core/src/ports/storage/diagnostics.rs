@@ -126,6 +126,23 @@ pub struct PrunedDiagnostics {
     pub over_cap: i64,
 }
 
+/// The durable intent of one diagnostic export: what a request key exported, and the exact
+/// `artifacts.save` command it submitted, so a retry with that key resubmits the same command
+/// (the gateway replays its receipt) and a different selection under the key is a conflict.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportIntent {
+    pub actor: ActorId,
+    /// The receipt identity's scope key and request key.
+    pub scope_key: String,
+    pub request_key: String,
+    pub project_id: ProjectId,
+    /// SHA-256 of the export's selection and destination.
+    pub selection_sha256: String,
+    /// The submitted `artifacts.save` command frame (JSON).
+    pub command: String,
+    pub created_at_ms: i64,
+}
+
 pub trait DiagnosticRead {
     fn diagnostic(&self, id: &Id) -> Result<Option<StoredDiagnostic>, StorageError>;
     /// Matching records in sequence order (descending when asked), at most `limit` (1..=500).
@@ -137,6 +154,13 @@ pub trait DiagnosticRead {
     /// How many records match (the same predicate as [`Self::diagnostics`]).
     fn count_diagnostics(&self, filter: &DiagnosticFilter) -> Result<i64, StorageError>;
     fn diagnostic_stats(&self) -> Result<DiagnosticStats, StorageError>;
+    /// The export intent of one receipt identity.
+    fn export_intent(
+        &self,
+        actor: &ActorId,
+        scope_key: &str,
+        request_key: &str,
+    ) -> Result<Option<ExportIntent>, StorageError>;
 }
 
 pub trait DiagnosticRepository: DiagnosticRead {
@@ -146,8 +170,11 @@ pub trait DiagnosticRepository: DiagnosticRead {
         &mut self,
         record: &StoredDiagnostic,
     ) -> Result<StoredDiagnostic, StorageError>;
+    /// Records (or replaces) the export intent of its receipt identity.
+    fn put_export_intent(&mut self, intent: &ExportIntent) -> Result<(), StorageError>;
     /// Removes records recorded before `older_than_ms`, then the oldest records beyond
-    /// `keep_at_most`. The sequence counter is never reset.
+    /// `keep_at_most`, and export intents created before `older_than_ms`. The sequence counter
+    /// is never reset.
     fn prune_diagnostics(
         &mut self,
         older_than_ms: i64,

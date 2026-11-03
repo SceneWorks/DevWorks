@@ -34,7 +34,7 @@
 //!   [`health`]). A metric the host cannot measure is `Unavailable` with its reason, never zero.
 //! * **Local only (OPS-02).** No central account, remote control plane, telemetry or upload:
 //!   an export is an artifact a person saves locally ([`DiagnosticService::export`]); a retry of
-//!   its request key replays the recorded save.
+//!   its request key resubmits the recorded command, which the gateway replays.
 //!
 //! # Retained CodeGraph behavior
 //!
@@ -76,7 +76,7 @@ use crate::ports::diagnostics::{
 };
 use crate::ports::storage::{
     ApplicationStore, ArtifactState, AuthorityRead, ConfigScope, ConfigurationRead,
-    DiagnosticAudience, DiagnosticFilter, LedgerEntry, PrunedDiagnostics, ReadOptions,
+    DiagnosticAudience, DiagnosticFilter, ExportIntent, PrunedDiagnostics, ReadOptions,
     ReadSnapshot, StorageError, StoredDiagnostic, Unavailable, WriteOptions, WriteTransaction,
     read_snapshot, run_write, severity_rank,
 };
@@ -92,7 +92,7 @@ use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
     ActorId, CommandReply, CorrelationId, Counter, DomainErrorCode, DomainFault, Id, OperationId,
-    ProjectId, Protocol, RequestKey, RetryAdvice, Revision,
+    ProjectId, Protocol, Rejection, RequestKey, RetryAdvice, Revision,
 };
 use crate::registry;
 use crate::services::artifacts::{Viewer, visible};
@@ -101,7 +101,6 @@ use crate::settings::model::{chain, current_chain};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
@@ -166,8 +165,6 @@ pub const EXPORT_MAX_BYTES: usize = 8 * 1024 * 1024;
 pub const EXPORT_FORMAT: &str = "devworks.diagnostics-export/1";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const CURSOR_VERSION: &str = "l1";
-/// Exports whose staged command is kept for an in-process retry.
-const STAGED_EXPORTS: usize = 64;
 
 /// `component` is `prefix` or lies beneath it (`indexing.repository` under `indexing`).
 pub fn under(component: &str, prefix: &str) -> bool {
@@ -743,8 +740,8 @@ pub struct DiagnosticService {
     sources: RwLock<Vec<Arc<dyn HealthSource>>>,
     consumers: RwLock<Option<Vec<String>>>,
     monitor: Mutex<MonitorState>,
-    /// The staged `artifacts.save` command of recent exports, by receipt identity.
-    staged: Mutex<VecDeque<(ReceiptIdentity, Vec<u8>)>>,
+    /// Where exports are staged (see [`Self::set_export_staging`]).
+    export_staging: RwLock<Option<Arc<dyn ExportStaging>>>,
 }
 
 impl DiagnosticService {
@@ -765,7 +762,7 @@ impl DiagnosticService {
             sources: RwLock::new(Vec::new()),
             consumers: RwLock::new(None),
             monitor: Mutex::new(MonitorState::default()),
-            staged: Mutex::new(VecDeque::new()),
+            export_staging: RwLock::new(None),
         }
     }
 
@@ -1119,52 +1116,92 @@ impl DiagnosticService {
         })
     }
 
+    /// Attaches the staging used by [`Self::export`] and swept by [`Self::sweep_exports`].
+    pub fn set_export_staging(&self, staging: Arc<dyn ExportStaging>) {
+        *self
+            .export_staging
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = Some(staging);
+    }
+    /// Removes staged export files left past their ticket's lifetime (a save that never
+    /// resolved them); the runtime's diagnostics monitor runs it every pass.
+    pub fn sweep_exports(&self) -> usize {
+        let staging = self
+            .export_staging
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        staging.map_or(0, |s| s.sweep())
+    }
+
     /// Exports the selection as an artifact of the invocation's project through the one
-    /// artifact service: renders it, stages it ([`ExportStaging`]) and submits `artifacts.save`
-    /// under `request_key` with `submit` (the runtime's command admission), returning that
-    /// command's outcome.
+    /// artifact service: renders it, stages it (the attached [`ExportStaging`]), records the
+    /// export's intent and submits `artifacts.save` under `request_key` with `submit` (the
+    /// runtime's command admission), returning that command's outcome.
+    ///
+    /// **Retries.** The intent binds the request key to the selection, the destination project
+    /// and the exact command submitted, durably. A retry with the same key and selection
+    /// resubmits that command unchanged, so the gateway replays its receipt under current
+    /// authority (preparation stages nothing for a replay). If no receipt was recorded, the
+    /// export is rendered and staged again. The key used for a different selection or project,
+    /// or already used by another command, is `IdempotencyConflict`; nothing is staged.
+    ///
+    /// **Staging.** Once the save is decided (recorded or rejected) the staged file is released;
+    /// a file whose outcome is unknown stays for a retry and is swept after its ticket expires.
     pub fn export(
         &self,
         ctx: &InvocationContext,
         query: &LogQuery,
-        staging: &dyn ExportStaging,
         request_key: &str,
         submit: impl FnOnce(&[u8]) -> CommandOutcome,
     ) -> Result<CommandOutcome, ExportFailure> {
         let Some(project) = ctx.project_id().cloned() else {
             return Err(ExportFailure::Staging(ExportRefused::NoProject));
         };
+        let staging = self
+            .export_staging
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .ok_or(ExportFailure::Staging(ExportRefused::Unavailable))?;
         let key = Id::new(request_key)
             .map_err(|_| ExportFailure::Invalid("a request key is an opaque identifier"))?;
-        let identity = ReceiptIdentity::bind(ctx, RequestKey(key));
-        // A retry of this request key must replay, not stage again: a new upload ticket would
-        // change the save's input and turn the retry into an idempotency conflict. In this
-        // process the staged command is resubmitted unchanged (the gateway replays its receipt
-        // under current authority); after a restart (tickets do not survive one) the recorded
-        // receipt is returned as the replay.
-        let staged = self
-            .staged
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .iter()
-            .find(|(k, _)| *k == identity)
-            .map(|(_, frame)| frame.clone());
-        if let Some(frame) = staged {
-            return Ok(submit(&frame));
-        }
-        let recorded = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
-            s.receipts().lookup(&identity)
+        let identity = ReceiptIdentity::bind(ctx, RequestKey(key.clone()));
+        let selection = sha256_hex(
+            json!({"selection": format!("{query:?}"), "projectId": project.0.as_str()})
+                .to_string()
+                .as_bytes(),
+        );
+        let (intent, receipt) = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
+            Ok((
+                s.diagnostics().export_intent(
+                    identity.actor_id(),
+                    identity.scope_key().as_str(),
+                    request_key,
+                )?,
+                s.receipts().lookup(&identity)?.is_some(),
+            ))
         })
         .map_err(ExportFailure::Storage)?;
-        if let Some(LedgerEntry::Current(stored)) = recorded
-            && stored.operation == "artifacts.save"
-            && ctx.principal_kind() == PrincipalKind::Human
-        {
-            return Ok(Ok(CommandReply::Recorded {
+        let conflict = || {
+            Ok(Ok(CommandReply::Rejected {
                 protocol: Protocol::Draft1,
-                receipt: stored.receipt,
-                replayed: true,
-            }));
+                request_key: RequestKey(key.clone()),
+                code: Rejection::IdempotencyConflict,
+                retry: RetryAdvice::RefreshAndNewRequest,
+                correlation_id: CorrelationId(self.ids.next_id(IdKind::Correlation)),
+            }))
+        };
+        match &intent {
+            Some(i) if i.selection_sha256 != selection || i.project_id != project => {
+                return conflict();
+            }
+            // The recorded save of this export: the same command replays through the gateway.
+            Some(i) if receipt => return Ok(submit(i.command.as_bytes())),
+            // The key belongs to another command.
+            None if receipt => return conflict(),
+            // Nothing was recorded under the key yet: (re)stage below.
+            _ => {}
         }
         let rendered = self.render_export(ctx, query)?;
         let name = format!("devworks-diagnostics-{}.json", self.now());
@@ -1175,16 +1212,31 @@ impl DiagnosticService {
             "kind": "Save", "projectId": project.0.as_str(), "title": "Diagnostics export",
             "mediaType": "application/json", "source": source,
             "expectedDigest": sha256_hex(&rendered.bytes),
-            "expectedBytes": rendered.bytes.len().to_string()}});
-        let frame = frame.to_string().into_bytes();
-        {
-            let mut staged = self.staged.lock().unwrap_or_else(|p| p.into_inner());
-            if staged.len() >= STAGED_EXPORTS {
-                staged.pop_front();
-            }
-            staged.push_back((identity, frame.clone()));
+            "expectedBytes": rendered.bytes.len().to_string()}})
+        .to_string();
+        let record = ExportIntent {
+            actor: identity.actor_id().clone(),
+            scope_key: identity.scope_key().as_str().to_owned(),
+            request_key: request_key.to_owned(),
+            project_id: project,
+            selection_sha256: selection,
+            command: frame.clone(),
+            created_at_ms: self.now(),
+        };
+        if let Err(e) = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            tx.diagnostics().put_export_intent(&record)
+        }) {
+            staging.release(&source);
+            return Err(ExportFailure::Storage(e));
         }
-        Ok(submit(&frame))
+        let outcome = submit(frame.as_bytes());
+        if matches!(
+            outcome,
+            Ok(CommandReply::Recorded { .. } | CommandReply::Rejected { .. })
+        ) {
+            staging.release(&source);
+        }
+        Ok(outcome)
     }
 }
 

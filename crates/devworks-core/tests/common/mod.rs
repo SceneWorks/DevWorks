@@ -1381,6 +1381,14 @@ impl DiagnosticRead for Unsupported {
     fn diagnostic_stats(&self) -> Result<DiagnosticStats, StorageError> {
         nope()
     }
+    fn export_intent(
+        &self,
+        _: &ActorId,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<ExportIntent>, StorageError> {
+        nope()
+    }
 }
 impl DiagnosticRepository for Unsupported {
     fn append_diagnostic(
@@ -1390,6 +1398,9 @@ impl DiagnosticRepository for Unsupported {
         nope()
     }
     fn prune_diagnostics(&mut self, _: i64, _: i64) -> Result<PrunedDiagnostics, StorageError> {
+        nope()
+    }
+    fn put_export_intent(&mut self, _: &ExportIntent) -> Result<(), StorageError> {
         nope()
     }
 }

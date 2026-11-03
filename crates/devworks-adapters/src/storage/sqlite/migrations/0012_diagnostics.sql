@@ -1,6 +1,7 @@
 -- Retained diagnostic log records (LOG-01..03, OPS-01): host work, the UI, agent tools and
 -- packages write diagnostics here, apart from history events, transcripts and model history.
--- Additive: one new table and its indexes; it references no table of migration 11.
+-- Additive: two new tables (the log and export intents) and their indexes; it references no
+-- table of migration 11.
 -- `sequence` is AUTOINCREMENT so a sequence is never reused after pruning: readers tail the log
 -- by "strictly after sequence N".
 CREATE TABLE diagnostic_records (
@@ -67,6 +68,21 @@ CREATE TABLE diagnostic_records (
         json_valid(recovery_json) AND json_type(recovery_json) = 'array'
     )
 ) STRICT;
+-- The durable intent of each diagnostic export, by receipt identity: the selection and
+-- destination it exported and the exact `artifacts.save` command it submitted, so a retry with
+-- the request key resubmits that command (the gateway replays its receipt under current
+-- authority) and other use of the key is a conflict. Pruned with the log's retention window.
+CREATE TABLE diagnostic_exports (
+    actor_id TEXT NOT NULL CHECK (length(actor_id) BETWEEN 1 AND 128),
+    scope_key TEXT NOT NULL CHECK (length(scope_key) BETWEEN 1 AND 1024),
+    request_key TEXT NOT NULL CHECK (length(request_key) BETWEEN 1 AND 128),
+    project_id TEXT NOT NULL CHECK (length(project_id) BETWEEN 1 AND 128),
+    selection_sha256 TEXT NOT NULL CHECK (length(selection_sha256) = 64),
+    command TEXT NOT NULL CHECK (json_valid(command) AND json_type(command) = 'object'),
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    PRIMARY KEY (actor_id, scope_key, request_key)
+) STRICT;
+CREATE INDEX diagnostic_exports_created ON diagnostic_exports(created_at);
 CREATE INDEX diagnostic_records_component ON diagnostic_records(component, sequence);
 CREATE INDEX diagnostic_records_recorded ON diagnostic_records(recorded_at);
 CREATE INDEX diagnostic_records_project ON diagnostic_records(project_id, sequence);

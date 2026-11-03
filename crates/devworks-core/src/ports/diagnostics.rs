@@ -80,6 +80,8 @@ pub enum ExportRefused {
     HumanOnly,
     /// The export needs a project to own its artifact.
     NoProject,
+    /// No staging is attached to the diagnostics service.
+    Unavailable,
     Io(String),
 }
 
@@ -92,4 +94,9 @@ pub trait ExportStaging: Send + Sync {
         file_name: &str,
         bytes: &[u8],
     ) -> Result<ArtifactSource, ExportRefused>;
+    /// The save that read `source` was decided (its bytes were copied, or it was refused for
+    /// good): remove the staged file.
+    fn release(&self, source: &ArtifactSource);
+    /// Removes staged files left past their ticket's lifetime; returns how many.
+    fn sweep(&self) -> usize;
 }

@@ -6,8 +6,9 @@
 //!   boot that stopped, so a failed or partial recovery stays visible after the restart.
 //! * [`sources`] registers the runtime's health sources: `boot.recovery` (from the
 //!   [`BootReport`]), `artifacts.collection` (the latest collection pass) and `queue.dispatcher`.
-//! * [`Monitor`] runs the retention pass and the monitor probes (integrity check, write-owner
-//!   probe) at boot and then every `RuntimeConfig::diagnostics_interval`.
+//! * [`Monitor`] runs the retention pass, the monitor probes (store inspection, integrity check,
+//!   write-owner probe) and the sweep of stale export staging files at boot and then every
+//!   `RuntimeConfig::diagnostics_interval`.
 use crate::dispatch::{self, Dispatcher};
 use crate::runtime::{BootError, BootReport, CollectionPass};
 use devworks_core::ports::diagnostics::Metric;
@@ -305,6 +306,7 @@ impl Monitor {
             let _ = tokio::task::spawn_blocking(move || {
                 let _ = svc.prune();
                 svc.refresh_monitor();
+                svc.sweep_exports();
             })
             .await;
             let _ = dispatch::first(self.wake.notified(), tokio::time::sleep(interval)).await;

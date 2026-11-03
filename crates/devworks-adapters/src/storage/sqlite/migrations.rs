@@ -141,11 +141,11 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0010_resources_processes.sql"),
         rebuilds_tables: false,
     },
-    // Additive: the retained diagnostic log (one table and its indexes), independent of every
-    // table of migration 11 (version 11 is another item's). The reader floor stays at 8: no
-    // earlier build reads diagnostic records. The writer floor stays at 9: no earlier build
-    // writes them, so it cannot break their sequence or bounds. Both are at least every earlier
-    // floor.
+    // Additive: the retained diagnostic log and export intents (two tables and their indexes),
+    // independent of every table of migration 11 (version 11 is another item's). The reader
+    // floor stays at 8: no earlier build reads diagnostic records. The writer floor stays at 9:
+    // no earlier build writes them, so it cannot break their sequence or bounds. Both are at
+    // least every earlier floor.
     Migration {
         version: 12,
         minimum_reader: 8,
@@ -156,7 +156,7 @@ pub const MIGRATIONS: &[Migration] = &[
 ];
 /// Recorded checksum of migration 12; a test fails if the shipped text changes.
 pub const MIGRATION_0012_SHA256: &str =
-    "ef8a43118dcce3622b937c0777d565f1682ddf500eca5a3605536c0699777ab9";
+    "2280b0a2bc95669067eca9d077a3d82ec1d7977cc5cb0e66d4ef0ac7fabf48c3";
 /// Recorded checksum of migration 10; a test fails if the shipped text changes.
 pub const MIGRATION_0010_SHA256: &str =
     "7fab1dd563202155578de4ffe4e14bf89647e97815685f0e58a886a051c20f01";

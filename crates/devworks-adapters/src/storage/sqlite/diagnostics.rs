@@ -266,6 +266,34 @@ fn stats(conn: &Connection) -> Result<DiagnosticStats, StorageError> {
     })
 }
 
+fn export_intent(
+    conn: &Connection,
+    actor: &ActorId,
+    scope_key: &str,
+    request_key: &str,
+) -> Result<Option<ExportIntent>, StorageError> {
+    let found: Option<(String, String, String, i64)> = db(conn
+        .query_row(
+            "SELECT project_id,selection_sha256,command,created_at FROM diagnostic_exports WHERE actor_id=?1 AND scope_key=?2 AND request_key=?3",
+            params![actor.0.as_str(), scope_key, request_key],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional())?;
+    found
+        .map(|(project, selection, command, created)| {
+            Ok(ExportIntent {
+                actor: actor.clone(),
+                scope_key: scope_key.to_owned(),
+                request_key: request_key.to_owned(),
+                project_id: ProjectId(id_of(project)?),
+                selection_sha256: selection,
+                command,
+                created_at_ms: created,
+            })
+        })
+        .transpose()
+}
+
 macro_rules! diagnostic_reads {
     ($t:ty) => {
         impl DiagnosticRead for $t {
@@ -284,6 +312,14 @@ macro_rules! diagnostic_reads {
             }
             fn diagnostic_stats(&self) -> Result<DiagnosticStats, StorageError> {
                 stats(self.conn)
+            }
+            fn export_intent(
+                &self,
+                actor: &ActorId,
+                scope_key: &str,
+                request_key: &str,
+            ) -> Result<Option<ExportIntent>, StorageError> {
+                export_intent(self.conn, actor, scope_key, request_key)
             }
         }
     };
@@ -363,7 +399,27 @@ impl DiagnosticRepository for Unit<'_> {
             "DELETE FROM diagnostic_records WHERE sequence IN (SELECT sequence FROM diagnostic_records ORDER BY sequence DESC LIMIT -1 OFFSET ?1)",
             [keep_at_most],
         ))? as i64;
+        db(self.conn.execute(
+            "DELETE FROM diagnostic_exports WHERE created_at < ?1",
+            [older_than_ms],
+        ))?;
         Ok(PrunedDiagnostics { expired, over_cap })
+    }
+
+    fn put_export_intent(&mut self, i: &ExportIntent) -> Result<(), StorageError> {
+        db(self.conn.execute(
+            "INSERT INTO diagnostic_exports(actor_id,scope_key,request_key,project_id,selection_sha256,command,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(actor_id,scope_key,request_key) DO UPDATE SET project_id=excluded.project_id,selection_sha256=excluded.selection_sha256,command=excluded.command,created_at=excluded.created_at",
+            params![
+                i.actor.0.as_str(),
+                i.scope_key,
+                i.request_key,
+                i.project_id.0.as_str(),
+                i.selection_sha256,
+                i.command,
+                i.created_at_ms,
+            ],
+        ))?;
+        Ok(())
     }
 }
 

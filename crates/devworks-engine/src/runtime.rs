@@ -10,7 +10,6 @@ use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
-use devworks_core::ports::diagnostics::ExportStaging;
 use devworks_core::ports::files::FileFault;
 use devworks_core::ports::process::{PowerPort, ProcessHost};
 use devworks_core::ports::storage::{ApplicationStore, StorageError, Unavailable, WriteOptions};
@@ -396,20 +395,18 @@ impl Runtime {
         &self.diagnostics
     }
     /// Exports the selected diagnostics (and the current health checks) as an artifact of the
-    /// invocation's project: rendered bounded and redacted, staged by `staging` (a person's
-    /// upload ticket in production) and saved by an `artifacts.save` admitted through this
-    /// runtime under `request_key`.
+    /// invocation's project: rendered bounded and redacted, staged by the diagnostics service's
+    /// export staging (a person's upload ticket in production) and saved by an `artifacts.save`
+    /// admitted through this runtime under `request_key`. A retry with the same key replays.
     pub fn export_diagnostics(
         &self,
         ctx: &InvocationContext,
         query: &LogQuery,
-        staging: &dyn ExportStaging,
         request_key: &str,
     ) -> Result<CommandOutcome, ExportFailure> {
-        self.diagnostics
-            .export(ctx, query, staging, request_key, |raw| {
-                self.command(ctx, "artifacts.save", raw)
-            })
+        self.diagnostics.export(ctx, query, request_key, |raw| {
+            self.command(ctx, "artifacts.save", raw)
+        })
     }
     /// The process supervisor every owned tree is launched through (process tools, package and
     /// helper hosts).

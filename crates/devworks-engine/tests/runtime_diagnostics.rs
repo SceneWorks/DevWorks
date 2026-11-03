@@ -19,7 +19,7 @@ use devworks_core::ports::diagnostics::StorageHealthProbe;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::{DiagnosticEntry, Severity};
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
-use devworks_core::protocol::{ActorId, CommandReply, ProjectId};
+use devworks_core::protocol::{ActorId, CommandReply, ProjectId, Rejection};
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::replies::REPLY_CONSUMER;
@@ -44,6 +44,21 @@ struct Parts {
     sqlite: Arc<SqliteStore>,
     sources: Arc<HostArtifactSources>,
     diagnostics: Arc<DiagnosticService>,
+    exports: Arc<DiagnosticExports>,
+}
+
+fn exports_dir(h: &Harness) -> std::path::PathBuf {
+    h.root.join("diagnostics").join("exports")
+}
+/// Files staged in the export directory right now.
+fn staged_files(h: &Harness) -> Vec<String> {
+    std::fs::read_dir(exports_dir(h))
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
@@ -67,6 +82,8 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
         Some(sqlite.clone() as Arc<dyn StorageHealthProbe>),
     ));
     diagnostics.register_secret(SECRET);
+    let exports = Arc::new(DiagnosticExports::new(exports_dir(h), sources.clone()));
+    diagnostics.set_export_staging(exports.clone());
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
     config.collect_interval = Duration::from_secs(3600);
     config.diagnostics_interval = Duration::from_secs(3600);
@@ -89,6 +106,7 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
             sqlite,
             sources,
             diagnostics,
+            exports,
         },
     )
 }
@@ -329,12 +347,8 @@ fn records_raise_the_live_hint_and_an_export_is_a_redacted_artifact() {
     let all = logs(&app, &user, json!({}));
     assert!(!text!(&all).contains(SECRET));
     // The export: a bounded, redacted JSON document saved through artifacts.save.
-    let exports = DiagnosticExports::new(
-        h.root.join("diagnostics").join("exports"),
-        parts.sources.clone(),
-    );
     let outcome = app
-        .export_diagnostics(&user, &LogQuery::default(), &exports, "export-1")
+        .export_diagnostics(&user, &LogQuery::default(), "export-1")
         .expect("exported");
     let saved = match outcome.expect("addressable") {
         CommandReply::Recorded { receipt, .. } => match receipt.decision {
@@ -356,6 +370,8 @@ fn records_raise_the_live_hint_and_an_export_is_a_redacted_artifact() {
     assert_eq!(parsed["records"].as_array().unwrap().len(), all.len());
     assert!(parsed["health"].as_array().unwrap().len() > 5);
     assert_eq!(parsed["truncated"], false);
+    // The staged file went once the save copied it.
+    assert!(staged_files(&h).is_empty(), "{:?}", staged_files(&h));
     // A non-human principal cannot stage an export.
     let agent = principal(&**app.store(), "agent-a", PrincipalKind::Agent).with_lineage(
         Some(ProjectId(id("project-a"))),
@@ -363,7 +379,7 @@ fn records_raise_the_live_hint_and_an_export_is_a_redacted_artifact() {
         None,
     );
     assert!(
-        app.export_diagnostics(&agent, &LogQuery::default(), &exports, "export-2")
+        app.export_diagnostics(&agent, &LogQuery::default(), "export-2")
             .is_err()
     );
     // The exported artifact is visible evidence for a later report.
@@ -425,8 +441,33 @@ fn the_retention_settings_bound_the_log() {
     rt.block_on(app.shutdown());
 }
 
+/// The recorded save of a command outcome, and whether it was a replay.
+fn saved_artifact(
+    outcome: devworks_core::gateway::CommandOutcome,
+) -> (devworks_core::protocol::provider::ArtifactRef, bool) {
+    match outcome.expect("addressable") {
+        CommandReply::Recorded {
+            receipt, replayed, ..
+        } => match receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::ArtifactsSave { value },
+            } => (value.artifact, replayed),
+            other => panic!("{other:?}"),
+        },
+        other => panic!("expected the recorded save, got {other:?}"),
+    }
+}
+fn conflicted(outcome: devworks_core::gateway::CommandOutcome) {
+    match outcome.expect("addressable") {
+        CommandReply::Rejected { code, .. } => {
+            assert!(matches!(code, Rejection::IdempotencyConflict), "{code:?}")
+        }
+        other => panic!("expected an idempotency conflict, got {other:?}"),
+    }
+}
+
 #[test]
-fn an_export_retried_with_its_request_key_replays_instead_of_conflicting() {
+fn an_export_retry_replays_through_the_gateway_and_other_use_of_its_key_conflicts() {
     let h = Harness::new();
     let rt = runtime();
     drop(h.open());
@@ -438,50 +479,98 @@ fn an_export_retried_with_its_request_key_replays_instead_of_conflicting() {
         None,
         None,
     );
-    let exports = DiagnosticExports::new(
-        h.root.join("diagnostics").join("exports"),
-        parts.sources.clone(),
-    );
-    let saved =
-        |outcome: devworks_core::gateway::CommandOutcome| match outcome.expect("addressable") {
-            CommandReply::Recorded {
-                receipt, replayed, ..
-            } => match receipt.decision {
-                DomainDecision::Applied {
-                    result: OperationResult::ArtifactsSave { value },
-                } => (value.artifact, replayed),
-                other => panic!("{other:?}"),
-            },
-            other => panic!("expected the recorded save, got {other:?}"),
-        };
     // The first attempt commits, but its response is lost on the way back to the caller.
-    let lost = app
-        .export_diagnostics(&user, &LogQuery::default(), &exports, "export-lost")
-        .expect("exported");
-    let (first, replayed) = saved(lost);
+    let (first, replayed) = saved_artifact(
+        app.export_diagnostics(&user, &LogQuery::default(), "export-lost")
+            .expect("exported"),
+    );
     assert!(!replayed);
     // More happened since; a retry with the same key replays the recorded save.
     parts
         .diagnostics
         .log(LogEntry::new("client", "later", Severity::Info, "later"))
         .unwrap();
-    let retry = app
-        .export_diagnostics(&user, &LogQuery::default(), &exports, "export-lost")
-        .expect("exported");
-    let (again, replayed) = saved(retry);
+    let (again, replayed) = saved_artifact(
+        app.export_diagnostics(&user, &LogQuery::default(), "export-lost")
+            .expect("exported"),
+    );
     assert!(replayed, "the retry replays");
-    assert_eq!(again.artifact_id, first.artifact_id);
     assert_eq!(again.version_id, first.version_id);
-    // After a restart of the service (no staged command in memory) the recorded receipt is
-    // the replay, and nothing is staged or submitted again.
+    // A restarted service (nothing in memory) resubmits the durably recorded command, and the
+    // gateway replays it under current authority.
     let fresh = DiagnosticService::new(app.store().clone(), h.ids.clone(), h.clock(), None);
-    let outcome = fresh
-        .export(&user, &LogQuery::default(), &exports, "export-lost", |_| {
-            panic!("a recorded export is not submitted again")
-        })
-        .expect("replayed");
-    let (durable, replayed) = saved(outcome);
+    fresh.set_export_staging(parts.exports.clone());
+    let submitted = std::cell::Cell::new(false);
+    let (durable, replayed) = saved_artifact(
+        fresh
+            .export(&user, &LogQuery::default(), "export-lost", |raw| {
+                submitted.set(true);
+                app.command(&user, "artifacts.save", raw)
+            })
+            .expect("replayed"),
+    );
+    assert!(submitted.get(), "the replay goes through the gateway");
     assert!(replayed);
     assert_eq!(durable.version_id, first.version_id);
+    // The same key with another selection is a conflict; nothing is staged.
+    let other = LogQuery {
+        component: Some("client".into()),
+        ..LogQuery::default()
+    };
+    conflicted(
+        fresh
+            .export(&user, &other, "export-lost", |raw| {
+                app.command(&user, "artifacts.save", raw)
+            })
+            .expect("addressable"),
+    );
+    // An ordinary save under a key is never returned as an export, even with nothing cached.
+    let file = h.root.with_extension("upload");
+    std::fs::create_dir_all(&file).unwrap();
+    let file = file.join("notes.txt");
+    std::fs::write(&file, b"unrelated notes").unwrap();
+    let ticket = parts.sources.mint_upload(&user, &file, 60_000).unwrap();
+    let frame = json!({"protocol": "1.0-draft.1", "requestKey": "shared-key", "command": {
+        "kind": "Save", "projectId": "project-a", "title": "Notes", "mediaType": "text/plain",
+        "source": {"kind": "Upload", "ticketId": ticket},
+        "expectedDigest": devworks_core::fingerprint::sha256_hex(b"unrelated notes"),
+        "expectedBytes": "15"}});
+    let (unrelated, _) =
+        saved_artifact(app.command(&user, "artifacts.save", frame.to_string().as_bytes()));
+    conflicted(
+        fresh
+            .export(&user, &LogQuery::default(), "shared-key", |raw| {
+                app.command(&user, "artifacts.save", raw)
+            })
+            .expect("addressable"),
+    );
+    assert_ne!(unrelated.version_id, first.version_id);
+    assert!(staged_files(&h).is_empty(), "{:?}", staged_files(&h));
+    rt.block_on(app.shutdown());
+}
+
+#[test]
+fn the_monitor_sweeps_stale_export_staging_files() {
+    let h = Harness::new();
+    let rt = runtime();
+    drop(h.open());
+    // Leftovers of an earlier run: one past the ticket lifetime, one still fresh.
+    std::fs::create_dir_all(exports_dir(&h)).unwrap();
+    let stale = exports_dir(&h).join("1-0-devworks-diagnostics-stale.json");
+    let fresh = exports_dir(&h).join("1-1-devworks-diagnostics-fresh.json");
+    std::fs::write(&stale, b"{}").unwrap();
+    std::fs::write(&fresh, b"{}").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&stale)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(3_600))
+        .unwrap();
+    let (composition, _parts) = compose(&h, Vec::new());
+    let app = rt.block_on(boot(composition)).expect("boot");
+    rt.block_on(until("the boot monitor pass sweeps the stale file", || {
+        !stale.exists()
+    }));
+    assert!(fresh.exists(), "a file within its ticket lifetime stays");
     rt.block_on(app.shutdown());
 }

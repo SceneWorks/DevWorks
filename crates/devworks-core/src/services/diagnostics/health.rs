@@ -550,6 +550,10 @@ fn queue_checks(svc: &DiagnosticService, snapshot: &dyn ReadSnapshot, out: &mut 
     }
 }
 
+/// Most process records one health check reads (pages of 500). Past it the check is incomplete
+/// and says so; it is never reported healthy.
+pub const PROCESS_SCAN_LIMIT: usize = 20_000;
+
 fn process_checks(
     svc: &DiagnosticService,
     snapshot: &dyn ReadSnapshot,
@@ -557,75 +561,93 @@ fn process_checks(
     out: &mut Vec<HealthCheck>,
 ) {
     let boot = svc.store.info().boot_id;
-    let processes = match snapshot
-        .resources()
-        .processes(&ProcessFilter::Unsettled, None, 500)
-    {
-        Ok(p) => p,
-        Err(e) => {
-            out.push(unavailable(
-                "process.owned",
-                &format!(
-                    "Owned-process records are unavailable: {}",
-                    storage_error(&e)
-                ),
-            ));
-            return;
+    // Every page of unsettled processes, following the cursor: a problem past the first page
+    // (or behind other projects' records) must not be missed.
+    let (mut running, mut orphaned, mut uncertain, mut lost) = (0i64, 0i64, 0i64, 0i64);
+    let mut scanned = 0usize;
+    let mut attention = Vec::new();
+    let mut after: Option<Id> = None;
+    let complete = loop {
+        let page =
+            match snapshot
+                .resources()
+                .processes(&ProcessFilter::Unsettled, after.as_ref(), 500)
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    out.push(unavailable(
+                        "process.owned",
+                        &format!(
+                            "Owned-process records are unavailable: {}",
+                            storage_error(&e)
+                        ),
+                    ));
+                    return;
+                }
+            };
+        let full = page.len() == 500;
+        after = page.last().map(|p| p.id.clone());
+        scanned += page.len();
+        for p in page {
+            let visible = match audience {
+                DiagnosticAudience::All => true,
+                DiagnosticAudience::Project(project) => {
+                    p.project_id.is_none() || p.project_id.as_ref() == Some(project)
+                }
+            };
+            if !visible {
+                continue;
+            }
+            let prior = boot.as_ref() != Some(&p.boot_id);
+            let unverified = matches!(p.phase, ProcessPhase::Uncertain | ProcessPhase::Lost);
+            if prior {
+                orphaned += 1;
+            } else {
+                running += 1;
+            }
+            uncertain += i64::from(p.phase == ProcessPhase::Uncertain);
+            lost += i64::from(p.phase == ProcessPhase::Lost);
+            if (prior || unverified) && attention.len() < 8 {
+                attention.push(p);
+            }
+        }
+        if !full {
+            break true;
+        }
+        if scanned >= PROCESS_SCAN_LIMIT {
+            break false;
         }
     };
-    let bound = processes.len() == 500;
-    let visible: Vec<_> = processes
-        .into_iter()
-        .filter(|p| match audience {
-            DiagnosticAudience::All => true,
-            DiagnosticAudience::Project(project) => {
-                p.project_id.is_none() || p.project_id.as_ref() == Some(project)
-            }
-        })
-        .collect();
-    let orphaned: Vec<_> = visible
-        .iter()
-        .filter(|p| boot.as_ref() != Some(&p.boot_id))
-        .collect();
-    let uncertain = visible
-        .iter()
-        .filter(|p| p.phase == ProcessPhase::Uncertain)
-        .count() as i64;
-    let lost = visible
-        .iter()
-        .filter(|p| p.phase == ProcessPhase::Lost)
-        .count() as i64;
-    let running = visible.len() as i64 - orphaned.len() as i64;
-    let at_least = if bound { "at least " } else { "" };
-    let mut check = if orphaned.is_empty() && uncertain == 0 && lost == 0 {
+    let mut check = if !complete {
+        HealthCheck::new(
+            "process.owned",
+            HealthState::Degraded,
+            format!(
+                "The scan stopped after {scanned} unsettled process records; more remain. Of those read, {orphaned} are of earlier boots, {uncertain} could not be verified stopped and {lost} recorded no identity."
+            ),
+        )
+    } else if orphaned == 0 && uncertain == 0 && lost == 0 {
         HealthCheck::new(
             "process.owned",
             HealthState::Healthy,
-            format!("{at_least}{running} owned process trees of this boot; none orphaned."),
+            format!("{running} owned process trees of this boot; none orphaned."),
         )
     } else {
         HealthCheck::new(
             "process.owned",
             HealthState::Degraded,
             format!(
-                "{at_least}{} process trees of earlier boots are unsettled, {uncertain} could not be verified stopped and {lost} launches recorded no identity; only a person can confirm an unverifiable tree stopped.",
-                orphaned.len()
+                "{orphaned} process trees of earlier boots are unsettled, {uncertain} could not be verified stopped and {lost} launches recorded no identity; only a person can confirm an unverifiable tree stopped."
             ),
         )
     };
     check = check
         .metric(MetricReading::count("running", running))
-        .metric(MetricReading::count("orphaned", orphaned.len() as i64))
+        .metric(MetricReading::count("orphaned", orphaned))
         .metric(MetricReading::count("uncertain", uncertain))
-        .metric(MetricReading::count("lost", lost));
-    for p in visible
-        .iter()
-        .filter(|p| {
-            boot.as_ref() != Some(&p.boot_id)
-                || matches!(p.phase, ProcessPhase::Uncertain | ProcessPhase::Lost)
-        })
-        .take(8)
-    {
+        .metric(MetricReading::count("lost", lost))
+        .metric(MetricReading::count("scanned", scanned as i64));
+    for p in attention {
         check = check.link(
             RecoveryLink::new("process.cancel", &format!("Stop {}", p.program))
                 .on("owned_process", p.id.clone()),

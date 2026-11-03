@@ -1417,3 +1417,58 @@ fn health_with_a_single_reader_needs_no_second_connection() {
         "Available"
     );
 }
+
+#[test]
+fn process_health_reads_every_page_and_finds_a_problem_past_the_first() {
+    let fx = Fx::new();
+    // 600 healthy trees of this boot in project-b whose IDs sort first, and one tree of
+    // project-a that could not be verified stopped, past the first page of 500.
+    fx.write(|tx| {
+        let new = |id: String, project: &str| NewProcess {
+            id: Id::new(id).unwrap(),
+            platform: "unix".into(),
+            program: "worker".into(),
+            argv_sha256: "a".repeat(64),
+            operation_id: None,
+            lease_id: None,
+            actor: ActorId(Id::new("host").unwrap()),
+            session_id: None,
+            project_id: Some(ProjectId(Id::new(project).unwrap())),
+            root_id: None,
+            assignment_id: None,
+        };
+        for i in 0..600 {
+            tx.resources()
+                .insert_process(new(format!("proc-a-{i:04}"), "project-b"))?;
+        }
+        let stuck = tx
+            .resources()
+            .insert_process(new("proc-z-stuck".into(), "project-a"))?;
+        let revision = stuck.revision;
+        let uncertain = StoredProcess {
+            phase: ProcessPhase::Uncertain,
+            detail: Some("the tree did not stop within its bound".into()),
+            revision: revision + 1,
+            ..stuck
+        };
+        tx.resources().update_process(&uncertain, revision)
+    });
+    for ctx in [
+        fx.user(),
+        fx.ctx("agent-a", PrincipalKind::Agent, Some("project-a")),
+    ] {
+        let checks = fx.health(&ctx);
+        let processes = check(&checks, "process.owned");
+        assert_eq!(health(processes), "Degraded", "{}", processes.message.0);
+        assert_eq!(metric(processes, "uncertain")["value"], "1");
+        assert_eq!(metric(processes, "scanned")["value"], "601");
+        assert!(json_of!(processes.recovery.as_ref().unwrap()).contains("proc-z-stuck"));
+    }
+    // The project-scoped reader counts only what it may see.
+    let agent = fx.ctx("agent-a", PrincipalKind::Agent, Some("project-a"));
+    let scoped = fx.health(&agent);
+    assert_eq!(
+        metric(check(&scoped, "process.owned"), "running")["value"],
+        "1"
+    );
+}
