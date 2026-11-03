@@ -972,6 +972,9 @@ pub struct ConsumerProgress {
 
 pub trait QueueRead {
     fn entry(&self, id: &Id) -> Result<Option<QueueEntry>, StorageError>;
+    /// The delivery of `event` to `consumer` (unique per pair), unless it was compacted.
+    fn delivery(&self, consumer: &str, event: &EventId)
+    -> Result<Option<QueueEntry>, StorageError>;
     fn status(&self, consumer: &str) -> Result<QueueStatus, StorageError>;
     /// Unsettled deliveries (claimed, failed/held, ready) in inspection order after `after`, at
     /// most `limit` (1..=500). Settled deliveries are history, not queue contents.

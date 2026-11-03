@@ -54,12 +54,19 @@ impl DeliveryHandler for AsyncOnly {
     }
 }
 
-/// The [`REPLY_CONSUMER`] registration for the dispatcher.
-pub fn reply_consumer(
-    replies: Arc<ReceiptReplies>,
-    store: Arc<dyn ApplicationStore>,
-    retry: RetryPolicy,
-) -> Consumer {
+/// Retry policy of reply publication: capped exponential backoff (1 s doubling to 5 min) with no
+/// attempt budget, so a transient fault (a full volume, a busy blob) never makes a receipt's
+/// reply terminally unpublished; it is retried until it succeeds.
+pub const REPLY_RETRY: RetryPolicy = RetryPolicy {
+    base_delay_ms: 1_000,
+    max_delay_ms: 300_000,
+    max_attempts: i64::MAX,
+};
+
+/// The [`REPLY_CONSUMER`] registration for the dispatcher (no in-flight cap by default; the
+/// composition root may set [`Consumer::max_in_flight`] to keep a burst of replies from taking
+/// every worker permit).
+pub fn reply_consumer(replies: Arc<ReceiptReplies>, store: Arc<dyn ApplicationStore>) -> Consumer {
     Consumer {
         name: REPLY_CONSUMER.into(),
         handler: Arc::new(AsyncOnly),
@@ -67,6 +74,7 @@ pub fn reply_consumer(
         async_handler: Some(Arc::new(ReplyPublisher { replies, store })),
         eligibility: None,
         stop_grace_ms: 5_000,
-        retry,
+        retry: REPLY_RETRY,
+        max_in_flight: None,
     }
 }

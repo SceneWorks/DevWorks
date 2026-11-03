@@ -471,6 +471,9 @@ impl QueueRead for MemQueue {
     fn entry(&self, _: &Id) -> Result<Option<QueueEntry>, StorageError> {
         nope()
     }
+    fn delivery(&self, _: &str, _: &EventId) -> Result<Option<QueueEntry>, StorageError> {
+        nope()
+    }
     fn status(&self, _: &str) -> Result<QueueStatus, StorageError> {
         nope()
     }
@@ -654,6 +657,9 @@ impl OperationJournal for Unsupported {
 }
 impl QueueRead for Unsupported {
     fn entry(&self, _: &Id) -> Result<Option<QueueEntry>, StorageError> {
+        nope()
+    }
+    fn delivery(&self, _: &str, _: &EventId) -> Result<Option<QueueEntry>, StorageError> {
         nope()
     }
     fn status(&self, _: &str) -> Result<QueueStatus, StorageError> {
@@ -993,6 +999,9 @@ pub fn repo_file(path: &str) -> PathBuf {
 
 impl ArtifactRead for Unsupported {
     fn workspace_usage(&self) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn receipt_usage(&self, _: Option<&ProjectId>) -> Result<i64, StorageError> {
         nope()
     }
     fn project_exists(&self, _: &ProjectId) -> Result<bool, StorageError> {

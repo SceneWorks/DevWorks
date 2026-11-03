@@ -323,10 +323,15 @@ pub trait ArtifactRead {
         after: Option<&str>,
         limit: u16,
     ) -> Result<Vec<BlobRecord>, StorageError>;
-    /// Bytes of distinct blobs named by live versions of artifacts `project` owns.
+    /// Bytes of distinct blobs named by live versions of explicitly retained artifacts `project`
+    /// owns (what its storage limit measures; receipt replies are not counted).
     fn project_usage(&self, project: &ProjectId) -> Result<i64, StorageError>;
-    /// Bytes of distinct blobs named by live versions of workspace-scoped artifacts.
+    /// Bytes of distinct blobs named by live versions of explicitly retained workspace-scoped
+    /// artifacts (receipt replies are not counted).
     fn workspace_usage(&self) -> Result<i64, StorageError>;
+    /// Bytes of distinct blobs named by live versions of receipt replies owned by `project`
+    /// (`None`: the workspace scope), reported separately from the storage limit.
+    fn receipt_usage(&self, project: Option<&ProjectId>) -> Result<i64, StorageError>;
     /// Unresolved staging operations in ID order after `after`, at most `limit` (1..=500).
     fn unresolved_staging(
         &self,

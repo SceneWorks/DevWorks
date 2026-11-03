@@ -428,7 +428,7 @@ macro_rules! artifact_reads {
                     self.conn,
                     "SELECT COALESCE(SUM(b.byte_count),0) FROM blobs b WHERE b.digest IN (
                        SELECT v.blob_digest FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id
-                       WHERE a.current_project_id=?1 AND v.deleted_at IS NULL)",
+                       WHERE a.current_project_id=?1 AND a.retention='Explicit' AND v.deleted_at IS NULL)",
                     [project.0.as_str()],
                 )
             }
@@ -437,8 +437,18 @@ macro_rules! artifact_reads {
                     self.conn,
                     "SELECT COALESCE(SUM(b.byte_count),0) FROM blobs b WHERE b.digest IN (
                        SELECT v.blob_digest FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id
-                       WHERE a.scope_kind='Workspace' AND v.deleted_at IS NULL)",
+                       WHERE a.scope_kind='Workspace' AND a.retention='Explicit' AND v.deleted_at IS NULL)",
                     [],
+                )
+            }
+            fn receipt_usage(&self, project: Option<&ProjectId>) -> Result<i64, StorageError> {
+                count(
+                    self.conn,
+                    "SELECT COALESCE(SUM(b.byte_count),0) FROM blobs b WHERE b.digest IN (
+                       SELECT v.blob_digest FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id
+                       WHERE a.retention='Receipt' AND v.deleted_at IS NULL
+                         AND a.current_project_id IS ?1)",
+                    [project.map(|p| p.0.as_str())],
                 )
             }
             fn unresolved_staging(

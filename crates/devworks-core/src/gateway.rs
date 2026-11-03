@@ -791,7 +791,6 @@ fn unit_of_work(
     // The decision is attached to the work it acted on (HISTORY-02), so a work item's history
     // shows every command decided on it, from the UI or an agent alike.
     let scope = decision_scope(tx, ctx, &command.targets, decided.operation_id.as_ref())?;
-    let reply_owner = scope.project.clone();
     let sequence = tx.history().append(NewEvent {
         id: event_id.clone(),
         actor: ctx.principal().clone(),
@@ -837,7 +836,6 @@ fn unit_of_work(
         &command.identity,
         &receipt.command_id,
         &event_id,
-        reply_owner.as_ref(),
     )?;
     Ok(Unit::Recorded(receipt))
 }
@@ -1044,6 +1042,141 @@ impl HistoryLog for HandlerTx<'_> {
         self.inner.get_mut().history().append(event)
     }
 }
+
+// The durable queue passes through, except that a use case cannot enqueue a receipt reply
+// publication: only the gateway records a receipt's intent, so a handler cannot mis-scope or
+// pre-empt another receipt's reply.
+use crate::ports::storage::{
+    ClaimRecovery, ClaimRequest, ConsumerProgress, DeliveryFilter, DeliveryKey, DeliveryPage,
+    FailureDisposition, NewQueueEntry, QueueEntry, QueueFence, QueueRead, QueueStatus,
+    RecoveryOutcome, Settlement,
+};
+impl QueueRead for HandlerTx<'_> {
+    fn entry(&self, id: &Id) -> Result<Option<QueueEntry>, StorageError> {
+        self.inner.borrow_mut().queue().entry(id)
+    }
+    fn delivery(
+        &self,
+        consumer: &str,
+        event: &EventId,
+    ) -> Result<Option<QueueEntry>, StorageError> {
+        self.inner.borrow_mut().queue().delivery(consumer, event)
+    }
+    fn status(&self, consumer: &str) -> Result<QueueStatus, StorageError> {
+        self.inner.borrow_mut().queue().status(consumer)
+    }
+    fn deliveries(
+        &self,
+        filter: &DeliveryFilter,
+        after: Option<&DeliveryKey>,
+        limit: u16,
+    ) -> Result<DeliveryPage, StorageError> {
+        self.inner
+            .borrow_mut()
+            .queue()
+            .deliveries(filter, after, limit)
+    }
+    fn progress(&self, consumer: &str) -> Result<ConsumerProgress, StorageError> {
+        self.inner.borrow_mut().queue().progress(consumer)
+    }
+    fn checkpoint(&self, consumer: &str, partition: Option<&str>) -> Result<i64, StorageError> {
+        self.inner
+            .borrow_mut()
+            .queue()
+            .checkpoint(consumer, partition)
+    }
+    fn next_due_ms(&self, now_ms: i64) -> Result<Option<i64>, StorageError> {
+        self.inner.borrow_mut().queue().next_due_ms(now_ms)
+    }
+    fn awaiting_eligibility(
+        &self,
+        consumer: &str,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<QueueEntry>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .queue()
+            .awaiting_eligibility(consumer, after, limit)
+    }
+}
+impl DurableQueue for HandlerTx<'_> {
+    fn enqueue(&mut self, entry: NewQueueEntry) -> Result<QueueEntry, StorageError> {
+        if entry.consumer == crate::services::artifacts::replies::REPLY_CONSUMER {
+            return Err(StorageError::InvalidRecord(
+                "receipt reply intents are recorded only by the gateway".into(),
+            ));
+        }
+        self.inner.get_mut().queue().enqueue(entry)
+    }
+    fn claim_ready(&mut self, request: &ClaimRequest) -> Result<Vec<QueueEntry>, StorageError> {
+        self.inner.get_mut().queue().claim_ready(request)
+    }
+    fn renew(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        lease_ms: i64,
+    ) -> Result<QueueEntry, StorageError> {
+        self.inner.get_mut().queue().renew(id, fence, lease_ms)
+    }
+    fn settle(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        settlement: Settlement,
+    ) -> Result<QueueEntry, StorageError> {
+        self.inner.get_mut().queue().settle(id, fence, settlement)
+    }
+    fn fail(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        cause: &str,
+        disposition: FailureDisposition,
+    ) -> Result<QueueEntry, StorageError> {
+        self.inner
+            .get_mut()
+            .queue()
+            .fail(id, fence, cause, disposition)
+    }
+    fn cancel(&mut self, id: &Id) -> Result<QueueEntry, StorageError> {
+        self.inner.get_mut().queue().cancel(id)
+    }
+    fn recover_claims(
+        &mut self,
+        mode: ClaimRecovery,
+        limit: u16,
+    ) -> Result<RecoveryOutcome, StorageError> {
+        self.inner.get_mut().queue().recover_claims(mode, limit)
+    }
+    fn requeue(&mut self, id: &Id, delay_ms: i64) -> Result<QueueEntry, StorageError> {
+        self.inner.get_mut().queue().requeue(id, delay_ms)
+    }
+    fn hold(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        cause: &str,
+    ) -> Result<QueueEntry, StorageError> {
+        self.inner.get_mut().queue().hold(id, fence, cause)
+    }
+    fn dismiss(&mut self, id: &Id, reason: &str) -> Result<QueueEntry, StorageError> {
+        self.inner.get_mut().queue().dismiss(id, reason)
+    }
+    fn reassert(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        lease_ms: i64,
+    ) -> Result<QueueEntry, StorageError> {
+        self.inner.get_mut().queue().reassert(id, fence, lease_ms)
+    }
+    fn compact(&mut self, id: &Id) -> Result<(), StorageError> {
+        self.inner.get_mut().queue().compact(id)
+    }
+}
+
 impl WriteTransaction for HandlerTx<'_> {
     fn now_ms(&self) -> i64 {
         self.inner.borrow().now_ms()
@@ -1079,7 +1212,7 @@ impl WriteTransaction for HandlerTx<'_> {
         self.inner.get_mut().operations()
     }
     fn queue(&mut self) -> &mut dyn DurableQueue {
-        self.inner.get_mut().queue()
+        self
     }
     // Grant and authority reads pass through; their writes are refused here and reach the
     // store only through the authority seams (which hold the capability) or the gateway's own

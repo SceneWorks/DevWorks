@@ -37,8 +37,10 @@
 //!
 //! `history.command_receipt` looks up the caller's own receipt and, once its durable typed reply
 //! is published after commit ([`crate::services::artifacts::replies`]), returns the `Recorded`
-//! observation with that reply artifact and schema; until then it is typed `ViewUnavailable`
-//! (retry the same query), and a caller that can no longer see the reply is denied.
+//! observation with that reply artifact and schema. Until then it is typed `ViewUnavailable`:
+//! pending (retry the same query), held behind a delivery an operator resolves (retry after that
+//! blocker clears) or abandoned (never retried). A caller that can no longer see the reply is
+//! denied.
 //!
 //! # Retained CodeGraph behavior
 //!
@@ -99,6 +101,12 @@ pub const LINK_AGGREGATE: &str = "history_link";
 /// (`ViewUnavailable`, retry the same query) or is no longer visible to the caller
 /// (`PermissionDenied`).
 pub const RECEIPT_REPLY_UNAVAILABLE: &str = "receipt_reply_artifact";
+/// Fault target kind of a recorded receipt whose reply publication is held or failed: the target
+/// is the delivery an operator resolves (`ViewUnavailable`, retry after that blocker clears).
+pub const RECEIPT_REPLY_HELD: &str = "receipt_reply_held";
+/// Fault target kind of a recorded receipt whose reply will never be published (its delivery was
+/// cancelled or dismissed, or no intent exists): `ViewUnavailable`, never retried.
+pub const RECEIPT_REPLY_ABANDONED: &str = "receipt_reply_abandoned";
 
 /// Link kinds other items record through [`record_link`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -678,6 +686,22 @@ impl HistoryService {
                         Some(stored.receipt.command_id.0),
                     )
                     .retry(RetryAdvice::SameCommand)
+                    .into()),
+                    // Publication waits behind a held or failed delivery: retrying the query
+                    // changes nothing until that delivery (named here) is resolved.
+                    Err(ObservationGap::Held(delivery)) => Err(Refusal::new(
+                        DomainErrorCode::ViewUnavailable,
+                        RECEIPT_REPLY_HELD,
+                        Some(delivery),
+                    )
+                    .retry(RetryAdvice::AfterBlockerClears)
+                    .into()),
+                    // The reply will never be published: no retry is advised.
+                    Err(ObservationGap::Abandoned) => Err(Refusal::new(
+                        DomainErrorCode::ViewUnavailable,
+                        RECEIPT_REPLY_ABANDONED,
+                        Some(stored.receipt.command_id.0),
+                    )
                     .into()),
                     // Access is rechecked before an old receipt is published: a caller that can
                     // no longer see its reply is denied rather than handed it.

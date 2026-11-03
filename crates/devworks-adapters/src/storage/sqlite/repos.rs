@@ -590,6 +590,21 @@ fn entry(conn: &Connection, id: &Id) -> Result<Option<QueueEntry>, StorageError>
     .optional())?;
     raw.map(queue_of).transpose()
 }
+fn delivery(
+    conn: &Connection,
+    consumer: &str,
+    event: &EventId,
+) -> Result<Option<QueueEntry>, StorageError> {
+    let raw = db(stmt(
+        conn,
+        &format!(
+            "SELECT {QUEUE_COLUMNS} FROM queue_entries WHERE consumer=?1 AND event_id=?2 AND state<>'Compacted'"
+        ),
+    )?
+    .query_row(params![consumer, event.0.as_str()], queue_row)
+    .optional())?;
+    raw.map(queue_of).transpose()
+}
 fn status(conn: &Connection, consumer: &str) -> Result<QueueStatus, StorageError> {
     let mut s = stmt(
         conn,
@@ -917,6 +932,13 @@ macro_rules! read_impls {
         impl QueueRead for $t {
             fn entry(&self, id: &Id) -> Result<Option<QueueEntry>, StorageError> {
                 entry(self.conn, id)
+            }
+            fn delivery(
+                &self,
+                consumer: &str,
+                event: &EventId,
+            ) -> Result<Option<QueueEntry>, StorageError> {
+                delivery(self.conn, consumer, event)
             }
             fn status(&self, consumer: &str) -> Result<QueueStatus, StorageError> {
                 status(self.conn, consumer)

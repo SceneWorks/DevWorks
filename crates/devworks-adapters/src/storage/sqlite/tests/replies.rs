@@ -8,7 +8,7 @@
 use super::{Harness, T0};
 use crate::fs::NativeFilesystem;
 use crate::fs::artifacts::{NativeArtifactFiles, Step};
-use crate::storage::sqlite::{MIGRATION_0008_SHA256, MIGRATIONS, SqliteStore};
+use crate::storage::sqlite::{MIGRATION_0008_SHA256, MIGRATIONS, Migration, SqliteStore};
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
@@ -31,13 +31,16 @@ use devworks_core::protocol::{
     RetryAdvice, Revision,
 };
 use devworks_core::services::UseCases;
+use devworks_core::services::artifacts::lifecycle::VersionResolution;
 use devworks_core::services::artifacts::replies::{
-    REPLY_CONSUMER, REPLY_MEDIA_TYPE, ReceiptReplies, ReplyOutcome,
+    REPLY_AGGREGATE, REPLY_CONSUMER, REPLY_MEDIA_TYPE, ReceiptReplies, ReplyOutcome,
 };
 use devworks_core::services::artifacts::{
     ArtifactService, RECEIPT_RETAINED, SHARED_REFERENCES_REMAIN, versions_digest,
 };
-use devworks_core::services::history::{HistoryService, RECEIPT_REPLY_UNAVAILABLE};
+use devworks_core::services::history::{
+    HistoryService, RECEIPT_REPLY_ABANDONED, RECEIPT_REPLY_HELD, RECEIPT_REPLY_UNAVAILABLE,
+};
 use devworks_core::services::sessions::SessionService;
 use devworks_core::settings::catalog::AgentRole;
 use serde_json::{Value, json};
@@ -554,21 +557,26 @@ fn a_recorded_receipt_publishes_its_reply_and_then_observes_recorded() {
             .storage_status(s, &ArtifactScope::Workspace)
             .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
     });
-    assert_eq!(usage.used_bytes, artifact.byte_length.get());
-    // Its publication is history of the artifact, attributed to the host.
+    // System-owned bytes are reported apart from the limit's usage.
+    assert_eq!(
+        (usage.used_bytes, usage.receipt_reply_bytes),
+        (0, artifact.byte_length.get())
+    );
+    // Its publication is history of the receipt's own aggregate, attributed to the host.
     let events = fx.read(|s| {
         s.history().page(
             &EventFilter::Aggregate {
-                kind: "artifact".into(),
-                id: artifact.artifact_id.as_str().to_owned(),
+                kind: REPLY_AGGREGATE.into(),
+                id: receipt.command_id.0.as_str().to_owned(),
             },
             0,
             10,
         )
     });
     assert_eq!(events.events.len(), 1);
-    assert_eq!(events.events[0].kind, "ArtifactVersionPublished");
+    assert_eq!(events.events[0].kind, "ReceiptReplyPublished");
     assert_eq!(events.events[0].actor, actor("host"));
+    assert_eq!(events.events[0].project_id, None);
 
     // A replayed command neither re-publishes nor changes the reply.
     let again = fx.start_home(&user, "start-1", "Home");
@@ -621,6 +629,245 @@ fn a_project_receipt_reply_is_project_owned_and_seen_only_by_its_principal() {
         OperationResult::ArtifactsList { value } => assert!(value.items.0.is_empty()),
         other => panic!("{other:?}"),
     }
+    // System-owned reply bytes are not the project's work output: its limit measures none of
+    // them, and they are reported separately.
+    let status = fx.read(|s| {
+        fx.svc
+            .storage_status(s, &ArtifactScope::Project(project("project-a")))
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert_eq!(
+        (status.used_bytes, status.receipt_reply_bytes),
+        (0, r.byte_length.get())
+    );
+    // Its publication is not in the project's history, where every project reader would see
+    // another principal's receipt.
+    let project_events = fx.read(|s| s.history().page(&EventFilter::All, 0, 500));
+    assert!(
+        !project_events.events.iter().any(|e| {
+            e.project_id == Some(project("project-a"))
+                && (e.aggregate_kind == "artifact" || e.aggregate_kind == REPLY_AGGREGATE)
+        }),
+        "{:?}",
+        project_events.events
+    );
+}
+
+#[test]
+fn a_receipt_reply_is_observed_from_any_context_its_principal_may_act_in() {
+    let fx = Fx::new();
+    // The user records from the workspace and looks it up from inside a project.
+    recorded(&fx.start_home(&fx.user(), "home-1", "Home"));
+    // An unconfined agent records in project-a and looks it up from project-b and the workspace.
+    recorded(&fx.start_project(&fx.agent("agent-a", Some("project-a")), "proj-1"));
+    let refs = published(fx.publish_all());
+    assert_eq!(refs.len(), 2);
+    let user_in_project = fx.ctx("user-a", PrincipalKind::Human, Some("project-a"));
+    observation(fx.receipt(&user_in_project, "home-1"))
+        .check()
+        .unwrap();
+    for ctx in [
+        fx.agent("agent-a", Some("project-b")),
+        fx.agent("agent-a", None),
+    ] {
+        let o = observation(fx.receipt(&ctx, "proj-1"));
+        o.check().unwrap();
+        text(fx.read_reply(&ctx, &o.reply_artifact.unwrap()));
+    }
+}
+
+#[test]
+fn only_an_active_unconfined_workspace_coordinator_joins_the_audience() {
+    let fx = Fx::new();
+    let user = fx.user();
+    fx.write(|tx| {
+        tx.actors().register(
+            &actor("coordinator-p"),
+            PrincipalKind::Agent,
+            "coordinator-p",
+        )
+    });
+    let by = user.clone();
+    fx.write(move |tx| {
+        auth::bind_principal(
+            tx,
+            &by,
+            NewPrincipalBinding {
+                actor: actor("coordinator-p"),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::WorkspaceCoordinator),
+                project_id: Some(project("project-a")),
+                tool_families: None,
+                bound_by: actor("user-a"),
+            },
+            None,
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    recorded(&fx.start_project(&fx.agent("agent-p", Some("project-a")), "p-1"));
+    let r = published(fx.publish_all()).remove(0);
+    let resolves = |ctx: &InvocationContext| {
+        matches!(
+            fx.read(|s| fx.svc.resolve_version(s, ctx, &r)),
+            VersionResolution::Available(_)
+        )
+    };
+    assert!(resolves(&fx.agent("coordinator-w", None)));
+    // A coordinator confined to a project is not the workspace coordinator.
+    assert!(!resolves(&fx.agent("coordinator-p", Some("project-a"))));
+    // Nor is a revoked one.
+    let by = user.clone();
+    fx.write(move |tx| {
+        auth::revoke_principal(tx, &by, &actor("coordinator-w"), 1)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert!(!resolves(&fx.agent("coordinator-w", None)));
+}
+
+#[test]
+fn a_receipt_stored_unredacted_is_redacted_when_its_reply_is_rendered() {
+    let fx = Fx::new();
+    let user = fx.user();
+    recorded(&fx.start_home(&user, "old-1", "Home"));
+    // As an earlier build might have stored it: a secret in the recorded decision.
+    let changed = fx
+        .store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute(
+                "UPDATE command_receipts SET result_json=replace(result_json,'\"Home\"','\"Home password=hunter2-plain\"')",
+                [],
+            ))
+        })
+        .unwrap();
+    assert_eq!(changed, 1);
+    let r = published(fx.publish_all()).remove(0);
+    let bytes = text(fx.read_reply(&user, &r));
+    assert!(!bytes.contains("hunter2"), "{bytes}");
+    assert!(bytes.contains("[REDACTED]"), "{bytes}");
+}
+
+#[test]
+fn an_untypable_receipt_is_held_and_its_observation_says_so() {
+    let fx = Fx::new();
+    let user = fx.user();
+    recorded(&fx.start_home(&user, "rev-1", "Home"));
+    recorded(&fx.start_home(&user, "op-1", "Home"));
+    // Receipts this build cannot type: another schema revision, an operation it does not
+    // register.
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute_batch(
+                "UPDATE command_receipts SET result_json=json_set(result_json,'$.schemaRevision',99) WHERE idempotency_key='rev-1';
+                 UPDATE command_receipts SET command_kind='retired.operation' WHERE idempotency_key='op-1';",
+            ))
+        })
+        .unwrap();
+    let mut held = Vec::new();
+    for e in fx.claim() {
+        let ReplyOutcome::Hold(cause) = fx.replies.publish(&*fx.store, &e) else {
+            panic!("expected a hold")
+        };
+        let (id, fence) = (e.id.clone(), e.fence().unwrap());
+        fx.write(move |tx| tx.queue().hold(&id, &fence, &cause));
+        held.push(e.id);
+    }
+    assert_eq!(held.len(), 2);
+    assert_eq!(fx.count("SELECT count(*) FROM artifacts"), 0);
+    let state = |key: &str| {
+        let f = fault(fx.receipt(&user, key));
+        (f.code, kind_of(&f).to_owned(), f.retry, f.target_id)
+    };
+    for key in ["rev-1", "op-1"] {
+        let (code, kind, retry, target) = state(key);
+        assert_eq!(
+            (code, kind.as_str(), retry),
+            (
+                DomainErrorCode::ViewUnavailable,
+                RECEIPT_REPLY_HELD,
+                RetryAdvice::AfterBlockerClears
+            )
+        );
+        assert!(held.contains(&target.unwrap()));
+    }
+    // Resolved by an operator, it is pending again; failed terminally it is held again; dismissed
+    // it is abandoned and no retry is advised.
+    let id = held[0].clone();
+    let key = fx
+        .read(|s| s.queue().entry(&id))
+        .map(|e| e.payload["requestKey"].as_str().unwrap().to_owned())
+        .unwrap();
+    let i = id.clone();
+    fx.write(move |tx| tx.queue().requeue(&i, 0));
+    let (_, kind, retry, _) = state(&key);
+    assert_eq!(
+        (kind.as_str(), retry),
+        (RECEIPT_REPLY_UNAVAILABLE, RetryAdvice::SameCommand)
+    );
+    let e = fx.claim().into_iter().find(|e| e.id == id).unwrap();
+    let fence = e.fence().unwrap();
+    let i = id.clone();
+    fx.write(move |tx| {
+        tx.queue()
+            .fail(&i, &fence, "untypable", FailureDisposition::Terminal)
+    });
+    assert_eq!(state(&key).1, RECEIPT_REPLY_HELD);
+    let i = id.clone();
+    fx.write(move |tx| tx.queue().dismiss(&i, "operator decision"));
+    let (code, kind, retry, _) = state(&key);
+    assert_eq!(
+        (code, kind.as_str(), retry),
+        (
+            DomainErrorCode::ViewUnavailable,
+            RECEIPT_REPLY_ABANDONED,
+            RetryAdvice::Never
+        )
+    );
+}
+
+#[test]
+fn a_failed_rebuild_migration_leaves_nothing_and_restores_foreign_keys() {
+    let h = Harness::new();
+    let before: Vec<Migration> = MIGRATIONS
+        .iter()
+        .filter(|m| m.version <= 7)
+        .copied()
+        .collect();
+    drop(SqliteStore::open_with(h.config(), &before).unwrap());
+    // A rebuild that would leave a dangling reference, and one whose SQL fails part way.
+    for sql in [
+        "CREATE TABLE fixture_rebuild(id TEXT PRIMARY KEY) STRICT; INSERT INTO artifact_versions VALUES('dangling','no-artifact',1,'no-blob','text/plain',1,NULL,'{}');",
+        "CREATE TABLE fixture_rebuild(id TEXT PRIMARY KEY) STRICT; INSERT INTO no_such_table VALUES(1);",
+    ] {
+        let mut migrations = before.clone();
+        migrations.push(Migration {
+            version: 8,
+            minimum_reader: 8,
+            minimum_writer: 8,
+            sql,
+            rebuilds_tables: true,
+        });
+        let conn = h.raw();
+        let failed = super::super::migrations::prepare(
+            &conn,
+            &migrations,
+            || "unused".to_owned(),
+            T0,
+            "test",
+        );
+        assert!(failed.is_err(), "{sql}");
+        let (fk, tables, version): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT foreign_keys FROM pragma_foreign_keys),
+                 (SELECT count(*) FROM sqlite_schema WHERE name='fixture_rebuild'),
+                 (SELECT schema_version FROM store_meta)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((fk, tables, version), (1, 0, 7), "{sql}");
+    }
+    // The real migration still applies afterwards.
+    drop(SqliteStore::open(h.config()).unwrap());
 }
 
 #[test]
@@ -737,44 +984,20 @@ fn re_publication_reuses_the_published_reply() {
     let fx = Fx::new();
     let user = fx.user();
     recorded(&fx.start_home(&user, "start-1", "Home"));
-    let claimed = fx.claim();
-    let intent = claimed[0].payload.clone();
-    let first = match fx.replies.publish(&*fx.store, &claimed[0]) {
-        ReplyOutcome::Published(r) => r,
-        other => panic!("{other:?}"),
-    };
+    let first = published(fx.publish_all()).remove(0);
     let artifacts = fx.count("SELECT count(*) FROM artifacts");
     let staging =
         fx.count("SELECT count(*) FROM operations WHERE capability='artifacts.stage_file'");
-    // A second intent for the same receipt (an operator-repeated or backfilled delivery) reuses
-    // the published reply and creates nothing.
-    fx.write(move |tx| {
-        let event = devworks_core::protocol::EventId(Id::new("event-repeat").unwrap());
-        tx.history().append(NewEvent {
-            id: event.clone(),
-            actor: actor("host"),
-            project_id: None,
-            root_id: None,
-            operation_id: None,
-            aggregate_kind: "fixture".into(),
-            aggregate_id: "again".into(),
-            aggregate_revision: 1,
-            kind: "FixtureRepeated".into(),
-            payload: json!({}),
-        })?;
-        tx.queue().enqueue(NewQueueEntry {
-            id: Id::new("repeat-1").unwrap(),
-            consumer: REPLY_CONSUMER.into(),
-            event_id: event,
-            root_id: None,
-            operation_id: None,
-            partition: None,
-            priority: 0,
-            ready_at_ms: T0,
-            payload: intent,
-        })?;
-        Ok(())
-    });
+    // The same delivery runs again after its reply was recorded (for example a settlement that
+    // an operator or a repair re-opened): it reuses the published reply and creates nothing.
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute_batch(
+                "UPDATE queue_entries SET state='Ready',owner_id=NULL,lease_until=NULL
+                 WHERE consumer='receipt_replies'",
+            ))
+        })
+        .unwrap();
     let outcomes = fx.publish_all();
     assert_eq!(outcomes.len(), 1);
     let ReplyOutcome::Existing(again) = &outcomes[0] else {
@@ -790,7 +1013,7 @@ fn re_publication_reuses_the_published_reply() {
         staging
     );
     assert_eq!(fx.count("SELECT count(*) FROM receipt_replies"), 1);
-    assert_eq!(fx.reply_deliveries().completed, 2);
+    assert_eq!(fx.reply_deliveries().completed, 1);
     // The reply record is unique per receipt.
     let dup = fx.store.with_writer_connection(|c| {
         super::super::conn::db(c.execute_batch(
@@ -799,6 +1022,51 @@ fn re_publication_reuses_the_published_reply() {
         ))
     });
     assert!(dup.is_err());
+}
+
+#[test]
+fn a_delivery_that_does_not_name_its_receipts_decision_publishes_nothing() {
+    let fx = Fx::new();
+    let user = fx.user();
+    recorded(&fx.start_home(&user, "start-1", "Home"));
+    let intent = fx.claim().remove(0).payload;
+    // A delivery carrying a real receipt's identity but another event (one a project's history
+    // holds) cannot scope or publish that receipt's reply.
+    fx.write(move |tx| {
+        let event = devworks_core::protocol::EventId(Id::new("event-forged").unwrap());
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor: actor("user-a"),
+            project_id: Some(project("project-a")),
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "fixture".into(),
+            aggregate_id: "forged".into(),
+            aggregate_revision: 1,
+            kind: "FixtureChanged".into(),
+            payload: json!({}),
+        })?;
+        tx.queue().enqueue(NewQueueEntry {
+            id: Id::new("forged-1").unwrap(),
+            consumer: REPLY_CONSUMER.into(),
+            event_id: event,
+            root_id: None,
+            operation_id: None,
+            partition: None,
+            priority: 0,
+            ready_at_ms: T0,
+            payload: intent,
+        })?;
+        Ok(())
+    });
+    let outcomes = fx.publish_all();
+    assert_eq!(outcomes.len(), 1);
+    assert!(
+        matches!(&outcomes[0], ReplyOutcome::Poison(_)),
+        "{outcomes:?}"
+    );
+    assert_eq!(fx.count("SELECT count(*) FROM artifacts"), 0);
+    assert_eq!(fx.count("SELECT count(*) FROM receipt_replies"), 0);
 }
 
 #[test]
@@ -1166,8 +1434,19 @@ fn the_reply_migration_rebuilds_artifacts_and_backfills_earlier_receipts() {
     assert_eq!(
         payload,
         json!({"actorId": "user-a", "scopeKey": "scope/0/ui", "requestKey": "key-old",
-            "commandId": "command-old", "projectId": null})
+            "commandId": "command-old"})
     );
+    // Child tables still enforce their references to the rebuilt table.
+    for orphan in [
+        "INSERT INTO artifact_versions VALUES('version-x','no-artifact',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','text/plain',1,NULL,'{}')",
+        "INSERT INTO artifact_shares VALUES('no-artifact','project-a')",
+        "INSERT INTO documents VALUES('no-artifact','version-old',1,0)",
+        "INSERT INTO artifact_tags VALUES('no-artifact','t')",
+    ] {
+        let refused =
+            store.with_writer_connection(move |c| super::super::conn::db(c.execute_batch(orphan)));
+        assert!(refused.is_err(), "{orphan}");
+    }
     // The rebuilt table keeps every constraint: a workspace artifact needs its owner.
     let no_owner = store.with_writer_connection(|c| {
         super::super::conn::db(c.execute_batch(
@@ -1193,4 +1472,43 @@ fn every_operation_has_a_qualified_reply_schema() {
             .unwrap_or_else(|| panic!("{}", d.name));
         assert_eq!(s.schema_id.as_str(), format!("devworks.reply/{}", d.name));
     }
+}
+
+/// Per-command overhead of reply publication, run on demand:
+/// `cargo test --release -p devworks-adapters --lib measure_reply_overhead -- --ignored
+/// --nocapture`.
+#[test]
+#[ignore = "measurement, not a check"]
+fn measure_reply_overhead() {
+    const N: usize = 200;
+    let fx = Fx::new();
+    let user = fx.user();
+    let t = std::time::Instant::now();
+    for i in 0..N {
+        recorded(&fx.start_home(&user, &format!("m-{i}"), "Home"));
+    }
+    let commands = t.elapsed();
+    let t = std::time::Instant::now();
+    let mut n = 0;
+    loop {
+        let batch = published(fx.publish_all()).len();
+        if batch == 0 {
+            break;
+        }
+        n += batch;
+    }
+    assert_eq!(n, N);
+    let publish = t.elapsed();
+    let files = fx.files.stored_files().unwrap().len();
+    let bytes = fx.count("SELECT COALESCE(SUM(byte_count),0) FROM blobs");
+    let t = std::time::Instant::now();
+    fx.svc.recover(&*fx.store).unwrap();
+    let recover = t.elapsed();
+    println!(
+        "commands: {:?}/command; publication: {:?}/reply; files: {files}; mean reply bytes: {}; \
+         artifact recovery with {N} replies: {recover:?}",
+        commands / N as u32,
+        publish / N as u32,
+        bytes / N as i64
+    );
 }

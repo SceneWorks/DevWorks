@@ -18,27 +18,61 @@
 //!    settles the delivery — all or nothing.
 //! 3. **Recovery.** A failure before that write leaves at most a journaled staging operation and
 //!    an unreferenced generation, which the staging resolution (at once, or the artifact store's
-//!    recovery after a crash) fails and collects; the unsettled delivery is retried with durable
-//!    backoff in this boot and redelivered after a restart. Publication is idempotent per
-//!    receipt: the reply record is unique per receipt, command and artifact, and a publisher that
-//!    finds the reply already recorded reuses it and creates nothing.
+//!    recovery after a crash) fails and collects; the unsettled delivery is retried with durable,
+//!    capped backoff in this boot and redelivered after a restart. A transient fault never makes
+//!    it terminal (the engine's reply consumer has no attempt budget), so every recorded receipt
+//!    eventually gets its reply. Publication is idempotent per receipt: the reply record is
+//!    unique per receipt, command and artifact, and a publisher that finds the reply already
+//!    recorded reuses it and creates nothing. Only a receipt this build cannot type is held
+//!    (another contract or schema revision, an unregistered operation, a decision that cannot be
+//!    redacted), and only an intent that cannot be honoured at all fails.
+//!
+//! **What a caller sees** ([`recorded_observation`]): the `Recorded` observation once published;
+//! while the delivery is ready or claimed, pending (retry the same query); while it is held or
+//! failed, held behind its delivery, which an operator resolves (`queue.retry`/`queue.reconcile`);
+//! once it was cancelled or dismissed without a reply (or no intent exists), abandoned — the
+//! reply will never be published, and no retry is advised.
 //!
 //! **Reply bytes** are the canonical (RFC 8785 JCS) JSON of the reply the command returned when it
 //! was recorded, `CommandReply::Recorded { receipt, replayed: false }`, built from the stored
 //! receipt, whose decision the gateway redacted before storing it; nothing is re-derived or
-//! re-run. The media type is `application/json`; the reply schema ([`reply_schema`]) names the
+//! re-run. The decision is redacted again when the bytes are rendered (defence in depth for a
+//! receipt an earlier build stored, including backfilled ones); one that cannot be redacted is
+//! held, never published. The media type is `application/json`; the reply schema ([`reply_schema`]) names the
 //! operation's registered binding (`devworks.reply/<operation>` at its schema revision) with the
 //! digest of the schema document combining the generic command reply envelope and that
 //! operation's registered result schema. A receipt recorded under another contract or schema
 //! revision than this build registers is held with its cause rather than typed by a guess.
 //!
-//! **Owner scope.** The reply belongs to the project its decision was recorded in, or to the
-//! workspace for a projectless receipt; either way its owning principal is the receipt's actor and
-//! it is retained with the receipt ([`ArtifactRetention::Receipt`]; see the module documentation
-//! of [`super`] for the deletion rule).
+//! **Owner scope.** The reply belongs to the project its decision was recorded in — taken from the
+//! receipt's own `CommandDecided` event, which the delivery must name, never from the delivery's
+//! payload — or to the workspace for a projectless receipt; either way its owning principal is
+//! the receipt's actor and it is retained with the receipt ([`ArtifactRetention::Receipt`]; see
+//! the module documentation of [`super`] for the deletion and visibility rules). A use case
+//! cannot enqueue a reply intent: the gateway's handler transaction refuses it.
+//!
+//! **History.** Publication is recorded as a `ReceiptReplyPublished` event of the receipt's own
+//! aggregate (`receipt_reply`, keyed by the command), attributed to the host, with no project or
+//! work root, so it never enters a project or work feed where another principal's receipt
+//! metadata would be disclosed. It names only the reply artifact version and its digest.
+//!
+//! **Cost.** Per recorded command: one queue row in the command's own transaction (no extra
+//! commit), then, after commit and off the command's path, two write transactions (staging
+//! journal; publication) and one small immutable file written through a flushed staging file,
+//! an atomic rename and directory flushes. Measured by the ignored `measure_reply_overhead`
+//! test (SQLite adapter reply tests, release build, macOS APFS with `synchronous=FULL`): a
+//! command took about 18 ms, its reply's publication about 64 ms of write-owner and flush time
+//! (roughly three flushed commits), a reply was about 400 bytes, and artifact recovery over 200
+//! replies took about 12 ms. Publication is deliberately not batched: each reply stays an
+//! independent, idempotent unit whose failure affects no other, and the dispatcher's
+//! per-consumer in-flight cap keeps a burst from taking every worker; batching several replies
+//! per write is the lever if write-owner time becomes the bottleneck. Files live in the
+//! content-addressed store's 256 shard directories (`artifacts/sha256/<2 hex>/`): about 4 000
+//! entries per shard per million receipts, which the supported file systems list efficiently;
+//! boot recovery's file sweep and verification grow linearly with the number of retained
+//! files, replies included.
 use super::{
-    ARTIFACT_AGGREGATE, ArtifactService, StagedFile, StagingRef, Viewer, put_staged_blob,
-    version_ref, visible,
+    ArtifactService, StagedFile, StagingRef, Viewer, put_staged_blob, version_ref, visible,
 };
 use crate::context::ReceiptIdentity;
 use crate::fingerprint::sha256_hex;
@@ -69,16 +103,17 @@ pub const REPLY_CONSUMER: &str = "receipt_replies";
 pub const REPLY_MEDIA_TYPE: &str = "application/json";
 /// Namespace of reply schema IDs (`devworks.reply/<operation>`).
 pub const REPLY_SCHEMA_NAMESPACE: &str = "devworks.reply";
+/// History aggregate of a receipt's reply publication (`aggregate_id` = command ID).
+pub const REPLY_AGGREGATE: &str = "receipt_reply";
 
 /// Records the publication intent of a receipt inside the command's unit of work: one unordered
 /// delivery for the receipt's `CommandDecided` event. Called only by the gateway, right after it
-/// recorded the receipt. `project` is the project the decision was recorded in.
+/// recorded the receipt.
 pub(crate) fn record_intent(
     tx: &mut dyn WriteTransaction,
     identity: &ReceiptIdentity,
     command: &CommandId,
     event: &EventId,
-    project: Option<&ProjectId>,
 ) -> Result<(), StorageError> {
     let id = tx.new_id(IdKind::QueueEntry);
     let ready_at_ms = tx.now_ms();
@@ -98,7 +133,6 @@ pub(crate) fn record_intent(
             "scopeKey": identity.scope_key().as_str(),
             "requestKey": identity.request_key().0.as_str(),
             "commandId": command.0.as_str(),
-            "projectId": project.map(|p| p.0.as_str()),
         }),
     })?;
     Ok(())
@@ -109,16 +143,11 @@ pub(crate) fn record_intent(
 struct Intent {
     identity: ReceiptIdentity,
     command_id: CommandId,
-    project: Option<ProjectId>,
 }
 impl Intent {
     fn parse(payload: &Value) -> Option<Self> {
         let id = |k: &str| payload.get(k)?.as_str().and_then(|s| Id::new(s).ok());
         let scope_key = payload.get("scopeKey")?.as_str()?.to_owned();
-        let project = match payload.get("projectId") {
-            None | Some(Value::Null) => None,
-            Some(_) => Some(ProjectId(id("projectId")?)),
-        };
         Some(Self {
             identity: ReceiptIdentity::recorded(
                 ActorId(id("actorId")?),
@@ -126,7 +155,6 @@ impl Intent {
                 RequestKey(id("requestKey")?),
             ),
             command_id: CommandId(id("commandId")?),
-            project,
         })
     }
 }
@@ -153,11 +181,14 @@ pub fn reply_schema(descriptor: &OperationDescriptor) -> Option<SchemaRef> {
     })
 }
 
-/// The canonical reply bytes of a stored receipt: the `Recorded` reply it was returned as.
+/// The canonical reply bytes of a stored receipt: the `Recorded` reply it was returned as, with
+/// its decision redacted again (an earlier build may have stored it unredacted).
 pub fn reply_bytes(stored: &StoredReceipt) -> Result<Vec<u8>, String> {
+    let mut receipt = stored.receipt.clone();
+    receipt.decision = crate::authority::redact::redact_decision(receipt.decision)?;
     let reply: DomainCommandReply = CommandReply::Recorded {
         protocol: Protocol::Draft1,
-        receipt: stored.receipt.clone(),
+        receipt,
         replayed: false,
     };
     let value = serde_json::to_value(&reply).map_err(|e| e.to_string())?;
@@ -240,12 +271,27 @@ impl ReceiptReplies {
         };
         let env = Preparation::new(store, None, None);
         let identity = intent.identity.clone();
-        let (existing, entry) = env.read(|s| {
+        let event_id = claim.event_id.clone();
+        let (existing, entry, event) = env.read(|s| {
             Ok((
                 s.receipts().reply(&identity)?,
                 s.receipts().lookup(&identity)?,
+                s.history().event(&event_id)?,
             ))
         })?;
+        // The delivery must name its receipt's own decision; the reply's owner scope is that
+        // decision's project, never something the delivery claims.
+        let decides = |e: &crate::ports::storage::EventRecord| {
+            e.kind == "CommandDecided"
+                && e.aggregate_kind == "command"
+                && e.aggregate_id == intent.command_id.0.as_str()
+                && &e.actor == intent.identity.actor_id()
+        };
+        let Some(event) = event.filter(decides) else {
+            return Ok(ReplyOutcome::Poison(
+                "the delivery does not name its receipt's decision".into(),
+            ));
+        };
         if existing.is_some() {
             return self.commit_existing(store, claim, fence, intent);
         }
@@ -292,8 +338,19 @@ impl ReceiptReplies {
         };
         let files = self.artifacts.files.clone();
         let (c, s, operation) = (claim.clone(), staged.clone(), stored.operation.clone());
+        let project = event.project_id;
         let committed = run_write(store, WriteOptions::default(), move |tx| {
-            commit(tx, &c, &fence, &intent, &operation, &schema, &s, &*files)
+            commit(
+                tx,
+                &c,
+                &fence,
+                &intent,
+                project.as_ref(),
+                &operation,
+                &schema,
+                &s,
+                &*files,
+            )
         });
         let staging = staged.staging_ref();
         match committed {
@@ -472,6 +529,7 @@ fn commit(
     claim: &QueueEntry,
     fence: &QueueFence,
     intent: &Intent,
+    project: Option<&ProjectId>,
     operation: &str,
     schema: &SchemaRef,
     staged: &StagedFile,
@@ -484,7 +542,7 @@ fn commit(
         return settle_existing(tx, claim, fence, intent);
     }
     let generation = put_staged_blob(tx, files, staged)?;
-    let scope = match &intent.project {
+    let scope = match project {
         Some(p) if tx.artifacts().project_exists(p)? => ArtifactScope::Project(p.clone()),
         _ => ArtifactScope::Workspace,
     };
@@ -543,22 +601,22 @@ fn commit(
         &staged.operation_id,
         json!({"artifactId": artifact_id.as_str(), "versionId": version_id.as_str()}),
     )?;
+    // The receipt's own aggregate, outside every project and work feed (see the module docs).
     let event = EventId(tx.new_id(IdKind::Event));
     tx.history().append(NewEvent {
         id: event,
         actor: host,
-        project_id: scope.project().cloned(),
+        project_id: None,
         root_id: None,
         operation_id: Some(staged.operation_id.clone()),
-        aggregate_kind: ARTIFACT_AGGREGATE.into(),
-        aggregate_id: artifact_id.as_str().to_owned(),
-        aggregate_revision: artifact.revision,
-        kind: "ArtifactVersionPublished".into(),
+        aggregate_kind: REPLY_AGGREGATE.into(),
+        aggregate_id: intent.command_id.0.as_str().to_owned(),
+        aggregate_revision: 1,
+        kind: "ReceiptReplyPublished".into(),
         payload: json!({
-            "versionId": version_id.as_str(), "versionNo": 1, "digest": staged.digest,
-            "byteCount": staged.byte_count, "mediaType": REPLY_MEDIA_TYPE, "title": title,
-            "source": staged.source, "receiptCommandId": intent.command_id.0.as_str(),
-            "principalKind": "Host",
+            "artifactId": artifact_id.as_str(), "versionId": version_id.as_str(),
+            "digest": staged.digest, "byteCount": staged.byte_count,
+            "mediaType": REPLY_MEDIA_TYPE, "principalKind": "Host",
         }),
     })?;
     tx.receipts().record_reply(
@@ -579,8 +637,14 @@ fn commit(
 /// Why a recorded receipt's observation cannot be published to this caller now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ObservationGap {
-    /// The reply is not published yet: its intent is committed and publication follows.
+    /// The reply is not published yet: its delivery is ready or being published.
     Pending,
+    /// Its delivery is held for reconciliation or failed: an operator resolves it (the delivery
+    /// named here) before publication can continue.
+    Held(Id),
+    /// It will never be published: its delivery was cancelled or dismissed without a reply, or
+    /// no publication intent exists.
+    Abandoned,
     /// The caller can no longer see the reply (its scope or authority changed).
     Denied,
 }
@@ -594,7 +658,7 @@ pub(crate) fn recorded_observation(
     stored: &StoredReceipt,
 ) -> Result<Result<ReceiptObservation, ObservationGap>, StorageError> {
     let Some(reply) = snapshot.receipts().reply(identity)? else {
-        return Ok(Err(ObservationGap::Pending));
+        return Ok(Err(publication_state(snapshot, stored)?));
     };
     let read = snapshot.artifacts();
     let Some(artifact) = read.artifact(&reply.artifact_id)? else {
@@ -624,4 +688,35 @@ pub(crate) fn recorded_observation(
     };
     observation.check().map_err(StorageError::InvalidRecord)?;
     Ok(Ok(observation))
+}
+
+/// Where an unpublished reply stands, from its receipt's decision event and that event's
+/// publication delivery.
+fn publication_state(
+    snapshot: &dyn ReadSnapshot,
+    stored: &StoredReceipt,
+) -> Result<ObservationGap, StorageError> {
+    let decision = snapshot.history().page(
+        &crate::ports::storage::EventFilter::Aggregate {
+            kind: "command".into(),
+            id: stored.receipt.command_id.0.as_str().to_owned(),
+        },
+        0,
+        1,
+    )?;
+    let Some(event) = decision.events.first() else {
+        return Ok(ObservationGap::Abandoned);
+    };
+    Ok(
+        match snapshot.queue().delivery(REPLY_CONSUMER, &event.id)? {
+            None => ObservationGap::Abandoned,
+            Some(e) => match e.state {
+                QueueState::Ready | QueueState::Claimed => ObservationGap::Pending,
+                QueueState::Reconciling | QueueState::Failed => ObservationGap::Held(e.id),
+                QueueState::Completed | QueueState::Cancelled | QueueState::Dismissed => {
+                    ObservationGap::Abandoned
+                }
+            },
+        },
+    )
 }

@@ -1,6 +1,7 @@
 //! Receipt reply publication through the durable delivery dispatcher on the real SQLite store
 //! and real managed files: commands through the gateway, their receipts' replies published by
-//! the dispatcher's asynchronous consumer after commit, and recovery after a restart.
+//! the dispatcher's asynchronous consumer after commit, recovery after a restart, a transient
+//! fault outlasting any attempt budget, and a per-consumer in-flight cap.
 mod common;
 
 use common::*;
@@ -8,7 +9,9 @@ use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceRefusal};
+use devworks_core::ports::files::{
+    ArtifactFiles, ArtifactSources, FileFault, PublishedBlob, ResolvedSource, SourceRefusal,
+};
 use devworks_core::ports::storage::ApplicationStore;
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::records::{ReceiptLookupState, ReceiptObservation};
@@ -19,10 +22,81 @@ use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::replies::{REPLY_CONSUMER, ReceiptReplies};
 use devworks_core::services::history::HistoryService;
 use devworks_core::services::sessions::SessionService;
-use devworks_engine::RetryPolicy;
 use devworks_engine::replies::reply_consumer;
+use devworks_engine::{AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome};
 use serde_json::json;
+use std::io::Read;
+use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// The native adapter, with the next `fail` publications failing on a full volume.
+struct Flaky {
+    inner: NativeArtifactFiles,
+    fail: AtomicUsize,
+}
+impl ArtifactFiles for Flaky {
+    fn publish(
+        &self,
+        s: &str,
+        src: &mut dyn Read,
+        d: &str,
+        n: u64,
+        r: Option<&str>,
+        g: &str,
+    ) -> Result<PublishedBlob, FileFault> {
+        if self
+            .fail
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Err(FileFault::DiskFull);
+        }
+        self.inner.publish(s, src, d, n, r, g)
+    }
+    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
+        self.inner.managed_path(d, g)
+    }
+    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
+        self.inner.present(d, g, n)
+    }
+    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
+        self.inner.inspect(d, g)
+    }
+    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
+        self.inner.read_range(d, g, n, o, m)
+    }
+    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
+        self.inner.open(d, g, n)
+    }
+    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
+        self.inner.unlink(d, g)
+    }
+    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
+        self.inner.quarantine(d, g)
+    }
+    fn staged(&self) -> Result<Vec<String>, FileFault> {
+        self.inner.staged()
+    }
+    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
+        self.inner.remove_staged(n)
+    }
+    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
+        self.inner.stored_files()
+    }
+    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
+        self.inner.write_derived(k, b)
+    }
+    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
+        self.inner.read_derived(k, m)
+    }
+    fn collect_derived(&self) -> Result<u64, FileFault> {
+        self.inner.collect_derived()
+    }
+    fn export(&self, d: &str, g: &str, n: u64, dest: &Path, o: bool) -> Result<(), FileFault> {
+        self.inner.export(d, g, n, dest, o)
+    }
+}
 
 struct NoSources;
 impl ArtifactSources for NoSources {
@@ -42,11 +116,15 @@ struct Boot {
     replies: Arc<ReceiptReplies>,
 }
 fn boot(h: &Harness) -> Boot {
+    boot_failing(h, 0)
+}
+/// A boot whose first `failures` reply file publications fail on a full volume.
+fn boot_failing(h: &Harness, failures: usize) -> Boot {
     let store = h.open();
-    let files = Arc::new(NativeArtifactFiles::new(
-        h.root.clone(),
-        h.root.with_extension("cache"),
-    ));
+    let files = Arc::new(Flaky {
+        inner: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
+        fail: AtomicUsize::new(failures),
+    });
     let svc = Arc::new(ArtifactService::new(
         files,
         Arc::new(NoSources),
@@ -112,11 +190,7 @@ impl Boot {
         dispatcher(
             h,
             self.store.clone(),
-            vec![reply_consumer(
-                self.replies.clone(),
-                self.store.clone(),
-                RetryPolicy::default(),
-            )],
+            vec![reply_consumer(self.replies.clone(), self.store.clone())],
         )
     }
 }
@@ -186,4 +260,104 @@ fn an_unpublished_reply_is_published_by_the_next_boot() {
     });
     assert_eq!(claimed, 1);
     b.observation(&h, &user, "start-1").check().unwrap();
+}
+
+#[test]
+fn a_transient_fault_outlasting_any_attempt_budget_still_publishes() {
+    let h = Harness::new();
+    let rt = runtime();
+    // A full volume for longer than the default retry budget (8 attempts) and its window.
+    let b = boot_failing(&h, 12);
+    let user = principal(&*b.store, "user-a", PrincipalKind::Human);
+    assert!(matches!(
+        b.start(&h, &user, "start-1"),
+        CommandReply::Recorded { .. }
+    ));
+    let d = b.dispatcher(&h);
+    let mut attempts = 0;
+    let published = rt.block_on(async {
+        within("publication through a long fault", async {
+            d.recover().await.unwrap();
+            for _ in 0..40 {
+                attempts += d.run_until_idle().await.unwrap();
+                let status = read(&*b.store, |s| s.queue().status(REPLY_CONSUMER));
+                assert_eq!(status.failed, 0, "never terminal");
+                if status.completed == 1 {
+                    return true;
+                }
+                // Past the capped backoff (5 minutes).
+                h.advance(301_000);
+            }
+            false
+        })
+        .await
+    });
+    assert!(published, "published after {attempts} attempts");
+    assert_eq!(attempts, 13);
+    b.observation(&h, &user, "start-1").check().unwrap();
+}
+
+/// An asynchronous handler that waits until its gate opens.
+struct Gated {
+    gate: tokio::sync::watch::Receiver<bool>,
+    started: Arc<AtomicUsize>,
+}
+impl AsyncDeliveryHandler for Gated {
+    fn start(&self, _: AsyncDelivery) -> AsyncFuture {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let mut gate = self.gate.clone();
+        Box::pin(async move {
+            while !*gate.borrow() {
+                if gate.changed().await.is_err() {
+                    break;
+                }
+            }
+            AsyncOutcome::Committed
+        })
+    }
+}
+
+#[test]
+fn a_capped_consumer_burst_leaves_capacity_to_the_others() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    for _ in 0..3 {
+        enqueue(&*store, "burst", None, json!({}));
+    }
+    enqueue(&*store, "other", None, json!({}));
+    let (open, gate) = tokio::sync::watch::channel(false);
+    let started = Arc::new(AtomicUsize::new(0));
+    let mut burst = consumer("burst", Recorder::ok());
+    burst.async_handler = Some(Arc::new(Gated {
+        gate,
+        started: started.clone(),
+    }));
+    burst.max_in_flight = Some(1);
+    let other = Recorder::ok();
+    let d = dispatcher_with(
+        &h,
+        store.clone(),
+        vec![burst, consumer("other", other.clone())],
+        |c| c.max_in_flight = 3,
+    );
+    rt.block_on(async {
+        within("fair dispatch", async {
+            d.recover().await.unwrap();
+            let mut changes = d.subscribe();
+            // Three free permits: the burst may take one, the other consumer gets its own.
+            assert_eq!(d.tick().await.unwrap().claimed, 2);
+            while other.seen().is_empty() {
+                changes.changed().await.unwrap();
+            }
+            // While the burst's delivery runs, it claims no more, whatever capacity is free.
+            assert_eq!(d.tick().await.unwrap().claimed, 0);
+            assert_eq!(read(&*store, |s| s.queue().status("burst")).claimed, 1);
+            open.send(true).unwrap();
+            d.run_until_idle().await.unwrap();
+        })
+        .await
+    });
+    assert_eq!(read(&*store, |s| s.queue().status("burst")).completed, 3);
+    assert_eq!(started.load(Ordering::SeqCst), 3);
 }

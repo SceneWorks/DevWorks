@@ -84,8 +84,13 @@
 //! never shared, moved or replaced, so explicit user deletion under ART-05 (which covers the
 //! user's own work outputs) can never break a receipt. Only the receipt's principal (with the
 //! user, the host and the workspace coordinator) sees it, so another principal's receipts are
-//! not disclosed, and project listings omit it. Its bytes count toward its scope's usage, but
-//! the storage limit never refuses it: a receipt's reply is not optional work output.
+//! not disclosed, and project listings omit it. Because a receipt identity has no project, a
+//! reply is judged by the viewer's current authorized scope (workspace-wide, or a confined
+//! principal's binding project), not by the invocation's lineage project ([`visible_in`]). Its bytes are system-owned: they never count
+//! toward the scope's storage limit (which measures the user's own work outputs) and are
+//! reported separately in the storage status. `artifacts.reference` on a reply is allowed on
+//! purpose: it only links the immutable version to work, and changes neither its content nor
+//! its retention.
 //!
 //! # Access (ART-04)
 //!
@@ -324,26 +329,53 @@ pub fn authorized_scope(
     })
 }
 
-/// Who is looking at artifacts: the invocation, and whether its principal is the unconfined
-/// workspace coordinator (resolved from its current host binding).
-#[derive(Clone, Copy, Debug)]
+/// Who is looking at artifacts: the invocation, the principal's current authorized scope from
+/// its host binding (`None` once the binding is inactive), and whether it is the unconfined
+/// workspace coordinator.
+#[derive(Clone, Debug)]
 pub struct Viewer<'a> {
     ctx: &'a InvocationContext,
     coordinator: bool,
+    authorized: Option<AuthorizedScope>,
 }
 impl<'a> Viewer<'a> {
     pub fn resolve(
         authority: &dyn AuthorityRead,
         ctx: &'a InvocationContext,
     ) -> Result<Self, StorageError> {
-        let coordinator = ctx.principal_kind() == PrincipalKind::Agent
-            && authority.principal(ctx.principal())?.is_some_and(|b| {
-                b.active
+        if matches!(
+            ctx.principal_kind(),
+            PrincipalKind::Human | PrincipalKind::Host
+        ) {
+            return Ok(Self {
+                ctx,
+                coordinator: false,
+                authorized: Some(AuthorizedScope::Workspace),
+            });
+        }
+        Ok(match authority.principal(ctx.principal())? {
+            Some(b) if !b.active => Self {
+                ctx,
+                coordinator: false,
+                authorized: None,
+            },
+            Some(b) => Self {
+                ctx,
+                coordinator: ctx.principal_kind() == PrincipalKind::Agent
                     && b.kind == PrincipalKind::Agent
                     && b.role == Some(AgentRole::WorkspaceCoordinator)
-                    && b.project_id.is_none()
-            });
-        Ok(Self { ctx, coordinator })
+                    && b.project_id.is_none(),
+                authorized: Some(
+                    b.project_id
+                        .map_or(AuthorizedScope::Workspace, AuthorizedScope::Project),
+                ),
+            },
+            None => Self {
+                ctx,
+                coordinator: false,
+                authorized: Some(AuthorizedScope::Workspace),
+            },
+        })
     }
     /// The workspace-level audience of what `owner` owns: the owner itself, the user, the host
     /// and the unconfined workspace coordinator.
@@ -358,8 +390,8 @@ impl<'a> Viewer<'a> {
 
 /// Whether an invocation may see `artifact`. A project-bound invocation sees what its project
 /// owns or was shared; a workspace invocation sees every project's artifacts and the workspace
-/// artifacts its principal belongs to the audience of. A receipt reply is seen only by its
-/// receipt's principal and the workspace audience, within the same scope rules.
+/// artifacts its principal belongs to the audience of. A receipt reply is judged by its
+/// principal instead (see [`visible_in`]).
 pub(crate) fn visible(
     read: &dyn crate::ports::storage::ArtifactRead,
     viewer: &Viewer<'_>,
@@ -370,16 +402,30 @@ pub(crate) fn visible(
 
 /// [`visible`] for work of `project` (`None`: the workspace) rather than the invocation's own
 /// project, for references a session or a work item records.
+///
+/// A receipt reply is not judged by the invocation's lineage project: a receipt identity is
+/// `(actor, scope key, request key)` and has no project, so its principal may look it up from
+/// any context. It is visible to its receipt's audience (the receipt's principal, the user, the
+/// host, the unconfined workspace coordinator) within that principal's current authorized scope:
+/// workspace-wide for the user, the host and unconfined principals; a confined principal's
+/// binding project otherwise (owned or shared). An inactive binding sees none.
 pub(crate) fn visible_in(
     read: &dyn crate::ports::storage::ArtifactRead,
     viewer: &Viewer<'_>,
     artifact: &StoredArtifact,
     project: Option<&ProjectId>,
 ) -> Result<bool, StorageError> {
-    if artifact.retention == ArtifactRetention::Receipt
-        && !viewer.sees_owned(artifact.owner.as_ref())
-    {
-        return Ok(false);
+    if artifact.retention == ArtifactRetention::Receipt {
+        if !viewer.sees_owned(artifact.owner.as_ref()) {
+            return Ok(false);
+        }
+        return Ok(match &viewer.authorized {
+            None => false,
+            Some(AuthorizedScope::Workspace) => true,
+            Some(AuthorizedScope::Project(p)) => {
+                artifact.scope.project() == Some(p) || read.shares(&artifact.id)?.contains(p)
+            }
+        });
     }
     Ok(match (project, &artifact.scope) {
         (None, ArtifactScope::Project(_)) => true,
@@ -463,7 +509,11 @@ fn setting_i64(
 /// Visible storage status of one scope (ART-04/05): usage against its limit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageStatus {
+    /// Bytes of explicitly retained artifacts: what the limit measures.
     pub used_bytes: i64,
+    /// Bytes of the scope's system-owned receipt replies, shown separately: they never count
+    /// toward the limit and are never refused by it.
+    pub receipt_reply_bytes: i64,
     /// 0 means no limit.
     pub quota_bytes: i64,
     pub max_file_bytes: i64,
@@ -965,6 +1015,7 @@ impl ArtifactService {
         let max = setting_i64(snapshot.configuration(), None, ARTIFACT_MAX_FILE_KEY)?;
         Ok(StorageStatus {
             used_bytes: used,
+            receipt_reply_bytes: snapshot.artifacts().receipt_usage(scope.project())?,
             quota_bytes: quota,
             max_file_bytes: max,
             at_limit: quota > 0 && used >= quota,

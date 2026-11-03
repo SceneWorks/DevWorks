@@ -48,7 +48,7 @@ CREATE TABLE receipt_replies (
 INSERT INTO queue_entries(id,consumer,event_id,priority,ready_at,state,payload_json,event_seq)
  SELECT 'receipt-reply-' || lower(hex(randomblob(16))), 'receipt_replies', e.id, 0, r.created_at,
   'Ready', json_object('actorId',r.actor_id,'scopeKey',r.scope_key,'requestKey',r.idempotency_key,
-  'commandId',e.aggregate_id,'projectId',e.project_id), e.seq
+  'commandId',e.aggregate_id), e.seq
  FROM command_receipts r JOIN events e ON e.aggregate_kind='command' AND e.kind='CommandDecided'
   AND e.aggregate_id=json_extract(r.result_json,'$.receipt.commandId')
  WHERE NOT EXISTS(SELECT 1 FROM queue_entries q WHERE q.consumer='receipt_replies' AND q.event_id=e.id);
