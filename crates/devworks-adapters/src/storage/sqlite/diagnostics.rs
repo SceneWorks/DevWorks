@@ -341,7 +341,7 @@ impl DiagnosticRepository for Unit<'_> {
         d: &StoredDiagnostic,
     ) -> Result<StoredDiagnostic, StorageError> {
         let rank = severity_rank(&d.severity)
-            .ok_or_else(|| invalid(format!("unknown severity {:?}", d.severity)))?;
+            .ok_or_else(|| invalid(format!("unknown severity '{}'", d.severity)))?;
         if one(self.conn, &d.id)?.is_some() {
             return Err(StorageError::Duplicate {
                 kind: "diagnostic",

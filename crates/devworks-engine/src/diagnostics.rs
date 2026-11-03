@@ -12,6 +12,7 @@
 use crate::dispatch::{self, Dispatcher};
 use crate::runtime::{BootError, BootReport, CollectionPass};
 use devworks_core::ports::diagnostics::Metric;
+use devworks_core::ports::files::FileFault;
 use devworks_core::ports::storage::StorageError;
 use devworks_core::protocol::OperationState;
 use devworks_core::protocol::records::{
@@ -239,7 +240,7 @@ pub fn record_boot_failure(service: &DiagnosticService, error: &BootError) {
         stage: Some(stage.into()),
         outcome: Some(DiagnosticOutcome::Failed),
         error_class: Some(class),
-        output: Some(format!("{cause:?}")),
+        output: Some(cause.to_string()),
         ..LogEntry::new(
             channels::BOOT,
             "failed",
@@ -272,6 +273,20 @@ fn boot_check(r: &BootReport, at: i64) -> HealthCheck {
     check
 }
 
+/// A file fault as text (never Debug: its escaping would hide a secret from redaction).
+fn fault_text(f: &FileFault) -> String {
+    match f {
+        FileFault::NotFound => "not found".into(),
+        FileFault::Corrupt(why) => format!("corrupt: {why}"),
+        FileFault::Mismatch => "length or digest mismatch".into(),
+        FileFault::Source(why) => format!("source unreadable: {why}"),
+        FileFault::DiskFull => "disk full".into(),
+        FileFault::Exists => "destination exists".into(),
+        FileFault::Io(why) => format!("I/O: {why}"),
+        FileFault::Unsupported(why) => format!("unsupported: {why}"),
+    }
+}
+
 fn collection_check(pass: Option<&CollectionPass>) -> HealthCheck {
     let Some(pass) = pass else {
         return HealthCheck::new(
@@ -289,7 +304,7 @@ fn collection_check(pass: Option<&CollectionPass>) -> HealthCheck {
         (Err(e), _) => HealthCheck::new(
             "artifacts.collection",
             HealthState::Failed,
-            format!("Collection pass {} failed: {e:?}", pass.pass),
+            format!("Collection pass {} failed: {e}", pass.pass),
         ),
         (Ok(r), _) if !r.failed.is_empty() => HealthCheck::new(
             "artifacts.collection",
@@ -304,8 +319,9 @@ fn collection_check(pass: Option<&CollectionPass>) -> HealthCheck {
             "artifacts.collection",
             HealthState::Degraded,
             format!(
-                "Collection pass {} could not clear derived previews: {e:?}",
-                pass.pass
+                "Collection pass {} could not clear derived previews: {}",
+                pass.pass,
+                fault_text(e)
             ),
         ),
         (Ok(_), Ok(_)) => HealthCheck::new(
@@ -332,7 +348,7 @@ fn collection_check(pass: Option<&CollectionPass>) -> HealthCheck {
                 check = check.metric(MetricReading::new(
                     name,
                     Some("count"),
-                    Metric::Unavailable(format!("the pass failed: {e:?}")),
+                    Metric::Unavailable(format!("the pass failed: {e}")),
                 ));
             }
         }
@@ -342,7 +358,7 @@ fn collection_check(pass: Option<&CollectionPass>) -> HealthCheck {
         Some("count"),
         match &pass.derived {
             Ok(n) => Metric::Available(*n),
-            Err(e) => Metric::Unavailable(format!("{e:?}")),
+            Err(e) => Metric::Unavailable(fault_text(e)),
         },
     ))
 }

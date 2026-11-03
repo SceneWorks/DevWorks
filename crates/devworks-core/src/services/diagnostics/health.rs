@@ -160,7 +160,9 @@ fn unavailable(component: &str, why: &str) -> HealthCheck {
     HealthCheck::new(component, HealthState::Unavailable, why)
 }
 fn storage_error(e: &StorageError) -> String {
-    Redactor::new().redact_text(&format!("{e:?}"))
+    // Display, never Debug: Debug escaping would hide a secret from the exact-value redactor
+    // (health messages pass the service's redactor again when they are written).
+    Redactor::new().redact_text(&e.to_string())
 }
 
 fn storage_checks(svc: &DiagnosticService, now: i64, out: &mut Vec<HealthCheck>) {

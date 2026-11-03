@@ -195,7 +195,7 @@ pub fn wire_name<T: Serialize>(v: &T) -> String {
 }
 fn parse_wire<T: DeserializeOwned>(s: &str) -> Result<T, StorageError> {
     serde_json::from_value(Value::String(s.to_owned()))
-        .map_err(|_| StorageError::unavailable(Unavailable::Corrupt, format!("stored value {s:?}")))
+        .map_err(|_| StorageError::unavailable(Unavailable::Corrupt, format!("stored value {s}")))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -582,6 +582,25 @@ impl LogQuery {
             until_ms: self.until_ms,
         }
     }
+    /// The selection as structured data (exports carry it, redacted; never a Debug string).
+    pub fn selection(&self) -> Value {
+        json!({
+            "afterSequence": self.after_sequence,
+            "component": self.component,
+            "severity": self.severity.as_ref().map(wire_name),
+            "outcome": self.outcome.as_ref().map(wire_name),
+            "operation": self.operation,
+            "operationId": self.operation_id.as_ref().map(|o| o.0.as_str()),
+            "correlationId": self.correlation_id.as_ref().map(Id::as_str),
+            "targetId": self.target_id.as_ref().map(Id::as_str),
+            "stage": self.stage,
+            "projectId": self.project_id.as_ref().map(|p| p.0.as_str()),
+            "search": self.search,
+            "sinceMs": self.since_ms,
+            "untilMs": self.until_ms,
+            "order": if self.descending { "Descending" } else { "Ascending" },
+        })
+    }
     fn digest(&self, audience: &DiagnosticAudience) -> String {
         let f = self.filter(audience.clone());
         sha256_hex(format!("{f:?}").as_bytes())[..16].to_owned()
@@ -777,6 +796,16 @@ impl DiagnosticService {
         }
     }
 
+    /// A storage error as text for health and monitor results: its Display form (never Debug,
+    /// whose escaping would hide a secret from the exact-value redactor), redacted with the
+    /// registered secrets.
+    fn error_text(&self, e: &StorageError) -> String {
+        self.redactor
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .redact_text(&e.to_string())
+    }
+
     /// Registers a resolved secret value: every later record and export has it removed.
     pub fn register_secret(&self, value: &str) {
         self.redactor
@@ -931,12 +960,7 @@ impl DiagnosticService {
         self.monitor
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .retention = Some((
-            self.now(),
-            outcome
-                .clone()
-                .map_err(|e| Redactor::new().redact_text(&format!("{e:?}"))),
-        ));
+            .retention = Some((self.now(), outcome.clone().map_err(|e| self.error_text(&e))));
         self.committed();
         outcome
     }
@@ -947,16 +971,14 @@ impl DiagnosticService {
     /// snapshot: the inspection takes a reader of its own.
     pub fn refresh_monitor(&self) -> MonitorState {
         let database = self.storage.as_ref().map(|p| {
-            let r = p
-                .database()
-                .map_err(|e| Redactor::new().redact_text(&format!("{e:?}")));
+            let r = p.database().map_err(|e| self.error_text(&e));
             (self.now(), r)
         });
         let integrity = self.storage.as_ref().map(|p| {
             let r = p
                 .integrity()
                 .map(|r| r.problems)
-                .map_err(|e| Redactor::new().redact_text(&format!("{e:?}")));
+                .map_err(|e| self.error_text(&e));
             (self.now(), r)
         });
         let start = std::time::Instant::now();
@@ -964,7 +986,7 @@ impl DiagnosticService {
             tx.committed_sequence()
         })
         .map(|_| start.elapsed().as_millis() as u64)
-        .map_err(|e| Redactor::new().redact_text(&format!("{e:?}")));
+        .map_err(|e| self.error_text(&e));
         let mut m = self.monitor.lock().unwrap_or_else(|p| p.into_inner());
         if integrity.is_some() {
             m.integrity = integrity;
@@ -1115,7 +1137,9 @@ impl DiagnosticService {
             })
             .map_err(ExportFailure::Storage)?
             .ok_or(ExportFailure::Denied)?;
-        let selection = redactor.redact_text(&format!("{q:?}"));
+        // Structural, then redacted: Debug escaping (`\"`, `\\`, `\n`) would hide a registered
+        // secret from the exact-value redactor.
+        let selection = redactor.redact_json(&q.selection());
         let health = Value::Array(health);
         let document = |k: usize| {
             let omitted = matched.saturating_sub(k);
@@ -1219,7 +1243,7 @@ impl DiagnosticService {
             .map_err(|_| ExportFailure::Invalid("a request key is an opaque identifier"))?;
         let identity = ReceiptIdentity::bind(ctx, RequestKey(key.clone()));
         let selection = sha256_hex(
-            json!({"selection": format!("{query:?}"), "projectId": project.0.as_str()})
+            json!({"selection": query.selection(), "projectId": project.0.as_str()})
                 .to_string()
                 .as_bytes(),
         );
@@ -1331,9 +1355,38 @@ impl DiagnosticService {
                 return Err(ExportFailure::Pending);
             }
             Err(e) => {
-                staging.release(&source);
-                release_claim(&mine);
-                return Err(ExportFailure::Storage(e));
+                // The write may have committed (a lost acknowledgment) or not: what is durable
+                // decides. Re-read the intent before cleaning anything up.
+                let (actor, scope) = (identity.actor_id().clone(), mine.scope_key.clone());
+                let durable = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
+                    s.diagnostics().export_intent(&actor, &scope, request_key)
+                });
+                match durable {
+                    // It committed: the recorded command is this one, so submit it.
+                    Ok(Some(i))
+                        if i.claim == mine.claim && i.command.as_deref() == Some(&frame) => {}
+                    // It did not commit and the claim is still this attempt's: nothing refers to
+                    // the staged file, so both go.
+                    Ok(Some(i)) if i.claim == mine.claim && i.command.is_none() => {
+                        staging.release(&source);
+                        release_claim(&mine);
+                        return Err(ExportFailure::Storage(e));
+                    }
+                    // Another attempt holds the key now, and it never recorded this command.
+                    Ok(Some(i)) if i.command.as_deref() != Some(&frame) => {
+                        staging.release(&source);
+                        return Err(ExportFailure::Pending);
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        staging.release(&source);
+                        return Err(ExportFailure::Storage(e));
+                    }
+                    // Still unknown: keep the staged file (a recorded command may name it); a
+                    // retry resolves the intent, and the sweep removes the file after its
+                    // ticket expires.
+                    Err(_) => return Err(ExportFailure::Storage(e)),
+                }
             }
         }
         let outcome = submit(frame.as_bytes());

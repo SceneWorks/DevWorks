@@ -1697,3 +1697,54 @@ fn a_health_cursor_expires_when_the_checks_change() {
     ));
     assert_eq!(fault.code, DomainErrorCode::CursorExpired);
 }
+
+#[test]
+fn secrets_with_quotes_backslashes_or_newlines_never_reach_an_export_in_any_encoding() {
+    use devworks_core::services::diagnostics::LogQuery;
+    let fx = Fx::new();
+    let user = fx.user();
+    let secrets = [
+        "hunter\"horse-quote-77",
+        "back\\slash-secret-88",
+        "new\nline-secret-99",
+    ];
+    for s in secrets {
+        fx.svc.register_secret(s);
+    }
+    // A record whose text and metric reason hold the secrets.
+    fx.log(LogEntry {
+        output: Some(secrets.join(" | ")),
+        metrics: vec![MetricReading::new(
+            "probe",
+            None,
+            Metric::Unavailable(format!("probe said {}", secrets[0])),
+        )],
+        ..LogEntry::new("client", "leak", Severity::Error, secrets.join(" and "))
+    });
+    // The selection itself names each secret (as a search a person typed).
+    for s in secrets {
+        let export = fx
+            .svc
+            .render_export(
+                &user,
+                &LogQuery {
+                    search: Some(s.to_owned()),
+                    ..LogQuery::default()
+                },
+            )
+            .unwrap();
+        let text = String::from_utf8(export.bytes).unwrap();
+        // Neither the raw value, its JSON-escaped form nor its Debug-escaped form appears; the
+        // distinctive tail of each secret would survive any of them.
+        for secret in secrets {
+            let tail = &secret[secret.len() - 9..];
+            assert!(!text.contains(tail), "{tail:?} in {text}");
+        }
+        let document: Value = serde_json::from_str(&text).unwrap();
+        assert!(
+            document["selection"].is_object(),
+            "{}",
+            document["selection"]
+        );
+    }
+}
