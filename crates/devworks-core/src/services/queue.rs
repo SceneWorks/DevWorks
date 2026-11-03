@@ -23,6 +23,13 @@
 //! the operation's reconciler must first record what actually happened. `queue.retry` accepts
 //! only `Retry` and `queue.reconcile` only `Reconcile`; `queue.resolve` accepts all four.
 //!
+//! A receipt's reply is mandatory (consumer [`REPLY_CONSUMER`]):
+//! `CancelBeforeDispatch` of its delivery is always refused, and `AcknowledgePoison` only
+//! dismisses a failed delivery that can never be honoured (its payload is not a publication
+//! intent, or it does not name its receipt's own decision). Both refusals are `Conflict` with
+//! target kind [`REPLY_REQUIRED`] and retry `Never`; a failed reply that can still be published
+//! is retried (`queue.retry`).
+//!
 //! A cancellation requested while a delivery was claimed or held is durable: a later `Retry` or
 //! `Reconcile` of that delivery settles it `Cancelled` with its undispatched operation instead of
 //! redelivering it, unless the operation's outcome was established (`ObservedComplete`,
@@ -63,7 +70,13 @@ use crate::protocol::{
     CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
     RetryAdvice, Revision, RevisionDimension,
 };
+use crate::services::artifacts::replies::{REPLY_CONSUMER, unhonourable};
 use serde_json::json;
+
+/// Fault target kind of a resolution that would abandon a receipt's mandatory reply
+/// (`Conflict`, retry `Never`): cancelling a [`REPLY_CONSUMER`] delivery, or acknowledging one
+/// as poison while it can still be honoured.
+pub const REPLY_REQUIRED: &str = "receipt_reply_required";
 
 /// The queue use cases (stateless; all state is in the store).
 #[derive(Clone, Copy, Debug, Default)]
@@ -464,6 +477,27 @@ fn resolve(
             ),
             Some(op.id.clone()),
         ));
+    }
+    // A receipt's reply is mandatory: its delivery is never cancelled, and is dismissed only
+    // when it can never be honoured (it is not a publication intent, or does not name its
+    // receipt's decision). Any other failed reply is retried (`queue.retry`), never abandoned.
+    if entry.consumer == REPLY_CONSUMER {
+        let abandons = match r.resolution {
+            QueueResolution::CancelBeforeDispatch => true,
+            QueueResolution::AcknowledgePoison => {
+                entry.state == QueueState::Failed && !unhonourable(tx, &entry)?
+            }
+            QueueResolution::Retry | QueueResolution::Reconcile => false,
+        };
+        if abandons {
+            let mut f = targeted(
+                fault(DomainErrorCode::Conflict, RetryAdvice::Never),
+                id,
+                Some(entry.revision),
+            );
+            f.target_kind = Some(BoundedText(REPLY_REQUIRED.into()));
+            return Ok(refused(f, None));
+        }
     }
     let conflict = || {
         Ok(refused(

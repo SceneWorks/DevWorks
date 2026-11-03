@@ -313,13 +313,24 @@ impl NativeArtifactFiles {
     fn staging(&self) -> PathBuf {
         self.data_root.join("staging")
     }
+    /// The data-root-relative managed path recorded in the store (`/`-separated on every
+    /// platform, so a record never depends on where it was written).
     fn relative(digest: &str, generation: &str) -> String {
         format!("artifacts/sha256/{}/{digest}.{generation}", &digest[..2])
+    }
+    /// The content-addressed store directory. Built one component at a time, as every native
+    /// path under the data root is: a verbatim Windows root (`\\?\C:\...`) disables separator
+    /// normalization, so a joined `/`-separated string would name one invalid component.
+    fn store_dir(&self) -> PathBuf {
+        self.data_root.join("artifacts").join("sha256")
     }
     fn blob_path(&self, digest: &str, generation: &str) -> Result<PathBuf, FileFault> {
         valid_digest(digest)?;
         valid_generation(generation)?;
-        Ok(self.data_root.join(Self::relative(digest, generation)))
+        Ok(self
+            .store_dir()
+            .join(&digest[..2])
+            .join(format!("{digest}.{generation}")))
     }
     fn previews(&self) -> PathBuf {
         self.cache_root.join("artifact-previews")
@@ -670,7 +681,7 @@ impl ArtifactFiles for NativeArtifactFiles {
     }
 
     fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
-        let root = self.data_root.join("artifacts/sha256");
+        let root = self.store_dir();
         let shards = match std::fs::read_dir(&root) {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -976,6 +987,84 @@ mod tests {
         assert!(stamp(old, old).settled(now));
         assert!(!stamp(old, now).settled(now));
         assert!(!stamp(now, old).settled(now));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn managed_paths_are_built_one_component_at_a_time() {
+        let data = root("components");
+        let files = NativeArtifactFiles::new(&data, data.join("cache"));
+        let d = digest(b"components");
+        let path = files.blob_path(&d, "op-1").unwrap();
+        let name = format!("{d}.op-1");
+        // Every component under the data root is one normal component without a separator.
+        let parts: Vec<String> = path
+            .strip_prefix(&data)
+            .unwrap()
+            .components()
+            .map(|c| match c {
+                std::path::Component::Normal(p) => p.to_string_lossy().into_owned(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(parts, ["artifacts", "sha256", &d[..2], name.as_str()]);
+        assert!(parts.iter().all(|p| !p.contains(['/', '\\'])));
+        assert_eq!(
+            path,
+            data.join("artifacts")
+                .join("sha256")
+                .join(&d[..2])
+                .join(&name)
+        );
+        assert_eq!(files.store_dir(), data.join("artifacts").join("sha256"));
+        // The recorded managed path stays `/`-separated on every platform.
+        assert_eq!(
+            files.managed_path(&d, "op-1").unwrap(),
+            format!("artifacts/sha256/{}/{name}", &d[..2])
+        );
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// A verbatim root (`\\?\`, what `canonicalize` returns on Windows) does not normalize `/`:
+    /// every operation under it must still find the managed files.
+    #[cfg(windows)]
+    #[test]
+    fn a_verbatim_windows_data_root_publishes_reads_lists_and_removes() {
+        let data = std::fs::canonicalize(root("verbatim")).unwrap();
+        assert!(data.to_string_lossy().starts_with(r"\\?\"), "{data:?}");
+        let files = NativeArtifactFiles::new(&data, data.join("cache"));
+        let bytes = b"verbatim root";
+        let d = digest(bytes);
+        let n = bytes.len() as u64;
+        let published = files
+            .publish("op-1.part", &mut &bytes[..], &d, n, None, "op-1")
+            .unwrap();
+        assert_eq!(
+            published.relative_path,
+            NativeArtifactFiles::relative(&d, "op-1")
+        );
+        assert!(files.present(&d, "op-1", n).unwrap());
+        assert_eq!(files.inspect(&d, "op-1").unwrap(), Some(n));
+        assert_eq!(files.read_range(&d, "op-1", n, 0, 64).unwrap(), bytes);
+        let mut read = Vec::new();
+        files
+            .open(&d, "op-1", n)
+            .unwrap()
+            .read_to_end(&mut read)
+            .unwrap();
+        assert_eq!(read, bytes);
+        assert_eq!(
+            files.stored_files().unwrap(),
+            vec![(d.clone(), "op-1".to_owned())]
+        );
+        // Reuse verifies the existing generation through the same path.
+        let reused = files
+            .publish("op-2.part", &mut &bytes[..], &d, n, Some("op-1"), "op-2")
+            .unwrap();
+        assert!(reused.reused);
+        files.unlink(&d, "op-1").unwrap();
+        assert!(!files.present(&d, "op-1", n).unwrap());
+        assert!(files.stored_files().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&data);
     }
 

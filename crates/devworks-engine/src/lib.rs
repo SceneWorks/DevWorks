@@ -39,15 +39,60 @@
 //!   as an asynchronous consumer: every recorded receipt's durable typed reply is published
 //!   after commit under the claim's fence, retried and recovered without duplicates.
 //!
+//!
+//! # Boot sequence
+//!
+//! Restart correctness depends on what runs before the first claim, so there is one entry point,
+//! [`runtime::boot`], and the composition root uses nothing else to start the engine. It takes
+//! one [`runtime::Composition`] of core ports and services (one store for everything; the engine
+//! still depends on no adapter) and, in this fixed order:
+//!
+//! 1. **Composes delivery.** The dispatcher is built with every required consumer — the receipt
+//!    reply consumer ([`replies::reply_consumer`], over the composition's one artifact service and
+//!    store) — plus the caller's consumers. A missing required consumer would leave every
+//!    `Recorded` receipt's reply pending forever, so the caller cannot omit it; a caller consumer
+//!    reusing its name is refused. Nothing is claimed yet.
+//! 2. **Recovers the queue and operation journal** ([`Dispatcher::recover`]): interrupted
+//!    operations of earlier boots are classified (`Preflighted` → `RetryPending`, `Dispatching`
+//!    → `OutcomeUnknown`), then their claims are requeued, held for reconciliation or settled
+//!    `Cancelled`. This must precede the first claim of the boot.
+//! 3. **Recovers artifacts** (`ArtifactService::recover`): interrupted staging operations of
+//!    earlier boots are completed or failed from durable metadata, staged files and orphaned
+//!    generations (a crash between a reply file and its metadata) are removed, interrupted
+//!    removals finished and present generations verified.
+//! 4. **Starts delivery** ([`Dispatcher::run`]).
+//! 5. **Starts artifact collection**: one pass at once, then every
+//!    [`runtime::RuntimeConfig::collect_interval`] and after every applied `artifacts.delete`
+//!    admitted through the runtime. A pass removes pending blob generations no reader or pin
+//!    holds (`ArtifactService::collect`) and clears derived previews (`collect_derived`).
+//! 6. **Returns the [`runtime::Runtime`]**, the only handle through which commands and queries
+//!    are admitted: a committed command wakes delivery for the reply intent its receipt
+//!    committed.
+//!
+//! Steps 2 and 3 commute. Queue recovery writes only queue claims and the journal state of
+//! non-terminal operations; artifact recovery resolves only staging operations (which commit as
+//! `Dispatching`, never `Preflighted`) and decides each from whether its version metadata
+//! committed, whatever non-terminal state it is in (`Dispatching` or the `OutcomeUnknown` that
+//! classification gives it), and it touches no queue row. A reply delivery carries no operation,
+//! so its prior-boot claim is requeued, never held, in either order. Either order therefore
+//! ends with the same claims requeued, every staging operation terminal, the orphan removed and
+//! the reply published exactly once (adapter test
+//! `boot_recovery_orders_commute_and_publish_the_reply_once`). The order above is fixed so a
+//! boot is reproducible.
+//!
 //! Nothing here establishes product acceptance: tests run the real SQLite adapter with injected
 //! clocks and scripted handlers, without inference, network or containers.
 pub mod dispatch;
 pub mod package;
 pub mod replies;
+pub mod runtime;
 mod store;
 
 pub use dispatch::{
     AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Consumer, Delivery,
     DeliveryHandler, Dispatcher, DispatcherConfig, EffectExecutor, EffectFuture, EffectResult,
     Outcome, RecoveryReport, RetryPolicy, RootEligibility, TickReport, Wakeup,
+};
+pub use runtime::{
+    BootError, BootReport, CollectionPass, Composition, Runtime, RuntimeConfig, boot,
 };

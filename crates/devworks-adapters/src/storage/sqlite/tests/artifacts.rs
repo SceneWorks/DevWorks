@@ -4343,3 +4343,232 @@ fn seeing_an_artifact_through_a_share_never_allows_retagging_it() {
     assert!(tagged(fx.retag(&confined_a, &p, rev(&p), json!(["b"]))).changed);
     assert!(tagged(fx.retag(&user, &p, rev(&p), json!(["c"]))).changed);
 }
+
+/// A use case that tries every artifact write the handler view must refuse, and the one receipt
+/// reply write it must keep serving (linking advances only the reference revision).
+struct ArtifactForger {
+    digest: String,
+    explicit: StoredArtifact,
+    receipt: StoredArtifact,
+    receipt_version: StoredVersion,
+    outcomes: Mutex<Vec<(&'static str, Result<(), String>)>>,
+}
+impl CommandHandler for ArtifactForger {
+    fn decide(
+        &self,
+        _: &InvocationContext,
+        _: &devworks_core::gateway::AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+        let mut out = Vec::new();
+        let d = self.digest.as_str();
+        let generation = tx.artifacts().blob(d)?.unwrap().generation;
+        let g = generation.as_str();
+        let holder = id("forger");
+        let (r, rv) = (&self.receipt, &self.receipt_version);
+        let mut outcome = |what, result: Result<(), StorageError>| {
+            out.push((what, result.map_err(|e| format!("{e:?}"))));
+        };
+        outcome("pin", tx.artifacts().pin(&holder, d));
+        outcome(
+            "release pins",
+            tx.artifacts().release_pins(&holder).map(drop),
+        );
+        outcome("claim", tx.artifacts().claim_blob(d, g, "forger").map(drop));
+        outcome(
+            "adopt",
+            tx.artifacts()
+                .adopt_claim(d, g, "other", "forger")
+                .map(drop),
+        );
+        outcome(
+            "finish",
+            tx.artifacts().finish_claim(d, g, "forger", None).map(drop),
+        );
+        outcome(
+            "unlink state",
+            tx.artifacts()
+                .set_blob_state(d, BlobState::Present, BlobState::Unlinked, None)
+                .map(drop),
+        );
+        let forged = StoredArtifact {
+            id: id("forged-reply"),
+            retention: ArtifactRetention::Receipt,
+            owner: Some(actor("user-a")),
+            current_version_id: None,
+            ..self.explicit.clone()
+        };
+        outcome(
+            "insert receipt artifact",
+            tx.artifacts().insert_artifact(&forged),
+        );
+        let replacement = StoredVersion {
+            id: id("forged-version"),
+            version_no: rv.version_no + 1,
+            ..rv.clone()
+        };
+        outcome(
+            "replace receipt version",
+            tx.artifacts().insert_version(&replacement),
+        );
+        let retired = StoredArtifact {
+            state: ArtifactState::Deleted,
+            current_version_id: None,
+            revision: r.revision + 1,
+            ..r.clone()
+        };
+        outcome(
+            "retire receipt artifact",
+            tx.artifacts().update_artifact(&retired),
+        );
+        outcome(
+            "tombstone receipt version",
+            tx.artifacts().tombstone_version(&rv.id, T0),
+        );
+        outcome(
+            "tag receipt artifact",
+            tx.artifacts().set_tags(&r.id, &["forged".to_owned()]),
+        );
+        outcome(
+            "share receipt artifact",
+            tx.artifacts()
+                .add_share(&r.id, &project("project-b"))
+                .map(drop),
+        );
+        outcome(
+            "unshare receipt artifact",
+            tx.artifacts()
+                .remove_share(&r.id, &project("project-a"))
+                .map(drop),
+        );
+        let linked = StoredArtifact {
+            reference_revision: r.reference_revision + 1,
+            ..r.clone()
+        };
+        outcome(
+            "link receipt artifact",
+            tx.artifacts().update_artifact(&linked),
+        );
+        *self.outcomes.lock().unwrap() = out;
+        let op = devworks_core::protocol::OperationId(
+            tx.new_id(devworks_core::ports::IdKind::Operation),
+        );
+        tx.operations().record_intent(NewOperation {
+            id: op.clone(),
+            root_id: Some(RootId(id("root-a"))),
+            assignment_id: None,
+            capability: "runs.start".into(),
+            schema_version: 1,
+            args_digest: "d".into(),
+            payload: json!({}),
+        })?;
+        Ok(devworks_core::ports::Decided {
+            decision: DomainDecision::Accepted {
+                operation_id: op.clone(),
+            },
+            operation_id: Some(op),
+        })
+    }
+}
+
+#[test]
+fn a_use_case_cannot_pin_collect_or_write_receipt_reply_records() {
+    use devworks_core::services::artifacts::replies::{
+        REPLY_CONSUMER, ReceiptReplies, ReplyOutcome,
+    };
+    let fx = Fx::new();
+    let saved = fx.saved(
+        "t1",
+        "Evidence",
+        "application/octet-stream",
+        b"explicitly retained",
+    );
+    let d = hex(&saved.artifact.sha256);
+    // Publish the save's receipt reply: a receipt-retained artifact.
+    let replies = ReceiptReplies::new(fx.svc.clone());
+    let claimed = fx.write(|tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: REPLY_CONSUMER.into(),
+            owner: id("publisher-1"),
+            lease_ms: 60_000,
+            limit: 10,
+        })
+    });
+    assert_eq!(claimed.len(), 1);
+    assert!(matches!(
+        replies.publish(&*fx.store, &claimed[0]),
+        ReplyOutcome::Published(_)
+    ));
+    let rid = fx
+        .store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.query_row(
+                "SELECT id FROM artifacts WHERE retention='Receipt'",
+                [],
+                |r| r.get::<_, String>(0),
+            ))
+        })
+        .unwrap();
+    let receipt = fx.artifact(&id(&rid));
+    let receipt_version = {
+        let v = receipt.current_version_id.clone().unwrap();
+        fx.read(move |s| s.artifacts().version(&v)).unwrap()
+    };
+    let handler = Arc::new(ArtifactForger {
+        digest: d.clone(),
+        explicit: fx.artifact(&saved.artifact.artifact_id),
+        receipt: receipt.clone(),
+        receipt_version: receipt_version.clone(),
+        outcomes: Mutex::new(Vec::new()),
+    });
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.h.ids,
+    };
+    let reply = gateway
+        .command(
+            &fx.user(),
+            "runs.start",
+            super::start("forge-1").as_bytes(),
+            handler.clone(),
+        )
+        .unwrap();
+    assert!(matches!(reply, CommandReply::Recorded { .. }), "{reply:?}");
+    let outcomes = handler.outcomes.lock().unwrap().clone();
+    assert_eq!(outcomes.len(), 14);
+    for (what, result) in &outcomes {
+        if *what == "link receipt artifact" {
+            assert!(result.is_ok(), "{what}: {result:?}");
+        } else {
+            assert!(
+                matches!(result, Err(m) if m.contains("artifact store's own paths")),
+                "{what} was not refused by the handler view: {result:?}"
+            );
+        }
+    }
+    // Nothing refused was written; the one permitted link committed with the command.
+    let pinned = {
+        let d = d.clone();
+        fx.read(move |s| s.artifacts().pinned(&d))
+    };
+    assert!(!pinned);
+    assert_eq!(fx.blob(&d).unwrap().state, BlobState::Present);
+    assert_eq!(
+        fx.artifact(&receipt.id),
+        StoredArtifact {
+            reference_revision: receipt.reference_revision + 1,
+            ..receipt.clone()
+        }
+    );
+    assert!(
+        fx.read(|s| s.artifacts().artifact(&id("forged-reply")))
+            .is_none()
+    );
+    let versions = {
+        let rid = receipt.id.clone();
+        fx.read(move |s| s.artifacts().versions(&rid))
+    };
+    assert_eq!(versions, vec![receipt_version]);
+}

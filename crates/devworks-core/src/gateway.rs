@@ -982,14 +982,37 @@ fn decision_scope(
     })
 }
 
-/// History kinds only the gateway may write.
+/// History a use case may never append through the handler view: the gateway's own command,
+/// receipt and denial records, the authority seams' principal, grant and repository-deletion
+/// records (written through [`WriteTransaction::authority_history`]), and receipt reply
+/// publication (written by the reply publisher on its own transaction).
 fn gateway_owned(event: &NewEvent) -> bool {
+    use crate::authority::deletion::DELETION_AGGREGATE;
+    use crate::authority::service::{DENIAL_AGGREGATE, GRANT_AGGREGATE, PRINCIPAL_AGGREGATE};
+    use crate::services::artifacts::replies::REPLY_AGGREGATE;
     matches!(
         event.aggregate_kind.as_str(),
-        "command" | "command_receipt" | "authority_denial"
+        "command"
+            | "command_receipt"
+            | DENIAL_AGGREGATE
+            | PRINCIPAL_AGGREGATE
+            | GRANT_AGGREGATE
+            | DELETION_AGGREGATE
+            | REPLY_AGGREGATE
     ) || matches!(
         event.kind.as_str(),
-        "CommandDecided" | "ReceiptIncompatible" | "AuthorityDenied"
+        "CommandDecided"
+            | "ReceiptIncompatible"
+            | "AuthorityDenied"
+            | "PrincipalAuthorityBound"
+            | "PrincipalAuthorityRevoked"
+            | "AuthorityGrantIssued"
+            | "AuthorityGrantRevoked"
+            | "RepositoryDeletionConfirmed"
+            | "RepositoryDeletionAuthorized"
+            | "RepositoryDeletionCompleted"
+            | "RepositoryDeletionPartial"
+            | "ReceiptReplyPublished"
     )
 }
 
@@ -1080,6 +1103,18 @@ impl CommandLedgerRead for HandlerTx<'_> {
     fn reply(&self, _: &ReceiptIdentity) -> Result<Option<ReceiptReply>, StorageError> {
         Err(ledger_owned())
     }
+    // Only the ownership answer passes through (queue resolution of reply deliveries needs it);
+    // the receipt itself stays unreadable to use cases.
+    fn may_be_receipt_of(
+        &self,
+        identity: &ReceiptIdentity,
+        command: &CommandId,
+    ) -> Result<bool, StorageError> {
+        self.inner
+            .borrow_mut()
+            .receipts()
+            .may_be_receipt_of(identity, command)
+    }
 }
 impl CommandLedger for HandlerTx<'_> {
     fn record(&mut self, _: &ReceiptIdentity, _: &StoredReceipt) -> Result<(), StorageError> {
@@ -1106,10 +1141,256 @@ impl HistoryLog for HandlerTx<'_> {
     fn append(&mut self, event: NewEvent) -> Result<i64, StorageError> {
         if gateway_owned(&event) {
             return Err(StorageError::InvalidRecord(
-                "command history is recorded only by the gateway".into(),
+                "command, authority and receipt reply history is recorded only by the gateway, \
+                 the authority seams and the reply publisher"
+                    .into(),
             ));
         }
         self.inner.get_mut().history().append(event)
+    }
+}
+
+// The artifact repository is narrowed to what the artifact use cases write: blobs they publish
+// or release (`Present` → `UnlinkPending`), explicitly retained artifacts, their versions,
+// links, tags and shares, and the reference revision of a receipt reply they link. Backup pins,
+// physical-removal claims (the collector's) and receipt reply records (the reply publisher's,
+// on its own transaction) are refused, so a use case can neither block collection, remove a
+// file, nor create, replace or retire a receipt's reply.
+use crate::ports::storage::{
+    ArtifactLink, ArtifactRead, ArtifactRetention, BlobRecord, BlobState, ListPosition,
+    StoredArtifact, StoredVersion, SubjectKey,
+};
+use crate::protocol::{OperationId, ProjectId};
+fn artifact_owned() -> StorageError {
+    StorageError::InvalidRecord(
+        "backup pins, removal claims and receipt reply records are written only by the \
+         artifact store's own paths"
+            .into(),
+    )
+}
+impl HandlerTx<'_> {
+    /// Refuses a write that would change a receipt reply (`artifact` is its ID).
+    fn explicit_only(&mut self, artifact: &Id) -> Result<(), StorageError> {
+        match self.inner.get_mut().artifacts().artifact(artifact)? {
+            Some(a) if a.retention == ArtifactRetention::Receipt => Err(artifact_owned()),
+            _ => Ok(()),
+        }
+    }
+}
+impl ArtifactRead for HandlerTx<'_> {
+    fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError> {
+        self.inner.borrow_mut().artifacts().project_exists(project)
+    }
+    fn subject_exists(
+        &self,
+        project: &ProjectId,
+        subject: &SubjectKey,
+    ) -> Result<bool, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .subject_exists(project, subject)
+    }
+    fn artifact(&self, id: &Id) -> Result<Option<StoredArtifact>, StorageError> {
+        self.inner.borrow_mut().artifacts().artifact(id)
+    }
+    fn version(&self, id: &Id) -> Result<Option<StoredVersion>, StorageError> {
+        self.inner.borrow_mut().artifacts().version(id)
+    }
+    fn versions(&self, artifact: &Id) -> Result<Vec<StoredVersion>, StorageError> {
+        self.inner.borrow_mut().artifacts().versions(artifact)
+    }
+    fn version_by_operation(
+        &self,
+        operation: &OperationId,
+    ) -> Result<Option<StoredVersion>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .version_by_operation(operation)
+    }
+    fn list(
+        &self,
+        project: &ProjectId,
+        tags: &[String],
+        after: Option<&ListPosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .list(project, tags, after, limit)
+    }
+    fn list_workspace(
+        &self,
+        owner: Option<&ActorId>,
+        tags: &[String],
+        after: Option<&ListPosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .list_workspace(owner, tags, after, limit)
+    }
+    fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
+        self.inner.borrow_mut().artifacts().tags(artifact)
+    }
+    fn shares(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError> {
+        self.inner.borrow_mut().artifacts().shares(artifact)
+    }
+    fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
+        self.inner.borrow_mut().artifacts().links(artifact)
+    }
+    fn linked_to(&self, subject: &SubjectKey) -> Result<Vec<ArtifactLink>, StorageError> {
+        self.inner.borrow_mut().artifacts().linked_to(subject)
+    }
+    fn blob(&self, digest: &str) -> Result<Option<BlobRecord>, StorageError> {
+        self.inner.borrow_mut().artifacts().blob(digest)
+    }
+    fn live_references(&self, digest: &str) -> Result<i64, StorageError> {
+        self.inner.borrow_mut().artifacts().live_references(digest)
+    }
+    fn pinned(&self, digest: &str) -> Result<bool, StorageError> {
+        self.inner.borrow_mut().artifacts().pinned(digest)
+    }
+    fn blobs_in(
+        &self,
+        state: BlobState,
+        after: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<BlobRecord>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .blobs_in(state, after, limit)
+    }
+    fn project_usage(&self, project: &ProjectId) -> Result<i64, StorageError> {
+        self.inner.borrow_mut().artifacts().project_usage(project)
+    }
+    fn workspace_usage(&self) -> Result<i64, StorageError> {
+        self.inner.borrow_mut().artifacts().workspace_usage()
+    }
+    fn receipt_usage(&self, project: Option<&ProjectId>) -> Result<i64, StorageError> {
+        self.inner.borrow_mut().artifacts().receipt_usage(project)
+    }
+    fn unresolved_staging(
+        &self,
+        after: Option<&OperationId>,
+        limit: u16,
+    ) -> Result<Vec<OperationId>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .unresolved_staging(after, limit)
+    }
+}
+impl ArtifactRepository for HandlerTx<'_> {
+    fn put_blob(
+        &mut self,
+        digest: &str,
+        byte_count: i64,
+        generation: &str,
+        relative_path: &str,
+    ) -> Result<BlobRecord, StorageError> {
+        self.inner
+            .get_mut()
+            .artifacts()
+            .put_blob(digest, byte_count, generation, relative_path)
+    }
+    fn set_blob_state(
+        &mut self,
+        digest: &str,
+        expected: BlobState,
+        to: BlobState,
+        error: Option<&str>,
+    ) -> Result<BlobRecord, StorageError> {
+        // Releasing a blob no live version names is a use case's; every other transition
+        // belongs to collection and recovery.
+        if (expected, to) != (BlobState::Present, BlobState::UnlinkPending) {
+            return Err(artifact_owned());
+        }
+        self.inner
+            .get_mut()
+            .artifacts()
+            .set_blob_state(digest, expected, to, error)
+    }
+    fn insert_artifact(&mut self, artifact: &StoredArtifact) -> Result<(), StorageError> {
+        if artifact.retention == ArtifactRetention::Receipt {
+            return Err(artifact_owned());
+        }
+        self.inner.get_mut().artifacts().insert_artifact(artifact)
+    }
+    fn insert_version(&mut self, version: &StoredVersion) -> Result<(), StorageError> {
+        self.explicit_only(&version.artifact_id)?;
+        self.inner.get_mut().artifacts().insert_version(version)
+    }
+    fn update_artifact(&mut self, artifact: &StoredArtifact) -> Result<(), StorageError> {
+        // A use case may only advance a receipt reply's reference revision (linking it to work,
+        // `artifacts.reference`); its content, scope, state and retention never change here.
+        if let Some(current) = self.inner.get_mut().artifacts().artifact(&artifact.id)?
+            && current.retention == ArtifactRetention::Receipt
+        {
+            let linked_only = StoredArtifact {
+                reference_revision: artifact.reference_revision,
+                ..current
+            };
+            if &linked_only != artifact {
+                return Err(artifact_owned());
+            }
+        }
+        self.inner.get_mut().artifacts().update_artifact(artifact)
+    }
+    fn tombstone_version(&mut self, version: &Id, at_ms: i64) -> Result<(), StorageError> {
+        if let Some(v) = self.inner.get_mut().artifacts().version(version)? {
+            self.explicit_only(&v.artifact_id)?;
+        }
+        self.inner
+            .get_mut()
+            .artifacts()
+            .tombstone_version(version, at_ms)
+    }
+    fn add_link(&mut self, link: &ArtifactLink) -> Result<bool, StorageError> {
+        self.inner.get_mut().artifacts().add_link(link)
+    }
+    fn set_tags(&mut self, artifact: &Id, tags: &[String]) -> Result<(), StorageError> {
+        self.explicit_only(artifact)?;
+        self.inner.get_mut().artifacts().set_tags(artifact, tags)
+    }
+    fn add_share(&mut self, artifact: &Id, project: &ProjectId) -> Result<bool, StorageError> {
+        self.explicit_only(artifact)?;
+        self.inner
+            .get_mut()
+            .artifacts()
+            .add_share(artifact, project)
+    }
+    fn remove_share(&mut self, artifact: &Id, project: &ProjectId) -> Result<bool, StorageError> {
+        self.explicit_only(artifact)?;
+        self.inner
+            .get_mut()
+            .artifacts()
+            .remove_share(artifact, project)
+    }
+    fn pin(&mut self, _: &Id, _: &str) -> Result<(), StorageError> {
+        Err(artifact_owned())
+    }
+    fn release_pins(&mut self, _: &Id) -> Result<i64, StorageError> {
+        Err(artifact_owned())
+    }
+    fn claim_blob(&mut self, _: &str, _: &str, _: &str) -> Result<bool, StorageError> {
+        Err(artifact_owned())
+    }
+    fn adopt_claim(&mut self, _: &str, _: &str, _: &str, _: &str) -> Result<bool, StorageError> {
+        Err(artifact_owned())
+    }
+    fn finish_claim(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        Err(artifact_owned())
     }
 }
 
@@ -1319,8 +1600,18 @@ impl WriteTransaction for HandlerTx<'_> {
         }
         self.inner.get_mut().authority_writes(capability, actor)
     }
+    fn authority_history(
+        &mut self,
+        capability: &AuthorityCapability,
+        actor: &ActorId,
+    ) -> Result<&mut dyn HistoryLog, StorageError> {
+        if self.ingress.as_ref() != Some(actor) {
+            return Err(authority_owned());
+        }
+        self.inner.get_mut().authority_history(capability, actor)
+    }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
-        self.inner.get_mut().artifacts()
+        self
     }
     fn sessions(&mut self) -> &mut dyn SessionRepository {
         self.inner.get_mut().sessions()
