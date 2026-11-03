@@ -21,7 +21,7 @@ use devworks_core::ports::Clock;
 use devworks_core::ports::process::NativeIdentity;
 use devworks_core::ports::storage::{
     ActivationOutcome, ActivationPhase, ApplicationStore, QueueEntry, StorageError,
-    StoredActivation, WriteTransaction,
+    StoredActivation, WriteTransaction, is_terminal,
 };
 use devworks_core::protocol::{Id, OperationId, OperationState, ProjectId, RootId};
 use devworks_core::services::process::{OwnedProcess, ProcessSupervisor, StopOutcome, StopScope};
@@ -702,6 +702,60 @@ impl RunSupervisor {
             service.stop_project(tx, &host, &p)
         })
         .await?;
+        self.kill_project(project, stopped).await
+    }
+
+    /// The immediate stop after a committed `projects.archive`, whose unit of work already
+    /// fenced the project and journaled one stop per root: while the project is still closed to
+    /// work, its owned trees are killed at once (no cooperative grace) and each root's
+    /// unfinished stop is executed and observed. A replayed or repeated call is harmless: a
+    /// restored project is left alone, and finished stops are not executed again.
+    pub async fn stop_archived_project(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Vec<(RootId, OperationState)>, StorageError> {
+        let p = project.clone();
+        let stops = store::read(&self.store, move |s| {
+            let closed = s
+                .runs()
+                .project_lifecycle(&p)?
+                .is_some_and(|l| devworks_core::services::runs::closed_to_work(&l));
+            if !closed {
+                return Ok(None);
+            }
+            let mut out = Vec::new();
+            let mut after: Option<RootId> = None;
+            loop {
+                let page = s.runs().project_roots(&p, after.as_ref(), 500)?;
+                for root in &page {
+                    let control = devworks_core::services::runs::control_of(s.runs(), root)?;
+                    if let Some(op) = control.stop_operation_id
+                        && s.operations()
+                            .operation(&op)?
+                            .is_some_and(|o| !is_terminal(o.state))
+                    {
+                        out.push((root.clone(), op));
+                    }
+                }
+                if page.len() < 500 {
+                    return Ok(Some(out));
+                }
+                after = page.last().cloned();
+            }
+        })
+        .await?;
+        match stops {
+            Some(stops) => self.kill_project(project, stops).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Kills every owned tree of `project` at once, then executes and observes each root stop.
+    async fn kill_project(
+        &self,
+        project: &ProjectId,
+        stopped: Vec<(RootId, OperationId)>,
+    ) -> Result<Vec<(RootId, OperationState)>, StorageError> {
         // One immediate project-wide kill, whether or not the project has roots: trees the
         // project owns without a root are stopped too.
         let (processes, bound, scope) = (

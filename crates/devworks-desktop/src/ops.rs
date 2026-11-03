@@ -5,8 +5,9 @@ use crate::backend::Backend;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
 use devworks_core::protocol::records::{
-    ArtifactRecord, EffortName, ResourceRecord, RouteAvailability, RouteChoice, RouteIntent,
-    RouteModel, SessionRecord, SettingEntry, ValidationReport,
+    AccessMode, ArtifactRecord, EffortName, MutationSummary, ProjectRecord, RepositoryRecord,
+    RepositoryText, ResourceRecord, RouteAvailability, RouteChoice, RouteIntent, RouteModel,
+    SessionRecord, SettingEntry, ValidationReport,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, DomainFault};
@@ -445,4 +446,172 @@ pub fn pinned(outcome: CommandOutcome) -> Result<RouteChoice, Failure> {
         OperationResult::RouterPin { value } => Ok(value),
         other => Err(unexpected("router.pin", &other)),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Projects and repository registrations (DW-11)
+
+/// The lifecycle a projects listing shows (`None`: active and archived).
+pub fn projects_list(backend: &dyn Backend, lifecycle: Option<&str>) -> Vec<u8> {
+    let mut body = json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}});
+    if let Some(l) = lifecycle {
+        body["lifecycle"] = json!(l);
+    }
+    query_frame(backend, "projects.list", body)
+}
+pub fn projects(outcome: QueryOutcome) -> Result<(Vec<ProjectRecord>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ProjectsList { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("projects.list", &other)),
+    }
+}
+pub fn project_create(
+    backend: &dyn Backend,
+    name: &str,
+    description: &str,
+    repositories: &[String],
+) -> Vec<u8> {
+    command_frame(
+        backend,
+        "projects.create",
+        json!({"name": name, "description": description, "repositoryIds": repositories}),
+    )
+}
+/// `projects.edit` of the changed members only (an unchanged member is left out).
+pub fn project_edit(
+    backend: &dyn Backend,
+    project: &ProjectRecord,
+    name: Option<&str>,
+    description: Option<&str>,
+    access_mode: Option<&AccessMode>,
+) -> Vec<u8> {
+    let mut changes = json!({});
+    if let Some(n) = name {
+        changes["name"] = json!(n);
+    }
+    if let Some(d) = description {
+        changes["description"] = json!(d);
+    }
+    if let Some(a) = access_mode {
+        changes["accessMode"] = json!(a);
+    }
+    command_frame(
+        backend,
+        "projects.edit",
+        json!({"projectId": project.id, "expectedRevision": project.revision,
+            "changes": changes}),
+    )
+}
+pub fn project_membership(
+    backend: &dyn Backend,
+    project: &ProjectRecord,
+    repositories: &[String],
+) -> Vec<u8> {
+    command_frame(
+        backend,
+        "projects.membership",
+        json!({"projectId": project.id, "expectedRevision": project.revision,
+            "repositoryIds": repositories}),
+    )
+}
+/// `projects.archive`, `.restore` or `.delete` of `project` at its revision.
+pub fn project_lifecycle(
+    backend: &dyn Backend,
+    operation: &str,
+    project: &ProjectRecord,
+) -> Vec<u8> {
+    command_frame(
+        backend,
+        operation,
+        json!({"projectId": project.id, "expectedRevision": project.revision}),
+    )
+}
+/// The project a projects command applied (or left unchanged).
+pub fn project_changed(outcome: CommandOutcome) -> Result<ProjectRecord, Failure> {
+    match command_result(outcome)? {
+        OperationResult::ProjectsCreate { value }
+        | OperationResult::ProjectsEdit { value }
+        | OperationResult::ProjectsMembership { value }
+        | OperationResult::ProjectsArchive { value }
+        | OperationResult::ProjectsRestore { value }
+        | OperationResult::ProjectsDelete { value } => Ok(value),
+        other => Err(unexpected("projects", &other)),
+    }
+}
+/// Registered repositories: a project's members, or every registration (`None`).
+pub fn repositories_list(backend: &dyn Backend, project: Option<&str>) -> Vec<u8> {
+    let scope = match project {
+        Some(p) => json!({"kind": "Project", "projectId": p}),
+        None => json!({"kind": "Workspace"}),
+    };
+    query_frame(
+        backend,
+        "repositories.list",
+        json!({"scope": scope, "page": {"limit": PAGE_LIMIT}}),
+    )
+}
+pub fn repositories(outcome: QueryOutcome) -> Result<(Vec<RepositoryRecord>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RepositoriesList { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("repositories.list", &other)),
+    }
+}
+/// `repositories.readme` or `.summary` of the repository's latest published view.
+pub fn repository_text(backend: &dyn Backend, operation: &str, repository: &str) -> Vec<u8> {
+    query_frame(
+        backend,
+        operation,
+        json!({"repositoryId": repository,
+            "views": {"kind": "Published", "repositoryIds": [repository]}}),
+    )
+}
+pub fn repository_text_result(outcome: QueryOutcome) -> Result<RepositoryText, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RepositoriesReadme { value }, _)
+        | (OperationResult::RepositoriesSummary { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("repositories.readme", &other)),
+    }
+}
+pub fn remove_index(backend: &dyn Backend, repository: &RepositoryRecord) -> Vec<u8> {
+    command_frame(
+        backend,
+        "repositories.remove_index",
+        json!({"repositoryId": repository.id, "expectedRevision": repository.revision}),
+    )
+}
+pub fn index_removed(outcome: CommandOutcome) -> Result<MutationSummary, Failure> {
+    match command_result(outcome)? {
+        OperationResult::RepositoriesRemoveIndex { value } => Ok(value),
+        other => Err(unexpected("repositories.remove_index", &other)),
+    }
+}
+/// `settings.read_effective` of `keys` at a project's scope (its overrides and inheritance).
+pub fn project_settings_read(backend: &dyn Backend, project: &str, keys: &[&str]) -> Vec<u8> {
+    query_frame(
+        backend,
+        "settings.read_effective",
+        json!({"scope": {"kind": "Project", "projectId": project}, "keys": keys,
+            "page": {"limit": 500}}),
+    )
+}
+/// `settings.validate` of explicit values at a project's scope (directory health).
+pub fn project_settings_validate(
+    backend: &dyn Backend,
+    project: &str,
+    revision: i64,
+    entries: &[(&str, Value)],
+) -> Vec<u8> {
+    let entries: Vec<Value> = entries
+        .iter()
+        .filter_map(|(k, v)| {
+            let d = devworks_core::settings::catalog::descriptor(k)?;
+            Some(json!({"key": k, "value": {"schema": d.schema_ref(), "value": v}}))
+        })
+        .collect();
+    query_frame(
+        backend,
+        "settings.validate",
+        json!({"scope": {"kind": "Project", "projectId": project},
+            "expectedRevision": revision.to_string(), "entries": entries}),
+    )
 }

@@ -1,0 +1,201 @@
+//! Project and repository registration records (DW-011): project boundaries and their revision,
+//! repository membership, registered repositories and the app index views published for them.
+//!
+//! The repository enforces record invariants (lifecycle names, compare-and-set revisions,
+//! membership referencing registered repositories, bounded listings). Visibility, authority,
+//! archive fencing, confirmation and what each command may change belong to
+//! `crate::services::projects`, which writes inside a unit of work.
+//!
+//! A project is never deleted as a row: deletion tombstones it (`Deleted`) so retained
+//! cross-scope references (history, receipts, artifacts) keep resolving to an honest record.
+//! Registered repositories are app records of a source location; nothing here touches the
+//! source itself. Removing an index removes only the published index views and their texts.
+use super::StorageError;
+use crate::protocol::{Id, ProjectId};
+
+/// The stored lifecycle names (`LifeState` wire names).
+pub const ACTIVE: &str = "Active";
+pub const ARCHIVED: &str = "Archived";
+pub const DELETED: &str = "Deleted";
+/// Every stored lifecycle name.
+pub const LIFECYCLES: [&str; 3] = [ACTIVE, ARCHIVED, DELETED];
+
+/// One project.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredProject {
+    pub id: ProjectId,
+    pub name: String,
+    pub description: String,
+    /// `Active`, `Archived` or `Deleted`.
+    pub lifecycle: String,
+    pub revision: i64,
+    /// Advances whenever the project's boundary (its repository membership) changes.
+    pub scope_revision: i64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub archived_at_ms: Option<i64>,
+    pub deleted_at_ms: Option<i64>,
+}
+
+/// One registered repository: the app record of a source location (never the source itself).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredRepository {
+    pub id: Id,
+    /// The canonical local location it was registered at (exact; never rewritten).
+    pub location: String,
+    pub name: String,
+    /// The remote it tracks, as registered (credentials are stripped before it is shown).
+    pub remote_url: Option<String>,
+    /// A primary local checkout (as opposed to a remote-only registration).
+    pub primary: bool,
+    pub lifecycle: String,
+    /// Language identifiers discovery recorded for it (lowercase).
+    pub languages: Vec<String>,
+    pub revision: i64,
+    pub registered_at_ms: i64,
+}
+
+/// Coverage of a published view or text: `Complete`, `Partial` or `Unavailable`.
+pub const COVERAGE: [&str; 3] = ["Complete", "Partial", "Unavailable"];
+
+/// One app index view published for a repository (the indexing item publishes them).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredIndexView {
+    pub view_id: Id,
+    pub repository_id: Id,
+    pub source_revision: String,
+    pub coverage: String,
+    pub published_at_ms: i64,
+}
+
+/// What a repository text holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextKind {
+    Readme,
+    Summary,
+}
+impl TextKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Readme => "Readme",
+            Self::Summary => "Summary",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "Readme" => Some(Self::Readme),
+            "Summary" => Some(Self::Summary),
+            _ => None,
+        }
+    }
+}
+
+/// A repository text of one view: its README or generated summary, as an artifact version.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredRepositoryText {
+    pub view_id: Id,
+    pub repository_id: Id,
+    pub kind: TextKind,
+    pub artifact_id: Id,
+    pub version_id: Id,
+    pub sha256: String,
+    pub byte_length: i64,
+    pub media_type: String,
+    pub coverage: String,
+}
+
+/// Which projects a listing covers (ordered by creation time, then ID).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectFilter {
+    /// Only this project (a project invocation's own).
+    pub only: Option<ProjectId>,
+    /// Lifecycle names to include (never empty).
+    pub lifecycles: Vec<String>,
+}
+
+/// Which repositories a listing covers (ordered by ID).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RepositoryFilter {
+    /// Only members of this project.
+    pub project: Option<ProjectId>,
+    /// Case-insensitive substring of the name, location or remote.
+    pub text: Option<String>,
+    /// Every one of these languages (lowercase).
+    pub languages: Vec<String>,
+    /// Include deleted registrations.
+    pub include_deleted: bool,
+}
+
+/// Position after which a project listing continues.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectPosition {
+    pub created_at_ms: i64,
+    pub id: ProjectId,
+}
+
+pub trait ProjectRead {
+    fn project(&self, id: &ProjectId) -> Result<Option<StoredProject>, StorageError>;
+    /// At most `limit` projects after `after`, by creation time then ID.
+    fn projects(
+        &self,
+        filter: &ProjectFilter,
+        after: Option<&ProjectPosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredProject>, StorageError>;
+    /// The project's member repositories, by ID.
+    fn members(&self, project: &ProjectId) -> Result<Vec<Id>, StorageError>;
+    fn repository(&self, id: &Id) -> Result<Option<StoredRepository>, StorageError>;
+    /// At most `limit` repositories after `after`, by ID.
+    fn repositories(
+        &self,
+        filter: &RepositoryFilter,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredRepository>, StorageError>;
+    /// The projects a repository is a member of (any lifecycle but `Deleted`), by ID.
+    fn repository_projects(&self, repository: &Id) -> Result<Vec<ProjectId>, StorageError>;
+    /// The repository's published index views, newest first.
+    fn index_views(&self, repository: &Id) -> Result<Vec<StoredIndexView>, StorageError>;
+    fn index_view(&self, view: &Id) -> Result<Option<StoredIndexView>, StorageError>;
+    fn repository_text(
+        &self,
+        view: &Id,
+        kind: TextKind,
+    ) -> Result<Option<StoredRepositoryText>, StorageError>;
+    /// Work items of `project` that name `repository`.
+    fn work_naming_repository(
+        &self,
+        project: &ProjectId,
+        repository: &Id,
+    ) -> Result<i64, StorageError>;
+}
+
+pub trait ProjectRepository: ProjectRead {
+    /// Creates a project (revision 1). An existing ID is `Duplicate`.
+    fn insert_project(&mut self, project: &StoredProject) -> Result<(), StorageError>;
+    /// Replaces the project at `expected_revision` (a stale one is a `Scope` revision conflict).
+    fn update_project(
+        &mut self,
+        project: &StoredProject,
+        expected_revision: i64,
+    ) -> Result<(), StorageError>;
+    /// Replaces the project's membership with exactly `repositories` (each registered).
+    fn set_members(&mut self, project: &ProjectId, repositories: &[Id])
+    -> Result<(), StorageError>;
+    /// Registers a repository (revision 1); the repository discovery item calls this.
+    fn insert_repository(&mut self, repository: &StoredRepository) -> Result<(), StorageError>;
+    /// Bumps the repository's revision from `expected_revision` (a stale one is a `Registry`
+    /// revision conflict); returns the new revision.
+    fn touch_repository(
+        &mut self,
+        repository: &Id,
+        expected_revision: i64,
+    ) -> Result<i64, StorageError>;
+    /// Publishes an index view (the indexing item calls this).
+    fn publish_index_view(&mut self, view: &StoredIndexView) -> Result<(), StorageError>;
+    /// Records a text of a published view (the indexing item calls this).
+    fn put_repository_text(&mut self, text: &StoredRepositoryText) -> Result<(), StorageError>;
+    /// Removes every published index view of the repository and their texts; returns how many
+    /// views were removed. The registration, membership and work history are untouched.
+    fn remove_index(&mut self, repository: &Id) -> Result<u64, StorageError>;
+}

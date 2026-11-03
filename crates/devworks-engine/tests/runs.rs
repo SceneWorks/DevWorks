@@ -27,6 +27,7 @@ use devworks_core::protocol::{
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::process::{LaunchPolicy, LaunchRequest, ProcessSupervisor};
+use devworks_core::services::projects::ProjectService;
 use devworks_core::services::resources::ResourceService;
 use devworks_core::services::runs::inspect::{RunCondition, RunInspection};
 use devworks_core::services::runs::recovery::NoLifecycleHooks;
@@ -102,6 +103,10 @@ impl Fx {
         let service = Arc::new(ControlService::with_scope(h.ids.clone(), scope.clone()));
         let use_cases = UseCases::new()
             .with_runs(service.clone())
+            .with_projects(Arc::new(ProjectService::new(
+                h.ids.clone(),
+                service.clone(),
+            )))
             .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store.clone())));
         let user = principal(&*store, "user-a", PrincipalKind::Human);
         let agent = principal(&*store, "agent-a", PrincipalKind::Agent);
@@ -1753,6 +1758,142 @@ fn seed_delivery(fx: &Fx, root: &str) {
         })
     })
     .unwrap();
+}
+
+fn archive_frame(fx: &Fx, project: &str, revision: &str) -> Value {
+    json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": fx.key(),
+        "body": {"kind": "projects.archive", "projectId": project,
+            "expectedRevision": revision}})
+}
+
+#[test]
+fn a_committed_archive_kills_the_projects_trees_at_once_through_the_runtime() {
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    applied(&fx.start(&fx.user, "root-b", 1, 1));
+    let rt = runtime();
+    let host = Arc::new(FakeHost::default());
+    let app = rt
+        .block_on(boot(composition_with(
+            &fx,
+            None,
+            Arc::new(FakePower::default()),
+            Arc::new(Authority),
+            host.clone(),
+        )))
+        .unwrap_or_else(|e| panic!("boot: {e:?}"));
+    spawn_tree(&fx, app.processes(), "root-f", "project-a");
+    // A tree the project owns without a root is stopped too.
+    spawn_owned(&fx, app.processes(), None, "project-a");
+    spawn_tree(&fx, app.processes(), "root-b", "project-b");
+    assert_eq!(app.processes().owned().len(), 3);
+    let frame = archive_frame(&fx, "project-a", "1");
+    let reply = app
+        .command(&fx.user, "projects.archive", frame.to_string().as_bytes())
+        .expect("addressable");
+    let CommandReply::Recorded { receipt, .. } = &reply else {
+        panic!("{reply:?}")
+    };
+    assert!(
+        matches!(receipt.decision, DomainDecision::Applied { .. }),
+        "{reply:?}"
+    );
+    // The fence and the root stops are already committed when the reply returns.
+    for r in ["root-f", "root-g", "root-i"] {
+        assert_eq!(fx.control(r).desired, DesiredExecution::Paused, "{r}");
+        assert!(fx.control(r).stop_operation_id.is_some(), "{r}");
+    }
+    // Then the project's owned trees are killed without a cooperative grace, and only its own.
+    rt.block_on(within("the archived project's trees stop", async {
+        while app.processes().owned().len() != 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }));
+    assert!(fx.live("root-b").is_some(), "other projects continue");
+    assert_eq!(fx.control("root-b").desired, DesiredExecution::Enabled);
+    // No tree is launched for the archived project any more, by any path; others still are.
+    let ctx =
+        fx.agent
+            .clone()
+            .with_lineage(Some(ProjectId(id("project-a"))), Some(rid("root-f")), None);
+    let fs = NativeFilesystem::default();
+    let roots = ProtectedRoots::new(vec![], vec![], None);
+    let refused_launch = app.processes().launch(
+        &ctx,
+        LaunchRequest {
+            spec: ProcessSpec::new(&["fake-tool".to_owned()]).unwrap(),
+            operation_id: None,
+            lease: None,
+            approved_hold: false,
+        },
+        &LaunchPolicy {
+            fs: &fs,
+            roots: &roots,
+            protected_branches: &[],
+        },
+    );
+    assert!(
+        matches!(
+            refused_launch,
+            Err(devworks_core::services::process::LaunchRefusal::ProjectClosed)
+        ),
+        "{refused_launch:?}"
+    );
+    spawn_tree(&fx, app.processes(), "root-b", "project-b");
+    assert_eq!(app.processes().owned().len(), 2);
+    // The stop of the root whose tree was killed is executed and observed.
+    let stop = fx.control("root-f").stop_operation_id.unwrap();
+    rt.block_on(within("the root's stop is observed", async {
+        loop {
+            let state = read(&*fx.store, |s| s.operations().operation(&stop)).map(|o| o.state);
+            if state == Some(OperationState::ObservedComplete) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }));
+    rt.block_on(app.shutdown());
+}
+
+#[test]
+fn an_archive_whose_kill_never_ran_stays_fenced_after_a_restart() {
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let running = fx.launch("supervisor-1");
+    // Committed through the use case, then the process dies before any post-commit kill.
+    let reply = fx.command(
+        &fx.user,
+        "projects.archive",
+        archive_frame(&fx, "project-a", "1"),
+    );
+    let CommandReply::Recorded { receipt, .. } = &reply else {
+        panic!("{reply:?}")
+    };
+    assert!(matches!(receipt.decision, DomainDecision::Applied { .. }));
+    let (h, store) = fx.into_parts();
+    drop(store);
+    let store = h.open();
+    let fx = Fx::over(h, store);
+    let rt = runtime();
+    let app = rt
+        .block_on(boot(composition(&fx, None, Arc::new(FakePower::default()))))
+        .unwrap_or_else(|e| panic!("boot: {e:?}"));
+    // The earlier boot's activation is interrupted; the archived project's roots stay paused
+    // and closed to work: no Start, no eligibility.
+    let a = fx.activation(&running.id);
+    assert_eq!(a.phase, ActivationPhase::Stopped);
+    for r in ["root-f", "root-g", "root-i"] {
+        assert_eq!(fx.control(r).desired, DesiredExecution::Paused, "{r}");
+        let root = fx.root(r);
+        let e = read(&*fx.store, |s| {
+            fx.service
+                .evaluate(s.runs(), &root, &Target::Root, ActivationPurpose::Resume)
+        });
+        assert!(!e.eligible, "{r}");
+    }
+    let (code, _) = refused(&fx.start(&fx.user, "root-g", 1, fx.control("root-g").revision));
+    assert_eq!(code, "Conflict");
+    rt.block_on(app.shutdown());
 }
 
 #[test]

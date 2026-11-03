@@ -48,8 +48,16 @@ pub const NATIVE_EXECUTION: [&str; 8] = [
     "mcp.connect",
 ];
 
-/// Commands a non-human principal may run only with an explicit approval for the exact request.
-pub const APPROVAL_REQUIRED: [&str; 1] = ["process.request_system_install"];
+/// Commands a non-human principal may run only with an explicit approval for the exact request:
+/// a system install, and the destructive project and repository-index changes (archiving fences
+/// and stops a project's work at once, deletion tombstones it, index removal drops a shared
+/// registration's index for every project). The user's own command is its confirmation.
+pub const APPROVAL_REQUIRED: [&str; 4] = [
+    "process.request_system_install",
+    "projects.archive",
+    "projects.delete",
+    "repositories.remove_index",
+];
 
 /// The selectable access profiles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -98,6 +98,9 @@ pub enum LaunchRefusal {
     NeedsInput(CommandVerdict),
     /// The dispatch-time resource check refused the lease.
     Resource(DispatchFailure),
+    /// The invocation's project is archived or deleted: it allocates no work (nothing was
+    /// started).
+    ProjectClosed,
     /// The native spawn failed (recorded `Failed`).
     Spawn(ProcessError),
     Storage(StorageError),
@@ -298,6 +301,16 @@ impl ProcessSupervisor {
         let (c, claim) = (ctx.clone(), request.lease.clone());
         let operation_id = request.operation_id.clone();
         let intent = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            // An archived (or deleted) project's work is fenced from the archival's commit: no
+            // tree is launched for it, whatever path asks.
+            if let Some(p) = c.project_id()
+                && tx
+                    .runs()
+                    .project_lifecycle(p)?
+                    .is_some_and(|l| crate::services::runs::closed_to_work(&l))
+            {
+                return Ok(Err(LaunchRefusal::ProjectClosed));
+            }
             let ticket = match &claim {
                 Some(claim) => {
                     match resources.authorize_dispatch(
@@ -308,7 +321,7 @@ impl ProcessSupervisor {
                         claim.fence,
                     ) {
                         Ok(t) => Some(t),
-                        Err(f) => return Ok(Err(f)),
+                        Err(f) => return Ok(Err(LaunchRefusal::Resource(f))),
                     }
                 }
                 None => None,
@@ -335,7 +348,7 @@ impl ProcessSupervisor {
             drop(ticket);
             Ok(Ok(record))
         })?;
-        let record = intent.map_err(LaunchRefusal::Resource)?;
+        let record = intent?;
 
         match self.host.spawn(&request.spec) {
             Err(e) => {

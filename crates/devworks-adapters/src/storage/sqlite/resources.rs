@@ -524,7 +524,7 @@ impl ResourceRepository for Unit<'_> {
         if let Some(p) = &r.project_id
             && !db(db(self
                 .conn
-                .prepare_cached("SELECT 1 FROM projects WHERE id=?1"))?
+                .prepare_cached("SELECT 1 FROM projects WHERE id=?1 AND lifecycle<>'Deleted'"))?
             .exists([p.0.as_str()]))?
         {
             return Err(StorageError::NotFound {

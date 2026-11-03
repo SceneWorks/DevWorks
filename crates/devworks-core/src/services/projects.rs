@@ -1,0 +1,1315 @@
+//! `WorkService` projects and `RepositoryService` registrations (DW-011) behind `projects.list`,
+//! `.get`, `.create`, `.edit`, `.membership`, `.archive`, `.restore`, `.delete` and
+//! `repositories.list`, `.get`, `.remove_index`, `.readme`, `.summary`, `.search`, registered
+//! through [`crate::services::UseCases::with_projects`] and
+//! [`crate::services::UseCases::with_repositories`]. The native Projects and Repositories screens
+//! and agent tools reach the same use cases through the gateway; nothing here has a second copy
+//! in the shell.
+//!
+//! # Scope and authority
+//!
+//! Current authority (role, selected tools, read-only reviewers, project confinement) is the
+//! gateway's authority port; archive, delete and index removal by any principal but the user
+//! need an exact-request approval there (`authority::policy::APPROVAL_REQUIRED`), so an agent can
+//! never archive, delete or drop an index on its own. On top of it every use case checks scope:
+//! an invocation bound to a project sees only that project and its member repositories (and only
+//! its own ID among a repository's projects); a workspace invocation sees every project and
+//! registration. Anything else is `NotFound`, so existence is not disclosed. Only a workspace
+//! invocation creates a project, and only the user changes a project's access profile (it is the
+//! project's `safety.accessProfile` setting, written through the settings seam with its history).
+//!
+//! # Boundaries, membership and shared references
+//!
+//! A project's boundary is its repository membership. `projects.membership` replaces it
+//! atomically under the expected revision: every added or removed repository must be visible to
+//! the invocation, added ones registered and not deleted, and a repository named by the
+//! project's work items cannot leave it (`Conflict`, `repository_in_use`). A repository is a
+//! shared registration: leaving one project never touches its registration, its other projects
+//! or its source. Each change advances the project revision and, for membership, its scope
+//! revision.
+//!
+//! # Archive, restore and delete
+//!
+//! * **Archive** fences work in the same unit of work that records it: the project becomes
+//!   `Archived`, so no root of it is eligible for dispatch, Start or Continue from that commit
+//!   on, and every root is stopped at once ([`ControlService::stop_project`]: paused under a new
+//!   stop epoch with a manual-resume hold, its activation asked to stop and its root-scoped
+//!   deliveries cancelled, one journaled stop each). The engine then kills the project's owned
+//!   process trees without cooperative grace and executes those stops; a stop it cannot verify
+//!   stays an uncertain, held stop rather than a fabricated cancellation.
+//! * **Restore** returns an archived project to `Active`. Its work stays stopped: each root keeps
+//!   the hold the archival left until an explicit Continue.
+//! * **Delete** tombstones an archived, quiescent project (no live activation, unfinished stop or
+//!   unsettled owned process): `Deleted`, membership cleared, every other app record retained.
+//!   It never touches source Git resources: no repository registration, checkout, branch,
+//!   worktree or remote is removed, and shared artifacts and history remain. A tombstone stays
+//!   readable through `projects.get` so retained references show the deletion honestly.
+//!
+//! `proposalId` names an approval proposal; proposals arrive with the approvals item, so one is
+//! never found yet (`NotFound`, `proposal`) and the user's own command is the confirmation (the
+//! native screen shows the concrete consequences before submitting it).
+//!
+//! # Repository indexes and texts
+//!
+//! `repositories.remove_index` removes only the app index views published for a repository and
+//! their README/summary texts (`MutationSummary.changed` says whether there was one); the
+//! registration, memberships, work history and artifacts stay. `repositories.readme` and
+//! `.summary` return the text of the selected published view as an artifact reference; without
+//! one the honest answer is `ViewUnavailable` (views are published by the indexing item).
+//!
+//! # Retained CodeGraph behavior
+//!
+//! `RepositoriesController.List`/`Detail`/`Delete`/`Readme`, the `list_repositories`,
+//! `search_repositories`, `get_service_summary` and `repository_report` tools and the
+//! `codegraph://repositories/*` resources map to `repositories.list`, `.get`, `.remove_index`,
+//! `.readme`, `.search` and `.summary`: a list filters by a case-insensitive search text and
+//! pages; an unknown repository is `NotFound`; deletion removes the graph data but, unlike
+//! CodeGraph, keeps the registration (DevWorks never treats index removal as source deletion),
+//! and CodeGraph's admin-only delete is an exact-approval command for agents here.
+//! `WorkController.Create`/`Find`/`Get`/`Update` and `create_work`/`find_work`/`get_work`/
+//! `update_work` for the `project` kind map to `projects.create`, `.list`, `.get` and `.edit`
+//! (`.membership`, `.archive`, `.restore`, `.delete` for the boundary and lifecycle changes).
+//! An initial work plan is created by the work-planning item; until then `initialPlan` is
+//! `UnsupportedCapability` rather than silently ignored.
+use crate::authority::AccessProfile;
+use crate::authority::policy::{ACCESS_PROFILE_KEY, resolve_policy};
+use crate::context::InvocationContext;
+use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::operations::{OperationInput, projects as pops, repositories as rops};
+use crate::ports::storage::{
+    ACTIVE, ARCHIVED, ConfigScope, ConfigurationRead, DELETED, NewEvent, ProcessFilter,
+    ProjectFilter, ProjectPosition, ProjectRead, ReadSnapshot, RepositoryFilter, StorageError,
+    StoredIndexView, StoredProject, StoredRepository, TextKind, WriteTransaction, is_terminal,
+};
+use crate::ports::{
+    CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
+};
+use crate::protocol::data::{Coverage, CoverageState, DataScope, ViewSelection};
+use crate::protocol::provider::{ArtifactRef, Digest};
+use crate::protocol::records::PageRequest;
+use crate::protocol::records::{
+    AccessMode, LifeState, MutationSummary, ProjectRecord, RepositoryRecord, RepositoryText,
+    SettingAssignment,
+};
+use crate::protocol::results::{DomainDecision, OperationResult};
+use crate::protocol::support::{BoundedList, BoundedText, Page, Url};
+use crate::protocol::{
+    CorrelationId, DomainErrorCode, DomainFault, EventId, Id, ProjectId, RetryAdvice,
+    RevisionDimension,
+};
+use crate::services::cursor::CursorBinding;
+use crate::services::runs::{ControlService, control_of};
+use crate::services::sessions::{
+    Failure, Refusal, content, counter, decided, label, not_found, project_visible, query_fault,
+    rev,
+};
+use crate::settings::catalog::descriptor;
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+/// The operations [`ProjectService`] is registered for.
+pub const PROJECT_OPERATIONS: [&str; 8] = [
+    "projects.list",
+    "projects.get",
+    "projects.create",
+    "projects.edit",
+    "projects.membership",
+    "projects.archive",
+    "projects.restore",
+    "projects.delete",
+];
+/// The operations [`RepositoryService`] is registered for (`repositories.nodes` belongs to the
+/// code graph item).
+pub const REPOSITORY_OPERATIONS: [&str; 6] = [
+    "repositories.list",
+    "repositories.get",
+    "repositories.remove_index",
+    "repositories.readme",
+    "repositories.summary",
+    "repositories.search",
+];
+/// History aggregate of a project (`aggregate_id` = project ID).
+pub const PROJECT_AGGREGATE: &str = "project";
+/// History aggregate of a repository registration (`aggregate_id` = repository ID).
+pub const REPOSITORY_AGGREGATE: &str = "repository";
+/// What a project deletion never removes.
+pub const RETAINED_ON_DELETE: [&str; 4] = [
+    "repository registrations and their source checkouts, branches, worktrees and remotes",
+    "work history and command receipts",
+    "artifacts and their shares",
+    "settings revisions",
+];
+const PAGE: u16 = 500;
+
+fn refuse(code: DomainErrorCode, kind: &'static str, id: Option<&Id>) -> Failure {
+    Refusal::new(code, kind, id.cloned()).into()
+}
+fn conflict(kind: &'static str, id: &Id) -> Failure {
+    refuse(DomainErrorCode::Conflict, kind, Some(id))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shared helpers
+
+/// The project `id` if this invocation may see it (any lifecycle; otherwise `NotFound`).
+pub fn visible_project(
+    read: &dyn ProjectRead,
+    ctx: &InvocationContext,
+    id: &ProjectId,
+) -> Result<StoredProject, Failure> {
+    match read.project(id)? {
+        Some(p) if project_visible(ctx, Some(&p.id)) => Ok(p),
+        _ => Err(not_found("project", &id.0).into()),
+    }
+}
+
+/// The registered, not deleted repository `id` if this invocation may see it: a workspace
+/// invocation sees every registration, a project invocation only its project's members.
+pub fn visible_repository(
+    read: &dyn ProjectRead,
+    ctx: &InvocationContext,
+    id: &Id,
+) -> Result<StoredRepository, Failure> {
+    let found = match read.repository(id)? {
+        Some(r) if r.lifecycle != DELETED => match ctx.project_id() {
+            None => Some(r),
+            Some(p) => read.members(p)?.contains(&r.id).then_some(r),
+        },
+        _ => None,
+    };
+    found.ok_or_else(|| not_found("repository", id).into())
+}
+
+/// The access mode a project's effective `safety.accessProfile` grants (an unsupported stored
+/// profile fails closed for authority, so it is never reported as Full).
+pub fn access_mode(
+    read: &dyn ConfigurationRead,
+    p: &ProjectId,
+) -> Result<AccessMode, StorageError> {
+    Ok(match resolve_policy(read, Some(p))?.profile {
+        Some(AccessProfile::Full) => AccessMode::Full,
+        _ => AccessMode::Project,
+    })
+}
+
+fn life(s: &str) -> LifeState {
+    match s {
+        ARCHIVED => LifeState::Archived,
+        DELETED => LifeState::Deleted,
+        _ => LifeState::Active,
+    }
+}
+fn life_name(l: &LifeState) -> &'static str {
+    match l {
+        LifeState::Active => ACTIVE,
+        LifeState::Archived => ARCHIVED,
+        LifeState::Deleted => DELETED,
+    }
+}
+
+/// The wire record of a project with its members and access mode.
+pub fn project_record(p: &StoredProject, members: Vec<Id>, access: AccessMode) -> ProjectRecord {
+    ProjectRecord {
+        id: p.id.clone(),
+        revision: rev(p.revision),
+        name: label(&p.name, "project"),
+        description: content(&p.description),
+        repository_ids: BoundedList(members.into_iter().take(128).collect()),
+        lifecycle: life(&p.lifecycle),
+        access_mode: access,
+    }
+}
+fn read_record(
+    projects: &dyn ProjectRead,
+    config: &dyn ConfigurationRead,
+    p: &StoredProject,
+) -> Result<ProjectRecord, StorageError> {
+    let members = projects.members(&p.id)?;
+    Ok(project_record(p, members, access_mode(config, &p.id)?))
+}
+fn tx_record(
+    tx: &mut dyn WriteTransaction,
+    p: &StoredProject,
+) -> Result<ProjectRecord, StorageError> {
+    let members = tx.projects().members(&p.id)?;
+    let access = access_mode(&*tx.configuration(), &p.id)?;
+    Ok(project_record(p, members, access))
+}
+
+/// A remote URL as it may be shown: `http(s)` with any user information, query and fragment
+/// removed, and SSH remotes (`ssh://` or `user@host:path`) as the equivalent `https` address.
+/// Anything else is not shown. Credentials embedded in a registered remote never leave the store.
+pub fn display_remote(remote: &str) -> Option<Url> {
+    let r = remote.trim();
+    let (scheme, rest) = if let Some(rest) = r.strip_prefix("https://") {
+        ("https://", rest)
+    } else if let Some(rest) = r.strip_prefix("http://") {
+        ("http://", rest)
+    } else if let Some(rest) = r.strip_prefix("ssh://") {
+        ("https://", rest)
+    } else if !r.contains("://")
+        && let Some((authority, path)) = r.split_once(':')
+        && !authority.contains('/')
+    {
+        let host = authority.rsplit('@').next().unwrap_or("");
+        // A one-letter "host" is a Windows drive (`C:\src`), not an SSH remote.
+        if host.chars().count() < 2 {
+            return None;
+        }
+        return url_of(
+            "https://",
+            host,
+            &format!("/{}", path.trim_start_matches('/')),
+        );
+    } else {
+        return None;
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    let host = authority.rsplit('@').next().unwrap_or("");
+    let host = if scheme == "https://" && r.starts_with("ssh://") {
+        host.split(':').next().unwrap_or("")
+    } else {
+        host
+    };
+    url_of(scheme, host, path)
+}
+fn url_of(scheme: &str, host: &str, path: &str) -> Option<Url> {
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    if host.is_empty() || host.contains(['@', '\\']) || path.contains('\\') {
+        return None;
+    }
+    let s = format!("{scheme}{host}{path}");
+    let ok = s.len() <= 4096 && !s.chars().any(|c| c.is_whitespace() || c == '\0');
+    ok.then_some(Url(s))
+}
+
+fn coverage(state: &str) -> Coverage {
+    Coverage {
+        state: match state {
+            "Complete" => CoverageState::Complete,
+            "Partial" => CoverageState::Partial,
+            _ => CoverageState::Unavailable,
+        },
+        gaps: Vec::new(),
+        more_gaps: false,
+    }
+}
+
+/// The wire record of a repository as `ctx` may see it: its projects are limited to the ones
+/// the invocation may see, and its remote is shown without credentials.
+pub fn repository_record(
+    read: &dyn ProjectRead,
+    ctx: &InvocationContext,
+    r: &StoredRepository,
+) -> Result<RepositoryRecord, StorageError> {
+    let projects: Vec<ProjectId> = read
+        .repository_projects(&r.id)?
+        .into_iter()
+        .filter(|p| project_visible(ctx, Some(p)))
+        .take(128)
+        .collect();
+    let views = read.index_views(&r.id)?;
+    Ok(RepositoryRecord {
+        id: r.id.clone(),
+        revision: rev(r.revision),
+        name: label(&r.name, "repository"),
+        remote_url: r.remote_url.as_deref().and_then(display_remote),
+        project_ids: BoundedList(projects),
+        primary: r.primary,
+        lifecycle: life(&r.lifecycle),
+        coverage: coverage(views.first().map_or("Unavailable", |v| v.coverage.as_str())),
+        indexed_view_ids: BoundedList(views.iter().take(128).map(|v| v.view_id.clone()).collect()),
+    })
+}
+
+fn event(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    project: Option<&ProjectId>,
+    aggregate: (&str, &Id, i64),
+    kind: &str,
+    payload: Value,
+) -> Result<(), StorageError> {
+    let id = EventId(tx.new_id(IdKind::Event));
+    let mut payload = payload;
+    if let Some(map) = payload.as_object_mut() {
+        map.insert(
+            "principalKind".into(),
+            json!(format!("{:?}", ctx.principal_kind())),
+        );
+    }
+    tx.history().append(NewEvent {
+        id,
+        actor: ctx.principal().clone(),
+        project_id: project.cloned(),
+        root_id: None,
+        operation_id: None,
+        aggregate_kind: aggregate.0.into(),
+        aggregate_id: aggregate.1.as_str().to_owned(),
+        aggregate_revision: aggregate.2.max(1),
+        kind: kind.into(),
+        payload,
+    })?;
+    Ok(())
+}
+
+fn ids(v: &[Id]) -> Vec<&str> {
+    v.iter().map(Id::as_str).collect()
+}
+
+/// A set of repository IDs, in ID order: duplicates are refused (a set identity, AD71).
+fn id_set(v: &[Id]) -> Result<Vec<Id>, Failure> {
+    let keys: BTreeSet<&str> = v.iter().map(Id::as_str).collect();
+    if keys.len() != v.len() {
+        return Err(refuse(
+            DomainErrorCode::InvalidArgument,
+            "repository_ids",
+            None,
+        ));
+    }
+    let mut out = v.to_vec();
+    out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    Ok(out)
+}
+/// The members of `a` that are not in `b`.
+fn minus(a: &[Id], b: &[Id]) -> Vec<Id> {
+    let b: BTreeSet<&str> = b.iter().map(Id::as_str).collect();
+    a.iter()
+        .filter(|x| !b.contains(x.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn revision_conflict(p: &StoredProject, expected: i64) -> Result<(), Failure> {
+    if p.revision != expected {
+        return Err(Failure::Storage(StorageError::conflict(
+            RevisionDimension::Scope,
+            "project",
+            p.id.0.clone(),
+            rev(expected),
+            rev(p.revision),
+        )));
+    }
+    Ok(())
+}
+
+/// Approval proposals arrive with the approvals item: none can be found yet.
+fn no_proposal(proposal: Option<&Id>) -> Result<(), Failure> {
+    match proposal {
+        Some(p) => Err(not_found("proposal", p).into()),
+        None => Ok(()),
+    }
+}
+
+/// A non-blank label (surrounding whitespace is kept exactly as given).
+fn require_name(name: &str) -> Result<(), Failure> {
+    if name.trim().is_empty() {
+        return Err(refuse(DomainErrorCode::InvalidArgument, "name", None));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Projects
+
+/// The projects service: the one implementation of project boundaries and lifecycle.
+pub struct ProjectService {
+    ids: Arc<dyn IdSource>,
+    runs: Arc<ControlService>,
+}
+
+impl ProjectService {
+    /// A service whose archival stops roots through `runs` (the runtime's one control service).
+    pub fn new(ids: Arc<dyn IdSource>, runs: Arc<ControlService>) -> Self {
+        Self { ids, runs }
+    }
+    fn correlation(&self) -> CorrelationId {
+        CorrelationId(self.ids.next_id(IdKind::Correlation))
+    }
+
+    fn list(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        i: &pops::ListInput,
+    ) -> Result<OperationResult, Failure> {
+        let only = match (&i.scope, ctx.project_id()) {
+            (DataScope::Workspace, None) => None,
+            (DataScope::Workspace, Some(_)) => {
+                return Err(refuse(
+                    DomainErrorCode::PermissionDenied,
+                    "workspace_scope",
+                    None,
+                ));
+            }
+            (DataScope::Project { project_id }, _) => {
+                visible_project(read.projects(), ctx, project_id)?;
+                Some(project_id.clone())
+            }
+        };
+        let lifecycles: Vec<String> = match &i.lifecycle {
+            None => vec![ACTIVE.into(), ARCHIVED.into()],
+            Some(l) => vec![life_name(l).into()],
+        };
+        let filter = ProjectFilter { only, lifecycles };
+        let scope_part = filter.only.as_ref().map_or("*", |p| p.0.as_str());
+        let life_part = filter.lifecycles.join(",");
+        let binding = CursorBinding::new(ctx, "projects.list", &[scope_part, &life_part], 1);
+        let after = match &i.page.cursor {
+            None => None,
+            Some(c) => {
+                let pos = binding.decode(&c.0)?;
+                let (at, id) = pos.split_once(':').ok_or(StorageError::CursorExpired)?;
+                Some(ProjectPosition {
+                    created_at_ms: at.parse().map_err(|_| StorageError::CursorExpired)?,
+                    id: ProjectId(Id::new(id).map_err(|_| StorageError::CursorExpired)?),
+                })
+            }
+        };
+        let limit = i.page.limit.get() as usize;
+        let rows = read
+            .projects()
+            .projects(&filter, after.as_ref(), limit as u16)?;
+        let position = |p: &StoredProject| ProjectPosition {
+            created_at_ms: p.created_at_ms,
+            id: p.id.clone(),
+        };
+        let has_more = rows.len() == limit
+            && !read
+                .projects()
+                .projects(&filter, Some(&position(&rows[limit - 1])), 1)?
+                .is_empty();
+        let next = has_more.then(|| {
+            let last = &rows[limit - 1];
+            BoundedText(binding.encode(&format!("{}:{}", last.created_at_ms, last.id.0.as_str())))
+        });
+        let items = rows
+            .iter()
+            .map(|p| read_record(read.projects(), read.configuration(), p))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(OperationResult::ProjectsList {
+            value: Page {
+                items: BoundedList(items),
+                next_cursor: next,
+                has_more,
+            },
+        })
+    }
+
+    fn create(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &pops::CreateInput,
+    ) -> Result<DomainDecision, Failure> {
+        // A project invocation works inside its own boundary; a new project is outside it.
+        if ctx.project_id().is_some() {
+            return Err(refuse(
+                DomainErrorCode::PermissionDenied,
+                "workspace_scope",
+                None,
+            ));
+        }
+        if i.initial_plan.is_some() {
+            return Err(refuse(
+                DomainErrorCode::UnsupportedCapability,
+                "initial_plan",
+                None,
+            ));
+        }
+        require_name(&i.name.0)?;
+        let members = id_set(&i.repository_ids.0)?;
+        for r in &members {
+            visible_repository(tx.projects(), ctx, r)?;
+        }
+        let now = tx.now_ms();
+        let p = StoredProject {
+            id: ProjectId(tx.new_id(IdKind::Project)),
+            name: i.name.0.clone(),
+            description: i.description.0.clone(),
+            lifecycle: ACTIVE.into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: now,
+            updated_at_ms: now,
+            archived_at_ms: None,
+            deleted_at_ms: None,
+        };
+        tx.projects().insert_project(&p)?;
+        tx.projects().set_members(&p.id, &members)?;
+        event(
+            tx,
+            ctx,
+            Some(&p.id),
+            (PROJECT_AGGREGATE, &p.id.0, p.revision),
+            "ProjectCreated",
+            json!({"name": p.name, "repositoryIds": ids(&members)}),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::ProjectsCreate {
+                value: tx_record(tx, &p)?,
+            },
+        })
+    }
+
+    /// The project for a boundary or metadata change: visible, at the expected revision, active.
+    fn changeable(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        id: &ProjectId,
+        expected: i64,
+    ) -> Result<StoredProject, Failure> {
+        let p = visible_project(tx.projects(), ctx, id)?;
+        revision_conflict(&p, expected)?;
+        match p.lifecycle.as_str() {
+            ARCHIVED => Err(conflict("project_archived", &p.id.0)),
+            DELETED => Err(conflict("project_deleted", &p.id.0)),
+            _ => Ok(p),
+        }
+    }
+
+    fn edit(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &pops::EditInput,
+    ) -> Result<DomainDecision, Failure> {
+        let before = self.changeable(tx, ctx, &i.project_id, i.expected_revision.get())?;
+        let mut after = before.clone();
+        let mut changed: Vec<&str> = Vec::new();
+        if let Some(name) = &i.changes.name {
+            require_name(&name.0)?;
+            if name.0 != before.name {
+                after.name = name.0.clone();
+                changed.push("name");
+            }
+        }
+        if let Some(d) = &i.changes.description
+            && d.0 != before.description
+        {
+            after.description = d.0.clone();
+            changed.push("description");
+        }
+        let current_access = access_mode(&*tx.configuration(), &before.id)?;
+        let access = i
+            .changes
+            .access_mode
+            .as_ref()
+            .filter(|a| access_name(a) != access_name(&current_access));
+        if let Some(a) = access {
+            // The project's access profile is its `safety.accessProfile` setting: one writer
+            // (the settings seam, human only) and one history.
+            let entry = access_assignment(a)?;
+            let wrote = crate::settings::service::apply_human_assignments(
+                tx,
+                ctx,
+                &ConfigScope::Project(before.id.clone()),
+                &[entry],
+                json!({"kind": "ProjectEdit", "projectId": before.id.0.as_str()}),
+            )
+            .map_err(settings_failure)?;
+            if wrote {
+                changed.push("accessMode");
+            }
+        }
+        if changed.is_empty() {
+            return Ok(DomainDecision::NoChange {
+                result: OperationResult::ProjectsEdit {
+                    value: tx_record(tx, &before)?,
+                },
+            });
+        }
+        after.revision = before.revision + 1;
+        after.updated_at_ms = tx.now_ms();
+        tx.projects().update_project(&after, before.revision)?;
+        event(
+            tx,
+            ctx,
+            Some(&after.id),
+            (PROJECT_AGGREGATE, &after.id.0, after.revision),
+            "ProjectEdited",
+            json!({"changed": changed}),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::ProjectsEdit {
+                value: tx_record(tx, &after)?,
+            },
+        })
+    }
+
+    fn membership(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &pops::MembershipInput,
+    ) -> Result<DomainDecision, Failure> {
+        let before = self.changeable(tx, ctx, &i.project_id, i.expected_revision.get())?;
+        let wanted = id_set(&i.repository_ids.0)?;
+        let current = tx.projects().members(&before.id)?;
+        let added = minus(&wanted, &current);
+        let removed = minus(&current, &wanted);
+        if added.is_empty() && removed.is_empty() {
+            return Ok(DomainDecision::NoChange {
+                result: OperationResult::ProjectsMembership {
+                    value: tx_record(tx, &before)?,
+                },
+            });
+        }
+        // Every repository the change touches is authorized for this invocation.
+        for r in added.iter().chain(&removed) {
+            visible_repository(tx.projects(), ctx, r)?;
+        }
+        for r in &removed {
+            if tx.projects().work_naming_repository(&before.id, r)? > 0 {
+                return Err(conflict("repository_in_use", r));
+            }
+        }
+        tx.projects().set_members(&before.id, &wanted)?;
+        let mut after = before.clone();
+        after.revision = before.revision + 1;
+        after.scope_revision = before.scope_revision + 1;
+        after.updated_at_ms = tx.now_ms();
+        tx.projects().update_project(&after, before.revision)?;
+        event(
+            tx,
+            ctx,
+            Some(&after.id),
+            (PROJECT_AGGREGATE, &after.id.0, after.revision),
+            "ProjectMembershipChanged",
+            json!({
+                "added": ids(&added),
+                "removed": ids(&removed),
+                "scopeRevision": after.scope_revision,
+            }),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::ProjectsMembership {
+                value: tx_record(tx, &after)?,
+            },
+        })
+    }
+
+    fn archive(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &pops::ArchiveInput,
+    ) -> Result<DomainDecision, Failure> {
+        let before = visible_project(tx.projects(), ctx, &i.project_id)?;
+        no_proposal(i.proposal_id.as_ref())?;
+        revision_conflict(&before, i.expected_revision.get())?;
+        match before.lifecycle.as_str() {
+            DELETED => return Err(conflict("project_deleted", &before.id.0)),
+            ARCHIVED => {
+                return Ok(DomainDecision::NoChange {
+                    result: OperationResult::ProjectsArchive {
+                        value: tx_record(tx, &before)?,
+                    },
+                });
+            }
+            _ => {}
+        }
+        let now = tx.now_ms();
+        let mut after = before.clone();
+        after.lifecycle = ARCHIVED.into();
+        after.revision = before.revision + 1;
+        after.updated_at_ms = now;
+        after.archived_at_ms = Some(now);
+        // The fence and the stops commit together: from this commit no root of the project is
+        // eligible, and each is paused under a new stop epoch with its stop journaled.
+        tx.projects().update_project(&after, before.revision)?;
+        let stopped = self.runs.stop_project(tx, ctx.principal(), &after.id)?;
+        event(
+            tx,
+            ctx,
+            Some(&after.id),
+            (PROJECT_AGGREGATE, &after.id.0, after.revision),
+            "ProjectArchived",
+            json!({
+                "stoppedRoots": stopped.iter().map(|(r, _)| r.0.as_str()).collect::<Vec<_>>(),
+                "stopOperations": stopped.iter().map(|(_, o)| o.0.as_str()).collect::<Vec<_>>(),
+            }),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::ProjectsArchive {
+                value: tx_record(tx, &after)?,
+            },
+        })
+    }
+
+    fn restore(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &pops::RestoreInput,
+    ) -> Result<DomainDecision, Failure> {
+        let before = visible_project(tx.projects(), ctx, &i.project_id)?;
+        no_proposal(i.proposal_id.as_ref())?;
+        revision_conflict(&before, i.expected_revision.get())?;
+        match before.lifecycle.as_str() {
+            DELETED => return Err(conflict("project_deleted", &before.id.0)),
+            ACTIVE => {
+                return Ok(DomainDecision::NoChange {
+                    result: OperationResult::ProjectsRestore {
+                        value: tx_record(tx, &before)?,
+                    },
+                });
+            }
+            _ => {}
+        }
+        let mut after = before.clone();
+        after.lifecycle = ACTIVE.into();
+        after.revision = before.revision + 1;
+        after.updated_at_ms = tx.now_ms();
+        after.archived_at_ms = None;
+        tx.projects().update_project(&after, before.revision)?;
+        // Work stays stopped: every root keeps the hold its archival left until a Continue.
+        event(
+            tx,
+            ctx,
+            Some(&after.id),
+            (PROJECT_AGGREGATE, &after.id.0, after.revision),
+            "ProjectRestored",
+            json!({"workStopped": true}),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::ProjectsRestore {
+                value: tx_record(tx, &after)?,
+            },
+        })
+    }
+
+    /// What of the project may still be running: live activations, unfinished stops and
+    /// unsettled owned processes (bounded to the first few, which a refusal names).
+    fn activity(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        project: &ProjectId,
+    ) -> Result<Vec<Id>, StorageError> {
+        let mut live: Vec<Id> = Vec::new();
+        let mut after = None;
+        loop {
+            let page = tx.runs().project_roots(project, after.as_ref(), PAGE)?;
+            for root in &page {
+                if let Some(a) = tx.runs().live_activation(root)? {
+                    live.push(a.id.clone());
+                }
+                let control = control_of(tx.runs(), root)?;
+                if let Some(op) = &control.stop_operation_id
+                    && tx
+                        .operations()
+                        .operation(op)?
+                        .is_some_and(|o| !is_terminal(o.state))
+                {
+                    live.push(op.0.clone());
+                }
+            }
+            if page.len() < usize::from(PAGE) {
+                break;
+            }
+            after = page.last().cloned();
+        }
+        let mut cursor: Option<Id> = None;
+        loop {
+            let page =
+                tx.resources()
+                    .processes(&ProcessFilter::Unsettled, cursor.as_ref(), PAGE)?;
+            live.extend(
+                page.iter()
+                    .filter(|p| p.project_id.as_ref() == Some(project))
+                    .map(|p| p.id.clone()),
+            );
+            if page.len() < usize::from(PAGE) {
+                break;
+            }
+            cursor = page.last().map(|p| p.id.clone());
+        }
+        Ok(live)
+    }
+
+    fn delete(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &pops::DeleteInput,
+    ) -> Result<DomainDecision, Failure> {
+        let before = visible_project(tx.projects(), ctx, &i.project_id)?;
+        no_proposal(i.proposal_id.as_ref())?;
+        revision_conflict(&before, i.expected_revision.get())?;
+        match before.lifecycle.as_str() {
+            DELETED => {
+                return Ok(DomainDecision::NoChange {
+                    result: OperationResult::ProjectsDelete {
+                        value: tx_record(tx, &before)?,
+                    },
+                });
+            }
+            // Deletion follows archival: work is fenced and stopped first.
+            ACTIVE => return Err(conflict("project_active", &before.id.0)),
+            _ => {}
+        }
+        let live = self.activity(tx, &before.id)?;
+        if !live.is_empty() {
+            let mut r = Refusal::new(
+                DomainErrorCode::Conflict,
+                "project_not_quiescent",
+                Some(before.id.0.clone()),
+            );
+            r.retry = RetryAdvice::AfterBlockerClears;
+            return Err(r.into());
+        }
+        let removed = tx.projects().members(&before.id)?;
+        tx.projects().set_members(&before.id, &[])?;
+        let now = tx.now_ms();
+        let mut after = before.clone();
+        after.lifecycle = DELETED.into();
+        after.revision = before.revision + 1;
+        after.scope_revision = before.scope_revision + 1;
+        after.updated_at_ms = now;
+        after.deleted_at_ms = Some(now);
+        tx.projects().update_project(&after, before.revision)?;
+        event(
+            tx,
+            ctx,
+            Some(&after.id),
+            (PROJECT_AGGREGATE, &after.id.0, after.revision),
+            "ProjectDeleted",
+            json!({
+                "removedMemberships": ids(&removed),
+                "retained": RETAINED_ON_DELETE,
+                "sourceResourcesTouched": false,
+            }),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::ProjectsDelete {
+                value: tx_record(tx, &after)?,
+            },
+        })
+    }
+}
+
+fn access_name(a: &AccessMode) -> &'static str {
+    match a {
+        AccessMode::Full => "full",
+        AccessMode::Project => "projectScope",
+    }
+}
+fn access_assignment(a: &AccessMode) -> Result<SettingAssignment, Failure> {
+    let d = descriptor(ACCESS_PROFILE_KEY).expect("catalog key");
+    serde_json::from_value(json!({
+        "key": ACCESS_PROFILE_KEY,
+        "value": {"schema": d.schema_ref(), "value": access_name(a)},
+    }))
+    .map_err(|_| refuse(DomainErrorCode::InvalidArgument, "access_mode", None))
+}
+fn settings_failure(f: crate::settings::service::Failure) -> Failure {
+    match f {
+        crate::settings::service::Failure::Refused(r) => {
+            // A non-human principal never changes the access profile.
+            let kind = if r.code == DomainErrorCode::PermissionDenied {
+                "access_mode"
+            } else {
+                r.target_kind
+            };
+            Refusal {
+                code: r.code,
+                retry: r.retry,
+                target_kind: kind,
+                target_id: r.target_id,
+            }
+            .into()
+        }
+        crate::settings::service::Failure::Storage(e) => Failure::Storage(e),
+    }
+}
+
+impl QueryHandler for ProjectService {
+    fn query(
+        &self,
+        ctx: &InvocationContext,
+        query: &AdmittedQuery,
+        snapshot: &dyn ReadSnapshot,
+    ) -> Result<QueryAnswer, DomainFault> {
+        let answered = match query.input() {
+            OperationInput::Projects(pops::Input::List(i)) => {
+                self.list(snapshot, ctx, i).map(|r| (r, 1))
+            }
+            OperationInput::Projects(pops::Input::Get(i)) => {
+                visible_project(snapshot.projects(), ctx, &i.project_id).and_then(|p| {
+                    let value = read_record(snapshot.projects(), snapshot.configuration(), &p)?;
+                    Ok((OperationResult::ProjectsGet { value }, p.scope_revision))
+                })
+            }
+            _ => Err(refuse(
+                DomainErrorCode::UnsupportedCapability,
+                "operation",
+                None,
+            )),
+        };
+        let (result, scope) =
+            answered.map_err(|f| query_fault(f, "project", self.correlation()))?;
+        Ok(QueryAnswer {
+            stamp: snapshot
+                .stamp()
+                .read_stamp(ctx.policy_revision().clone(), rev(scope)),
+            result,
+        })
+    }
+}
+
+impl CommandHandler for ProjectService {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let outcome = match command.input() {
+            OperationInput::Projects(pops::Input::Create(i)) => self.create(tx, ctx, i),
+            OperationInput::Projects(pops::Input::Edit(i)) => self.edit(tx, ctx, i),
+            OperationInput::Projects(pops::Input::Membership(i)) => self.membership(tx, ctx, i),
+            OperationInput::Projects(pops::Input::Archive(i)) => self.archive(tx, ctx, i),
+            OperationInput::Projects(pops::Input::Restore(i)) => self.restore(tx, ctx, i),
+            OperationInput::Projects(pops::Input::Delete(i)) => self.delete(tx, ctx, i),
+            _ => Err(refuse(
+                DomainErrorCode::UnsupportedCapability,
+                "operation",
+                None,
+            )),
+        };
+        decided(tx, outcome)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Repositories
+
+/// The repository registration service: listing, search, texts and index removal.
+pub struct RepositoryService {
+    ids: Arc<dyn IdSource>,
+}
+
+impl RepositoryService {
+    pub fn new(ids: Arc<dyn IdSource>) -> Self {
+        Self { ids }
+    }
+    fn correlation(&self) -> CorrelationId {
+        CorrelationId(self.ids.next_id(IdKind::Correlation))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn page(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        operation: &str,
+        scope: &DataScope,
+        text: Option<&str>,
+        languages: &[String],
+        page: &PageRequest,
+    ) -> Result<Page<RepositoryRecord>, Failure> {
+        let project = match (scope, ctx.project_id()) {
+            (DataScope::Workspace, None) => None,
+            (DataScope::Workspace, Some(_)) => {
+                return Err(refuse(
+                    DomainErrorCode::PermissionDenied,
+                    "workspace_scope",
+                    None,
+                ));
+            }
+            (DataScope::Project { project_id }, _) => {
+                visible_project(read.projects(), ctx, project_id)?;
+                Some(project_id.clone())
+            }
+        };
+        let mut languages: Vec<String> = languages.iter().map(|l| l.to_lowercase()).collect();
+        languages.sort();
+        languages.dedup();
+        let filter = RepositoryFilter {
+            project,
+            text: text.map(str::to_owned),
+            languages,
+            include_deleted: false,
+        };
+        let scope_part = filter.project.as_ref().map_or("*", |p| p.0.as_str());
+        let text_part = filter.text.clone().unwrap_or_default();
+        let language_part = filter.languages.join(",");
+        let binding =
+            CursorBinding::new(ctx, operation, &[scope_part, &text_part, &language_part], 1);
+        let after = page
+            .cursor
+            .as_ref()
+            .map(|c| {
+                binding
+                    .decode(&c.0)
+                    .and_then(|p| Id::new(p).map_err(|_| StorageError::CursorExpired))
+            })
+            .transpose()?;
+        let limit = page.limit.get() as usize;
+        let rows = read
+            .projects()
+            .repositories(&filter, after.as_ref(), limit as u16)?;
+        let has_more = rows.len() == limit
+            && !read
+                .projects()
+                .repositories(&filter, Some(&rows[limit - 1].id), 1)?
+                .is_empty();
+        let next = has_more.then(|| BoundedText(binding.encode(rows[limit - 1].id.as_str())));
+        let items = rows
+            .iter()
+            .map(|r| repository_record(read.projects(), ctx, r))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Page {
+            items: BoundedList(items),
+            next_cursor: next,
+            has_more,
+        })
+    }
+
+    fn text(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        repository: &Id,
+        views: &ViewSelection,
+        kind: TextKind,
+    ) -> Result<RepositoryText, Failure> {
+        let r = visible_repository(read.projects(), ctx, repository)?;
+        let view = select_view(read.projects(), &r, views)?;
+        let Some(t) = read.projects().repository_text(&view.view_id, kind)? else {
+            return Err(refuse(
+                DomainErrorCode::ViewUnavailable,
+                match kind {
+                    TextKind::Readme => "repository_readme",
+                    TextKind::Summary => "repository_summary",
+                },
+                Some(&r.id),
+            ));
+        };
+        let sha256 = Digest::try_from(t.sha256.clone())
+            .map_err(|_| StorageError::InvalidRecord("stored text digest".into()))?;
+        Ok(RepositoryText {
+            repository_id: r.id.clone(),
+            view_id: view.view_id.clone(),
+            content: ArtifactRef {
+                artifact_id: t.artifact_id.clone(),
+                version_id: t.version_id.clone(),
+                sha256,
+                byte_length: counter(t.byte_length),
+                media_type: t.media_type.clone(),
+            },
+            coverage: coverage(&t.coverage),
+        })
+    }
+
+    fn remove_index(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &rops::RemoveIndexInput,
+    ) -> Result<DomainDecision, Failure> {
+        let r = visible_repository(tx.projects(), ctx, &i.repository_id)?;
+        let expected = i.expected_revision.get();
+        if r.revision != expected {
+            return Err(Failure::Storage(StorageError::conflict(
+                RevisionDimension::Registry,
+                "repository",
+                r.id.clone(),
+                rev(expected),
+                rev(r.revision),
+            )));
+        }
+        let removed = tx.projects().remove_index(&r.id)?;
+        if removed == 0 {
+            return Ok(DomainDecision::NoChange {
+                result: OperationResult::RepositoriesRemoveIndex {
+                    value: MutationSummary {
+                        id: r.id.clone(),
+                        revision: rev(r.revision),
+                        changed: false,
+                    },
+                },
+            });
+        }
+        let revision = tx.projects().touch_repository(&r.id, r.revision)?;
+        event(
+            tx,
+            ctx,
+            None,
+            (REPOSITORY_AGGREGATE, &r.id, revision),
+            "RepositoryIndexRemoved",
+            json!({
+                "removedViews": removed,
+                "registrationKept": true,
+                "sourceTouched": false,
+            }),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::RepositoriesRemoveIndex {
+                value: MutationSummary {
+                    id: r.id.clone(),
+                    revision: rev(revision),
+                    changed: true,
+                },
+            },
+        })
+    }
+}
+
+/// The published view a text request selects for `r`.
+fn select_view(
+    read: &dyn ProjectRead,
+    r: &StoredRepository,
+    views: &ViewSelection,
+) -> Result<StoredIndexView, Failure> {
+    let unavailable = || {
+        refuse(
+            DomainErrorCode::ViewUnavailable,
+            "repository_view",
+            Some(&r.id),
+        )
+    };
+    match views {
+        ViewSelection::Published { repository_ids } => {
+            if !repository_ids.contains(&r.id) {
+                return Err(refuse(DomainErrorCode::InvalidArgument, "views", None));
+            }
+            read.index_views(&r.id)?
+                .into_iter()
+                .next()
+                .ok_or_else(unavailable)
+        }
+        ViewSelection::Exact { view_ids } => {
+            for v in view_ids {
+                if let Some(view) = read.index_view(v)?
+                    && view.repository_id == r.id
+                {
+                    return Ok(view);
+                }
+            }
+            Err(unavailable())
+        }
+        // Retrieval pins belong to the retrieval items; none exists to resolve here.
+        ViewSelection::Pinned { .. } => Err(refuse(
+            DomainErrorCode::UnsupportedCapability,
+            "view_pin",
+            None,
+        )),
+        ViewSelection::SchemaPublished { .. } => {
+            Err(refuse(DomainErrorCode::InvalidArgument, "views", None))
+        }
+    }
+}
+
+impl QueryHandler for RepositoryService {
+    fn query(
+        &self,
+        ctx: &InvocationContext,
+        query: &AdmittedQuery,
+        snapshot: &dyn ReadSnapshot,
+    ) -> Result<QueryAnswer, DomainFault> {
+        let answered = match query.input() {
+            OperationInput::Repositories(rops::Input::List(i)) => self
+                .page(
+                    snapshot,
+                    ctx,
+                    "repositories.list",
+                    &i.scope,
+                    i.text.as_ref().map(|t| t.0.as_str()),
+                    &[],
+                    &i.page,
+                )
+                .map(|value| OperationResult::RepositoriesList { value }),
+            OperationInput::Repositories(rops::Input::Search(i)) => {
+                let languages: Vec<String> = i.language_ids.0.iter().map(|l| l.0.clone()).collect();
+                self.page(
+                    snapshot,
+                    ctx,
+                    "repositories.search",
+                    &i.scope,
+                    Some(i.query.0.as_str()),
+                    &languages,
+                    &i.page,
+                )
+                .map(|value| OperationResult::RepositoriesSearch { value })
+            }
+            OperationInput::Repositories(rops::Input::Get(i)) => {
+                visible_repository(snapshot.projects(), ctx, &i.repository_id).and_then(|r| {
+                    Ok(OperationResult::RepositoriesGet {
+                        value: repository_record(snapshot.projects(), ctx, &r)?,
+                    })
+                })
+            }
+            OperationInput::Repositories(rops::Input::Readme(i)) => self
+                .text(snapshot, ctx, &i.repository_id, &i.views, TextKind::Readme)
+                .map(|value| OperationResult::RepositoriesReadme { value }),
+            OperationInput::Repositories(rops::Input::Summary(i)) => self
+                .text(snapshot, ctx, &i.repository_id, &i.views, TextKind::Summary)
+                .map(|value| OperationResult::RepositoriesSummary { value }),
+            _ => Err(refuse(
+                DomainErrorCode::UnsupportedCapability,
+                "operation",
+                None,
+            )),
+        };
+        let result = answered.map_err(|f| query_fault(f, "repository", self.correlation()))?;
+        Ok(QueryAnswer {
+            stamp: snapshot
+                .stamp()
+                .read_stamp(ctx.policy_revision().clone(), rev(1)),
+            result,
+        })
+    }
+}
+
+impl CommandHandler for RepositoryService {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let outcome = match command.input() {
+            OperationInput::Repositories(rops::Input::RemoveIndex(i)) => {
+                self.remove_index(tx, ctx, i)
+            }
+            _ => Err(refuse(
+                DomainErrorCode::UnsupportedCapability,
+                "operation",
+                None,
+            )),
+        };
+        decided(tx, outcome)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_remote;
+
+    #[test]
+    fn remotes_are_shown_without_credentials() {
+        let shown = |r: &str| display_remote(r).map(|u| u.0);
+        assert_eq!(
+            shown("https://user:ghp_secret@github.com/acme/tools.git?token=x#frag"),
+            Some("https://github.com/acme/tools.git".into())
+        );
+        assert_eq!(
+            shown("git@github.com:acme/tools.git"),
+            Some("https://github.com/acme/tools.git".into())
+        );
+        assert_eq!(
+            shown("ssh://git:pw@example.com:2222/acme/tools"),
+            Some("https://example.com/acme/tools".into())
+        );
+        assert_eq!(shown("file:///Users/me/src"), None);
+        assert_eq!(shown("/Users/me/src"), None);
+        assert_eq!(shown("C:\\src\\tools"), None);
+        assert_eq!(shown("C:/src/tools"), None);
+    }
+}
