@@ -3982,6 +3982,76 @@ fn a_stored_receipt_under_an_unregistered_revision_is_a_visible_hold_on_sqlite()
 }
 
 // ---------------------------------------------------------------------------------------------
+#[test]
+fn workspace_upload_tickets_resolve_only_for_a_workspace_save() {
+    use crate::fs::sources::{HostArtifactSources, IssueRefusal};
+    let fx = Fx::new();
+    let sources = Arc::new(HostArtifactSources::new(
+        fx.h.clock.clone(),
+        fx.h.ids.clone(),
+    ));
+    let (_, cases) = fx.service_with(fx.files.clone(), sources.clone());
+    let authority = fx.authority();
+    let dir = fx.h.root.0.with_extension("pasted");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("pasted.txt");
+    let bytes = b"attached to a Home conversation";
+    std::fs::write(&file, bytes).unwrap();
+    let save = |ctx: &InvocationContext, project: Option<&str>, ticket: &Id| {
+        let mut frame = fx.save_frame(
+            &fx.key(),
+            project.unwrap_or("project-a"),
+            "Pasted",
+            "text/plain",
+            json!({"kind": "Upload", "ticketId": ticket}),
+            bytes,
+        );
+        if project.is_none() {
+            frame["command"]
+                .as_object_mut()
+                .unwrap()
+                .remove("projectId");
+            frame["command"]["workspace"] = json!(true);
+            frame["schemaRevision"] = json!(3);
+        }
+        fx.command_via(&cases, &authority, ctx, &frame, WriteOptions::default())
+    };
+    // User ingress from a workspace invocation only.
+    assert_eq!(
+        sources.mint_workspace_upload(
+            &fx.ctx("agent-a", PrincipalKind::Agent, None),
+            &file,
+            60_000
+        ),
+        Err(IssueRefusal::HumanOnly)
+    );
+    let in_a = fx
+        .user()
+        .with_lineage(Some(project("project-a")), None, None);
+    assert!(matches!(
+        sources.mint_workspace_upload(&in_a, &file, 60_000),
+        Err(IssueRefusal::Invalid(_))
+    ));
+    let ticket = sources
+        .mint_workspace_upload(&fx.user(), &file, 60_000)
+        .unwrap();
+    // Never into a project, and never for another principal.
+    assert_eq!(
+        refused(save(&fx.user(), Some("project-a"), &ticket)).code,
+        DomainErrorCode::PermissionDenied
+    );
+    let agent = fx.ctx("agent-a", PrincipalKind::Agent, None);
+    assert_eq!(
+        refused(save(&agent, None, &ticket)).code,
+        DomainErrorCode::NotFound
+    );
+    let record = saved(save(&fx.user(), None, &ticket));
+    assert!(matches!(record.scope, DataScope::Workspace));
+    let stored = fx.artifact(&record.artifact.artifact_id);
+    assert_eq!(stored.provenance["originalName"], "pasted.txt");
+}
+
 // Schema revision 3: the workspace scope, and artifacts.tag
 
 impl Fx {

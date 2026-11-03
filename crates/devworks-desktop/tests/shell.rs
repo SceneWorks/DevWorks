@@ -1,0 +1,967 @@
+//! The native shell over the real runtime, driven headlessly (no window or GPU) and asserted
+//! through the AccessKit tree a screen reader sees. Each test boots the production composition
+//! root in its own temporary data root.
+mod common;
+
+use common::*;
+use devworks_core::protocol::provider::{TranscriptBody, UserContent};
+use devworks_core::settings::catalog::{Category, descriptor};
+use devworks_desktop::backend::Backend;
+use devworks_desktop::chat::{ATTACH_LABEL, COMPOSER_LABEL, NO_COORDINATOR, SEND_LABEL};
+use devworks_desktop::host::{Engine, StartError};
+use devworks_desktop::notifications::CompletionCard;
+use devworks_desktop::ops;
+use devworks_desktop::route::{NAV_ORDER, Route};
+use devworks_desktop::shell::Lifecycle;
+use eframe::egui::{self, Key, Modifiers, accesskit::Role};
+use egui_kittest::kittest::{NodeT, Queryable};
+use serde_json::json;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+fn type_into(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    label: &str,
+    text: &str,
+) {
+    h.get_by_role_and_label(Role::TextInput, label).focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, label)
+        .type_text(text);
+    h.step();
+}
+
+fn transcript(backend: &dyn Backend, session: &str) -> Vec<TranscriptBody> {
+    ops::transcript_page(backend.query(
+        "sessions.transcript",
+        &ops::transcript(backend, session, None),
+    ))
+    .expect("transcript")
+    .entries
+    .into_iter()
+    .map(|e| e.body)
+    .collect()
+}
+
+// ---------------------------------------------------------------------------------------------
+// A3 / CONTROL-08: one composition root, recovery before admission, bounded close
+
+#[test]
+fn the_window_close_runs_the_runtime_shutdown_and_releases_the_data_root() {
+    let root = Root::new("lifecycle");
+    let engine = start(&root);
+    let report = engine.host().report();
+    assert!(report.queue.requeued.is_empty() && report.queue.held.is_empty());
+    // Only one process owns a data root: a second composition root is refused, and its shell
+    // would run offline with that reason instead of guessing.
+    match Engine::start(config(&root.0)) {
+        Err(StartError::Store(e)) => assert!(format!("{e:?}").contains("DataRootInUse"), "{e:?}"),
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("a second store opened the same data root"),
+    }
+    let backend = engine.backend();
+    let shell = shell_with(
+        Ok(backend),
+        &root,
+        Script::default(),
+        Some(Box::new(engine)),
+    );
+    let mut h = harness(shell, 1440.0, 900.0);
+    settle(&mut h);
+    assert_eq!(h.state().lifecycle(), &Lifecycle::Open);
+
+    // The window's close button: the close is cancelled until the runtime has shut down.
+    h.input_mut()
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .events
+        .push(egui::ViewportEvent::Close);
+    h.step();
+    let commands = &h.output().viewport_output[&egui::ViewportId::ROOT].commands;
+    assert!(
+        commands.contains(&egui::ViewportCommand::CancelClose),
+        "{commands:?}"
+    );
+    assert!(!matches!(h.state().lifecycle(), Lifecycle::Open));
+    assert!(
+        has_text(&h, "Closing DevWorks"),
+        "a responsive progress surface"
+    );
+    // Failure-only bound: shutdown finishes on the engine thread long before this.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut closed = false;
+    while Instant::now() < deadline {
+        h.step();
+        let commands = &h.output().viewport_output[&egui::ViewportId::ROOT].commands;
+        if commands.contains(&egui::ViewportCommand::Close) {
+            closed = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(closed, "the window closes once the runtime stopped");
+    assert_eq!(h.state().lifecycle(), &Lifecycle::Closed);
+    assert!(
+        h.state()
+            .shutdown_summary()
+            .is_some_and(|s| s.contains("Runtime stopped")),
+        "{:?}",
+        h.state().shutdown_summary()
+    );
+    assert!(
+        root.memory().exists(),
+        "view state is persisted while closing"
+    );
+    drop(h);
+    // Nothing keeps running: the data root is free and the next boot has nothing to recover.
+    let again = start(&root);
+    let r = again.host().report();
+    assert!(r.queue.requeued.is_empty() && r.queue.held.is_empty());
+    assert!(r.artifacts.completed.is_empty() && r.artifacts.failed.is_empty());
+}
+
+#[test]
+fn without_a_runtime_every_route_shows_a_designed_offline_state() {
+    let root = Root::new("offline");
+    let shell = shell_with(
+        Err("another DevWorks process owns this data root.".into()),
+        &root,
+        Script::default(),
+        None,
+    );
+    let mut h = harness(shell, 1440.0, 900.0);
+    settle(&mut h);
+    for r in Route::all() {
+        h.state_mut().navigate(r);
+        settle(&mut h);
+        assert!(
+            has_text(&h, "another DevWorks process owns this data root"),
+            "{r:?}"
+        );
+        // Offline is never rendered as zero values.
+        assert!(h.query_by_label("0 Features").is_none(), "{r:?}");
+    }
+    h.state_mut().navigate(Route::Chat);
+    settle(&mut h);
+    let send = h.get_by_role_and_label(Role::Button, SEND_LABEL);
+    assert!(
+        send.accesskit_node().is_disabled(),
+        "nothing pretends to send"
+    );
+    let attach = h.get_by_role_and_label(Role::Button, ATTACH_LABEL);
+    assert!(attach.accesskit_node().is_disabled());
+    h.get_by_role_and_label(Role::Button, "New Chat");
+}
+
+// ---------------------------------------------------------------------------------------------
+// UI-14 / UI-15: navigation, integrated headers, inner sidebars, summary strips, footer
+
+#[test]
+fn navigation_puts_approvals_below_chat_keeps_intelligence_collapsible_and_the_footer_left() {
+    let root = Root::new("nav");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    let y = |h: &egui_kittest::Harness<'_, _>, l: &str| nav(h, l).rect().center().y;
+    let order: Vec<f32> = NAV_ORDER.iter().map(|r| y(&h, r.nav_label())).collect();
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "navigation order {order:?}"
+    );
+    assert!(
+        y(&h, "Approvals") - y(&h, "Chat") < 40.0,
+        "Approvals sits directly below Chat"
+    );
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Activity")
+            .is_none(),
+        "Activity lives inside Overview"
+    );
+    click(&mut h, Role::Button, "Intelligence");
+    assert!(!h.state().intelligence_open());
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Knowledge")
+            .is_none()
+    );
+    click(&mut h, Role::Button, "Intelligence");
+    click_nav(&mut h, "Knowledge");
+    assert_eq!(h.state().route(), Route::Knowledge);
+    // The footer: version and update message, left-aligned at the bottom of the sidebar.
+    let version = h.get_by_label("DevWorks 0.1.0-test").rect();
+    let update = h
+        .get_by_role_and_label(Role::Button, "Updates: not checked")
+        .rect();
+    let settings = nav(&h, "Settings").rect();
+    assert!(version.top() > settings.bottom() && update.top() > version.top());
+    assert!(
+        update.left() < 40.0 && version.left() < 40.0,
+        "{update:?} {version:?}"
+    );
+}
+
+#[test]
+fn every_route_has_its_integrated_header_subviews_inner_sidebar_and_honest_states() {
+    let root = Root::new("routes");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    for r in Route::all() {
+        h.state_mut().navigate(r);
+        settle(&mut h);
+        let screen = r.screen();
+        let title = match r {
+            Route::Settings => "All settings",
+            _ => screen.title,
+        };
+        let heading = h
+            .query_all_by_label(title)
+            .map(|n| n.rect())
+            .find(|rect| rect.left() > 206.0)
+            .unwrap_or_else(|| panic!("{r:?}: header {title}"));
+        for (i, sub) in screen.subviews.iter().enumerate() {
+            let tab = h
+                .query_all_by_role_and_label(Role::Button, sub)
+                .find(|n| n.rect().left() > devworks_desktop::theme::NAV)
+                .unwrap_or_else(|| panic!("{r:?}: tab {sub}"));
+            assert!(
+                tab.rect().top() > heading.top(),
+                "{r:?}: {sub} sits in the header"
+            );
+            if i == 0 {
+                assert!(is_on(&tab), "{r:?}: {sub} is selected");
+            }
+        }
+        if let Some(side) = screen.inner_sidebar.filter(|_| r != Route::Chat) {
+            let pane = h.get_by_label(side).rect();
+            assert!(
+                pane.left() > heading.right(),
+                "{r:?}: {side} is on the right"
+            );
+            assert!(
+                (pane.top() - heading.top()).abs() < 12.0,
+                "{r:?}: aligned with the header"
+            );
+        }
+        for label in screen.summary_strip {
+            assert!(
+                h.query_by_label(&format!("— {label}")).is_some(),
+                "{r:?}: {label}"
+            );
+        }
+        if let Some(p) = screen.pending {
+            assert!(has_text(&h, "Not available in this build"), "{r:?}");
+            assert!(has_text(&h, p.owner), "{r:?}: names {}", p.owner);
+        }
+    }
+    // A header action reaches its secondary route and keeps the parent selected in navigation.
+    h.state_mut().navigate(Route::Agents);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Resource reservations");
+    assert_eq!(h.state().route(), Route::Resources);
+    assert!(
+        has_text(&h, "desktop"),
+        "the boot-registered desktop resource is listed"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// UI-01..05: the Home chat layout, tabs, New Chat, the composer, honest coordinator state
+
+#[test]
+fn home_chat_has_current_first_history_second_and_new_chat_in_the_header() {
+    let root = Root::new("home");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    let current = h.get_by_role_and_label(Role::Button, "Current");
+    let history = h.get_by_role_and_label(Role::Button, "Chat History");
+    assert!(is_on(&current), "Current is selected first");
+    assert!(current.rect().left() < history.rect().left());
+    let heading = h
+        .get_by_role_and_label(Role::Label, "Workspace coordinator")
+        .rect();
+    assert!(
+        current.rect().left() > heading.right(),
+        "the sidebar is on the right"
+    );
+    assert!(has_text(&h, "What would you like to work on?"));
+    assert!(has_text(&h, NO_COORDINATOR));
+    assert!(has_text(&h, "Needs you") && has_text(&h, "Recently completed"));
+
+    // A draft survives tab switches; New Chat works with either tab selected.
+    type_into(&mut h, COMPOSER_LABEL, "first draft");
+    click(&mut h, Role::Button, "Chat History");
+    click(&mut h, Role::Button, "New Chat");
+    let first = h.state().chat.selected.clone().expect("a started session");
+    assert!(has_text(&h, "Conversation 1"));
+    click(&mut h, Role::Button, "Current");
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .value()
+            .as_deref(),
+        Some("first draft"),
+        "the draft moved into the started conversation"
+    );
+    click(&mut h, Role::Button, "New Chat");
+    let second = h.state().chat.selected.clone().unwrap();
+    assert_ne!(first, second);
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .value()
+            .as_deref(),
+        Some(""),
+        "each conversation keeps its own draft"
+    );
+    // Selecting a conversation in Chat History restores its draft.
+    click(&mut h, Role::Button, "Chat History");
+    click(&mut h, Role::Button, "Conversation 1");
+    assert_eq!(h.state().chat.selected.as_deref(), Some(first.as_str()));
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .value()
+            .as_deref(),
+        Some("first draft")
+    );
+    // History search filters by title.
+    type_into(&mut h, "Search conversations", "conversation 2");
+    settle(&mut h);
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Conversation 1")
+            .is_none()
+    );
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Conversation 2")
+            .is_some()
+    );
+
+    // Send records exactly one user message through sessions.append_message; nothing replies.
+    click(&mut h, Role::Button, SEND_LABEL);
+    let bodies = transcript(&*backend, &first);
+    assert_eq!(bodies.len(), 1, "{bodies:?}");
+    match &bodies[0] {
+        TranscriptBody::UserMessage { content } => {
+            assert!(matches!(&content[0], UserContent::Text { text } if text == "first draft"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        has_text(&h, "first draft"),
+        "the message is shown in the transcript"
+    );
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .value()
+            .as_deref(),
+        Some(""),
+        "the sent draft is cleared"
+    );
+    // The send shortcut works from the focused composer.
+    type_into(&mut h, COMPOSER_LABEL, "by keyboard");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    settle(&mut h);
+    assert_eq!(transcript(&*backend, &first).len(), 2);
+    assert!(
+        !transcript(&*backend, &first)
+            .iter()
+            .any(|b| matches!(b, TranscriptBody::AssistantAttempt { .. })),
+        "no reply is fabricated"
+    );
+    // Coordinator instructions are inspectable in Settings (UI-05).
+    click(&mut h, Role::Button, "Coordinator instructions");
+    assert_eq!(h.state().route(), Route::Settings);
+    assert_eq!(h.state().settings.category, Some(Category::Instructions));
+    assert!(
+        h.query_by_role_and_label(Role::TextInput, "Workspace coordinator instructions")
+            .is_some()
+    );
+}
+
+// UI-11..13: the toolbar chat icon and the app-level coordinator sidebar.
+#[test]
+fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_or_home() {
+    let root = Root::new("sidebar");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().unwrap();
+    type_into(&mut h, COMPOSER_LABEL, "shared ");
+    click_nav(&mut h, "Settings");
+    assert!(!h.state().coordinator_open(), "navigation never opens it");
+    click(&mut h, Role::Button, "Workspace coordinator");
+    assert!(h.state().coordinator_open());
+    assert!(has_text(&h, "same conversation as Chat"));
+    // Same draft, same session: typing in the sidebar continues the Home draft.
+    type_into(&mut h, COMPOSER_LABEL, "draft");
+    click_nav(&mut h, "Artifacts");
+    assert!(
+        h.state().coordinator_open(),
+        "it stays open across navigation"
+    );
+    click(&mut h, Role::Button, SEND_LABEL);
+    let bodies = transcript(&*backend, &session);
+    assert!(
+        matches!(&bodies[..], [TranscriptBody::UserMessage { content }] if matches!(&content[0], UserContent::Text { text } if text == "shared draft")),
+        "{bodies:?}"
+    );
+    // Returning Home closes it and shows the same conversation in the centre.
+    click_nav(&mut h, "Chat");
+    assert!(!h.state().coordinator_open());
+    assert_eq!(h.state().chat.selected.as_deref(), Some(session.as_str()));
+    assert!(has_text(&h, "shared draft"));
+    // Closing explicitly preserves the session; later navigation does not reopen it.
+    click_nav(&mut h, "Approvals");
+    click(&mut h, Role::Button, "Workspace coordinator");
+    type_into(&mut h, COMPOSER_LABEL, "kept");
+    click(
+        &mut h,
+        Role::Button,
+        "Close the workspace coordinator sidebar",
+    );
+    assert!(!h.state().coordinator_open());
+    click_nav(&mut h, "Knowledge");
+    assert!(!h.state().coordinator_open());
+    click_nav(&mut h, "Chat");
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .value()
+            .as_deref(),
+        Some("kept")
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// UI-08 / UI-09: attachments
+
+#[test]
+fn attachments_from_the_dialog_a_drop_and_a_paste_are_stored_with_their_conversation() {
+    let root = Root::new("attach");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let script = Script::default();
+    let picture = root.file("diagram.png", &png());
+    let notes = root.file("notes.md", b"# notes\n");
+    let extra = root.file("extra.txt", b"remove me");
+    script.files.lock().unwrap().push(vec![picture.clone()]);
+    let mut h = harness(shell(&engine, &root, script), 1440.0, 900.0);
+    settle(&mut h);
+
+    // The plus-only control has its accessible name and tooltip.
+    let plus = h.get_by_role_and_label(Role::Button, ATTACH_LABEL);
+    assert!(plus.rect().width() < 40.0, "plus-only");
+    // Attaching before any conversation exists starts one (its ID is the provenance).
+    click(&mut h, Role::Button, ATTACH_LABEL);
+    let session = h
+        .state()
+        .chat
+        .selected
+        .clone()
+        .expect("started for the attachment");
+    // Drag and drop.
+    h.input_mut()
+        .dropped_files
+        .push(Arc::new(Dropped(notes.clone())));
+    h.input_mut()
+        .dropped_files
+        .push(Arc::new(Dropped(extra.clone())));
+    settle(&mut h);
+    // Paste an image into the focused composer.
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    let pasted = egui::ColorImage::new([3, 3], vec![egui::Color32::GREEN; 9]);
+    h.event(egui::Event::PasteImage(Arc::new(pasted)));
+    settle(&mut h);
+
+    let draft = h.state().chat.draft().expect("draft");
+    let names: Vec<&str> = draft.attachments.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names.len(), 4, "{names:?}");
+    for a in &draft.attachments {
+        assert!(
+            matches!(a.state, devworks_desktop::chat::AttachState::Stored(_)),
+            "{}: {:?}",
+            a.name,
+            a.state
+        );
+    }
+    let image = draft
+        .attachments
+        .iter()
+        .find(|a| a.name == "diagram.png")
+        .unwrap();
+    assert!(image.preview.is_some(), "image previews are decoded");
+    assert!(h.query_by_label("Preview of diagram.png").is_some());
+    let md = draft
+        .attachments
+        .iter()
+        .find(|a| a.name == "notes.md")
+        .unwrap();
+    assert!(
+        md.preview.is_none()
+            && md
+                .preview_note
+                .as_deref()
+                .is_some_and(|n| n.contains("not analyzed"))
+    );
+    // The pasted image was materialized only until the artifact service had its own copy.
+    assert!(
+        std::fs::read_dir(backend.scratch_dir())
+            .map(|d| d.count())
+            .unwrap_or(0)
+            == 0
+    );
+    // Remove one before sending.
+    click(&mut h, Role::Button, "Remove attachment extra.txt");
+    assert_eq!(h.state().chat.draft().unwrap().attachments.len(), 3);
+
+    // Durable copies: workspace artifacts tagged with the conversation.
+    let (listed, _) =
+        ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(&*backend)))
+            .unwrap();
+    let tag = ops::conversation_tag(&session).unwrap();
+    let tagged = listed
+        .iter()
+        .filter(|a| a.tags.as_ref().is_some_and(|t| t.0.contains(&tag)))
+        .count();
+    assert_eq!(
+        tagged, 4,
+        "every stored attachment keeps its conversation scope"
+    );
+
+    // Sending associates exactly the remaining attachments with the message.
+    type_into(&mut h, COMPOSER_LABEL, "see attached");
+    click(&mut h, Role::Button, SEND_LABEL);
+    let bodies = transcript(&*backend, &session);
+    let TranscriptBody::UserMessage { content } = &bodies[0] else {
+        panic!("{bodies:?}")
+    };
+    let attached = content
+        .iter()
+        .filter(|c| matches!(c, UserContent::Attachment { .. }))
+        .count();
+    assert_eq!(attached, 3);
+    assert!(h.state().chat.draft().unwrap().attachments.is_empty());
+    assert!(has_text(&h, "Attachment · image/png"));
+    // The Artifacts screen lists them through artifacts.list.
+    click_nav(&mut h, "Artifacts");
+    assert!(has_text(&h, "diagram.png"));
+    type_into(&mut h, "Filter artifacts", "notes");
+    settle(&mut h);
+    assert!(has_text(&h, "notes.md") && !has_text(&h, "diagram.png"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// SET-01/02/03/07/08: Settings
+
+#[test]
+fn settings_are_categorized_searchable_validated_saved_and_keep_unsaved_changes() {
+    let root = Root::new("settings");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let script = Script::default();
+    let chosen = root.dir("repos");
+    let second = root.dir("repos-2");
+    script
+        .folders
+        .lock()
+        .unwrap()
+        .extend([chosen.clone(), second.clone()]);
+    let mut h = harness(shell(&engine, &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    for c in Category::ALL {
+        assert!(
+            h.query_by_role_and_label(Role::Button, c.label()).is_some(),
+            "{c:?}"
+        );
+    }
+    assert!(has_text(&h, "Workspace") && has_text(&h, "Revision 1"));
+    // Search narrows across categories.
+    type_into(&mut h, "Search settings", "base directory");
+    settle(&mut h);
+    let key = "repositories.baseDirectory";
+    let label = descriptor(key).unwrap().label;
+    assert!(h.query_by_role_and_label(Role::TextInput, label).is_some());
+    assert!(h.query_by_label("Tier Max members").is_none());
+    assert!(
+        has_text(&h, "Used for new clones only"),
+        "the adoption boundary is shown"
+    );
+    // The native directory chooser drafts a value; health is separate from the value.
+    click(
+        &mut h,
+        Role::Button,
+        &format!("Choose directory for {label}"),
+    );
+    assert!(has_text(&h, "1 unsaved change"));
+    // Navigation keeps unsaved changes.
+    click_nav(&mut h, "Chat");
+    click_nav(&mut h, "Settings");
+    assert!(has_text(&h, "1 unsaved change"));
+    click(&mut h, Role::Button, "Save changes");
+    assert!(has_text(&h, "Settings saved."));
+    assert!(has_text(&h, "Revision 2"));
+    assert!(
+        has_text(&h, "Runtime health: available"),
+        "the chosen directory exists"
+    );
+    let (_, entries) = ops::settings_entries(
+        backend.query("settings.read_effective", &ops::settings_read(&*backend)),
+    )
+    .unwrap();
+    let saved = entries.iter().find(|e| e.key.0 == key).unwrap();
+    assert_eq!(saved.value.value.0, json!(chosen.display().to_string()));
+
+    // Another surface saves meanwhile: the UI's save is refused, drafts are kept, the conflict
+    // is shown, and a second save succeeds at the new revision.
+    click(
+        &mut h,
+        Role::Button,
+        &format!("Choose directory for {label}"),
+    );
+    let d = descriptor("delivery.maxReviewFixCycles").unwrap();
+    let body = json!({"scope": {"kind": "Workspace"}, "expectedRevision": "2", "entries": [
+        {"key": d.key, "value": {"schema": d.schema_ref(), "value": 5}}]});
+    ops::settings_saved(backend.command(
+        "settings.save_revision",
+        &ops::command_frame(&*backend, "settings.save_revision", body),
+    ))
+    .expect("another surface saves");
+    click(&mut h, Role::Button, "Save changes");
+    assert!(has_text(&h, "Settings changed elsewhere"));
+    assert!(
+        has_text(&h, "1 unsaved change"),
+        "drafts survive the conflict"
+    );
+    click(&mut h, Role::Button, "Save changes");
+    assert!(has_text(&h, "Revision 4"));
+    // The effective value's source chain comes from settings.explain_source.
+    click(&mut h, Role::Button, &format!("Explain source of {label}"));
+    assert!(has_text(&h, "Workspace (revision 4): "), "configured layer");
+    assert!(
+        has_text(&h, "Default: ~/DevWorks/Repositories"),
+        "shadowed default"
+    );
+
+    // Invalid values are flagged by the shared core validation and cannot be saved.
+    h.get_by_role_and_label(Role::TextInput, label).focus();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, label)
+        .type_text("relative/repos");
+    settle(&mut h);
+    assert!(has_text(&h, "Use an absolute path or one starting with ~/"));
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Save changes")
+            .accesskit_node()
+            .is_disabled()
+    );
+    click(&mut h, Role::Button, &format!("Discard change to {label}"));
+    assert!(!has_text(&h, "unsaved change"));
+
+    // Keep-awake shows its runtime health beside the configured value.
+    h.get_by_role_and_label(Role::TextInput, "Search settings")
+        .focus();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Search settings")
+        .type_text("awake");
+    settle(&mut h);
+    assert!(
+        has_text(&h, "Runtime health:"),
+        "keep-awake shows runtime health"
+    );
+
+    // Role instructions (SET-03) are editable; proposals and history are reported honestly.
+    h.get_by_role_and_label(Role::TextInput, "Search settings")
+        .focus();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.key_press(Key::Backspace);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Role instructions");
+    for role in [
+        "Workspace coordinator instructions",
+        "Code review agent instructions",
+    ] {
+        assert!(
+            h.query_by_role_and_label(Role::TextInput, role).is_some(),
+            "{role}"
+        );
+    }
+    assert!(has_text(&h, "DW-14 (approvals) and DW-34 (roles)"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pane restoration and preserved view state
+
+#[test]
+fn view_state_is_restored_after_a_restart_and_preserved_across_navigation() {
+    let root = Root::new("restore");
+    let engine = start(&root);
+    let script = Script::default();
+    script.folders.lock().unwrap().push(root.dir("restored"));
+    {
+        let mut h = harness(shell(&engine, &root, script.clone()), 1440.0, 900.0);
+        settle(&mut h);
+        click(&mut h, Role::Button, "New Chat");
+        type_into(&mut h, COMPOSER_LABEL, "unsent");
+        click_nav(&mut h, "Settings");
+        click(
+            &mut h,
+            Role::Button,
+            "Choose directory for Repository base directory",
+        );
+        click_nav(&mut h, "Artifacts");
+        type_into(&mut h, "Filter artifacts", "pdf");
+        click_nav(&mut h, "Knowledge");
+        click(&mut h, Role::Button, "Documents");
+        click(&mut h, Role::Button, "Intelligence");
+        // In-memory preservation across navigation.
+        click_nav(&mut h, "Artifacts");
+        assert_eq!(
+            h.get_by_role_and_label(Role::TextInput, "Filter artifacts")
+                .value()
+                .as_deref(),
+            Some("pdf")
+        );
+        h.state_mut().on_exit();
+    }
+    let mut h = harness(shell(&engine, &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    assert_eq!(h.state().route(), Route::Artifacts);
+    assert!(!h.state().intelligence_open());
+    assert_eq!(h.state().route_memory(Route::Knowledge).tab, 1);
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, "Filter artifacts")
+            .value()
+            .as_deref(),
+        Some("pdf")
+    );
+    click_nav(&mut h, "Chat");
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .value()
+            .as_deref(),
+        Some("unsent"),
+        "the selected conversation and its draft are restored"
+    );
+    click_nav(&mut h, "Settings");
+    assert!(
+        has_text(&h, "1 unsaved change"),
+        "unsaved settings survive a restart"
+    );
+}
+
+#[test]
+fn scroll_positions_are_kept_across_navigation() {
+    let root = Root::new("scroll");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1200.0, 700.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    let before = h.state().scroll_offset("settings-items").unwrap_or(0.0);
+    h.get_by_role_and_label(Role::Label, "Context compaction threshold (%)")
+        .scroll_to_me();
+    settle(&mut h);
+    let scrolled = h.state().scroll_offset("settings-items").unwrap();
+    assert!(scrolled > before + 100.0, "{before} -> {scrolled}");
+    click_nav(&mut h, "Usage & costs");
+    click_nav(&mut h, "Settings");
+    let back = h.state().scroll_offset("settings-items").unwrap();
+    assert!((back - scrolled).abs() < 1.0, "{scrolled} -> {back}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// UI-06/07: keyboard, focus, announcements, text scaling, responsive layout
+
+#[test]
+fn keyboard_focus_moves_through_controls_and_status_changes_are_announced() {
+    let root = Root::new("keyboard");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    let focused = |h: &egui_kittest::Harness<'_, _>| {
+        h.root()
+            .children_recursive()
+            .find(|n| n.accesskit_node().is_focused())
+            .and_then(|n| n.accesskit_node().label())
+    };
+    h.key_press(Key::Tab);
+    h.run();
+    let first = focused(&h).expect("Tab focuses a named control");
+    h.key_press(Key::Tab);
+    h.run();
+    let second = focused(&h).expect("Tab moves focus");
+    assert_ne!(first, second);
+    click(&mut h, Role::Button, "New Chat");
+    let status = h
+        .query_all_by_label_contains("New conversation started")
+        .find(|n| n.accesskit_node().role() == Role::Label)
+        .expect("the status is in the tree");
+    assert_eq!(
+        status.accesskit_node().live(),
+        egui::accesskit::Live::Polite,
+        "status changes are announced politely"
+    );
+}
+
+#[test]
+fn layouts_keep_the_conversation_and_essential_controls_at_every_width_and_text_size() {
+    let root = Root::new("responsive");
+    let engine = start(&root);
+    for (w, hgt, zoom) in [
+        (1440.0, 900.0, 1.0),
+        (1000.0, 760.0, 1.0),
+        (800.0, 600.0, 1.0),
+        (1440.0, 900.0, 1.5),
+    ] {
+        let mut h = harness(shell(&engine, &root, Script::default()), w, hgt);
+        h.ctx.set_zoom_factor(zoom);
+        settle(&mut h);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, hgt) / zoom);
+        for label in [
+            SEND_LABEL,
+            ATTACH_LABEL,
+            "New Chat",
+            "Workspace coordinator",
+            "Settings",
+        ] {
+            let r = h.get_by_role_and_label(Role::Button, label).rect();
+            assert!(
+                screen.contains_rect(r),
+                "{w}x{hgt}@{zoom}: {label} at {r:?}"
+            );
+        }
+        let input = h
+            .get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .rect();
+        assert!(screen.contains_rect(input), "{w}x{hgt}@{zoom}: composer");
+        if w / zoom < 1100.0 {
+            // Narrow: Current / Chat History overlay the right edge on request.
+            click(&mut h, Role::Button, "Show Current and Chat History");
+            assert!(
+                h.query_by_role_and_label(Role::Button, "Chat History")
+                    .is_some()
+            );
+            assert!(screen.contains_rect(h.get_by_role_and_label(Role::Button, SEND_LABEL).rect()));
+        } else {
+            assert!(
+                h.query_by_role_and_label(Role::Button, "Chat History")
+                    .is_some()
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// NOTIFY-05 seam: the completion overlay
+
+#[test]
+fn completion_cards_float_below_the_toolbar_without_moving_content_or_taking_focus() {
+    let root = Root::new("cards");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.run();
+    let heading = h
+        .get_by_role_and_label(Role::Label, "Workspace coordinator")
+        .rect();
+    let send = h.get_by_role_and_label(Role::Button, SEND_LABEL).rect();
+    for id in ["a", "b"] {
+        h.state_mut().completions.push(CompletionCard {
+            id: id.into(),
+            project: "Fixture".into(),
+            kind: "Issue completed".into(),
+            title: format!("Card {id}"),
+            at: "20:22".into(),
+            link: "completed issue".into(),
+        });
+    }
+    settle(&mut h);
+    assert_eq!(
+        h.get_by_role_and_label(Role::Label, "Workspace coordinator")
+            .rect(),
+        heading,
+        "no layout shift"
+    );
+    assert_eq!(
+        h.get_by_role_and_label(Role::Button, SEND_LABEL).rect(),
+        send
+    );
+    assert!(
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .is_focused(),
+        "the overlay does not take focus"
+    );
+    let card = h.get_by_label("Card b").rect();
+    assert!(card.top() > devworks_desktop::shell::TOOLBAR && card.top() < 120.0);
+    assert!(
+        card.left() > 720.0 - 260.0 && card.right() < 720.0 + 260.0,
+        "top centre"
+    );
+    assert!(
+        h.query_by_label("Card a").is_none(),
+        "stacked: newest on top"
+    );
+    click(&mut h, Role::Button, "1 more completion");
+    assert!(
+        h.query_by_label("Card a").is_some(),
+        "expanded to every message"
+    );
+    click(&mut h, Role::Button, "Dismiss Card b");
+    assert!(h.query_by_label("Card b").is_none() && h.query_by_label("Card a").is_some());
+    assert_eq!(h.state_mut().completions.take_dismissed(), ["b"]);
+    // Navigation keeps undismissed cards.
+    click_nav(&mut h, "Settings");
+    assert!(h.query_by_label("Card a").is_some());
+}
+
+// ---------------------------------------------------------------------------------------------
+// A2 / ARCH-02: the UI admits through the same gateway as agent tools
+
+#[test]
+fn the_shell_reaches_only_validated_operations() {
+    let root = Root::new("gateway");
+    let engine = start(&root);
+    let backend = engine.backend();
+    // A frame that fails admission is rejected by the gateway before any use case.
+    assert!(matches!(
+        ops::command_result(backend.command("sessions.start", b"{\"not\": \"a frame\"}")),
+        Err(ops::Failure::Other(_)) | Err(ops::Failure::Rejected(_))
+    ));
+    // An operation owned by a later item has no use case: nothing is admitted or recorded.
+    assert!(matches!(
+        ops::query_result(backend.query("runs.list", b"{}")),
+        Err(ops::Failure::NoUseCase(_)) | Err(ops::Failure::Other(_))
+    ));
+    // The user's commands are receipted like any other principal's.
+    let frame = ops::session_start(&*backend, "Receipted");
+    let key = serde_json::from_slice::<serde_json::Value>(&frame).unwrap()["requestKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ops::started(backend.command("sessions.start", &frame)).unwrap();
+    let query = json!({"protocol": ops::PROTOCOL, "queryId": "q-receipt",
+        "query": {"kind": "history.command_receipt", "requestKey": key}})
+    .to_string();
+    // The receipt is recorded at once; its durable reply is published by the required reply
+    // consumer boot started. Failure-only bound: publication takes milliseconds.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match ops::query_result(backend.query("history.command_receipt", query.as_bytes())) {
+            Ok(_) => break,
+            Err(ops::Failure::Refused(f))
+                if f.target_kind
+                    .as_ref()
+                    .is_some_and(|k| k.0 == "receipt_reply_artifact")
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+}

@@ -1,0 +1,80 @@
+---
+title: Gateway and admission (devworks-core, implemented)
+---
+classDiagram
+  direction LR
+  class HostIngress {
+    store_id: StoreId
+    +new(store: &dyn ApplicationStore) HostIngress
+    +context(principal, kind, invocation, namespace, epoch, policy) InvocationContext
+  }
+  class InvocationContext {
+    principal: ActorId
+    principal_kind: PrincipalKind
+    session_id / project_id / root_id
+    authority_sources: Vec~Id~
+    no Deserialize, no Default
+  }
+  class Gateway~'p~ {
+    +authority: &dyn AuthorityPort
+    +store: &dyn ApplicationStore
+    +ids: &dyn IdSource
+    +query(ctx, op, raw, handler) QueryOutcome
+    +command_with(ctx, op, raw, handler, options) CommandOutcome
+  }
+  class UseCases {
+    queries: BTreeMap~op, Arc dyn QueryHandler~
+    commands: BTreeMap~op, Arc dyn CommandHandler~
+    +register(op, query, command)
+    +with_queue() / with_settings() / with_sessions() / with_history()
+    +with_artifacts() / with_resources()
+    +query(gateway, ctx, op, raw) QueryOutcome
+    +command_with(gateway, ctx, op, raw, options) CommandOutcome
+  }
+  class QueryHandler {
+    <<trait>>
+    +query(ctx, query: &AdmittedQuery, snapshot) Result~QueryAnswer, DomainFault~
+  }
+  class CommandHandler {
+    <<trait>>
+    +prepare(ctx, command, env) Option~Prepared~
+    +decide(ctx, command: &AdmittedCommand, tx) Result~Decided, HandlerFailure~
+    +settle(ctx, prepared, reply, env)
+  }
+  class AdmittedQuery {
+    only the gateway constructs it
+  }
+  class AdmittedCommand {
+    only the gateway constructs it
+  }
+  class AuthorityPort {
+    <<trait>>
+    +authorize(ctx, request) Result~Authorization, AuthorityDenial~
+  }
+  class HostAuthority~'a~ {
+    +store / clock / protected_branches
+    +decide(ctx, request) Result~Authorization, Denied~
+  }
+  class StoreAuthority {
+    desktop crate: owned wrapper
+    +store: Arc dyn ApplicationStore
+    +clock: Arc dyn Clock
+  }
+  class registry {
+    <<module>>
+    +find(op) OperationDescriptor
+    353 generated bindings
+  }
+  HostIngress ..> InvocationContext : mints
+  UseCases --> QueryHandler : dispatches to
+  UseCases --> CommandHandler : dispatches to
+  UseCases ..> Gateway : submits through
+  Gateway ..> registry : selected operation and mode
+  Gateway --> AuthorityPort : every request
+  Gateway ..> AdmittedQuery : creates
+  Gateway ..> AdmittedCommand : creates
+  QueryHandler ..> AdmittedQuery
+  CommandHandler ..> AdmittedCommand
+  HostAuthority ..|> AuthorityPort
+  StoreAuthority ..|> AuthorityPort
+  StoreAuthority ..> HostAuthority : builds per request

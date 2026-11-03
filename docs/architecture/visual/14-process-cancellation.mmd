@@ -1,0 +1,31 @@
+---
+title: Bounded process cancellation and lease reconciliation (implemented)
+---
+sequenceDiagram
+  autonumber
+  participant Caller as Caller (shutdown, run control, operator)
+  participant PS as ProcessSupervisor
+  participant Store as ApplicationStore
+  participant Host as ProcessHost (NativeProcessHost)
+  participant RS as ResourceService
+  Caller->>PS: cancel(scope) / shutdown(grace, bound)
+  PS->>Store: record Stopping (attributed)
+  PS->>Host: cooperative stop of the whole tree (group / Job Object)
+  alt tree empties within the grace period
+    Host-->>PS: empty
+    PS->>Store: Reaped { graceful: true } + lease reconciliation (one unit of work)
+  else still running at the grace deadline
+    PS->>Host: forced kill of the tree
+    alt verified gone within the shared bound
+      PS->>Store: Reaped { graceful: false }
+    else not verifiable (escaped descendant, lost handle)
+      PS->>Store: Uncertain(observed) — a physical lease it serves stays Uncertain
+    end
+  end
+  alt the record cannot be written
+    PS-->>Caller: StopFailure { outcome, error } — the native stop still ran
+  end
+  PS->>RS: reconcile(cause)
+  RS->>Store: settle leases: Releasing/Uncertain → Reconciled only when every serving tree settled
+  RS->>Store: promote the next waiter (fresh fencing token)
+  PS-->>Caller: ShutdownReport { stopped, reconciliation }
