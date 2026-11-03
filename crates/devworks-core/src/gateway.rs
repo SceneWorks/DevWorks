@@ -386,12 +386,16 @@ impl Gateway<'_> {
         };
         // Preparation runs only for an admitted, currently authorized command and before its unit
         // of work; it never records a receipt, so a failure here is retryable with the same key.
+        // Authority that can only replay never reaches a new decision, so it prepares nothing
+        // (no source read, no staging): the unit of work replays the receipt or denies.
         let cancellation = options.cancellation.clone();
-        let env = Preparation {
-            store: self.store,
-            cancellation: cancellation.as_ref(),
+        let env = Preparation::new(self.store, cancellation.as_ref(), options.deadline_ms);
+        let preparing = if authorization.is_replay_only() {
+            Ok(None)
+        } else {
+            handler.prepare(ctx, &admitted, &env)
         };
-        match handler.prepare(ctx, &admitted, &env) {
+        match preparing {
             Ok(prepared) => admitted.prepared = prepared,
             Err(e) => {
                 // Same mapping as a write that was not admitted: nothing durable decided.

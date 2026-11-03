@@ -40,6 +40,8 @@ pub enum IdKind {
     Grant,
     Artifact,
     ArtifactVersion,
+    /// Host-issued artifact source handles (upload tickets).
+    SourceHandle,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {
@@ -224,11 +226,75 @@ impl fmt::Debug for Prepared {
     }
 }
 
-/// What a preparation step may use: the store (for its own durable journal entries and
-/// snapshot reads) and the command's cancellation signal.
+/// What a preparation (and settlement) step may use: read snapshots, small writes limited to the
+/// operation journal and the artifact records ([`StagingTx`]), and the command's cancellation
+/// signal and deadline. It cannot record receipts, append history or touch authority.
 pub struct Preparation<'a> {
-    pub store: &'a dyn ApplicationStore,
+    store: &'a dyn ApplicationStore,
     pub cancellation: Option<&'a Cancellation>,
+    /// Store-clock deadline (UTC ms) of the command: past it, preparation stops.
+    pub deadline_ms: Option<i64>,
+}
+impl<'a> Preparation<'a> {
+    pub fn new(
+        store: &'a dyn ApplicationStore,
+        cancellation: Option<&'a Cancellation>,
+        deadline_ms: Option<i64>,
+    ) -> Self {
+        Self {
+            store,
+            cancellation,
+            deadline_ms,
+        }
+    }
+    /// Whether the command was cancelled or its deadline passed at `now_ms`.
+    pub fn stopped(&self, now_ms: i64) -> bool {
+        self.cancellation.is_some_and(Cancellation::is_cancelled)
+            || self.deadline_ms.is_some_and(|d| now_ms > d)
+    }
+    /// The store's identity (boot epoch, host actor).
+    pub fn info(&self) -> storage::StoreInfo {
+        self.store.info()
+    }
+    /// Runs `work` against one read snapshot.
+    pub fn read<T>(
+        &self,
+        work: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        storage::read_snapshot(self.store, &storage::ReadOptions::default(), work)
+    }
+    /// Runs `work` in its own write transaction with only the journal and artifact records.
+    pub fn write<T, F>(&self, work: F) -> Result<T, StorageError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut StagingTx<'_>) -> Result<T, StorageError> + Send + 'static,
+    {
+        storage::run_write(self.store, storage::WriteOptions::default(), move |tx| {
+            work(&mut StagingTx { tx })
+        })
+    }
+}
+
+/// The repositories a preparation write may use.
+pub struct StagingTx<'t> {
+    tx: &'t mut dyn WriteTransaction,
+}
+impl StagingTx<'_> {
+    pub fn now_ms(&self) -> i64 {
+        self.tx.now_ms()
+    }
+    pub fn new_id(&mut self, kind: IdKind) -> Id {
+        self.tx.new_id(kind)
+    }
+    pub fn store(&self) -> &storage::StoreInfo {
+        self.tx.store()
+    }
+    pub fn operations(&mut self) -> &mut dyn storage::OperationJournal {
+        self.tx.operations()
+    }
+    pub fn artifacts(&mut self) -> &mut dyn storage::ArtifactRepository {
+        self.tx.artifacts()
+    }
 }
 
 /// Command use cases. `decide` runs synchronously on the sole write owner inside the command's

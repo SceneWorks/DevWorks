@@ -4,7 +4,9 @@ use devworks_core::authority::destructive::{
     CheckedTarget, DestructiveExecutor, DestructiveKind, EntryKind, FileIdentity, RemovalOutcome,
     ResolveError,
 };
-use devworks_core::authority::reads::{ReadRefusal, ReadRequest, VerifiedBytes, VerifiedReader};
+use devworks_core::authority::reads::{
+    ReadRefusal, ReadRequest, VerifiedBytes, VerifiedFile, VerifiedReader,
+};
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
@@ -112,6 +114,35 @@ fn refusal(e: &io::Error, dir: RawFd, name: &CStr) -> ReadRefusal {
 
 impl VerifiedReader for NativeFilesystem {
     fn read(&self, req: &ReadRequest<'_>) -> Result<VerifiedBytes, ReadRefusal> {
+        let (file, identity) = self.open_verified(req)?;
+        let mut bytes = Vec::new();
+        file.take(req.max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|e| ReadRefusal::Io(e.kind().to_string()))?;
+        if bytes.len() as u64 > req.max_bytes {
+            return Err(ReadRefusal::TooLarge {
+                limit: req.max_bytes,
+            });
+        }
+        Ok(VerifiedBytes {
+            bytes,
+            identity: Some(identity),
+        })
+    }
+
+    fn open(&self, req: &ReadRequest<'_>) -> Result<VerifiedFile, ReadRefusal> {
+        let (file, identity) = self.open_verified(req)?;
+        Ok(VerifiedFile {
+            reader: Box::new(file.take(req.max_bytes.saturating_add(1))),
+            identity: Some(identity),
+        })
+    }
+}
+
+impl NativeFilesystem {
+    /// Walks to the file descriptor-relative without following links and returns it opened
+    /// after the identity checks; reading is left to the caller.
+    fn open_verified(&self, req: &ReadRequest<'_>) -> Result<(File, FileIdentity), ReadRefusal> {
         let parts = normal_components(req.relative).ok_or(ReadRefusal::Escape)?;
         // The registered identity is mandatory: without it a replaced root cannot be detected.
         let Some(expected_root) = req.root.identity else {
@@ -171,20 +202,7 @@ impl VerifiedReader for NativeFilesystem {
                 Ok(now) if !is_link(&now) && ident(&now) == ident(&opened) => {}
                 _ => return Err(ReadRefusal::Changed),
             }
-            let mut bytes = Vec::new();
-            File::from(fd)
-                .take(req.max_bytes.saturating_add(1))
-                .read_to_end(&mut bytes)
-                .map_err(|e| ReadRefusal::Io(e.kind().to_string()))?;
-            if bytes.len() as u64 > req.max_bytes {
-                return Err(ReadRefusal::TooLarge {
-                    limit: req.max_bytes,
-                });
-            }
-            return Ok(VerifiedBytes {
-                bytes,
-                identity: Some(ident(&opened)),
-            });
+            return Ok((File::from(fd), ident(&opened)));
         }
         Err(ReadRefusal::Escape)
     }

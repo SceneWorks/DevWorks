@@ -33,6 +33,46 @@ pub struct Preview {
     pub extent: Extent,
 }
 
+/// Serializes a preview for the derived cache: a versioned header (format, media type, extent)
+/// followed by the payload bytes.
+pub fn encode_cached(p: &Preview) -> Vec<u8> {
+    let extent = match p.extent {
+        Extent::Complete => "complete",
+        Extent::Partial => "partial",
+        Extent::Unavailable => "unavailable",
+    };
+    let mut out = format!("dwpv{PREVIEW_REVISION}\n{}\n{extent}\n", p.media_type).into_bytes();
+    out.extend_from_slice(&p.bytes);
+    out
+}
+
+/// Reads a cached preview back; anything malformed or from another generator revision is
+/// `None` (and rebuilt).
+pub fn decode_cached(bytes: &[u8]) -> Option<Preview> {
+    let mut parts = bytes.splitn(4, |b| *b == b'\n');
+    let header = parts.next()?;
+    if header != format!("dwpv{PREVIEW_REVISION}").as_bytes() {
+        return None;
+    }
+    let media_type = match parts.next()? {
+        m if m == TEXT_PREVIEW_MEDIA.as_bytes() => TEXT_PREVIEW_MEDIA,
+        m if m == INFO_PREVIEW_MEDIA.as_bytes() => INFO_PREVIEW_MEDIA,
+        _ => return None,
+    };
+    let extent = match parts.next()? {
+        b"complete" => Extent::Complete,
+        b"partial" => Extent::Partial,
+        b"unavailable" => Extent::Unavailable,
+        _ => return None,
+    };
+    let bytes = parts.next()?.to_vec();
+    (bytes.len() <= PREVIEW_BYTES || media_type == INFO_PREVIEW_MEDIA).then_some(Preview {
+        bytes,
+        media_type,
+        extent,
+    })
+}
+
 /// The derived identity of a version's preview (`pv-` + 40 hex characters).
 pub fn preview_id(version_id: &str) -> String {
     let digest = sha256_hex(format!("{version_id}|preview|{PREVIEW_REVISION}").as_bytes());

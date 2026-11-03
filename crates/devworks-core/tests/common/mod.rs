@@ -908,6 +908,16 @@ impl ArtifactRead for Unsupported {
     fn project_usage(&self, _: &ProjectId) -> Result<i64, StorageError> {
         nope()
     }
+    fn staging_names_digest(&self, _: &str, _: Option<&OperationId>) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn unresolved_staging(
+        &self,
+        _: Option<&OperationId>,
+        _: u16,
+    ) -> Result<Vec<OperationId>, StorageError> {
+        nope()
+    }
 }
 impl ArtifactRepository for Unsupported {
     fn put_blob(&mut self, _: &str, _: i64, _: &str) -> Result<BlobRecord, StorageError> {
@@ -947,6 +957,15 @@ impl ArtifactRepository for Unsupported {
         nope()
     }
     fn release_pins(&mut self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn claim_unreferenced(
+        &mut self,
+        _: &str,
+        _: i64,
+        _: &str,
+        _: Option<&OperationId>,
+    ) -> Result<bool, StorageError> {
         nope()
     }
 }

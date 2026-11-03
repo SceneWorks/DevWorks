@@ -4,21 +4,41 @@
 //!
 //! * `staging/<operation>.part` — in-flight bytes of one journaled staging operation;
 //! * `artifacts/sha256/<first two hex>/<digest>` — immutable content-addressed blobs;
+//! * `quarantine/<digest>.<n>` — corrupt digest files kept as evidence, never served;
 //! * `<cache root>/artifact-previews/<preview id>` — disposable derived previews.
 //!
-//! Publication writes and `fsync`s the staged file, reads it back to verify length and SHA-256,
-//! renames it into place and `fsync`s the destination directory (Unix; Windows has no directory
-//! handle flush through std, so the rename's metadata durability rests on NTFS journaling). An
-//! existing digest file is re-verified before reuse; a mismatch is reported as corruption and
-//! never overwritten or served. Export copies through a flushed temporary file in the
-//! destination directory and publishes it with a no-clobber hard link (or `create_new` where
-//! the volume has no hard links), or an atomic rename when overwrite was explicitly requested.
+//! **Publication** streams the source in 64 KiB chunks into the staging file while hashing it
+//! (memory stays bounded whatever the file size), refuses a source above the byte bound or with
+//! another length/digest, flushes the file, then renames it into place. Every directory it
+//! creates is flushed into its parent, and the destination directory is flushed after the
+//! rename. An existing digest file is re-verified before reuse; a mismatch is corruption and is
+//! never overwritten or served.
+//!
+//! **Reads** verify the whole file's digest once before serving any range of it and remember
+//! the verification against the file's length, modification time and (Unix) inode/change time,
+//! so a file changed afterwards is verified again before another byte is served.
+//!
+//! **Durability by platform.**
+//! * Unix: `fsync` on the file, on each new directory's parent and on the destination
+//!   directory after the rename.
+//! * Windows: `FlushFileBuffers` on the file (`sync_all`), and the rename uses
+//!   `MoveFileExW(MOVEFILE_WRITE_THROUGH)`, which returns only after the move is flushed. std
+//!   offers no directory-handle flush; NTFS journals directory metadata (creation and rename
+//!   are atomic and survive a crash once its log is flushed, which write-through forces for the
+//!   rename), but a newly created directory's own entry is not separately forced to disk.
+//!
+//! Export copies through a flushed temporary file (bounded name) in the destination directory
+//! and publishes it with a no-clobber hard link (or `create_new` where the volume has no hard
+//! links), or a write-through atomic replace when overwrite was explicitly requested.
 use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
 use sha2::{Digest as _, Sha256};
-use std::fs::{File, OpenOptions};
+use std::collections::HashMap;
+use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 /// Publication steps a test can crash at.
 #[cfg(test)]
@@ -32,12 +52,41 @@ pub(crate) enum Step {
     Renamed,
 }
 
+/// What a verification was made against: a file changed since is verified again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: Option<SystemTime>,
+    extra: (u64, i64, i64),
+}
+#[cfg(unix)]
+fn stamp(m: &Metadata) -> Stamp {
+    use std::os::unix::fs::MetadataExt;
+    Stamp {
+        len: m.len(),
+        modified: m.modified().ok(),
+        extra: (m.ino(), m.ctime(), m.ctime_nsec()),
+    }
+}
+#[cfg(not(unix))]
+fn stamp(m: &Metadata) -> Stamp {
+    Stamp {
+        len: m.len(),
+        modified: m.modified().ok(),
+        extra: (0, 0, 0),
+    }
+}
+
 pub struct NativeArtifactFiles {
     data_root: PathBuf,
     cache_root: PathBuf,
     serial: AtomicU64,
+    verified: Mutex<HashMap<String, Stamp>>,
     #[cfg(test)]
-    pub(crate) crash_at: std::sync::Mutex<Option<Step>>,
+    pub(crate) crash_at: Mutex<Option<Step>>,
+    /// Directories flushed, in order (durability tests).
+    #[cfg(test)]
+    pub(crate) synced: Mutex<Vec<PathBuf>>,
 }
 
 fn fault(e: io::Error) -> FileFault {
@@ -71,30 +120,57 @@ fn valid_name(n: &str) -> Result<(), FileFault> {
         Err(FileFault::Unsupported("not a managed file name".into()))
     }
 }
-#[cfg(unix)]
-fn sync_dir(dir: &Path) -> io::Result<()> {
-    File::open(dir)?.sync_all()
+fn hex(h: Sha256) -> String {
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
-#[cfg(not(unix))]
-fn sync_dir(_: &Path) -> io::Result<()> {
-    Ok(())
-}
-/// Streams a file's SHA-256 and length.
-fn hash_file(path: &Path) -> io::Result<(String, u64)> {
-    let mut f = File::open(path)?;
+/// Streams a reader's SHA-256 and length.
+fn hash_reader(r: &mut dyn Read) -> io::Result<(String, u64)> {
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut n = 0u64;
     loop {
-        let k = f.read(&mut buf)?;
+        let k = r.read(&mut buf)?;
         if k == 0 {
             break;
         }
         h.update(&buf[..k]);
         n += k as u64;
     }
-    let digest: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    Ok((digest, n))
+    Ok((hex(h), n))
+}
+
+#[cfg(windows)]
+mod durable {
+    use std::io;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    fn wide(p: &Path) -> Vec<u16> {
+        p.as_os_str().encode_wide().chain(Some(0)).collect()
+    }
+    /// A rename that returns only after it is flushed to disk; without `replace` an existing
+    /// destination is an `AlreadyExists` error.
+    pub fn rename(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
+        let (f, t) = (wide(from), wide(to));
+        let flags = MOVEFILE_WRITE_THROUGH
+            | if replace {
+                MOVEFILE_REPLACE_EXISTING
+            } else {
+                0
+            };
+        // SAFETY: both buffers are NUL-terminated UTF-16 paths that outlive the call.
+        if unsafe { MoveFileExW(f.as_ptr(), t.as_ptr(), flags) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
 }
 
 impl NativeArtifactFiles {
@@ -104,8 +180,11 @@ impl NativeArtifactFiles {
             data_root: data_root.into(),
             cache_root: cache_root.into(),
             serial: AtomicU64::new(0),
+            verified: Mutex::new(HashMap::new()),
             #[cfg(test)]
-            crash_at: std::sync::Mutex::new(None),
+            crash_at: Mutex::new(None),
+            #[cfg(test)]
+            synced: Mutex::new(Vec::new()),
         }
     }
     fn staging(&self) -> PathBuf {
@@ -123,13 +202,68 @@ impl NativeArtifactFiles {
     }
     #[cfg(test)]
     fn step(&self, step: Step) {
-        if *self.crash_at.lock().unwrap() == Some(step) {
+        let hit = *self.crash_at.lock().unwrap() == Some(step);
+        if hit {
             panic!("simulated crash at {step:?}");
         }
     }
 
+    /// Flushes a directory's entries (Unix). See the module docs for Windows.
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        #[cfg(test)]
+        self.synced.lock().unwrap().push(dir.to_path_buf());
+        #[cfg(unix)]
+        {
+            File::open(dir)?.sync_all()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = dir;
+            Ok(())
+        }
+    }
+
+    /// Creates `dir` and any missing ancestors, flushing each new directory's entry into its
+    /// parent (a crash cannot lose the directory a published blob was renamed into).
+    fn ensure_dir(&self, dir: &Path) -> io::Result<()> {
+        let mut missing = Vec::new();
+        let mut cur = dir;
+        while std::fs::symlink_metadata(cur).is_err() {
+            missing.push(cur.to_path_buf());
+            match cur.parent() {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+        for d in missing.into_iter().rev() {
+            match std::fs::create_dir(&d) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+            if let Some(parent) = d.parent() {
+                self.sync_dir(parent)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn rename(&self, from: &Path, to: &Path, replace: bool) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            durable::rename(from, to, replace)
+        }
+        #[cfg(not(windows))]
+        {
+            // Unix `rename` replaces; callers that must not replace checked the destination and
+            // only ever replace an identical, verified blob.
+            let _ = replace;
+            std::fs::rename(from, to)
+        }
+    }
+
     fn verify_path(path: &Path, digest: &str, byte_count: u64) -> Result<(), FileFault> {
-        let (d, n) = hash_file(path).map_err(fault)?;
+        let (d, n) = hash_reader(&mut File::open(path).map_err(fault)?).map_err(fault)?;
         if n != byte_count || d != digest {
             return Err(FileFault::Corrupt(format!(
                 "managed file {digest} does not match its recorded identity"
@@ -137,44 +271,70 @@ impl NativeArtifactFiles {
         }
         Ok(())
     }
-}
 
-macro_rules! step {
-    ($self:ident, $s:ident) => {
-        #[cfg(test)]
-        $self.step(Step::$s);
-    };
-}
+    fn forget(&self, digest: &str) {
+        self.verified
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(digest);
+    }
 
-impl ArtifactFiles for NativeArtifactFiles {
-    fn publish(
+    /// Streams `source` into `staged`, returning its digest and length.
+    fn stage(
         &self,
-        staging_name: &str,
-        bytes: &[u8],
-        digest: &str,
-    ) -> Result<PublishedBlob, FileFault> {
-        valid_name(staging_name)?;
-        let dest = self.blob_path(digest)?;
-        let staging_dir = self.staging();
-        std::fs::create_dir_all(&staging_dir).map_err(fault)?;
-        let staged = staging_dir.join(staging_name);
-        {
-            let mut f = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&staged)
-                .map_err(fault)?;
-            f.write_all(bytes).map_err(fault)?;
-            step!(self, Written);
-            f.sync_all().map_err(fault)?;
+        staged: &Path,
+        source: &mut dyn Read,
+        max_bytes: u64,
+    ) -> Result<(String, u64), FileFault> {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(staged)
+            .map_err(fault)?;
+        let mut h = Sha256::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut n = 0u64;
+        loop {
+            let k = match source.read(&mut buf) {
+                Ok(k) => k,
+                Err(e) => return Err(FileFault::Source(e.to_string())),
+            };
+            if k == 0 {
+                break;
+            }
+            n += k as u64;
+            if n > max_bytes {
+                return Err(FileFault::TooLarge);
+            }
+            h.update(&buf[..k]);
+            f.write_all(&buf[..k]).map_err(fault)?;
         }
-        Self::verify_path(&staged, digest, bytes.len() as u64)?;
-        step!(self, Flushed);
+        #[cfg(test)]
+        self.step(Step::Written);
+        f.sync_all().map_err(fault)?;
+        Ok((hex(h), n))
+    }
+
+    fn publish_staged(
+        &self,
+        staged: &Path,
+        source: &mut dyn Read,
+        max_bytes: u64,
+        digest: &str,
+        expected_bytes: u64,
+    ) -> Result<PublishedBlob, FileFault> {
+        let dest = self.blob_path(digest)?;
+        let (d, n) = self.stage(staged, source, max_bytes)?;
+        if d != digest || n != expected_bytes {
+            return Err(FileFault::Mismatch);
+        }
+        #[cfg(test)]
+        self.step(Step::Flushed);
         let dir = dest.parent().expect("digest directory");
-        std::fs::create_dir_all(dir).map_err(fault)?;
-        let reuse = |staged: &Path| -> Result<PublishedBlob, FileFault> {
-            Self::verify_path(&dest, digest, bytes.len() as u64)?;
+        self.ensure_dir(dir).map_err(fault)?;
+        let reuse = || -> Result<PublishedBlob, FileFault> {
+            Self::verify_path(&dest, digest, expected_bytes)?;
             std::fs::remove_file(staged).map_err(fault)?;
             Ok(PublishedBlob {
                 relative_path: Self::relative(digest),
@@ -182,19 +342,48 @@ impl ArtifactFiles for NativeArtifactFiles {
             })
         };
         if dest.exists() {
-            return reuse(&staged);
+            return reuse();
         }
-        match std::fs::rename(&staged, &dest) {
+        match self.rename(staged, &dest, false) {
             Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return reuse(&staged),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return reuse(),
             Err(e) => return Err(fault(e)),
         }
-        sync_dir(dir).map_err(fault)?;
-        step!(self, Renamed);
+        self.sync_dir(dir).map_err(fault)?;
+        #[cfg(test)]
+        self.step(Step::Renamed);
         Ok(PublishedBlob {
             relative_path: Self::relative(digest),
             reused: false,
         })
+    }
+}
+
+impl ArtifactFiles for NativeArtifactFiles {
+    fn publish(
+        &self,
+        staging_name: &str,
+        source: &mut dyn Read,
+        max_bytes: u64,
+        expected_digest: &str,
+        expected_bytes: u64,
+    ) -> Result<PublishedBlob, FileFault> {
+        valid_name(staging_name)?;
+        valid_digest(expected_digest)?;
+        let staging_dir = self.staging();
+        self.ensure_dir(&staging_dir).map_err(fault)?;
+        let staged = staging_dir.join(staging_name);
+        let published =
+            self.publish_staged(&staged, source, max_bytes, expected_digest, expected_bytes);
+        if published.is_err() {
+            let _ = std::fs::remove_file(&staged);
+        }
+        published
+    }
+
+    fn managed_path(&self, digest: &str) -> Result<String, FileFault> {
+        valid_digest(digest)?;
+        Ok(Self::relative(digest))
     }
 
     fn present(&self, digest: &str, byte_count: u64) -> Result<bool, FileFault> {
@@ -205,6 +394,22 @@ impl ArtifactFiles for NativeArtifactFiles {
         }
     }
 
+    fn inspect(&self, digest: &str) -> Result<Option<u64>, FileFault> {
+        let path = self.blob_path(digest)?;
+        let mut f = match File::open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(fault(e)),
+        };
+        let (d, n) = hash_reader(&mut f).map_err(fault)?;
+        if d != digest {
+            return Err(FileFault::Corrupt(format!(
+                "managed file {digest} does not hash to its name"
+            )));
+        }
+        Ok(Some(n))
+    }
+
     fn read_range(
         &self,
         digest: &str,
@@ -213,10 +418,34 @@ impl ArtifactFiles for NativeArtifactFiles {
         max: usize,
     ) -> Result<Vec<u8>, FileFault> {
         let mut f = File::open(self.blob_path(digest)?).map_err(fault)?;
-        if f.metadata().map_err(fault)?.len() != byte_count {
+        let meta = f.metadata().map_err(fault)?;
+        if meta.len() != byte_count {
             return Err(FileFault::Corrupt(format!(
                 "managed file {digest} has the wrong length"
             )));
+        }
+        let now = stamp(&meta);
+        let known = self
+            .verified
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(digest)
+            .copied();
+        if known != Some(now) {
+            let (d, n) = hash_reader(&mut f).map_err(fault)?;
+            if d != digest || n != byte_count {
+                self.forget(digest);
+                return Err(FileFault::Corrupt(format!(
+                    "managed file {digest} does not match its recorded identity"
+                )));
+            }
+            // Remember the verification only if the file did not change while it was hashed.
+            if f.metadata().map(|m| stamp(&m)).ok() == Some(now) {
+                self.verified
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(digest.to_owned(), now);
+            }
         }
         f.seek(SeekFrom::Start(offset)).map_err(fault)?;
         let mut out = Vec::with_capacity(max.min(byte_count.saturating_sub(offset) as usize));
@@ -235,8 +464,23 @@ impl ArtifactFiles for NativeArtifactFiles {
     }
 
     fn unlink(&self, digest: &str) -> Result<(), FileFault> {
+        self.forget(digest);
         match std::fs::remove_file(self.blob_path(digest)?) {
             Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(fault(e)),
+        }
+    }
+
+    fn quarantine(&self, digest: &str) -> Result<(), FileFault> {
+        let path = self.blob_path(digest)?;
+        self.forget(digest);
+        let dir = self.data_root.join("quarantine");
+        self.ensure_dir(&dir).map_err(fault)?;
+        let n = self.serial.fetch_add(1, Ordering::Relaxed);
+        let target = dir.join(format!("{digest}.{}-{n}", std::process::id()));
+        match self.rename(&path, &target, false) {
+            Ok(()) => self.sync_dir(&dir).map_err(fault),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(fault(e)),
         }
@@ -344,10 +588,13 @@ impl ArtifactFiles for NativeArtifactFiles {
                 "destination has no file name".into(),
             ));
         };
+        // The temporary name is bounded whatever the destination name's length (NAME_MAX).
         let n = self.serial.fetch_add(1, Ordering::Relaxed);
+        let mut h = Sha256::new();
+        h.update(name.as_encoded_bytes());
         let tmp = dir.join(format!(
-            ".{}.devworks-export-{}-{n}.tmp",
-            name.to_string_lossy(),
+            ".dwx-{}-{}-{n}.tmp",
+            &hex(h)[..16],
             std::process::id()
         ));
         let copy = || -> Result<(), FileFault> {
@@ -364,7 +611,7 @@ impl ArtifactFiles for NativeArtifactFiles {
             return Err(e);
         }
         let published = if overwrite {
-            std::fs::rename(&tmp, destination).map_err(fault)
+            self.rename(&tmp, destination, true).map_err(fault)
         } else {
             match std::fs::hard_link(&tmp, destination) {
                 Ok(()) => Ok(()),
@@ -383,6 +630,123 @@ impl ArtifactFiles for NativeArtifactFiles {
         };
         let _ = std::fs::remove_file(&tmp);
         published?;
-        sync_dir(dir).map_err(fault)
+        self.sync_dir(dir).map_err(fault)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "devworks-artifact-files-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+    fn digest(b: &[u8]) -> String {
+        let mut h = Sha256::new();
+        h.update(b);
+        hex(h)
+    }
+
+    #[test]
+    fn publication_flushes_every_directory_it_creates() {
+        let data = root("dirs");
+        let files = NativeArtifactFiles::new(&data, data.join("cache"));
+        let bytes = b"durable";
+        let d = digest(bytes);
+        files
+            .publish("op-1.part", &mut &bytes[..], 64, &d, bytes.len() as u64)
+            .unwrap();
+        let synced = files.synced.lock().unwrap().clone();
+        let shard = data.join(format!("artifacts/sha256/{}", &d[..2]));
+        // New directories are flushed into their parents, and the shard after the rename.
+        for dir in [
+            data.clone(),
+            data.join("artifacts"),
+            data.join("artifacts/sha256"),
+            shard.clone(),
+        ] {
+            assert!(synced.contains(&dir), "{dir:?} not flushed: {synced:?}");
+        }
+        assert_eq!(synced.last(), Some(&shard));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn publication_streams_and_refuses_bounds_and_mismatches_without_leftovers() {
+        let data = root("stream");
+        let files = NativeArtifactFiles::new(&data, data.join("cache"));
+        let big = vec![7u8; 300 * 1024];
+        let d = digest(&big);
+        let published = files
+            .publish(
+                "op-1.part",
+                &mut &big[..],
+                big.len() as u64,
+                &d,
+                big.len() as u64,
+            )
+            .unwrap();
+        assert!(!published.reused);
+        assert_eq!(files.inspect(&d).unwrap(), Some(big.len() as u64));
+        assert_eq!(
+            files.publish("op-2.part", &mut &big[..], 1024, &d, big.len() as u64),
+            Err(FileFault::TooLarge)
+        );
+        assert_eq!(
+            files.publish("op-3.part", &mut &b"other"[..], 64, &d, 5),
+            Err(FileFault::Mismatch)
+        );
+        assert!(files.staged().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn ranges_are_never_served_from_a_corrupt_file() {
+        let data = root("verify");
+        let files = NativeArtifactFiles::new(&data, data.join("cache"));
+        let bytes = b"0123456789";
+        let d = digest(bytes);
+        files
+            .publish("op-1.part", &mut &bytes[..], 64, &d, 10)
+            .unwrap();
+        assert_eq!(files.read_range(&d, 10, 2, 3).unwrap(), b"234");
+        // Same length, different content: verified again because the file changed.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(data.join(NativeArtifactFiles::relative(&d)), b"9876543210").unwrap();
+        assert!(matches!(
+            files.read_range(&d, 10, 2, 3),
+            Err(FileFault::Corrupt(_))
+        ));
+        assert!(matches!(files.inspect(&d), Err(FileFault::Corrupt(_))));
+        files.quarantine(&d).unwrap();
+        assert_eq!(files.inspect(&d).unwrap(), None);
+        assert_eq!(
+            std::fs::read_dir(data.join("quarantine")).unwrap().count(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn export_temporary_names_stay_bounded() {
+        let data = root("export");
+        let files = NativeArtifactFiles::new(&data, data.join("cache"));
+        let bytes = b"export";
+        let d = digest(bytes);
+        files
+            .publish("op-1.part", &mut &bytes[..], 64, &d, 6)
+            .unwrap();
+        let out = data.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let long = out.join(format!("{}.txt", "n".repeat(250)));
+        files.export(&d, 6, &long, false).unwrap();
+        assert_eq!(std::fs::read(&long).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

@@ -16,6 +16,9 @@ use crate::protocol::shared::Subject;
 use crate::protocol::{Id, OperationId, ProjectId, RootId};
 use serde_json::Value;
 
+/// Journal capability of a staged artifact file publication.
+pub const STAGE_CAPABILITY: &str = "artifacts.stage_file";
+
 /// Lifecycle of one managed blob file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BlobState {
@@ -256,6 +259,19 @@ pub trait ArtifactRead {
     ) -> Result<Vec<BlobRecord>, StorageError>;
     /// Bytes of distinct blobs named by live versions of artifacts `project` owns.
     fn project_usage(&self, project: &ProjectId) -> Result<i64, StorageError>;
+    /// Whether an unresolved staging operation (other than `except`) names `digest`. Answered
+    /// from the durable journal (indexed), never from a bounded in-memory set.
+    fn staging_names_digest(
+        &self,
+        digest: &str,
+        except: Option<&OperationId>,
+    ) -> Result<bool, StorageError>;
+    /// Unresolved staging operations in ID order after `after`, at most `limit` (1..=500).
+    fn unresolved_staging(
+        &self,
+        after: Option<&OperationId>,
+        limit: u16,
+    ) -> Result<Vec<OperationId>, StorageError>;
 }
 
 pub trait ArtifactRepository: ArtifactRead {
@@ -297,4 +313,17 @@ pub trait ArtifactRepository: ArtifactRead {
     fn pin(&mut self, holder: &Id, digest: &str) -> Result<(), StorageError>;
     /// Releases every pin `holder` holds; returns how many were released.
     fn release_pins(&mut self, holder: &Id) -> Result<i64, StorageError>;
+    /// Claims an unreferenced digest file for removal: when no blob row names the digest (or
+    /// its row is `Unlinked`) and no unresolved staging other than `except` names it, the row
+    /// becomes `Unlinking` (inserted with `byte_count`/`relative_path` when absent) and `true`
+    /// is returned. Any other state leaves everything unchanged and returns `false`. A save
+    /// that finds the row `Unlinking` refuses as `Busy`, so the file can be removed after this
+    /// commits without racing a publication.
+    fn claim_unreferenced(
+        &mut self,
+        digest: &str,
+        byte_count: i64,
+        relative_path: &str,
+        except: Option<&OperationId>,
+    ) -> Result<bool, StorageError>;
 }

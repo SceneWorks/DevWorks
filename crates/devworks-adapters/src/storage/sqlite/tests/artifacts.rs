@@ -14,11 +14,11 @@ use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::Preparation;
 use devworks_core::ports::files::{
-    ArtifactFiles, ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal,
+    ArtifactFiles, ArtifactSources, FileFault, ResolvedSource, SourceOrigin, SourceRefusal,
 };
 use devworks_core::ports::storage::*;
+use devworks_core::ports::{AuthorityPort, CommandHandler, Preparation, Prepared};
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::provider::{ArtifactRef, Digest};
 use devworks_core::protocol::records::{ArtifactReadContent, ArtifactRecord, MutationSummary};
@@ -32,11 +32,11 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::lifecycle::{
-    ExportRefusal, StreamRefusal, VersionResolution, pin_for_backup, release_backup,
+    ExportRefusal, RecoveryReport, StreamRefusal, VersionResolution, pin_for_backup, release_backup,
 };
 use devworks_core::services::artifacts::{
-    ArtifactService, QUOTA_TARGET, SHARED_REFERENCES_REMAIN, STAGE_CAPABILITY, StageRequest,
-    Staging, version_ref, versions_digest,
+    ArtifactService, INTEGRITY_TARGET, QUOTA_TARGET, SHARED_REFERENCES_REMAIN, STAGE_CAPABILITY,
+    StageRequest, StagedFile, Staging, version_ref, versions_digest,
 };
 use devworks_core::settings::catalog::{AgentRole, descriptor};
 use devworks_core::settings::service::SettingsService;
@@ -73,6 +73,7 @@ impl ArtifactSources for Sources {
         &self,
         _: &InvocationContext,
         source: &ArtifactSource,
+        _: &ProjectId,
     ) -> Result<ResolvedSource, SourceRefusal> {
         let key = match source {
             ArtifactSource::Upload { ticket_id } => ticket_id,
@@ -794,10 +795,7 @@ fn versions_are_never_overwritten_and_exact_references_survive() {
     let revised = b"one, revised";
     fx.source("t3", "t3.bin", revised, SourceOrigin::default());
     let user = fx.user();
-    let env = Preparation {
-        store: &*fx.store,
-        cancellation: None,
-    };
+    let env = Preparation::new(&*fx.store, None, None);
     let digest = Digest::try_from(sha256_hex(revised)).unwrap();
     let source = ArtifactSource::Upload {
         ticket_id: id("t3"),
@@ -973,10 +971,7 @@ fn a_crash_at_any_publication_step_is_reconciled_without_visible_metadata() {
             }
             None => {
                 // The bytes are published, then the process dies before the unit of work.
-                let env = Preparation {
-                    store: &*fx.store,
-                    cancellation: None,
-                };
+                let env = Preparation::new(&*fx.store, None, None);
                 let expected = Digest::try_from(digest.clone()).unwrap();
                 let source = ArtifactSource::Upload {
                     ticket_id: id("t1"),
@@ -1761,36 +1756,1024 @@ fn a_save_refused_after_staging_resolves_its_staging_without_a_restart() {
     assert_eq!(op.revision, mine[0].revision, "not resolved again");
 }
 
+// ---------------------------------------------------------------------------------------------
+// Review regressions: claims, concurrent recovery, preparation limits, integrity, sources.
+
+/// The real file adapter with hooks at the interleaving points the review probed.
+struct HookFiles {
+    inner: Arc<NativeArtifactFiles>,
+    before_publish: Mutex<Option<OnResolve>>,
+    during_publish: Mutex<Option<OnResolve>>,
+    after_publish: Mutex<Option<OnResolve>>,
+    on_unlink: Mutex<Option<OnResolve>>,
+    read_ranges: AtomicU64,
+}
+impl HookFiles {
+    fn new(inner: Arc<NativeArtifactFiles>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            before_publish: Mutex::new(None),
+            during_publish: Mutex::new(None),
+            after_publish: Mutex::new(None),
+            on_unlink: Mutex::new(None),
+            read_ranges: AtomicU64::new(0),
+        })
+    }
+    fn fire(slot: &Mutex<Option<OnResolve>>) {
+        let hook = slot.lock().unwrap().take();
+        if let Some(h) = hook {
+            h();
+        }
+    }
+}
+/// A source that runs a hook after its first chunk (the staging file exists, partly written).
+struct HookedReader<'a> {
+    inner: &'a mut dyn Read,
+    hook: Option<OnResolve>,
+}
+impl Read for HookedReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let cap = buf.len().min(4);
+        let n = self.inner.read(&mut buf[..cap])?;
+        if let Some(h) = self.hook.take() {
+            h();
+        }
+        Ok(n)
+    }
+}
+impl ArtifactFiles for HookFiles {
+    fn publish(
+        &self,
+        s: &str,
+        source: &mut dyn Read,
+        max: u64,
+        d: &str,
+        n: u64,
+    ) -> Result<devworks_core::ports::files::PublishedBlob, FileFault> {
+        Self::fire(&self.before_publish);
+        let hook = self.during_publish.lock().unwrap().take();
+        let mut reader = HookedReader {
+            inner: source,
+            hook,
+        };
+        let published = self.inner.publish(s, &mut reader, max, d, n);
+        Self::fire(&self.after_publish);
+        published
+    }
+    fn managed_path(&self, d: &str) -> Result<String, FileFault> {
+        self.inner.managed_path(d)
+    }
+    fn present(&self, d: &str, n: u64) -> Result<bool, FileFault> {
+        self.inner.present(d, n)
+    }
+    fn inspect(&self, d: &str) -> Result<Option<u64>, FileFault> {
+        self.inner.inspect(d)
+    }
+    fn read_range(&self, d: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
+        self.read_ranges.fetch_add(1, Ordering::SeqCst);
+        self.inner.read_range(d, n, o, m)
+    }
+    fn verify(&self, d: &str, n: u64) -> Result<(), FileFault> {
+        self.inner.verify(d, n)
+    }
+    fn open(&self, d: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
+        self.inner.open(d, n)
+    }
+    fn unlink(&self, d: &str) -> Result<(), FileFault> {
+        Self::fire(&self.on_unlink);
+        self.inner.unlink(d)
+    }
+    fn quarantine(&self, d: &str) -> Result<(), FileFault> {
+        self.inner.quarantine(d)
+    }
+    fn staged(&self) -> Result<Vec<String>, FileFault> {
+        self.inner.staged()
+    }
+    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
+        self.inner.remove_staged(n)
+    }
+    fn stored_digests(&self) -> Result<Vec<String>, FileFault> {
+        self.inner.stored_digests()
+    }
+    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
+        self.inner.write_derived(k, b)
+    }
+    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
+        self.inner.read_derived(k, m)
+    }
+    fn collect_derived(&self) -> Result<u64, FileFault> {
+        self.inner.collect_derived()
+    }
+    fn export(&self, d: &str, n: u64, p: &std::path::Path, o: bool) -> Result<(), FileFault> {
+        self.inner.export(d, n, p, o)
+    }
+}
+
+impl Fx {
+    /// A second service over the same store and sources with other file/source ports.
+    fn service_with(
+        &self,
+        files: Arc<dyn ArtifactFiles>,
+        sources: Arc<dyn ArtifactSources>,
+    ) -> (Arc<ArtifactService>, UseCases) {
+        let svc = Arc::new(ArtifactService::new(
+            files,
+            sources,
+            Arc::new(NativeFilesystem::new()),
+            self.h.clock.clone(),
+            self.h.ids.clone(),
+        ));
+        let cases = UseCases::new().with_artifacts(svc.clone());
+        (svc, cases)
+    }
+    fn command_via(
+        &self,
+        cases: &UseCases,
+        authority: &dyn AuthorityPort,
+        ctx: &InvocationContext,
+        frame: &Value,
+        options: WriteOptions,
+    ) -> DomainCommandReply {
+        let gateway = Gateway {
+            authority,
+            store: &*self.store,
+            ids: &*self.h.ids,
+        };
+        cases
+            .command_with(
+                &gateway,
+                ctx,
+                "artifacts.save",
+                frame.to_string().as_bytes(),
+                options,
+            )
+            .unwrap()
+    }
+    /// Every Present blob still has its file (the invariant the review's race broke).
+    fn assert_present_blobs_have_files(&self) {
+        let blobs = self.read(|s| s.artifacts().blobs_in(BlobState::Present, None, 500));
+        for b in blobs {
+            assert!(
+                self.blob_file(&b.digest).exists(),
+                "Present blob {} has no file",
+                b.digest
+            );
+        }
+    }
+}
+
+/// A save through the shared registry whose reply lands in `slot` (no assertion inside).
+fn save_into(
+    fx: &Fx,
+    handle: &str,
+    bytes: &[u8],
+    slot: Arc<Mutex<Option<DomainCommandReply>>>,
+) -> OnResolve {
+    let (store, cases, ids, clock) = (
+        fx.store.clone(),
+        fx.cases.clone(),
+        fx.h.ids.clone(),
+        fx.h.clock.clone(),
+    );
+    let (user, frame) = (
+        fx.user(),
+        fx.save_frame(
+            &fx.key(),
+            "project-a",
+            "Concurrent",
+            "text/plain",
+            json!({"kind": "Upload", "ticketId": handle}),
+            bytes,
+        ),
+    );
+    Box::new(move || {
+        let authority = HostAuthority {
+            store: &*store,
+            clock: &*clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*store,
+            ids: &*ids,
+        };
+        let reply = cases
+            .command(
+                &gateway,
+                &user,
+                "artifacts.save",
+                frame.to_string().as_bytes(),
+            )
+            .unwrap();
+        *slot.lock().unwrap() = Some(reply);
+    })
+}
+
+/// A save whose host lineage names work outside its project is refused by its unit of work
+/// after its file was staged.
+fn refused_after_staging(fx: &Fx) -> InvocationContext {
+    fx.user()
+        .with_lineage(None, Some(RootId(id("root-b"))), None)
+}
+
 #[test]
-fn a_save_rejected_before_commit_resolves_its_staging_immediately() {
+fn abandoning_a_staged_file_never_unlinks_bytes_a_concurrent_save_committed() {
     let fx = Fx::new();
-    let user = fx.user();
-    let bytes = b"never committed";
+    let bytes = b"same bytes for both saves";
+    let digest = sha256_hex(bytes);
     fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let hook = HookFiles::new(fx.files.clone());
+    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    // Save B (same bytes) runs between A's resolution and its physical removal.
+    let slot = Arc::new(Mutex::new(None));
+    *hook.on_unlink.lock().unwrap() = Some(save_into(&fx, "t2", bytes, slot.clone()));
     let frame = fx.save_frame(
         &fx.key(),
         "project-a",
-        "Late",
+        "A",
         "text/plain",
         json!({"kind": "Upload", "ticketId": "t1"}),
         bytes,
     );
-    // The unit of work is not admitted after staging (its deadline passed).
+    let authority = fx.authority();
+    let a = refused_after_staging(&fx);
+    let f = refused(fx.command_via(&cases, &authority, &a, &frame, WriteOptions::default()));
+    assert_eq!(target(&f), "origin_work");
+    // B could not commit metadata for a file A had claimed: it is refused as retryable.
+    let b = slot
+        .lock()
+        .unwrap()
+        .take()
+        .expect("B ran during A's removal");
+    assert_eq!(rejected(b), Rejection::StorageUnavailable);
+    fx.assert_present_blobs_have_files();
+    assert!(list(&fx, &fx.user(), "project-a").is_empty());
+    // B's retry stages the bytes again and is readable.
+    let r = saved(fx.save(&fx.user(), "project-a", "B", "text/plain", "t2", bytes)).artifact;
+    assert_eq!(hex(&r.sha256), digest);
+    assert_eq!(read_text(&fx, &fx.user(), &r).as_bytes(), bytes);
+    fx.assert_present_blobs_have_files();
+}
+
+#[test]
+fn a_digest_another_save_is_staging_is_never_claimed() {
+    let fx = Fx::new();
+    let bytes = b"staged twice";
+    fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let hook = HookFiles::new(fx.files.clone());
+    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    // B is mid-staging (journaled, file published) while A is refused and resolved.
+    let slot = Arc::new(Mutex::new(None));
+    let a_frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "A",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t1"}),
+        bytes,
+    );
+    let (store, cases_a, ids, clock, a) = (
+        fx.store.clone(),
+        cases.clone(),
+        fx.h.ids.clone(),
+        fx.h.clock.clone(),
+        refused_after_staging(&fx),
+    );
+    let a_slot = slot.clone();
+    *hook.after_publish.lock().unwrap() = Some(Box::new(move || {
+        let authority = HostAuthority {
+            store: &*store,
+            clock: &*clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*store,
+            ids: &*ids,
+        };
+        let reply = cases_a
+            .command(
+                &gateway,
+                &a,
+                "artifacts.save",
+                a_frame.to_string().as_bytes(),
+            )
+            .unwrap();
+        *a_slot.lock().unwrap() = Some(reply);
+    }));
+    let authority = fx.authority();
+    let b_frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "B",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t2"}),
+        bytes,
+    );
+    let r = saved(fx.command_via(
+        &cases,
+        &authority,
+        &fx.user(),
+        &b_frame,
+        WriteOptions::default(),
+    ))
+    .artifact;
+    assert_eq!(
+        target(&refused(slot.lock().unwrap().take().unwrap())),
+        "origin_work"
+    );
+    assert_eq!(read_text(&fx, &fx.user(), &r).as_bytes(), bytes);
+    fx.assert_present_blobs_have_files();
+}
+
+#[test]
+fn recovery_running_while_saves_stage_removes_nothing_in_flight() {
+    let fx = Fx::new();
+    let bytes = b"recover around me";
+    fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
+    let hook = HookFiles::new(fx.files.clone());
+    let (svc, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    for slot in [
+        &hook.before_publish,
+        &hook.during_publish,
+        &hook.after_publish,
+    ] {
+        let (svc, store, reports) = (fx.svc.clone(), fx.store.clone(), reports.clone());
+        *slot.lock().unwrap() = Some(Box::new(move || {
+            reports.lock().unwrap().push(svc.recover(&*store).unwrap());
+        }));
+    }
+    let authority = fx.authority();
+    let frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "Concurrent",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t1"}),
+        bytes,
+    );
+    let r = saved(fx.command_via(
+        &cases,
+        &authority,
+        &fx.user(),
+        &frame,
+        WriteOptions::default(),
+    ))
+    .artifact;
+    let reports = reports.lock().unwrap().clone();
+    assert_eq!(reports.len(), 3);
+    for report in &reports {
+        assert_eq!(
+            report,
+            &RecoveryReport::default(),
+            "touched in-flight staging"
+        );
+    }
+    assert_eq!(read_text(&fx, &fx.user(), &r).as_bytes(), bytes);
+    assert_eq!(svc.recover(&*fx.store).unwrap(), RecoveryReport::default());
+}
+
+#[test]
+fn recovery_in_a_loop_alongside_many_saves_keeps_every_committed_file() {
+    let fx = Fx::new();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (svc, store, flag) = (fx.svc.clone(), fx.store.clone(), stop.clone());
+    let recoverer = std::thread::spawn(move || {
+        let mut runs = 0;
+        while !flag.load(Ordering::SeqCst) {
+            svc.recover(&*store).unwrap();
+            svc.collect(&*store).unwrap();
+            runs += 1;
+        }
+        runs
+    });
+    let user = fx.user();
+    let mut saved_refs = Vec::new();
+    for i in 0..24 {
+        // Half the saves share bytes with an earlier one.
+        let bytes = format!("payload {}", i % 12).into_bytes();
+        let handle = format!("h{i}");
+        fx.source(
+            &handle,
+            &format!("{handle}.bin"),
+            &bytes,
+            SourceOrigin::default(),
+        );
+        saved_refs.push((
+            saved(fx.save(&user, "project-a", "Loop", "text/plain", &handle, &bytes)).artifact,
+            bytes,
+        ));
+    }
+    stop.store(true, Ordering::SeqCst);
+    assert!(recoverer.join().unwrap() > 0);
+    for (r, bytes) in &saved_refs {
+        assert_eq!(read_text(&fx, &user, r).as_bytes(), &bytes[..]);
+    }
+    fx.assert_present_blobs_have_files();
+    assert!(fx.svc.recover(&*fx.store).unwrap().missing.is_empty());
+}
+
+#[test]
+fn recovery_pages_through_every_unresolved_staging_operation() {
+    let fx = Fx::new();
+    let digest = sha256_hex(b"named by the last operation");
+    // 600 operations of an earlier boot plus 1 of this boot naming a digest whose file exists.
+    let journal = |n: usize, d: String| {
+        fx.write(move |tx| {
+            let mut last = None;
+            for _ in 0..n {
+                let id = devworks_core::protocol::OperationId(
+                    tx.new_id(devworks_core::ports::IdKind::Operation),
+                );
+                tx.operations().record_intent(NewOperation {
+                    id: id.clone(),
+                    root_id: None,
+                    assignment_id: None,
+                    capability: STAGE_CAPABILITY.into(),
+                    schema_version: 1,
+                    args_digest: "x".into(),
+                    payload: json!({"digest": d, "byteCount": 27}),
+                })?;
+                let attempt = tx
+                    .operations()
+                    .begin_attempt(&id, 1, AttemptBinding::default())?;
+                tx.operations().transition(
+                    &id,
+                    2,
+                    Some(&attempt.fence()),
+                    OperationState::Dispatching,
+                    None,
+                )?;
+                last = Some(id);
+            }
+            Ok(last)
+        })
+    };
+    journal(600, sha256_hex(b"other"));
+    let fx = fx.restart();
+    // In flight in this boot: its digest file must survive recovery.
+    let bytes = b"named by the last operation";
+    fx.files
+        .publish(
+            "live.part",
+            &mut &bytes[..],
+            64,
+            &digest,
+            bytes.len() as u64,
+        )
+        .unwrap();
+    journal_in(&fx, &digest);
+    let report = fx.svc.recover(&*fx.store).unwrap();
+    assert_eq!(report.failed.len(), 600);
+    assert!(fx.blob_file(&digest).exists(), "{report:?}");
+}
+fn journal_in(fx: &Fx, d: &str) {
+    let d = d.to_owned();
+    fx.write(move |tx| {
+        let id = devworks_core::protocol::OperationId(
+            tx.new_id(devworks_core::ports::IdKind::Operation),
+        );
+        tx.operations().record_intent(NewOperation {
+            id: id.clone(),
+            root_id: None,
+            assignment_id: None,
+            capability: STAGE_CAPABILITY.into(),
+            schema_version: 1,
+            args_digest: "x".into(),
+            payload: json!({"digest": d, "byteCount": 27}),
+        })?;
+        let attempt = tx
+            .operations()
+            .begin_attempt(&id, 1, AttemptBinding::default())?;
+        tx.operations().transition(
+            &id,
+            2,
+            Some(&attempt.fence()),
+            OperationState::Dispatching,
+            None,
+        )?;
+        Ok(())
+    });
+}
+
+/// Authority that can only replay receipts.
+struct ReplayOnly;
+impl AuthorityPort for ReplayOnly {
+    fn authorize(
+        &self,
+        _: &InvocationContext,
+        _: &devworks_core::ports::AuthorityRequest<'_>,
+    ) -> Result<devworks_core::ports::Authorization, devworks_core::ports::AuthorityDenial> {
+        Ok(devworks_core::ports::Authorization::direct().replay_only())
+    }
+}
+
+#[test]
+fn replay_only_and_expired_commands_prepare_nothing() {
+    let fx = Fx::new();
+    let bytes = b"never read";
+    fx.source("t1", "t1.bin", bytes, SourceOrigin::default());
+    let resolved = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = resolved.clone();
+    fx.sources.on_resolve.lock().unwrap().insert(
+        "t1".into(),
+        Box::new(move || flag.store(true, Ordering::SeqCst)),
+    );
+    let frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "Replay",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t1"}),
+        bytes,
+    );
+    let reply = fx.command_via(
+        &fx.cases,
+        &ReplayOnly,
+        &fx.user(),
+        &frame,
+        WriteOptions::default(),
+    );
+    assert_eq!(rejected(reply), Rejection::PermissionDenied);
+    assert!(!resolved.load(Ordering::SeqCst), "the source was resolved");
+    assert!(fx.staging_ops_all().is_empty());
+    // An expired command reads no source and stages nothing either.
     let options = WriteOptions {
         deadline_ms: Some(T0 - 1),
         ..WriteOptions::default()
     };
-    let reply = fx.command_with(&user, "artifacts.save", frame.clone(), options);
+    let reply = fx.command_with(&fx.user(), "artifacts.save", frame.clone(), options);
+    assert_eq!(rejected(reply), Rejection::StorageUnavailable);
+    assert!(!resolved.load(Ordering::SeqCst), "the source was resolved");
+    assert!(fx.staging_ops_all().is_empty());
+    assert!(fx.files.staged().unwrap().is_empty());
+    // A deadline that passes while the file streams stops it and resolves the staging.
+    let hook = HookFiles::new(fx.files.clone());
+    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let clock = fx.h.clock.clone();
+    *hook.during_publish.lock().unwrap() = Some(Box::new(move || {
+        clock.0.store(T0 + 10_000, Ordering::SeqCst);
+    }));
+    let options = WriteOptions {
+        deadline_ms: Some(T0 + 5_000),
+        ..WriteOptions::default()
+    };
+    let authority = fx.authority();
+    let reply = fx.command_via(&cases, &authority, &fx.user(), &frame, options);
     assert_eq!(rejected(reply), Rejection::StorageUnavailable);
     let ops = fx.staging_ops_all();
     assert_eq!(ops.len(), 1);
     assert_eq!(ops[0].state, OperationState::Failed);
+    assert!(fx.files.staged().unwrap().is_empty());
     assert!(!fx.blob_file(&sha256_hex(bytes)).exists());
-    // The same command then succeeds and its own staging completes.
-    saved(fx.command(&user, "artifacts.save", frame));
-    let states: Vec<_> = fx.staging_ops_all().iter().map(|o| o.state).collect();
-    assert_eq!(
-        states,
-        vec![OperationState::Failed, OperationState::ObservedComplete]
+}
+
+/// A store that refuses to admit the next `n` writes (a resolution that cannot be written).
+struct Flaky {
+    inner: Arc<SqliteStore>,
+    refuse: AtomicU64,
+}
+impl ApplicationStore for Flaky {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(
+        &self,
+        options: WriteOptions,
+        job: Box<dyn WriteJob>,
+    ) -> Result<(), StorageError> {
+        if self
+            .refuse
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Err(StorageError::Busy);
+        }
+        self.inner.submit_write(options, job)
+    }
+    fn read(
+        &self,
+        options: &ReadOptions,
+        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(options, work)
+    }
+}
+
+fn staged_for(fx: &Fx, handle: &str, bytes: &[u8]) -> StagedFile {
+    fx.source(
+        handle,
+        &format!("{handle}.bin"),
+        bytes,
+        SourceOrigin::default(),
     );
+    let env = Preparation::new(&*fx.store, None, None);
+    let digest = Digest::try_from(sha256_hex(bytes)).unwrap();
+    let source = ArtifactSource::Upload {
+        ticket_id: id(handle),
+    };
+    match fx
+        .svc
+        .stage(
+            &env,
+            &fx.user(),
+            &StageRequest {
+                project: &project("project-a"),
+                source: &source,
+                expected_digest: &digest,
+                expected_bytes: bytes.len() as i64,
+                request_digest: "direct",
+            },
+        )
+        .unwrap()
+    {
+        Staging::Staged(s) => s,
+        other => panic!("{other:?}"),
+    }
+}
+fn op_state(fx: &Fx, op: &devworks_core::protocol::OperationId) -> OperationState {
+    let op = op.clone();
+    fx.read(|s| s.operations().operation(&op)).unwrap().state
+}
+
+#[test]
+fn unknown_commit_outcomes_and_unwritable_resolutions_resolve_within_the_boot() {
+    let fx = Fx::new();
+    let unknown = CommandReply::CommandStatusUnknown {
+        protocol: devworks_core::protocol::Protocol::Draft1,
+        request_key: devworks_core::protocol::RequestKey(id("k")),
+        correlation_id: devworks_core::protocol::CorrelationId(id("c")),
+    };
+    // The unit of work never committed: the staging fails and its file is collected.
+    let s = staged_for(&fx, "t1", b"lost acknowledgment");
+    let env = Preparation::new(&*fx.store, None, None);
+    let prepared = Prepared::new(Staging::Staged(s.clone()));
+    fx.svc
+        .settle(&fx.user(), Some(&prepared), Some(&unknown), &env);
+    assert_eq!(op_state(&fx, &s.operation_id), OperationState::Failed);
+    assert!(!fx.blob_file(&s.digest).exists());
+    // The unit of work did commit (the acknowledgment was lost): the staging completes.
+    let s = staged_for(&fx, "t2", b"committed after all");
+    let st = s.clone();
+    fx.write(move |tx| {
+        tx.artifacts()
+            .put_blob(&st.digest, st.byte_count, &st.relative_path)?;
+        let artifact = StoredArtifact {
+            id: id("artifact-x"),
+            origin_project_id: project("project-a"),
+            origin_work_id: None,
+            title: "X".into(),
+            revision: 1,
+            current_project_id: project("project-a"),
+            scope_revision: 1,
+            reference_revision: 1,
+            current_version_id: None,
+            state: ArtifactState::Live,
+            created_at_ms: T0,
+            provenance: json!({}),
+        };
+        tx.artifacts().insert_artifact(&artifact)?;
+        tx.artifacts().insert_version(&StoredVersion {
+            id: id("version-x"),
+            artifact_id: id("artifact-x"),
+            version_no: 1,
+            blob_digest: st.digest.clone(),
+            byte_count: st.byte_count,
+            media_type: "text/plain".into(),
+            created_at_ms: T0,
+            deleted_at_ms: None,
+            source: json!({"operationId": st.operation_id.0.as_str()}),
+        })
+    });
+    let prepared = Prepared::new(Staging::Staged(s.clone()));
+    fx.svc
+        .settle(&fx.user(), Some(&prepared), Some(&unknown), &env);
+    assert_eq!(
+        op_state(&fx, &s.operation_id),
+        OperationState::ObservedComplete
+    );
+    assert!(fx.blob_file(&s.digest).exists());
+    // A resolution that cannot be written is retried by the next collection in this boot.
+    let s = staged_for(&fx, "t3", b"resolution deferred");
+    let flaky = Flaky {
+        inner: fx.store.clone(),
+        refuse: AtomicU64::new(1),
+    };
+    let env = Preparation::new(&flaky, None, None);
+    let prepared = Prepared::new(Staging::Staged(s.clone()));
+    fx.svc.settle(&fx.user(), Some(&prepared), None, &env);
+    assert_eq!(op_state(&fx, &s.operation_id), OperationState::Dispatching);
+    fx.svc.collect(&*fx.store).unwrap();
+    assert_eq!(op_state(&fx, &s.operation_id), OperationState::Failed);
+    assert!(!fx.blob_file(&s.digest).exists());
+}
+
+#[test]
+fn a_corrupt_existing_file_is_an_integrity_refusal_and_recovery_quarantines_it() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let bytes = b"0123456789 evidence";
+    let first = fx.saved("t1", "First", "text/plain", bytes).artifact;
+    let d = hex(&first.sha256);
+    // Same length, different content.
+    std::fs::write(fx.blob_file(&d), b"9876543210 evidence").unwrap();
+    // Corrupt bytes are never served.
+    assert_eq!(
+        fault(fx.query(&user, "artifacts.read", version_query("Read", &first), None)).code,
+        DomainErrorCode::NotFound
+    );
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let f = refused(fx.save(&user, "project-a", "Again", "text/plain", "t2", bytes));
+    assert_eq!(
+        (f.code, target(&f), f.retry),
+        (
+            DomainErrorCode::StorageUnavailable,
+            INTEGRITY_TARGET,
+            devworks_core::protocol::RetryAdvice::Never
+        )
+    );
+    let report = fx.svc.recover(&*fx.store).unwrap();
+    assert_eq!(report.quarantined, vec![d.clone()]);
+    assert!(!fx.blob_file(&d).exists());
+    assert_eq!(
+        fx.blob(&d).unwrap().state,
+        BlobState::Present,
+        "metadata unchanged"
+    );
+    // Saving the bytes again publishes a verified copy; both versions read again.
+    fx.source("t3", "t3.bin", bytes, SourceOrigin::default());
+    let again = saved(fx.save(&user, "project-a", "Third", "text/plain", "t3", bytes)).artifact;
+    assert_eq!(read_text(&fx, &user, &again).as_bytes(), bytes);
+    assert_eq!(read_text(&fx, &user, &first).as_bytes(), bytes);
+}
+
+#[test]
+fn a_stream_whose_file_disappeared_is_not_found() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let r = fx
+        .saved("t1", "Binary", "application/octet-stream", b"\x00\x01\x02")
+        .artifact;
+    let OperationResult::ArtifactsRead {
+        value: ArtifactReadContent::Binary { stream_id, .. },
+    } = result(fx.query(&user, "artifacts.read", version_query("Read", &r), None))
+    else {
+        panic!()
+    };
+    std::fs::remove_file(fx.blob_file(&hex(&r.sha256))).unwrap();
+    let authority = fx.authority();
+    assert!(matches!(
+        fx.svc
+            .open_stream(&authority, &*fx.store, &user, &stream_id),
+        Err(StreamRefusal::NotFound)
+    ));
+}
+
+#[test]
+fn history_aggregates_never_repeat_a_revision() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let r = fx.saved("t1", "Agg", "text/plain", b"aggregates").artifact;
+    summary(fx.reference(&user, &r, json!({"kind": "root", "id": "root-a"}), 1));
+    let (svc, aid, ctx) = (fx.svc.clone(), r.artifact_id.clone(), user.clone());
+    fx.write(move |tx| {
+        as_failure(svc.share(
+            tx,
+            &ctx,
+            &aid,
+            &project("project-b"),
+            &Revision::new(1).unwrap(),
+        ))
+    });
+    let a = fx.artifact(&r.artifact_id);
+    summary(fx.delete(
+        &user,
+        json!({"kind": "DetachProject", "artifactId": r.artifact_id, "projectId": "project-b",
+            "expectedReferenceRevision": a.reference_revision.to_string()}),
+    ));
+    let a = fx.artifact(&r.artifact_id);
+    summary(fx.reference(
+        &user,
+        &r,
+        json!({"kind": "root", "id": "task-a"}),
+        a.reference_revision,
+    ));
+    let mut seen = std::collections::HashSet::new();
+    for e in fx.events() {
+        if e.aggregate_id == r.artifact_id.as_str() {
+            assert!(
+                seen.insert((e.aggregate_kind.clone(), e.aggregate_revision)),
+                "{} repeats {} revision {}",
+                e.kind,
+                e.aggregate_kind,
+                e.aggregate_revision
+            );
+        }
+    }
+    assert!(seen.len() >= 5);
+}
+
+#[test]
+fn previews_are_served_from_the_derived_cache_until_it_is_collected() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let hook = HookFiles::new(fx.files.clone());
+    let (svc, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    fx.source("t1", "t1.bin", b"cached preview", SourceOrigin::default());
+    let frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "P",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t1"}),
+        b"cached preview",
+    );
+    let authority = fx.authority();
+    let r =
+        saved(fx.command_via(&cases, &authority, &user, &frame, WriteOptions::default())).artifact;
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.h.ids,
+    };
+    let preview = || {
+        let frame = json!({"protocol": "1.0-draft.1", "queryId": "q-p", "limit": 1,
+            "query": version_query("Preview", &r)});
+        match result(
+            cases
+                .query(
+                    &gateway,
+                    &user,
+                    "artifacts.preview",
+                    frame.to_string().as_bytes(),
+                )
+                .unwrap(),
+        ) {
+            OperationResult::ArtifactsPreview { value } => value.preview,
+            other => panic!("{other:?}"),
+        }
+    };
+    let first = preview();
+    let reads = hook.read_ranges.load(Ordering::SeqCst);
+    assert!(reads >= 1);
+    let second = preview();
+    assert_eq!(
+        hook.read_ranges.load(Ordering::SeqCst),
+        reads,
+        "cache hit reads the source"
+    );
+    assert_eq!(hex(&first.sha256), hex(&second.sha256));
+    assert!(svc.collect_derived().unwrap() >= 1);
+    let third = preview();
+    assert!(
+        hook.read_ranges.load(Ordering::SeqCst) > reads,
+        "rebuilt after collection"
+    );
+    assert_eq!(hex(&first.sha256), hex(&third.sha256));
+}
+
+#[test]
+fn host_issued_sources_resolve_only_for_their_binding() {
+    use crate::fs::sources::{HostArtifactSources, IssueRefusal};
+    let fx = Fx::new();
+    let sources = Arc::new(HostArtifactSources::new(
+        fx.h.clock.clone(),
+        fx.h.ids.clone(),
+    ));
+    let (_, cases) = fx.service_with(fx.files.clone(), sources.clone());
+    let authority = fx.authority();
+    let dir = fx.h.root.0.with_extension("picked");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("picked.txt");
+    std::fs::write(&file, b"picked by the user").unwrap();
+    let bytes = b"picked by the user";
+    let save = |ctx: &InvocationContext, p: &str, source: Value| {
+        let frame = fx.save_frame(&fx.key(), p, "Picked", "text/plain", source, bytes);
+        fx.command_via(&cases, &authority, ctx, &frame, WriteOptions::default())
+    };
+    let in_a = fx
+        .user()
+        .with_lineage(Some(project("project-a")), None, None);
+    // Only user ingress mints upload tickets, and only for regular files.
+    assert_eq!(
+        sources.mint_upload(
+            &fx.ctx("agent-a", PrincipalKind::Agent, None),
+            &file,
+            60_000
+        ),
+        Err(IssueRefusal::HumanOnly)
+    );
+    assert_eq!(
+        sources.mint_upload(&in_a, &dir, 60_000),
+        Err(IssueRefusal::NotAFile)
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&file, dir.join("link.txt")).unwrap();
+        assert_eq!(
+            sources.mint_upload(&in_a, &dir.join("link.txt"), 60_000),
+            Err(IssueRefusal::NotAFile)
+        );
+    }
+    let ticket = sources.mint_upload(&in_a, &file, 60_000).unwrap();
+    let upload = json!({"kind": "Upload", "ticketId": ticket});
+    // Another principal, another project and an expired ticket are refused.
+    let agent = fx.ctx("agent-a", PrincipalKind::Agent, Some("project-a"));
+    assert_eq!(
+        refused(save(&agent, "project-a", upload.clone())).code,
+        DomainErrorCode::NotFound
+    );
+    assert_eq!(
+        refused(save(&fx.user(), "project-b", upload.clone())).code,
+        DomainErrorCode::PermissionDenied
+    );
+    let r = saved(save(&in_a, "project-a", upload.clone())).artifact;
+    assert_eq!(read_text(&fx, &in_a, &r).as_bytes(), bytes);
+    let stored = fx.artifact(&r.artifact_id);
+    assert_eq!(stored.provenance["originalName"], "picked.txt");
+    fx.h.clock.0.store(T0 + 61_000, Ordering::SeqCst);
+    assert_eq!(
+        refused(save(&in_a, "project-a", upload)).code,
+        DomainErrorCode::NotFound
+    );
+    fx.h.clock.0.store(T0, Ordering::SeqCst);
+    // Attachments and work outputs are registered by the host for their owning records.
+    let host = fx.ctx("host", PrincipalKind::Host, None);
+    assert_eq!(
+        sources.register_attachment(
+            &fx.user(),
+            &id("att-1"),
+            &project("project-a"),
+            &dir,
+            "picked.txt",
+            None
+        ),
+        Err(IssueRefusal::HostOnly)
+    );
+    sources
+        .register_attachment(
+            &host,
+            &id("att-1"),
+            &project("project-a"),
+            &dir,
+            "picked.txt",
+            Some("orig.txt".into()),
+        )
+        .unwrap();
+    let attachment = json!({"kind": "Attachment", "attachmentId": "att-1"});
+    assert_eq!(
+        refused(save(&fx.user(), "project-b", attachment.clone())).code,
+        DomainErrorCode::PermissionDenied
+    );
+    saved(save(&fx.user(), "project-a", attachment.clone()));
+    // A handle of another kind is unknown.
+    assert_eq!(
+        refused(save(
+            &fx.user(),
+            "project-a",
+            json!({"kind": "WorkOutput", "fileHandle": "att-1"})
+        ))
+        .code,
+        DomainErrorCode::NotFound
+    );
+    sources
+        .register_work_output(
+            &host,
+            &id("out-1"),
+            &actor("agent-a"),
+            &project("project-a"),
+            Some(RootId(id("root-a"))),
+            &dir,
+            "picked.txt",
+            SourceOrigin {
+                repository_revision: Some("abc123".into()),
+                ..SourceOrigin::default()
+            },
+        )
+        .unwrap();
+    let output = json!({"kind": "WorkOutput", "fileHandle": "out-1"});
+    let worker = fx.worker("agent-a");
+    let r = saved(save(&worker, "project-a", output.clone())).artifact;
+    assert_eq!(
+        fx.artifact(&r.artifact_id).provenance["repositoryRevision"],
+        "abc123"
+    );
+    assert_eq!(
+        refused(save(&fx.worker("agent-p"), "project-a", output)).code,
+        DomainErrorCode::NotFound
+    );
+    assert_eq!(
+        refused(save(
+            &fx.user(),
+            "project-a",
+            json!({"kind": "Upload", "ticketId": "unknown"})
+        ))
+        .code,
+        DomainErrorCode::NotFound
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

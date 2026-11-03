@@ -56,7 +56,23 @@ pub enum ReadRefusal {
     Io(String),
 }
 
+/// A verified open file for streaming. It yields at most `max_bytes + 1` bytes, so a caller that
+/// receives more than `max_bytes` knows the source exceeds the bound and refuses it.
+pub struct VerifiedFile {
+    pub reader: Box<dyn std::io::Read + Send>,
+    pub identity: Option<FileIdentity>,
+}
+
 /// The native read adapter.
 pub trait VerifiedReader: Send + Sync {
     fn read(&self, request: &ReadRequest<'_>) -> Result<VerifiedBytes, ReadRefusal>;
+    /// Opens the file with exactly the checks of [`Self::read`] and returns it for bounded
+    /// streaming instead of buffering it. The default buffers through [`Self::read`].
+    fn open(&self, request: &ReadRequest<'_>) -> Result<VerifiedFile, ReadRefusal> {
+        let v = self.read(request)?;
+        Ok(VerifiedFile {
+            reader: Box::new(std::io::Cursor::new(v.bytes)),
+            identity: v.identity,
+        })
+    }
 }

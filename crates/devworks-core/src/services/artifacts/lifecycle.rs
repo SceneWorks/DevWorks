@@ -4,9 +4,9 @@
 //! documents and backup items build on (share, append a version, resolve an exact version, pin
 //! retained blobs).
 use super::{
-    ArtifactService, AuthorizedScope, BLOB_AGGREGATE, Failure, Refusal, STAGE_CAPABILITY,
-    StagedFile, authorized_scope, check_quota, complete_operation, conflict, event, file_failure,
-    new_version, origin_links, put_staged_blob, rev, visible, visible_artifact,
+    ArtifactService, AuthorizedScope, BLOB_AGGREGATE, Failure, Refusal, StagedFile, StagingRef,
+    authorized_scope, check_quota, complete_operation, conflict, event, file_failure, new_version,
+    origin_links, put_staged_blob, rev, visible, visible_artifact,
 };
 use crate::authority::destructive::{
     self, BlockReason, DestructiveKind, EffectPlan, EntryKind, FilesystemResolver, InputNeeded,
@@ -16,9 +16,10 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::{Fingerprint, sha256_hex};
 use crate::gateway::AdmittedQuery;
 use crate::operations::OperationInput;
-use crate::ports::files::FileFault;
+use crate::ports::Preparation;
+use crate::ports::files::{ArtifactFiles, FileFault};
 use crate::ports::storage::{
-    ApplicationStore, ArtifactLink, ArtifactState, BlobRecord, BlobState, NewEvent,
+    ApplicationStore, ArtifactLink, ArtifactRead, ArtifactState, BlobRecord, BlobState, NewEvent,
     OperationRecord, ReadOptions, ReadSnapshot, StorageError, StoredArtifact, StoredVersion,
     SubjectKey, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
@@ -32,7 +33,7 @@ use crate::protocol::{
 };
 use crate::registry::{ModeBinding, OperationDescriptor};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -182,13 +183,13 @@ impl Read for ArtifactStream {
 
 #[derive(Debug)]
 pub enum StreamRefusal {
-    /// Unknown handle, another principal's handle, or a version deleted since it was issued.
+    /// Unknown handle, another principal's handle, a version deleted since it was issued, or a
+    /// stored file that is missing, corrupt or unreadable when opened (the retained
+    /// GetAttachment behavior reports an unreadable stored file as not found).
     NotFound,
     Expired,
     /// Current authority no longer allows the operation that issued it.
     Denied(AuthorityDenial),
-    /// The stored file is missing, corrupt or unreadable.
-    Unavailable(FileFault),
     Storage(StorageError),
 }
 
@@ -265,9 +266,11 @@ pub struct RecoveryReport {
     pub removed_orphans: Vec<String>,
     /// Interrupted physical removals that were finished.
     pub finished_unlinks: Vec<String>,
-    /// Present blobs whose file is missing or has the wrong length: an integrity problem that is
-    /// reported, never repaired by changing metadata.
+    /// Present blobs whose file is missing: an integrity problem that is reported, never
+    /// repaired by changing metadata.
     pub missing: Vec<String>,
+    /// Corrupt digest files (wrong digest, even with the right length) moved into quarantine.
+    pub quarantined: Vec<String>,
 }
 
 /// Resolution of one exact version reference (citation seam).
@@ -317,14 +320,59 @@ fn blob_event(
     Ok(())
 }
 
-pub(super) fn unresolved_staging(
-    s: &dyn ReadSnapshot,
-) -> Result<Vec<OperationRecord>, StorageError> {
-    Ok(s.operations()
-        .unresolved(500)?
-        .into_iter()
-        .filter(|o| o.capability == STAGE_CAPABILITY)
-        .collect())
+/// Whether `digest` is still claimed for removal (another pass may have finished it).
+fn still_claimed(read: &dyn ArtifactRead, digest: &str) -> Result<bool, StorageError> {
+    Ok(read
+        .blob(digest)?
+        .is_some_and(|b| b.state == BlobState::Unlinking))
+}
+
+/// The digest, length and managed path a staging operation journaled.
+fn staged_path(files: &dyn ArtifactFiles, op: &OperationRecord) -> Option<(String, i64, String)> {
+    let digest = op.payload.get("digest")?.as_str()?.to_owned();
+    let bytes = op.payload.get("byteCount")?.as_i64()?;
+    let path = files.managed_path(&digest).ok()?;
+    Some((digest, bytes, path))
+}
+
+/// Resolves one staging operation of an earlier boot inside its own write: re-read under the
+/// transaction, completed when its version committed, otherwise failed with its digest claimed
+/// when nothing else names it. `None` when it changed since it was listed.
+fn resolve_stale(
+    tx: &mut dyn WriteTransaction,
+    listed: OperationRecord,
+    staged: Option<(String, i64, String)>,
+) -> Result<Option<(OperationId, bool, Option<String>)>, StorageError> {
+    let Some(op) = tx.operations().operation(&listed.id)? else {
+        return Ok(None);
+    };
+    if crate::ports::storage::is_terminal(op.state) || op.revision != listed.revision {
+        return Ok(None);
+    }
+    let published = tx.artifacts().version_by_operation(&op.id)?.is_some();
+    let to = if published && op.state != OperationState::Preflighted {
+        OperationState::ObservedComplete
+    } else {
+        OperationState::Failed
+    };
+    let fence = op.latest_attempt().map(|a| a.fence());
+    tx.operations().transition(
+        &op.id,
+        op.revision,
+        fence.as_ref(),
+        to,
+        Some(json!({"recovered": if published { "metadata committed" } else { "metadata never committed" }})),
+    )?;
+    let mut claim = None;
+    if !published
+        && let Some((digest, bytes, path)) = staged
+        && tx
+            .artifacts()
+            .claim_unreferenced(&digest, bytes, &path, Some(&op.id))?
+    {
+        claim = Some(digest);
+    }
+    Ok(Some((op.id, published, claim)))
 }
 
 impl ArtifactService {
@@ -380,7 +428,7 @@ impl ArtifactService {
         let reader = self
             .files
             .open(&grant.digest, grant.byte_count as u64)
-            .map_err(StreamRefusal::Unavailable)?;
+            .map_err(|_| StreamRefusal::NotFound)?;
         Ok(ArtifactStream {
             grant,
             reader,
@@ -486,8 +534,10 @@ impl ArtifactService {
 
     /// Physically removes blobs no live version names, skipping those a backup pins or a reader
     /// holds. Claim (`Unlinking`) commits before the file is removed and the outcome after, so a
-    /// crash in between is finished by [`Self::recover`]; a failure is visible and retried.
+    /// crash in between is finished by [`Self::recover`]; a failure is visible and retried. It
+    /// first retries staging resolutions that could not be written earlier in this boot.
     pub fn collect(&self, store: &dyn ApplicationStore) -> Result<CollectReport, StorageError> {
+        self.retry_pending(&Preparation::new(store, None, None));
         let pending = read_snapshot(store, &ReadOptions::default(), |s| {
             s.artifacts().blobs_in(BlobState::UnlinkPending, None, 500)
         })?;
@@ -524,6 +574,9 @@ impl ArtifactService {
         Ok(report)
     }
 
+    /// Removes the files of claimed (`Unlinking`) digests and records each outcome: `Unlinked`,
+    /// or back to `UnlinkPending` with the visible error so the next collection retries it. A
+    /// digest another pass already finished is skipped (claims are idempotent).
     fn unlink_claimed(
         &self,
         store: &dyn ApplicationStore,
@@ -541,6 +594,9 @@ impl ArtifactService {
         let (d, f) = (done.clone(), failed.clone());
         run_write(store, WriteOptions::default(), move |tx| {
             for digest in &d {
+                if !still_claimed(tx.artifacts(), digest)? {
+                    continue;
+                }
                 tx.artifacts().set_blob_state(
                     digest,
                     BlobState::Unlinking,
@@ -550,6 +606,9 @@ impl ArtifactService {
                 blob_event(tx, &host, digest, "ArtifactBlobUnlinked", json!({}))?;
             }
             for (digest, error) in &f {
+                if !still_claimed(tx.artifacts(), digest)? {
+                    continue;
+                }
                 tx.artifacts().set_blob_state(
                     digest,
                     BlobState::Unlinking,
@@ -569,85 +628,123 @@ impl ArtifactService {
         Ok((done, failed))
     }
 
-    /// Reconciles staging after a restart: interrupted staging operations of earlier boots are
-    /// completed (metadata committed) or failed (it never did); staged files and digest files
-    /// without metadata that no in-flight operation of this boot names are removed; interrupted
-    /// physical removals are finished; Present blobs with a missing file are reported.
+    /// Reconciles staging and managed files. Safe while commands are admitted: it resolves only
+    /// staging operations of earlier boots (and resolutions this service could not write
+    /// earlier), and every file it removes is claimed in the store first.
+    ///
+    /// * Interrupted staging operations of earlier boots are completed (metadata committed) or
+    ///   failed (it never did), and their digest is claimed when nothing else names it.
+    /// * A staged file is removed only when its operation is resolved (or absent: the journal
+    ///   entry always commits before its file exists).
+    /// * A digest file without metadata is verified: a corrupt one is quarantined; an intact one
+    ///   is claimed (no blob row, no unresolved staging naming it) and only then removed.
+    /// * Interrupted physical removals are finished.
+    /// * Present blobs are verified: a missing file is reported; a corrupt one (even with the
+    ///   right length) is quarantined and reported. Metadata is never changed to hide either.
     pub fn recover(&self, store: &dyn ApplicationStore) -> Result<RecoveryReport, StorageError> {
+        let env = Preparation::new(store, None, None);
+        self.retry_pending(&env);
         let boot = store.info().boot_id;
-        let ops = read_snapshot(store, &ReadOptions::default(), unresolved_staging)?;
-        let (stale, in_flight): (Vec<_>, Vec<_>) = ops.into_iter().partition(|o| {
-            o.latest_attempt()
-                .is_none_or(|a| Some(&a.boot_id) != boot.as_ref())
-        });
-        let keep_staging: HashSet<String> = in_flight
-            .iter()
-            .map(|o| format!("{}.part", o.id.0.as_str()))
-            .collect();
-        let keep_digests: HashSet<String> = in_flight
-            .iter()
-            .filter_map(|o| {
-                o.payload
-                    .get("digest")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect();
         let mut report = RecoveryReport::default();
-        let resolved = run_write(store, WriteOptions::default(), move |tx| {
-            let mut out = Vec::new();
+        let mut claimed = Vec::new();
+        let mut after: Option<OperationId> = None;
+        loop {
+            let page = read_snapshot(store, &ReadOptions::default(), |s| {
+                let ids = s.artifacts().unresolved_staging(after.as_ref(), 500)?;
+                let mut records = Vec::with_capacity(ids.len());
+                for id in &ids {
+                    if let Some(r) = s.operations().operation(id)? {
+                        records.push(r);
+                    }
+                }
+                Ok((ids, records))
+            })?;
+            let (ids, records) = page;
+            let stale: Vec<OperationRecord> = records
+                .into_iter()
+                .filter(|o| {
+                    o.latest_attempt()
+                        .is_none_or(|a| Some(&a.boot_id) != boot.as_ref())
+                })
+                .collect();
             for op in stale {
-                let published = tx.artifacts().version_by_operation(&op.id)?.is_some();
-                let to = if published && op.state != OperationState::Preflighted {
-                    OperationState::ObservedComplete
-                } else {
-                    OperationState::Failed
-                };
-                let fence = op.latest_attempt().map(|a| a.fence());
-                tx.operations().transition(
-                    &op.id,
-                    op.revision,
-                    fence.as_ref(),
-                    to,
-                    Some(json!({"recovered": if published { "metadata committed" } else { "metadata never committed" }})),
-                )?;
-                out.push((op.id, published));
+                let path = staged_path(&*self.files, &op);
+                let resolved = run_write(store, WriteOptions::default(), move |tx| {
+                    resolve_stale(tx, op, path)
+                })?;
+                match resolved {
+                    Some((id, true, _)) => report.completed.push(id),
+                    Some((id, false, claim)) => {
+                        report.failed.push(id);
+                        if let Some(d) = claim {
+                            if self.files.inspect(&d).ok().flatten().is_some() {
+                                report.removed_orphans.push(d.clone());
+                            }
+                            claimed.push(d);
+                        }
+                    }
+                    None => {}
+                }
             }
-            Ok(out)
-        })?;
-        for (id, published) in resolved {
-            if published {
-                report.completed.push(id);
-            } else {
-                report.failed.push(id);
+            match ids.last() {
+                Some(last) if ids.len() == 500 => after = Some(last.clone()),
+                _ => break,
             }
         }
         for name in self.files.staged().map_err(file_failure)? {
-            if !keep_staging.contains(&name) {
+            let op = name
+                .strip_suffix(".part")
+                .and_then(|id| Id::new(id).ok())
+                .map(OperationId);
+            let resolved = match &op {
+                None => false,
+                Some(op) => read_snapshot(store, &ReadOptions::default(), |s| {
+                    Ok(s.operations()
+                        .operation(op)?
+                        .is_none_or(|o| crate::ports::storage::is_terminal(o.state)))
+                })?,
+            };
+            if resolved {
                 self.files.remove_staged(&name).map_err(file_failure)?;
                 report.removed_staging.push(name);
             }
         }
-        let on_disk = self.files.stored_digests().map_err(file_failure)?;
-        let orphans = read_snapshot(store, &ReadOptions::default(), |s| {
-            let mut out = Vec::new();
-            for d in on_disk {
-                if !keep_digests.contains(&d) && s.artifacts().blob(&d)?.is_none() {
-                    out.push(d);
+        for d in self.files.stored_digests().map_err(file_failure)? {
+            let row = read_snapshot(store, &ReadOptions::default(), |s| s.artifacts().blob(&d))?;
+            if row.as_ref().is_some_and(|b| b.state != BlobState::Unlinked) {
+                continue;
+            }
+            match self.files.inspect(&d) {
+                Ok(None) => {}
+                Err(FileFault::Corrupt(_)) => {
+                    self.files.quarantine(&d).map_err(file_failure)?;
+                    report.quarantined.push(d);
+                }
+                Err(f) => return Err(file_failure(f)),
+                Ok(Some(len)) => {
+                    let path = self.files.managed_path(&d).map_err(file_failure)?;
+                    let digest = d.clone();
+                    let claim = run_write(store, WriteOptions::default(), move |tx| {
+                        tx.artifacts()
+                            .claim_unreferenced(&digest, len as i64, &path, None)
+                    })?;
+                    if claim {
+                        claimed.push(d.clone());
+                        report.removed_orphans.push(d);
+                    }
                 }
             }
-            Ok(out)
-        })?;
-        for d in orphans {
-            self.files.unlink(&d).map_err(file_failure)?;
-            report.removed_orphans.push(d);
         }
         let interrupted = read_snapshot(store, &ReadOptions::default(), |s| {
             s.artifacts().blobs_in(BlobState::Unlinking, None, 500)
         })?;
-        let (done, _) =
-            self.unlink_claimed(store, interrupted.into_iter().map(|b| b.digest).collect())?;
-        report.finished_unlinks = done;
+        for b in interrupted {
+            if !claimed.contains(&b.digest) {
+                report.finished_unlinks.push(b.digest.clone());
+                claimed.push(b.digest);
+            }
+        }
+        self.unlink_claimed(store, claimed)?;
         let mut after: Option<String> = None;
         loop {
             let page = read_snapshot(store, &ReadOptions::default(), |s| {
@@ -655,12 +752,14 @@ impl ArtifactService {
                     .blobs_in(BlobState::Present, after.as_deref(), 500)
             })?;
             for b in &page {
-                if !self
-                    .files
-                    .present(&b.digest, b.byte_count as u64)
-                    .unwrap_or(false)
-                {
-                    report.missing.push(b.digest.clone());
+                match self.files.inspect(&b.digest) {
+                    Ok(Some(len)) if len == b.byte_count as u64 => {}
+                    Ok(None) => report.missing.push(b.digest.clone()),
+                    Ok(Some(_)) | Err(FileFault::Corrupt(_)) => {
+                        self.files.quarantine(&b.digest).map_err(file_failure)?;
+                        report.quarantined.push(b.digest.clone());
+                    }
+                    Err(_) => report.missing.push(b.digest.clone()),
                 }
             }
             match page.last() {
@@ -671,58 +770,117 @@ impl ArtifactService {
         Ok(report)
     }
 
-    /// Resolves a staging operation whose metadata was not committed: under the staging
-    /// attempt's journal fence, a still-`Dispatching` operation with no published version
-    /// becomes `Failed`, and its staged file and digest file become collectible. The digest file
-    /// is removed only when no blob row and no other in-flight staging names it (bytes another
-    /// artifact holds are never touched). Returns `false` when there was nothing to resolve
-    /// (already resolved, for example by recovery, or committed after all); calling it again is
-    /// a no-op.
+    /// Resolves a staging operation whose metadata was not committed, under the staging
+    /// attempt's journal fence and in one write: a still-`Dispatching` operation becomes
+    /// `ObservedComplete` if its version did commit (an unknown commit outcome that succeeded)
+    /// and `Failed` otherwise, and in the same transaction its digest is claimed when no blob
+    /// row and no other unresolved staging names it. Only after that commits are the staged file
+    /// and the claimed digest file removed. Returns `false` when there was nothing to resolve
+    /// (already resolved, for example by recovery, or never journaled under this fence);
+    /// calling it again is a no-op.
     pub fn abandon(
         &self,
-        store: &dyn ApplicationStore,
-        staged: &StagedFile,
+        env: &Preparation<'_>,
+        staged: &StagingRef,
+        reason: Value,
     ) -> Result<bool, StorageError> {
-        let (op, fence) = (staged.operation_id.clone(), staged.fence.clone());
-        let resolved = run_write(store, WriteOptions::default(), move |tx| {
-            let Some(rec) = tx.operations().operation(&op)? else {
-                return Ok(false);
+        let path = self
+            .files
+            .managed_path(&staged.digest)
+            .map_err(file_failure)?;
+        let s = staged.clone();
+        let resolved = env.write(move |tx| {
+            let Some(rec) = tx.operations().operation(&s.operation_id)? else {
+                return Ok(None);
             };
             if rec.state != OperationState::Dispatching
-                || rec.latest_attempt().map(|a| a.fence()).as_ref() != Some(&fence)
-                || tx.artifacts().version_by_operation(&op)?.is_some()
+                || rec.latest_attempt().map(|a| a.fence()).as_ref() != Some(&s.fence)
             {
-                return Ok(false);
+                return Ok(None);
+            }
+            if tx
+                .artifacts()
+                .version_by_operation(&s.operation_id)?
+                .is_some()
+            {
+                tx.operations().transition(
+                    &s.operation_id,
+                    rec.revision,
+                    Some(&s.fence),
+                    OperationState::ObservedComplete,
+                    Some(json!({"reconciled": "the save had committed"})),
+                )?;
+                return Ok(Some(false));
             }
             tx.operations().transition(
-                &op,
+                &s.operation_id,
                 rec.revision,
-                Some(&fence),
+                Some(&s.fence),
                 OperationState::Failed,
-                Some(json!({"abandoned": "the save was not committed"})),
+                Some(reason),
             )?;
-            Ok(true)
+            let claimed = tx.artifacts().claim_unreferenced(
+                &s.digest,
+                s.byte_count,
+                &path,
+                Some(&s.operation_id),
+            )?;
+            Ok(Some(claimed))
         })?;
-        if !resolved {
+        let Some(claimed) = resolved else {
             return Ok(false);
-        }
-        let own = staged.operation_id.clone();
+        };
         self.files
-            .remove_staged(&format!("{}.part", own.0.as_str()))
+            .remove_staged(&format!("{}.part", staged.operation_id.0.as_str()))
             .map_err(file_failure)?;
-        let keep = read_snapshot(store, &ReadOptions::default(), |s| {
-            if s.artifacts().blob(&staged.digest)?.is_some() {
-                return Ok(true);
-            }
-            Ok(unresolved_staging(s)?.iter().any(|o| {
-                o.id != own
-                    && o.payload.get("digest").and_then(Value::as_str) == Some(&staged.digest)
-            }))
-        })?;
-        if !keep {
-            self.files.unlink(&staged.digest).map_err(file_failure)?;
+        if claimed {
+            let outcome = self.files.unlink(&staged.digest);
+            let (digest, error) = (
+                staged.digest.clone(),
+                outcome.err().map(|f| format!("{f:?}")),
+            );
+            env.write(move |tx| {
+                if still_claimed(tx.artifacts(), &digest)? {
+                    let to = if error.is_some() {
+                        BlobState::UnlinkPending
+                    } else {
+                        BlobState::Unlinked
+                    };
+                    tx.artifacts().set_blob_state(
+                        &digest,
+                        BlobState::Unlinking,
+                        to,
+                        error.as_deref(),
+                    )?;
+                }
+                Ok(())
+            })?;
         }
         Ok(true)
+    }
+
+    /// Resolves `staged` now, or remembers it for the next [`Self::recover`] /
+    /// [`Self::collect`] in this boot when the resolution itself cannot be written.
+    pub(super) fn abandon_or_defer(
+        &self,
+        env: &Preparation<'_>,
+        staged: &StagingRef,
+        reason: Value,
+    ) {
+        if self.abandon(env, staged, reason.clone()).is_err() {
+            self.pending
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push((staged.clone(), reason));
+        }
+    }
+
+    /// Retries deferred resolutions; those that still fail stay deferred.
+    fn retry_pending(&self, env: &Preparation<'_>) {
+        let pending = std::mem::take(&mut *self.pending.lock().unwrap_or_else(|p| p.into_inner()));
+        for (staged, reason) in pending {
+            self.abandon_or_defer(env, &staged, reason);
+        }
     }
 
     /// Removes every derived (rebuildable) payload; retained blobs are untouched.

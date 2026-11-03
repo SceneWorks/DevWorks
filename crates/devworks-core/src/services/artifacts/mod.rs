@@ -8,12 +8,14 @@
 //! A save is published in this order, so a crash at any point is reconcilable:
 //!
 //! 1. [`CommandHandler::prepare`] (after admission and current authority, outside any write
-//!    transaction) resolves the host source handle ([`ArtifactSources`]), reads it with the
-//!    verified no-follow bounded reader and checks the caller's expected digest and length;
+//!    transaction; skipped for replay-only authority and stopped by cancellation or the command's
+//!    deadline) resolves the host source handle ([`ArtifactSources`]) and opens it with the
+//!    verified no-follow reader;
 //! 2. it journals a staging operation (`artifacts.stage_file`, committed as `Dispatching`) in its
-//!    own small write;
-//! 3. the file port stages the bytes in `staging/`, flushes and verifies them, renames them to
-//!    their content-addressed location in `artifacts/` and flushes the directory;
+//!    own small write, through a preparation port limited to the journal and artifact records;
+//! 3. the file port streams the bytes in bounded chunks into `staging/` while hashing them,
+//!    checks the caller's expected digest and length, flushes them, renames them to their
+//!    content-addressed location in `artifacts/` and flushes every directory involved;
 //! 4. [`CommandHandler::decide`] — inside the gateway's unit of work, atomically with the receipt
 //!    — records the blob, the artifact and its immutable version, origin links, provenance and
 //!    history, and completes the staging operation.
@@ -22,9 +24,18 @@
 //! [`ArtifactService::recover`] fails the operation and collects the files. Committed metadata
 //! never names a file that was not durably published; a file without metadata is never visible.
 //! When the process survives but step 4 does not commit (a refusal such as the in-transaction
-//! quota check, a replay, a denial or a rollback), [`CommandHandler::settle`] resolves the
-//! staging operation at once under its attempt fence ([`ArtifactService::abandon`]), so it never
-//! waits for the next boot and is never resolved twice.
+//! quota check, a replay, a denial, a rollback or an unknown commit outcome),
+//! [`CommandHandler::settle`] resolves the staging operation at once under its attempt fence
+//! ([`ArtifactService::abandon`]); a resolution that cannot be written is retried later in the
+//! same boot, and nothing is resolved twice.
+//!
+//! **Removing an unreferenced file is always claimed first.** In one write transaction the
+//! digest must have no live blob row and no unresolved staging operation may name it; the row
+//! becomes `Unlinking`. Only after that commits is the file removed and marked `Unlinked`. A save
+//! that finds the digest `Unlinking` (or a non-`Present` row, or no row, without its file in
+//! place) refuses as `Busy` and retries, so a concurrent save can never commit metadata for a
+//! file that is being removed. Collection, abandonment and recovery all use this claim, which is
+//! what makes recovery safe to run while commands are admitted.
 //!
 //! # Versions, references and deletion (AD 59)
 //!
@@ -72,9 +83,8 @@ use crate::operations::{OperationInput, artifacts as ops};
 use crate::ports::files::{ArtifactFiles, ArtifactSources, FileFault, SourceOrigin, SourceRefusal};
 use crate::ports::storage::{
     ArtifactLink, ArtifactState, AttemptBinding, AttemptFence, BlobState, ConfigScope,
-    ConfigurationRead, LinkPurpose, ListPosition, NewEvent, NewOperation, ReadOptions,
-    ReadSnapshot, StorageError, StoredArtifact, StoredVersion, SubjectKey, Unavailable,
-    WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ConfigurationRead, LinkPurpose, ListPosition, NewEvent, NewOperation, ReadSnapshot,
+    StorageError, StoredArtifact, StoredVersion, SubjectKey, Unavailable, WriteTransaction,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -114,10 +124,16 @@ pub const OPERATIONS: [&str; 7] = [
 /// project and, where there is one, the origin or referencing work root, so work history
 /// navigates to its artifacts and an artifact's history navigates back (HISTORY-01/02).
 pub const ARTIFACT_AGGREGATE: &str = "artifact";
+/// History aggregate of an artifact's reference set (`aggregate_revision` = reference revision).
+pub const REFERENCES_AGGREGATE: &str = "artifact_references";
+/// History aggregate of an artifact's visibility scope (`aggregate_revision` = scope revision).
+pub const SCOPE_AGGREGATE: &str = "artifact_scope";
+/// History aggregate of an artifact's exports (ordered by commit; no artifact revision changes).
+pub const EXPORT_AGGREGATE: &str = "artifact_export";
 /// History aggregate of a managed blob's physical lifecycle (`aggregate_id` = digest).
 pub const BLOB_AGGREGATE: &str = "artifact_blob";
 /// Journal capability of a staged file publication.
-pub const STAGE_CAPABILITY: &str = "artifacts.stage_file";
+pub use crate::ports::storage::STAGE_CAPABILITY;
 /// Largest inline text window of one `artifacts.read` page.
 pub const READ_WINDOW: usize = 65536;
 /// Fault target kind of a delete refused because live references outside the caller's
@@ -194,9 +210,11 @@ fn file_failure(f: FileFault) -> StorageError {
         FileFault::Corrupt(e) => StorageError::unavailable(Unavailable::Corrupt, e),
         FileFault::NotFound => StorageError::unavailable(Unavailable::Io, "managed file missing"),
         FileFault::Exists => StorageError::unavailable(Unavailable::Io, "file exists"),
-        FileFault::Io(e) | FileFault::Unsupported(e) => {
+        FileFault::Io(e) | FileFault::Unsupported(e) | FileFault::Source(e) => {
             StorageError::unavailable(Unavailable::Io, e)
         }
+        FileFault::Mismatch => StorageError::unavailable(Unavailable::Io, "source changed"),
+        FileFault::TooLarge => StorageError::unavailable(Unavailable::Io, "source too large"),
     }
 }
 
@@ -413,6 +431,17 @@ fn event(
             map.insert("sessionId".into(), json!(s.as_str()));
         }
     }
+    // Each event belongs to the aggregate of the revision dimension it advances, so no
+    // aggregate ever records the same revision twice.
+    let (aggregate_kind, aggregate_revision) = match kind {
+        "ArtifactReferenced" | "ArtifactProjectDetached" => {
+            (REFERENCES_AGGREGATE, artifact.reference_revision)
+        }
+        "ArtifactShared" => (SCOPE_AGGREGATE, artifact.scope_revision),
+        // An export changes no artifact revision: its own aggregate orders by commit.
+        "ArtifactExported" => (EXPORT_AGGREGATE, tx.committed_sequence()? + 1),
+        _ => (ARTIFACT_AGGREGATE, artifact.revision),
+    };
     let id = EventId(tx.new_id(IdKind::Event));
     tx.history().append(NewEvent {
         id,
@@ -420,9 +449,9 @@ fn event(
         project_id: Some(artifact.current_project_id.clone()),
         root_id: root,
         operation_id: operation,
-        aggregate_kind: ARTIFACT_AGGREGATE.into(),
+        aggregate_kind: aggregate_kind.into(),
         aggregate_id: artifact.id.as_str().to_owned(),
-        aggregate_revision: artifact.revision,
+        aggregate_revision,
         kind: kind.into(),
         payload,
     })
@@ -464,6 +493,47 @@ pub struct StagedFile {
     /// The staging attempt's journal fence: only this attempt's owner resolves the operation.
     pub fence: AttemptFence,
 }
+impl StagedFile {
+    pub fn staging_ref(&self) -> StagingRef {
+        StagingRef {
+            operation_id: self.operation_id.clone(),
+            fence: self.fence.clone(),
+            digest: self.digest.clone(),
+            byte_count: self.byte_count,
+        }
+    }
+}
+
+/// What resolving a journaled staging operation needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StagingRef {
+    pub operation_id: OperationId,
+    pub fence: AttemptFence,
+    pub digest: String,
+    pub byte_count: i64,
+}
+
+/// Wraps a source so a cancelled or expired command stops between chunks.
+struct Stoppable<'a> {
+    inner: &'a mut dyn std::io::Read,
+    env: &'a Preparation<'a>,
+    clock: &'a dyn Clock,
+}
+impl std::io::Read for Stoppable<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.env.stopped(self.clock.now_ms().get()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "stopped",
+            ));
+        }
+        self.inner.read(buf)
+    }
+}
+
+/// Fault target kind of a save refused because the existing managed file for its digest is
+/// corrupt: an integrity problem that retrying cannot fix (recovery quarantines the file).
+pub const INTEGRITY_TARGET: &str = "artifact_blob_corrupt";
 
 fn source_json(source: &ArtifactSource) -> Value {
     serde_json::to_value(source).unwrap_or(Value::Null)
@@ -506,6 +576,9 @@ pub struct ArtifactService {
     pub(crate) ids: Arc<dyn IdSource>,
     pub(crate) streams: Streams,
     pub(crate) readers: Readers,
+    /// Staging resolutions that could not be written when they arose; retried by the next
+    /// recovery or collection in this boot.
+    pub(crate) pending: std::sync::Mutex<Vec<(StagingRef, Value)>>,
 }
 
 impl ArtifactService {
@@ -524,6 +597,7 @@ impl ArtifactService {
             ids,
             streams: Streams::default(),
             readers: Readers::default(),
+            pending: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -548,12 +622,12 @@ impl ArtifactService {
             expected_bytes,
             request_digest,
         } = *request;
-        let cancelled = || env.cancellation.is_some_and(|c| c.is_cancelled());
-        if cancelled() {
+        let stopped = || env.stopped(self.clock.now_ms().get());
+        if stopped() {
             return Err(StorageError::Cancelled);
         }
         let digest = String::from(expected_digest.clone());
-        let limits = read_snapshot(env.store, &ReadOptions::default(), |s| {
+        let limits = env.read(|s| {
             let max = setting_i64(s.configuration(), None, ARTIFACT_MAX_FILE_KEY);
             let quota = setting_i64(s.configuration(), Some(project), ARTIFACT_QUOTA_KEY);
             let new_bytes = s.artifacts().blob(&digest)?.is_none();
@@ -568,18 +642,21 @@ impl ArtifactService {
             }
             (Err(Failure::Storage(e)), _) | (_, Err(Failure::Storage(e))) => return Err(e),
         };
-        if expected_bytes > max {
-            return Ok(Staging::Refused(Refusal::new(
+        let too_large = || {
+            Refusal::new(
                 DomainErrorCode::InvalidArgument,
                 "artifact_file_limit",
                 None,
-            )));
+            )
+        };
+        if expected_bytes > max {
+            return Ok(Staging::Refused(too_large()));
         }
         // Bytes no blob holds yet always add to usage: refuse before reading or staging them.
         if quota > 0 && new_bytes && usage.saturating_add(expected_bytes) > quota {
             return Ok(Staging::Refused(quota_refusal(project)));
         }
-        let resolved = match self.sources.resolve(ctx, source) {
+        let resolved = match self.sources.resolve(ctx, source, project) {
             Ok(r) => r,
             Err(SourceRefusal::NotFound) => {
                 return Ok(Staging::Refused(Refusal::new(
@@ -596,25 +673,19 @@ impl ArtifactService {
                 )));
             }
         };
-        let read = self.reader.read(&ReadRequest {
+        if stopped() {
+            return Err(StorageError::Cancelled);
+        }
+        let opened = self.reader.open(&ReadRequest {
             root: &resolved.root,
             relative: &resolved.relative,
             max_bytes: max as u64,
             allow_hard_links: false,
         });
-        let bytes = match read {
-            Ok(v) => v.bytes,
+        let mut file = match opened {
+            Ok(f) => f.reader,
             Err(r) => return Ok(Staging::Refused(read_refusal(r)?)),
         };
-        if bytes.len() as i64 != expected_bytes || sha256_hex(&bytes) != digest {
-            return Ok(Staging::Refused(
-                Refusal::new(DomainErrorCode::SourceChanged, "artifact_source", None)
-                    .retry(RetryAdvice::RefreshAndNewRequest),
-            ));
-        }
-        if cancelled() {
-            return Err(StorageError::Cancelled);
-        }
         let payload = json!({
             "digest": digest,
             "byteCount": expected_bytes,
@@ -623,7 +694,7 @@ impl ArtifactService {
             "source": source_json(source),
         });
         let args = sha256_hex(payload.to_string().as_bytes());
-        let operation = run_write(env.store, WriteOptions::default(), move |tx| {
+        let (operation, fence) = env.write(move |tx| {
             let id = OperationId(tx.new_id(IdKind::Operation));
             tx.operations().record_intent(NewOperation {
                 id: id.clone(),
@@ -646,20 +717,51 @@ impl ArtifactService {
             )?;
             Ok((id, attempt.fence()))
         })?;
-        let (operation, fence) = operation;
+        let staging = StagingRef {
+            operation_id: operation.clone(),
+            fence: fence.clone(),
+            digest: digest.clone(),
+            byte_count: expected_bytes,
+        };
         let staging_name = format!("{}.part", operation.0.as_str());
-        let published = match self.files.publish(&staging_name, &bytes, &digest) {
+        let published = {
+            let mut source = Stoppable {
+                inner: &mut *file,
+                env,
+                clock: &*self.clock,
+            };
+            self.files.publish(
+                &staging_name,
+                &mut source,
+                max as u64,
+                &digest,
+                expected_bytes as u64,
+            )
+        };
+        let published = match published {
             Ok(p) => p,
             Err(fault) => {
-                let diagnostic = format!("{fault:?}");
-                // Best effort: the failure stays visible on the journaled operation; recovery
-                // resolves it if this write cannot be made either.
-                let _ = fail_operation(env.store, &operation, json!({"failed": diagnostic}));
-                return Err(file_failure(fault));
+                // The failure stays visible on the journaled operation; if that write cannot be
+                // made either, the resolution is retried later in this boot.
+                self.abandon_or_defer(env, &staging, json!({"failed": format!("{fault:?}")}));
+                return match fault {
+                    FileFault::Source(_) if stopped() => Err(StorageError::Cancelled),
+                    FileFault::Mismatch => Ok(Staging::Refused(
+                        Refusal::new(DomainErrorCode::SourceChanged, "artifact_source", None)
+                            .retry(RetryAdvice::RefreshAndNewRequest),
+                    )),
+                    FileFault::TooLarge => Ok(Staging::Refused(too_large())),
+                    FileFault::Corrupt(_) => Ok(Staging::Refused(Refusal::new(
+                        DomainErrorCode::StorageUnavailable,
+                        INTEGRITY_TARGET,
+                        Id::new(digest.clone()).ok(),
+                    ))),
+                    f => Err(file_failure(f)),
+                };
             }
         };
-        if cancelled() {
-            let _ = fail_operation(env.store, &operation, json!({"cancelled": true}));
+        if stopped() {
+            self.abandon_or_defer(env, &staging, json!({"cancelled": true}));
             return Err(StorageError::Cancelled);
         }
         Ok(Staging::Staged(StagedFile {
@@ -697,32 +799,6 @@ fn quota_refusal(project: &ProjectId) -> Refusal {
         QUOTA_TARGET,
         Some(project.0.clone()),
     )
-}
-
-/// Fails a journaled staging operation (from `Dispatching`) with an attributed observation.
-pub(crate) fn fail_operation(
-    store: &dyn crate::ports::storage::ApplicationStore,
-    operation: &OperationId,
-    observation: Value,
-) -> Result<(), StorageError> {
-    let operation = operation.clone();
-    run_write(store, WriteOptions::default(), move |tx| {
-        let Some(op) = tx.operations().operation(&operation)? else {
-            return Ok(());
-        };
-        if crate::ports::storage::is_terminal(op.state) {
-            return Ok(());
-        }
-        let fence = op.latest_attempt().map(|a| a.fence());
-        tx.operations().transition(
-            &operation,
-            op.revision,
-            fence.as_ref(),
-            OperationState::Failed,
-            Some(observation),
-        )?;
-        Ok(())
-    })
 }
 
 /// Completes a staging operation inside the publishing transaction.
@@ -1391,11 +1467,24 @@ impl ArtifactService {
     }
 
     fn preview_of(&self, v: &StoredVersion) -> Result<(preview::Preview, ArtifactRef), Failure> {
-        let head = self.blob_range(v, 0, preview::PREVIEW_BYTES)?;
-        let p = preview::build(&v.media_type, &head, v.byte_count as u64);
         let pid = preview::preview_id(v.id.as_str());
-        // The derived cache is disposable: a failed cache write only means it is rebuilt.
-        let _ = self.files.write_derived(&pid, &p.bytes);
+        // The derived cache is disposable: a missing or unreadable entry is rebuilt from the
+        // verified source, and a failed cache write only means it is rebuilt next time.
+        let cached = self
+            .files
+            .read_derived(&pid, preview::PREVIEW_BYTES + 256)
+            .ok()
+            .flatten()
+            .and_then(|b| preview::decode_cached(&b));
+        let p = match cached {
+            Some(p) => p,
+            None => {
+                let head = self.blob_range(v, 0, preview::PREVIEW_BYTES)?;
+                let p = preview::build(&v.media_type, &head, v.byte_count as u64);
+                let _ = self.files.write_derived(&pid, &preview::encode_cached(&p));
+                p
+            }
+        };
         let reference = ArtifactRef {
             artifact_id: v.artifact_id.clone(),
             version_id: Id::new(pid).expect("derived id"),
@@ -1666,9 +1755,7 @@ impl CommandHandler for ArtifactService {
             return Ok(None);
         };
         // A replay decides nothing new, so nothing is staged for it.
-        let replay = read_snapshot(env.store, &ReadOptions::default(), |s| {
-            Ok(s.receipts().lookup(command.identity())?.is_some())
-        })?;
+        let replay = env.read(|s| Ok(s.receipts().lookup(command.identity())?.is_some()))?;
         if replay {
             return Ok(None);
         }
@@ -1693,7 +1780,8 @@ impl CommandHandler for ArtifactService {
     /// A save whose staged file the unit of work did not commit — refused (for example by the
     /// in-transaction quota check), replayed, denied, rejected or rolled back — resolves its
     /// staging operation now instead of at the next boot ([`ArtifactService::abandon`]). An
-    /// unknown commit outcome is left to recovery, which reads the durable record first.
+    /// unknown commit outcome is resolved the same way: the fenced resolution re-reads the
+    /// durable record and completes the operation if its version did commit.
     fn settle(
         &self,
         _ctx: &InvocationContext,
@@ -1704,17 +1792,22 @@ impl CommandHandler for ArtifactService {
         let Some(Staging::Staged(staged)) = prepared.and_then(|p| p.get::<Staging>()) else {
             return;
         };
-        let committed_or_unknown = match reply {
+        let committed = match reply {
             Some(crate::protocol::CommandReply::Recorded {
                 receipt, replayed, ..
             }) => !replayed && !matches!(receipt.decision, DomainDecision::Refused { .. }),
-            Some(crate::protocol::CommandReply::CommandStatusUnknown { .. }) => true,
             _ => false,
         };
-        if !committed_or_unknown {
-            // Best effort: a failure here leaves the operation to recovery, which is fenced the
-            // same way, so nothing is ever resolved twice.
-            let _ = self.abandon(env.store, staged);
+        if !committed {
+            // An unknown commit outcome is settled the same way: the resolution re-reads the
+            // durable record under the fence, completing the operation when its version did
+            // commit and failing it otherwise. A resolution that cannot be written is retried
+            // later in this boot.
+            self.abandon_or_defer(
+                env,
+                &staged.staging_ref(),
+                json!({"abandoned": "the save was not committed"}),
+            );
         }
     }
 

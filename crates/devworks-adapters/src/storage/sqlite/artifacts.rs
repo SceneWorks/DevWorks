@@ -391,8 +391,54 @@ macro_rules! artifact_reads {
                     [project.0.as_str()],
                 )
             }
+            fn staging_names_digest(
+                &self,
+                digest: &str,
+                except: Option<&OperationId>,
+            ) -> Result<bool, StorageError> {
+                staging_names_digest(self.conn, digest, except)
+            }
+            fn unresolved_staging(
+                &self,
+                after: Option<&OperationId>,
+                limit: u16,
+            ) -> Result<Vec<OperationId>, StorageError> {
+                let limit = bounded(limit)?;
+                let mut s = db(self.conn.prepare_cached(&format!(
+                    "SELECT id FROM operations WHERE capability='{STAGE_CAPABILITY}'
+                     AND state NOT IN ({TERMINAL}) AND id>?1 ORDER BY id LIMIT ?2"
+                )))?;
+                let rows = db(db(s.query_map(
+                    params![after.map_or("", |a| a.0.as_str()), limit],
+                    |r| r.get::<_, String>(0),
+                ))?
+                .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter()
+                    .map(|i| id_of(i).map(OperationId))
+                    .collect()
+            }
         }
     };
+}
+
+/// Terminal operation states (an unresolved staging operation is in none of them).
+const TERMINAL: &str = "'ObservedComplete','Failed','CancelledBeforeDispatch'";
+
+fn staging_names_digest(
+    conn: &Connection,
+    digest: &str,
+    except: Option<&OperationId>,
+) -> Result<bool, StorageError> {
+    // Matches the partial expression index of migration 6 (`staging_digest`).
+    exists(
+        conn,
+        &format!(
+            "SELECT 1 FROM operations WHERE capability='{STAGE_CAPABILITY}'
+             AND json_extract(payload_json,'$.digest')=?1 AND state NOT IN ({TERMINAL})
+             AND id<>?2 LIMIT 1"
+        ),
+        params![digest, except.map_or("", |e| e.0.as_str())],
+    )
 }
 artifact_reads!(Snapshot<'_>);
 artifact_reads!(Unit<'_>);
@@ -619,6 +665,38 @@ impl ArtifactRepository for Unit<'_> {
         ))?
         .execute(params![holder.as_str(), digest, self.now]))?;
         Ok(())
+    }
+
+    fn claim_unreferenced(
+        &mut self,
+        digest: &str,
+        byte_count: i64,
+        relative_path: &str,
+        except: Option<&OperationId>,
+    ) -> Result<bool, StorageError> {
+        if staging_names_digest(self.conn, digest, except)? {
+            return Ok(false);
+        }
+        match blob(self.conn, digest)? {
+            Some(b) if b.state != BlobState::Unlinked => Ok(false),
+            Some(_) => {
+                db(db(self.conn.prepare_cached(
+                    "UPDATE blobs SET state='Unlinking',last_error=NULL WHERE digest=?1 AND state='Unlinked'",
+                ))?
+                .execute([digest]))?;
+                Ok(true)
+            }
+            None => {
+                if byte_count < 0 {
+                    return Err(invalid("blob byte count must be non-negative"));
+                }
+                db(db(self.conn.prepare_cached(
+                    "INSERT INTO blobs(digest,byte_count,relative_path,state) VALUES(?1,?2,?3,'Unlinking')",
+                ))?
+                .execute(params![digest, byte_count, relative_path]))?;
+                Ok(true)
+            }
+        }
     }
 
     fn release_pins(&mut self, holder: &Id) -> Result<i64, StorageError> {

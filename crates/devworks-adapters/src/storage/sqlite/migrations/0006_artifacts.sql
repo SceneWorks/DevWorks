@@ -20,3 +20,8 @@ CREATE TABLE artifact_blob_pins (
  PRIMARY KEY(holder_id,blob_digest)
 ) STRICT;
 CREATE INDEX artifact_pin_blob ON artifact_blob_pins(blob_digest);
+-- Staging journal lookups: whether an unresolved staging operation names a digest (claims for
+-- removal consult it), and the unresolved staging operations in ID order (recovery pages them).
+CREATE INDEX staging_digest ON operations(json_extract(payload_json,'$.digest'),state)
+ WHERE capability='artifacts.stage_file';
+CREATE INDEX staging_unresolved ON operations(id,state) WHERE capability='artifacts.stage_file';
