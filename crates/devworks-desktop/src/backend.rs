@@ -41,6 +41,9 @@ pub trait Backend: Send + Sync {
     fn token(&self, prefix: &str) -> String;
     /// A directory for files the UI materializes before attaching them (pasted images).
     fn scratch_dir(&self) -> PathBuf;
+    /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
+    /// service's verified stream (re-authorized, liveness-checked, reader-held).
+    fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
 }
 
 /// Who is waiting for a reply. Equal slots supersede each other.
@@ -59,6 +62,8 @@ pub enum Slot {
     Attach(String, u64),
     /// A decoded preview for a pending attachment.
     Preview(String, u64),
+    /// Deleting an attachment removed from its draft (artifact ID).
+    DeleteAttachment(String),
     ArtifactsList,
     ResourcesList,
 }

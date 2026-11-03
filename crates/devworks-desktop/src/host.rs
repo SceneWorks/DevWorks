@@ -102,6 +102,8 @@ pub struct Host {
     data_root: PathBuf,
     ids: Arc<HostIds>,
     waker: Arc<Mutex<Option<Waker>>>,
+    /// The same authority the runtime admits with (stream handles are re-authorized by it).
+    authority: Arc<StoreAuthority>,
 }
 impl Host {
     pub fn runtime(&self) -> &Arc<Runtime> {
@@ -153,16 +155,17 @@ async fn compose(
             store.clone(),
         )))
         .with_history(Arc::new(HistoryService::new(id_source.clone())));
+    let authority = Arc::new(StoreAuthority {
+        store: store.clone(),
+        clock: clock.clone(),
+    });
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
     let composition = Composition {
         store: store.clone(),
         clock: clock.clone(),
         ids: id_source.clone(),
-        authority: Arc::new(StoreAuthority {
-            store: store.clone(),
-            clock: clock.clone(),
-        }),
+        authority: authority.clone(),
         artifacts,
         resources: Arc::new(ResourceService::new(id_source.clone(), clock.clone())),
         process_host: Arc::new(NativeProcessHost),
@@ -202,6 +205,7 @@ async fn compose(
         data_root: config.data_root.clone(),
         ids,
         waker: Arc::new(Mutex::new(None)),
+        authority,
     })
 }
 
@@ -351,7 +355,16 @@ impl Drop for Engine {
     }
 }
 
+/// The engine's Quiescing step pauses nothing yet: run controls (`runs.*`, DW-9) are not part of
+/// this build. When they land, `begin_quiesce` asks the run-control service to pause every
+/// active work root (recording the shutdown hold that makes them need an explicit Continue at
+/// the next boot) and `quiesced` reports when those pauses committed; the shell already waits
+/// for both, within its bound, before it persists and shuts the runtime down.
 impl crate::shell::HostControl for Engine {
+    fn begin_quiesce(&mut self) {}
+    fn quiesced(&mut self) -> bool {
+        true
+    }
     fn begin_shutdown(&mut self) {
         Engine::begin_shutdown(self);
     }
@@ -402,5 +415,27 @@ impl Backend for DesktopBackend {
     }
     fn scratch_dir(&self) -> PathBuf {
         self.host.data_root.join("staging-ui")
+    }
+    fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
+        use std::io::Read;
+        let runtime = &self.host.runtime;
+        let opened = runtime
+            .artifacts()
+            .open_stream(
+                &*self.host.authority,
+                &**runtime.store(),
+                &self.host.ctx,
+                stream,
+            )
+            .map_err(|e| format!("the stored file could not be opened: {e:?}"))?;
+        let mut bytes = Vec::new();
+        opened
+            .take(max.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > max {
+            return Err("too large to preview".into());
+        }
+        Ok(bytes)
     }
 }

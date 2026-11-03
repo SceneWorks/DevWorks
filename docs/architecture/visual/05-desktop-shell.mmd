@@ -33,6 +33,7 @@ classDiagram
   }
   class HostControl {
     <<trait>>
+    +begin_quiesce() / quiesced() bool
     +begin_shutdown()
     +poll_shutdown() Option~String~
   }

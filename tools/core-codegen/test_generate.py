@@ -34,7 +34,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'artifacts.save', 'artifacts.list', 'history.events', 'history.work_lineage',
             'history.git_links', 'history.evidence_links', 'history.tool_usage', 'sessions.briefing',
             'resources.list', 'resources.acquire', 'resources.renew', 'resources.release',
-            'resources.holders', 'resources.waiters'})
+            'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
+        'sessions.append_message', 'sessions.start', 'sessions.end'})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:

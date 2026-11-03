@@ -527,9 +527,10 @@ fn attachments_from_the_dialog_a_drop_and_a_paste_are_stored_with_their_conversa
         .filter(|a| a.tags.as_ref().is_some_and(|t| t.0.contains(&tag)))
         .count();
     assert_eq!(
-        tagged, 4,
-        "every stored attachment keeps its conversation scope"
+        tagged, 3,
+        "every kept attachment has its conversation scope; the removed one was deleted"
     );
+    assert!(!listed.iter().any(|a| a.name.0 == "extra.txt"));
 
     // Sending associates exactly the remaining attachments with the message.
     type_into(&mut h, COMPOSER_LABEL, "see attached");

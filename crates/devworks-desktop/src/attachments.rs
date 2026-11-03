@@ -104,7 +104,34 @@ pub fn preview(path: &Path) -> Result<TaskOutput, String> {
         return Err("too large to preview".into());
     }
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let image = image::load_from_memory(&bytes).map_err(|e| format!("no preview: {e}"))?;
+    preview_bytes(&bytes)
+}
+
+/// Decodes the preview of an attachment already stored as an artifact (a draft restored after
+/// a restart): `artifacts.read` issues a principal-bound stream handle, and the artifact
+/// service's verified stream supplies the bytes. The picked file is never consulted.
+pub fn preview_stored(
+    backend: &dyn Backend,
+    artifact: &devworks_core::protocol::provider::ArtifactRef,
+) -> Result<TaskOutput, String> {
+    use devworks_core::protocol::records::ArtifactReadContent;
+    if artifact.byte_length.get() as u64 > PREVIEW_MAX_BYTES {
+        return Err("too large to preview".into());
+    }
+    let content =
+        ops::read_content(backend.query("artifacts.read", &ops::artifact_read(backend, artifact)))
+            .map_err(|e| e.describe())?;
+    let bytes = match content {
+        ArtifactReadContent::Binary { stream_id, .. } => {
+            backend.read_stream(&stream_id, PREVIEW_MAX_BYTES)?
+        }
+        ArtifactReadContent::Text { content, .. } => content.0.into_bytes(),
+    };
+    preview_bytes(&bytes)
+}
+
+fn preview_bytes(bytes: &[u8]) -> Result<TaskOutput, String> {
+    let image = image::load_from_memory(bytes).map_err(|e| format!("no preview: {e}"))?;
     let thumb = if image.width() > PREVIEW_EDGE || image.height() > PREVIEW_EDGE {
         image.thumbnail(PREVIEW_EDGE, PREVIEW_EDGE).to_rgba8()
     } else {

@@ -17,6 +17,8 @@ pub const PROTOCOL: &str = "1.0-draft.1";
 pub const WORKSPACE_ARTIFACT_REVISION: u64 = 3;
 /// Most rows one page request asks for.
 pub const PAGE_LIMIT: u16 = 200;
+/// Session records carry their start and last-activity times from session schema revision 2.
+pub const SESSION_REVISION: u64 = 2;
 
 /// Why a request produced no usable result. Never rendered as success or as zero values.
 #[derive(Clone, Debug)]
@@ -97,6 +99,12 @@ pub fn query_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> V
     json!({"mode": "Query", "protocol": PROTOCOL, "queryId": backend.token("q"), "body": body})
         .to_string()
         .into_bytes()
+}
+/// A frame negotiating schema `revision` (the envelope member `schemaRevision`).
+fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
+    let mut v: Value = serde_json::from_slice(&frame).expect("frames are JSON");
+    v["schemaRevision"] = json!(revision);
+    v.to_string().into_bytes()
 }
 pub fn command_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> Vec<u8> {
     body["kind"] = json!(operation);
@@ -187,10 +195,13 @@ pub fn settings_saved(outcome: CommandOutcome) -> Result<(), Failure> {
 // Sessions (UI-01..04, UI-11..13)
 
 pub fn sessions_list(backend: &dyn Backend) -> Vec<u8> {
-    query_frame(
-        backend,
-        "sessions.list",
-        json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
+    at_revision(
+        query_frame(
+            backend,
+            "sessions.list",
+            json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
+        ),
+        SESSION_REVISION,
     )
 }
 pub fn sessions(outcome: QueryOutcome) -> Result<(Vec<SessionRecord>, bool), Failure> {
@@ -200,10 +211,13 @@ pub fn sessions(outcome: QueryOutcome) -> Result<(Vec<SessionRecord>, bool), Fai
     }
 }
 pub fn session_start(backend: &dyn Backend, title: &str) -> Vec<u8> {
-    command_frame(
-        backend,
-        "sessions.start",
-        json!({"scope": {"kind": "Workspace"}, "title": title}),
+    at_revision(
+        command_frame(
+            backend,
+            "sessions.start",
+            json!({"scope": {"kind": "Workspace"}, "title": title}),
+        ),
+        SESSION_REVISION,
     )
 }
 pub fn started(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
@@ -243,7 +257,8 @@ pub fn append_message(
         content.push(json!({"kind": "Attachment", "artifact": a}));
     }
     json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"), "sessionId": session,
-        "expectedSessionRevision": revision.to_string(), "content": content})
+        "expectedSessionRevision": revision.to_string(), "content": content,
+        "schemaRevision": SESSION_REVISION})
     .to_string()
     .into_bytes()
 }
@@ -289,6 +304,38 @@ pub fn saved_artifact(outcome: CommandOutcome) -> Result<ArtifactRecord, Failure
     match command_result(outcome)? {
         OperationResult::ArtifactsSave { value } => Ok(value),
         other => Err(unexpected("artifacts.save", &other)),
+    }
+}
+/// `artifacts.read` of one version (binary content comes back as a stream handle).
+pub fn artifact_read(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
+        "query": {"kind": "Read", "artifactId": artifact.artifact_id,
+            "versionId": artifact.version_id}, "limit": 1})
+    .to_string()
+    .into_bytes()
+}
+pub fn read_content(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::ArtifactReadContent, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ArtifactsRead { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("artifacts.read", &other)),
+    }
+}
+/// `artifacts.delete` of the one version of an attachment saved for a draft and removed from it
+/// before it was ever sent (revision and reference revision 1: nothing referenced it).
+pub fn delete_unsent_attachment(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"), "deletion": {
+        "kind": "DeleteVersion", "artifactId": artifact.artifact_id,
+        "versionId": artifact.version_id, "expectedRevision": "1",
+        "expectedReferenceRevision": "1"}})
+    .to_string()
+    .into_bytes()
+}
+pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
+    match command_result(outcome)? {
+        OperationResult::ArtifactsDelete { .. } => Ok(()),
+        other => Err(unexpected("artifacts.delete", &other)),
     }
 }
 pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {

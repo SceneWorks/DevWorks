@@ -264,7 +264,12 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "resources.release",
             "resources.renew",
             "resources.waiters",
+            "sessions.append_message",
             "sessions.briefing",
+            "sessions.end",
+            "sessions.get",
+            "sessions.list",
+            "sessions.start",
         ])
     );
     // Revision 1 of the history pages is exactly the recorded Page; revision 2 adds the tail

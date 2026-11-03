@@ -19,6 +19,7 @@ sequenceDiagram
   Eng-->>View: dispatcher hint (watch) → re-query what is visible (transcript after its tail cursor)
   Note over View: window close button
   View->>View: CancelClose, Lifecycle Open → Quiescing (Client closed to new requests)
+  View->>Eng: HostControl begin_quiesce — seam where DW-9 pauses active work roots (no-op in this build)
   View->>Client: wait for in-flight requests (bounded 10 s)
   View->>View: Persisting — ui-state.json written
   View->>Eng: HostControl::begin_shutdown

@@ -52,6 +52,13 @@ impl Dialogs for NativeDialogs {
 
 /// The engine's bounded shutdown, driven by the close lifecycle.
 pub trait HostControl {
+    /// The Quiescing seam (AD 20 step 1): asked once when the close starts, while the shell
+    /// stops admitting new requests. The run-control item (DW-9) plugs in here to pause every
+    /// active work root before anything is persisted or stopped; this build has no run
+    /// controls, so the engine pauses nothing.
+    fn begin_quiesce(&mut self);
+    /// Whether what `begin_quiesce` started has finished (bounded by [`QUIESCE_BOUND`]).
+    fn quiesced(&mut self) -> bool;
     fn begin_shutdown(&mut self);
     /// A short description of the finished shutdown, once it finished.
     fn poll_shutdown(&mut self) -> Option<String>;
@@ -175,7 +182,7 @@ impl Shell {
                     path: None,
                     state: AttachState::Stored(r),
                     preview: None,
-                    preview_note: Some("Preview is not kept across restarts.".into()),
+                    preview_note: None,
                 });
             }
             chat.drafts.insert(key.clone(), draft);
@@ -509,6 +516,62 @@ impl Shell {
         }
     }
 
+    /// Removes a pending attachment from its draft. One already stored is deleted through
+    /// `artifacts.delete`; one still being stored is deleted when its save completes.
+    fn remove_attachment(&mut self, local: u64) {
+        let removed = {
+            let d = self.chat.draft_mut();
+            let i = d.attachments.iter().position(|a| a.local == local);
+            i.map(|i| d.attachments.remove(i))
+        };
+        if let Some(Attachment {
+            state: AttachState::Stored(r),
+            ..
+        }) = removed
+        {
+            self.delete_removed(r);
+        }
+    }
+
+    fn delete_removed(&mut self, artifact: ArtifactRef) {
+        let id = artifact.artifact_id.as_str().to_owned();
+        self.command(
+            Slot::DeleteAttachment(id),
+            "Deleting a removed attachment",
+            "artifacts.delete",
+            move |b| ops::delete_unsent_attachment(b, &artifact),
+        );
+    }
+
+    /// Re-derives the previews of restored image attachments from their stored artifacts.
+    fn restore_previews(&mut self) {
+        let jobs: Vec<(String, u64, ArtifactRef)> = self
+            .chat
+            .drafts
+            .iter()
+            .flat_map(|(key, d)| {
+                d.attachments.iter().filter_map(move |a| match &a.state {
+                    AttachState::Stored(r)
+                        if a.preview.is_none() && attachments::previewable(&a.media_type) =>
+                    {
+                        Some((key.clone(), a.local, r.clone()))
+                    }
+                    _ => None,
+                })
+            })
+            .collect();
+        if self.online().is_err() {
+            return;
+        }
+        for (key, local, r) in jobs {
+            if let Some(c) = &mut self.client {
+                c.task(Slot::Preview(key, local), "Restoring a preview", move |b| {
+                    attachments::preview_stored(b, &r)
+                });
+            }
+        }
+    }
+
     /// Starts storing every attachment of the selected conversation's draft that waits.
     fn store_pending(&mut self) {
         let Some(session) = self.chat.selected.clone() else {
@@ -651,7 +714,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::Attach(key, local), Reply::Task(t)) => {
+            (Slot::Attach(_, local), Reply::Task(t)) => {
                 let state = match t {
                     Ok(TaskOutput::Stored(c)) => match ops::saved_artifact(c) {
                         Ok(record) => AttachState::Stored(record.artifact),
@@ -663,32 +726,25 @@ impl Shell {
                     Err(e) => AttachState::Failed(e),
                 };
                 let stored = matches!(state, AttachState::Stored(_));
-                if let Some(a) = self
-                    .chat
-                    .drafts
-                    .get_mut(&key)
-                    .and_then(|d| d.attachments.iter_mut().find(|a| a.local == local))
-                {
-                    self.status = Some(if stored {
-                        format!("{} stored.", a.name)
-                    } else {
-                        format!("{} could not be stored.", a.name)
-                    });
-                    a.state = state;
+                match self.chat.attachment_mut(local) {
+                    Some(a) => {
+                        self.status = Some(if stored {
+                            format!("{} stored.", a.name)
+                        } else {
+                            format!("{} could not be stored.", a.name)
+                        });
+                        a.state = state;
+                    }
+                    // Removed while it was being stored: nothing the user removed survives.
+                    None => {
+                        if let AttachState::Stored(r) = state {
+                            self.delete_removed(r);
+                        }
+                    }
                 }
             }
-            (Slot::Preview(key, local), Reply::Task(t)) => {
-                let key_now = if self.chat.drafts.contains_key(&key) {
-                    key
-                } else {
-                    self.chat.draft_key()
-                };
-                if let Some(a) = self
-                    .chat
-                    .drafts
-                    .get_mut(&key_now)
-                    .and_then(|d| d.attachments.iter_mut().find(|a| a.local == local))
-                {
+            (Slot::Preview(_, local), Reply::Task(t)) => {
+                if let Some(a) = self.chat.attachment_mut(local) {
                     match t {
                         Ok(TaskOutput::Preview { size, rgba }) => {
                             let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
@@ -783,6 +839,13 @@ impl Shell {
                 }
                 Err(e) => self.settings.message = Some((Tone::Bad, e.describe())),
             },
+            (Slot::DeleteAttachment(_), Reply::Command(c)) => match ops::deleted(c) {
+                Ok(()) => self.announce("The removed attachment was deleted."),
+                Err(e) => self.announce(format!(
+                    "The removed attachment could not be deleted: {}",
+                    e.describe()
+                )),
+            },
             (Slot::ArtifactsList, Reply::Query(q)) => match ops::artifacts(q) {
                 Ok((items, more)) => {
                     self.artifacts = ListState {
@@ -827,8 +890,8 @@ impl Shell {
                 .chat
                 .sessions
                 .iter()
-                .rev()
-                .find(|s| !s.closed)
+                .filter(|s| !s.closed)
+                .max_by_key(|s| chat::last_activity(s))
                 .map(|s| s.id.as_str().to_owned()),
         };
         if pick != self.chat.selected
@@ -918,10 +981,7 @@ impl Shell {
                     self.attach(picked);
                 }
                 ChatAction::Attach(paths) => self.attach(paths),
-                ChatAction::Remove(local) => {
-                    let d = self.chat.draft_mut();
-                    d.attachments.retain(|a| a.local != local);
-                }
+                ChatAction::Remove(local) => self.remove_attachment(local),
                 ChatAction::OpenInstructions => {
                     self.settings.category =
                         Some(devworks_core::settings::catalog::Category::Instructions);
@@ -1023,6 +1083,9 @@ impl Shell {
             self.lifecycle = Lifecycle::Quiescing {
                 since: Instant::now(),
             };
+            if let Some(c) = &mut self.control {
+                c.begin_quiesce();
+            }
             self.announce("Closing DevWorks: finishing requests in flight.");
         }
     }
@@ -1035,11 +1098,13 @@ impl Shell {
         match &self.lifecycle {
             Lifecycle::Open | Lifecycle::Closed => return,
             Lifecycle::Quiescing { since } => {
+                let since = *since;
                 let idle = self
                     .client
                     .as_ref()
                     .is_none_or(|c| c.activities().is_empty());
-                if idle || since.elapsed() > QUIESCE_BOUND {
+                let quiesced = self.control.as_mut().is_none_or(|c| c.quiesced());
+                if (idle && quiesced) || since.elapsed() > QUIESCE_BOUND {
                     self.lifecycle = Lifecycle::Persisting;
                 }
             }
@@ -1147,6 +1212,7 @@ impl Shell {
             }
             self.load_sessions();
             self.load_route();
+            self.restore_previews();
         }
         self.advance_lifecycle(&ctx);
         self.drain(&ctx);

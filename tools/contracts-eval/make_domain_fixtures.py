@@ -412,5 +412,18 @@ case('reject-r1-result-lease-purpose','operation-result',{'kind':'resources.acqu
 case('reject-r1-result-resource-scope','operation-result',{'kind':'resources.list','value':{'items':[resource_r2],'hasMore':False}},False,False)
 case('reject-r2-result-lease-end-reason','operation-result.r2',{'kind':'resources.release','value':{**ended,'endReason':'Stolen'}},False,False)
 case('reject-r2-result-resource-scope','operation-result.r2',{'kind':'resources.list','value':{'items':[{**resource_r2,'scope':'Global'}],'hasMore':False}},False,False)
+# Schema revision 2 (session times): SessionRecord carries createdAtMs and lastActivityMs for
+# Chat History date grouping; every operation returning a session negotiates revision 2.
+case('r2-input-sessions.list','domain-request.r2',domain('sessions.list'))
+case('r2-input-sessions.get','domain-request.r2',domain('sessions.get'))
+for name in ['sessions.start','sessions.end']:
+ case('r2-input-'+name,'domain-request.r2',command_at(name))
+case('r2-input-sessions.append_message','session-command-request',{'protocol':'1.0-draft.1','requestKey':'request-a','sessionId':'session-a','expectedSessionRevision':'1','content':[{'kind':'Text','text':'Hello'}],'schemaRevision':2})
+session_r2={**sample('SessionRecord'),'createdAtMs':'1793570000000','lastActivityMs':'1793570060000'}
+for name in ['sessions.get','sessions.start','sessions.end','sessions.append_message']:
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':session_r2})
+case('r2-result-sessions.list','operation-result.r2',{'kind':'sessions.list','value':{'items':[session_r2,sample('SessionRecord')],'hasMore':False}})
+case('reject-r1-result-session-times','operation-result',{'kind':'sessions.get','value':session_r2},False,False)
+case('reject-r2-result-session-negative-time','operation-result.r2',{'kind':'sessions.get','value':{**session_r2,'createdAtMs':'-1'}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

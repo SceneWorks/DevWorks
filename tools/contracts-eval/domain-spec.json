@@ -560,7 +560,13 @@
         "title": "Label",
         "root_id": "?RootId",
         "context_epoch": "Counter",
-        "closed": "bool"
+        "closed": "bool",
+        "created_at_ms": "?Counter",
+        "last_activity_ms": "?Counter"
+      },
+      "since": {
+        "created_at_ms": 2,
+        "last_activity_ms": 2
       }
     },
     "ContextSource": {
@@ -6548,6 +6554,26 @@
       2
     ],
     "resources.waiters": [
+      1,
+      2
+    ],
+    "sessions.list": [
+      1,
+      2
+    ],
+    "sessions.get": [
+      1,
+      2
+    ],
+    "sessions.append_message": [
+      1,
+      2
+    ],
+    "sessions.start": [
+      1,
+      2
+    ],
+    "sessions.end": [
       1,
       2
     ]

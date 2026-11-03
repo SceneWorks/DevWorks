@@ -14,12 +14,15 @@ publish.workspace = true
 # time (dlopen), so building needs no system packages on CI. rfd 0.17.2 provides native file and
 # folder dialogs; on Linux it uses the XDG desktop portal over D-Bus (pure Rust, no GTK build
 # dependency). image 0.25.10 is the version eframe already resolves; only the PNG and JPEG
-# decoders are enabled, for attachment previews and pasted-image encoding.
+# decoders are enabled, for attachment previews and pasted-image encoding. jiff 0.2.39 turns
+# session times into the user's local calendar days for Chat History grouping (system tz database,
+# bundled where the platform has none).
 [dependencies]
 devworks-adapters = { path = "../devworks-adapters" }
 devworks-core = { path = "../devworks-core" }
 devworks-engine = { path = "../devworks-engine" }
 eframe = { version = "=0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "wayland", "wgpu", "x11"] }
+jiff = "=0.2.39"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 rfd = "=0.17.2"
 serde.workspace = true

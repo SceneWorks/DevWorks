@@ -1146,6 +1146,9 @@ impl ArtifactRepository for Unsupported {
     }
 }
 impl SessionRead for Unsupported {
+    fn last_entry_at_ms(&self, _: &Id) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
     // The in-memory store holds no work items or projects: the gateway resolves no command
     // target or lineage against it.
     fn work_root(&self, _: &RootId) -> Result<Option<WorkRoot>, StorageError> {

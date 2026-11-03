@@ -1006,6 +1006,17 @@ macro_rules! session_reads {
                     params![session.as_str(), entry_id.as_str()],
                 )
             }
+            fn last_entry_at_ms(&self, session: &Id) -> Result<Option<i64>, StorageError> {
+                // The newest entry has the highest sequence (primary key order, one row).
+                db(self
+                    .conn
+                    .query_row(
+                        "SELECT created_at FROM transcript_chunks WHERE session_id=?1 ORDER BY seq DESC LIMIT 1",
+                        params![session.as_str()],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .optional())
+            }
             fn batch(
                 &self,
                 session: &Id,

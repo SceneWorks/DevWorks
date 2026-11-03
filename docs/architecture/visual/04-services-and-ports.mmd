@@ -16,6 +16,7 @@ classDiagram
     ids / audit store / coordinator: Option ActorId
     sessions.list .get .transcript .briefing
     sessions.append_message .context_sources .start .end
+    SessionRecord r2: createdAtMs, lastActivityMs
   }
   class SessionWriter {
     host-attributed transcript batches

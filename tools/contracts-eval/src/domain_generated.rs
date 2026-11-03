@@ -1114,6 +1114,20 @@ pub struct SessionRecord {
     pub root_id: Option<RootId>,
     pub context_epoch: Counter,
     pub closed: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub created_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub last_activity_ms: Option<Counter>,
 }
 impl Check for SessionRecord {
     fn check(&self) -> Result<(), String> {
@@ -1123,11 +1137,24 @@ impl Check for SessionRecord {
         self.root_id.check()?;
         self.context_epoch.check()?;
         self.closed.check()?;
+        self.created_at_ms.check()?;
+        self.last_activity_ms.check()?;
         super::domain_rules::record(
             "SessionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for SessionRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.created_at_ms = None;
+        }
+        if revision < 2 {
+            self.last_activity_ms = None;
+        }
     }
 }
 
@@ -12330,6 +12357,10 @@ impl Check for OperationResult {
 impl Revisioned for OperationResult {
     fn retain_revision(&mut self, revision: u32) {
         match self {
+            Self::SessionsList { value } => value.retain_revision(revision),
+            Self::SessionsGet { value } => value.retain_revision(revision),
+            Self::SessionsStart { value } => value.retain_revision(revision),
+            Self::SessionsEnd { value } => value.retain_revision(revision),
             Self::HistoryWorkLineage { value } => value.retain_revision(revision),
             Self::HistoryGitLinks { value } => value.retain_revision(revision),
             Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
@@ -12341,6 +12372,7 @@ impl Revisioned for OperationResult {
             Self::ResourcesHolders { value } => value.retain_revision(revision),
             Self::ResourcesWaiters { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
+            Self::SessionsAppendMessage { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             _ => {}

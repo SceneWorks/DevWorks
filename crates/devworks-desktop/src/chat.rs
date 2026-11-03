@@ -194,6 +194,13 @@ impl Chat {
         let key = self.draft_key();
         self.drafts.entry(key).or_default()
     }
+    /// The pending attachment with this local ID, in whichever draft holds it.
+    pub fn attachment_mut(&mut self, local: u64) -> Option<&mut Attachment> {
+        self.drafts
+            .values_mut()
+            .flat_map(|d| d.attachments.iter_mut())
+            .find(|a| a.local == local)
+    }
     pub fn session(&self, id: &str) -> Option<&SessionRecord> {
         self.sessions.iter().find(|s| s.id.as_str() == id)
     }
@@ -201,19 +208,24 @@ impl Chat {
         self.selected.as_deref().and_then(|s| self.session(s))
     }
     /// Sessions matching the Chat History search (title words, case-insensitive).
+    /// Sessions matching the Chat History search, most recently active first.
     pub fn filtered(&self) -> Vec<&SessionRecord> {
         let terms: Vec<String> = self
             .history_query
             .split_whitespace()
             .map(str::to_lowercase)
             .collect();
-        self.sessions
+        let mut out: Vec<&SessionRecord> = self
+            .sessions
             .iter()
             .filter(|s| {
                 let t = s.title.0.to_lowercase();
                 terms.iter().all(|w| t.contains(w))
             })
-            .collect()
+            .collect();
+        // Stable: sessions without a time keep their listed (newest-started-first) order.
+        out.sort_by_key(|s| std::cmp::Reverse(last_activity(s)));
+        out
     }
     /// Moves the not-yet-started draft onto a started session.
     pub fn adopt_new_draft(&mut self, session: &str) {
@@ -236,6 +248,84 @@ impl Chat {
 impl Default for Chat {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A session's last activity (start, newest message or end), when the record carries it.
+pub fn last_activity(s: &SessionRecord) -> Option<i64> {
+    s.last_activity_ms
+        .as_ref()
+        .or(s.created_at_ms.as_ref())
+        .map(|c| c.get())
+}
+
+/// A Chat History date group, by the user's local calendar day of a session's last activity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DateGroup {
+    Today,
+    Yesterday,
+    /// Two to seven days ago.
+    Previous7Days,
+    /// Eight to thirty days ago.
+    Previous30Days,
+    /// Older, by calendar month.
+    Month {
+        year: i16,
+        month: i8,
+    },
+    /// The record carries no time.
+    Undated,
+}
+impl DateGroup {
+    pub fn label(&self) -> String {
+        const MONTHS: [&str; 12] = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
+        match self {
+            Self::Today => "Today".into(),
+            Self::Yesterday => "Yesterday".into(),
+            Self::Previous7Days => "Previous 7 days".into(),
+            Self::Previous30Days => "Previous 30 days".into(),
+            Self::Month { year, month } => {
+                format!("{} {year}", MONTHS[(*month as usize).clamp(1, 12) - 1])
+            }
+            Self::Undated => "Undated".into(),
+        }
+    }
+}
+
+/// The group of a time (`at_ms`, UTC milliseconds) seen from `now` in its time zone. A time
+/// later than now (another machine's clock) counts as today.
+pub fn date_group(now: &jiff::Zoned, at_ms: Option<i64>) -> DateGroup {
+    let Some(at) = at_ms.and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok()) else {
+        return DateGroup::Undated;
+    };
+    let at = at.to_zoned(now.time_zone().clone());
+    let days = at
+        .date()
+        .until(now.date())
+        .map(|span| span.get_days())
+        .unwrap_or(0);
+    match days {
+        ..=0 => DateGroup::Today,
+        1 => DateGroup::Yesterday,
+        2..=7 => DateGroup::Previous7Days,
+        8..=30 => DateGroup::Previous30Days,
+        _ => DateGroup::Month {
+            year: at.year(),
+            month: at.month(),
+        },
     }
 }
 
@@ -699,10 +789,6 @@ fn history(ui: &mut Ui, chat: &mut Chat, online: Result<(), &str>, actions: &mut
             .desired_width(f32::INFINITY),
     )
     .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Search conversations"));
-    widgets::caption(
-        ui,
-        "Grouped by date once conversations record their times (DW-16).",
-    );
     if let Err(reason) = online {
         widgets::state_block(
             ui,
@@ -733,11 +819,26 @@ fn history(ui: &mut Ui, chat: &mut Chat, online: Result<(), &str>, actions: &mut
         );
         return;
     }
-    let rows: Vec<(String, String, bool)> = chat
-        .filtered()
-        .into_iter()
-        .map(|s| (s.id.as_str().to_owned(), s.title.0.clone(), s.closed))
-        .collect();
+    // Rows interleave a header before the first session of each date group.
+    enum Row {
+        Group(String),
+        Session(String, String, bool),
+    }
+    let now = jiff::Zoned::now();
+    let mut rows: Vec<Row> = Vec::new();
+    let mut current = None;
+    for s in chat.filtered() {
+        let group = date_group(&now, last_activity(s));
+        if current.as_ref() != Some(&group) {
+            rows.push(Row::Group(group.label()));
+            current = Some(group);
+        }
+        rows.push(Row::Session(
+            s.id.as_str().to_owned(),
+            s.title.0.clone(),
+            s.closed,
+        ));
+    }
     if rows.is_empty() {
         widgets::state_block(
             ui,
@@ -763,17 +864,21 @@ fn history(ui: &mut Ui, chat: &mut Chat, online: Result<(), &str>, actions: &mut
         "chat-history",
         30.0,
         rows.len(),
-        |ui, i| {
-            let (id, title, closed) = &rows[i];
-            ui.horizontal(|ui| {
-                let r = ui.selectable_label(selected.as_deref() == Some(id), title);
-                if r.clicked() {
-                    actions.push(ChatAction::Select(id.clone()));
-                }
-                if *closed {
-                    chip(ui, "Closed", Tone::Neutral);
-                }
-            });
+        |ui, i| match &rows[i] {
+            Row::Group(label) => {
+                ui.label(RichText::new(label).small().strong().color(theme::DIM));
+            }
+            Row::Session(id, title, closed) => {
+                ui.horizontal(|ui| {
+                    let r = ui.selectable_label(selected.as_deref() == Some(id), title);
+                    if r.clicked() {
+                        actions.push(ChatAction::Select(id.clone()));
+                    }
+                    if *closed {
+                        chip(ui, "Closed", Tone::Neutral);
+                    }
+                });
+            }
         },
     );
     if chat.sessions_more {

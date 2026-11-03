@@ -2679,6 +2679,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -2723,6 +2731,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -2865,6 +2881,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "session-command-request.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -2957,6 +2981,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -3003,6 +3035,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
