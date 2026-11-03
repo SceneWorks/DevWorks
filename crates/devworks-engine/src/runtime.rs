@@ -202,6 +202,9 @@ pub struct Runtime {
     shutdown_bound: Duration,
     report: BootReport,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// The run supervision loop, awaited only within the shutdown bound (a root stop it is
+    /// executing may be blocked on a tree).
+    supervision: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// Boots the runtime (see the crate documentation, "Boot sequence"):
@@ -280,7 +283,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .boot(config.machine_resources.clone())
         .await
         .map_err(BootError::Resources)?;
-    let run_supervisor = RunSupervisor::new(
+    let mut run_supervisor = RunSupervisor::new(
         store.clone(),
         clock,
         runs.service.clone(),
@@ -289,6 +292,11 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         runs.hooks.clone(),
         run_owner,
     );
+    // A root stop never outlasts the application's one shutdown bound.
+    if let Some(s) = Arc::get_mut(&mut run_supervisor) {
+        s.stop_grace = config.shutdown_grace.min(config.shutdown_bound);
+        s.stop_bound = config.shutdown_bound;
+    }
     let recovered_runs = run_supervisor.boot().await.map_err(BootError::Runs)?;
     // Applying may start an OS helper (and wait briefly to see it hold), so off the async thread.
     let keep_awake = Arc::new(KeepAwake::new(power));
@@ -318,6 +326,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     ));
     let (keeper, every) = (housekeeper.clone(), config.housekeeping_interval);
     let housekeeping = tokio::spawn(async move { keeper.run(every).await });
+    run_supervisor.set_dispatcher_wakeup(dispatcher.wakeup());
     let supervision = tokio::spawn(run_supervisor.clone().run(every));
     Ok(Runtime {
         store,
@@ -342,7 +351,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             runs: recovered_runs,
             keep_awake: applied,
         },
-        tasks: Mutex::new(vec![delivery, collection, housekeeping, supervision]),
+        tasks: Mutex::new(vec![delivery, collection, housekeeping]),
+        supervision: Mutex::new(Some(supervision)),
     })
 }
 
@@ -539,6 +549,9 @@ impl Runtime {
         // feature/issue work is held for manual Continue and asked to stop; launches get the
         // cooperative grace. A storage failure here is not fatal: the next boot holds the same
         // work from its boot epoch.
+        // One bound for the whole shutdown (AD20): every later step gets what is left of it.
+        let deadline = tokio::time::Instant::now() + self.shutdown_bound;
+        let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
         // Close admission: wait (off the async thread) for every admitted command to commit, so
         // none commits after the quiescence snapshot.
         self.enter(ShutdownStage::DrainingAdmission);
@@ -548,17 +561,32 @@ impl Runtime {
         })
         .await;
         self.enter(ShutdownStage::Quiescing);
-        let _ = self.runs.quiesce(self.shutdown_grace).await;
+        let _ = self.runs.quiesce(self.shutdown_grace.min(left())).await;
         self.enter(ShutdownStage::StoppingWork);
         self.stop();
         let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
         for task in tasks {
             let _ = task.await;
         }
+        // Run supervision admits no further root stop once stopping; one it is executing ends
+        // within its own bound (at most the shutdown bound, started before this deadline), and
+        // is not waited for past the deadline: the owned-tree stop below covers its trees.
+        let supervision = self
+            .supervision
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some(mut task) = supervision
+            && let dispatch::Either::Left(()) =
+                dispatch::first(tokio::time::sleep(left()), &mut task).await
+        {
+            task.abort();
+        }
         self.dispatcher.idle().await;
+        let bound = left();
         let stopped = self
             .housekeeper
-            .shutdown(self.shutdown_grace, self.shutdown_bound)
+            .shutdown(self.shutdown_grace.min(bound), bound)
             .await;
         // AD20 step 4: final known activation state.
         let _ = self.runs.finish().await;

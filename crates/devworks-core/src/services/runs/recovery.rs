@@ -507,11 +507,16 @@ impl ControlService {
         uncertain: &[(Id, String)],
     ) -> Result<(), StorageError> {
         let actor = tx.store().host_actor.clone();
+        // The display reason is bounded like every blocker reason; every identity stays in the
+        // clearance, which is what settlement and the superseded re-stop read.
         let reason = |names: &[String]| {
             format!(
                 "Owned processes could not be verified stopped: {}",
                 names.join(", ")
             )
+            .chars()
+            .take(4096)
+            .collect::<String>()
         };
         let existing = active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?
             .into_iter()

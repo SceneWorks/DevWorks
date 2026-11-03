@@ -694,6 +694,10 @@ macro_rules! run_reads {
                     ),
                     BlockerFilter::Assignment(a) => ("assignment_id=?1", a.0.as_str()),
                     BlockerFilter::Operation(o) => ("operation_id=?1", o.0.as_str()),
+                    BlockerFilter::RootLevelCause(c) => (
+                        "cause=?1 AND root_id IS NOT NULL AND assignment_id IS NULL AND operation_id IS NULL",
+                        c.as_str(),
+                    ),
                 };
                 blockers(
                     self.conn,

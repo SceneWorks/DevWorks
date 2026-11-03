@@ -15,7 +15,7 @@
 //! * [`RunSupervisor::quiesce`] and [`RunSupervisor::finish`] are the run-control steps of the
 //!   bounded shutdown ([`crate::runtime::Runtime::shutdown`]).
 //! * [`RunGate`] is the root-control [`RootEligibility`] every consumer gets at boot.
-use crate::dispatch::{Either, RootEligibility, first};
+use crate::dispatch::{Either, RootEligibility, Wakeup, first};
 use crate::store;
 use devworks_core::ports::Clock;
 use devworks_core::ports::process::NativeIdentity;
@@ -127,6 +127,11 @@ pub struct RunTick {
     pub reasserted: usize,
     pub expired: usize,
     pub stops: Vec<(RootId, OperationState)>,
+    /// Roots whose pending stop could not be executed this pass (each in its own unit of
+    /// work: one root's failure never blocks another's).
+    pub failed: Vec<(RootId, String)>,
+    /// Roots whose capacity or rate-limit wait expired and was cleared.
+    pub swept: Vec<RootId>,
     pub launched: Vec<Id>,
 }
 
@@ -163,6 +168,10 @@ pub struct RunSupervisor {
     /// stop from a cursor, so no root's stop waits behind others that stay pending.
     pub stop_batch: u16,
     stop_cursor: Mutex<Option<RootId>>,
+    /// The dispatcher's wakeup: a supervision commit that can make a root eligible again
+    /// (a cleared hold, an expired wait, a settled stop, a recovered lease) restarts its scan
+    /// of root work held awaiting eligibility.
+    dispatcher: Mutex<Option<Wakeup>>,
     last: Mutex<Option<(Instant, i64)>>,
     stopping: AtomicBool,
     wake: Notify,
@@ -193,6 +202,7 @@ impl RunSupervisor {
             stop_bound: Duration::from_secs(30),
             stop_batch: 500,
             stop_cursor: Mutex::new(None),
+            dispatcher: Mutex::new(None),
             last: Mutex::new(None),
             stopping: AtomicBool::new(false),
             wake: Notify::new(),
@@ -242,6 +252,21 @@ impl RunSupervisor {
         store::write(&self.store, move |tx| service.recover_boot(tx, &*hooks)).await
     }
 
+    /// Connects the dispatcher whose held root work supervision commits may make eligible.
+    pub fn set_dispatcher_wakeup(&self, wakeup: Wakeup) {
+        *self.dispatcher.lock().unwrap_or_else(|p| p.into_inner()) = Some(wakeup);
+    }
+    fn wake_dispatcher(&self) {
+        if let Some(w) = self
+            .dispatcher
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+        {
+            w.wake();
+        }
+    }
+
     /// Requests a tick now (a committed stop, pause or continue).
     pub fn notify(&self) {
         self.wake.notify_one();
@@ -269,8 +294,19 @@ impl RunSupervisor {
         }
         let service = self.service.clone();
         report.expired = store::write(&self.store, move |tx| service.recover_expired(tx)).await?;
+        let service = self.service.clone();
+        report.swept = store::write(&self.store, move |tx| service.sweep_expired_waits(tx)).await?;
         self.signal_stopping().await?;
-        report.stops = self.execute_stops().await?;
+        (report.stops, report.failed) = self.execute_stops().await?;
+        // Anything here may have made a root eligible again: restart the dispatcher's scan of
+        // root work held awaiting eligibility (it rechecks each root; a needless wake is cheap).
+        if report.reasserted > 0
+            || report.expired > 0
+            || !report.swept.is_empty()
+            || !report.stops.is_empty()
+        {
+            self.wake_dispatcher();
+        }
         if self.launcher.is_some() && !self.stopping.load(Ordering::SeqCst) {
             loop {
                 // Shutdown (or drop) may begin while this tick runs: no further claim, and a
@@ -303,7 +339,10 @@ impl RunSupervisor {
 
     /// Executes every journaled stop still to be observed: the stop is marked dispatching, the
     /// launches and owned trees it covers are stopped (bounded), and the outcome is recorded.
-    async fn execute_stops(&self) -> Result<Vec<(RootId, OperationState)>, StorageError> {
+    #[allow(clippy::type_complexity)]
+    async fn execute_stops(
+        &self,
+    ) -> Result<(Vec<(RootId, OperationState)>, Vec<(RootId, String)>), StorageError> {
         let batch = self.stop_batch.clamp(1, 500);
         let cursor = self
             .stop_cursor
@@ -328,21 +367,32 @@ impl RunSupervisor {
                 None
             };
         let mut out = Vec::new();
+        let mut failed = Vec::new();
         for c in pending {
+            // Shutdown stops admitting root stops: the remaining trees are stopped by the shared
+            // bounded shutdown of owned trees, and the stops settle at the next boot.
+            if self.stopping.load(Ordering::SeqCst) {
+                break;
+            }
             let Some(op) = c.stop_operation_id.clone() else {
                 continue;
             };
-            let state = self
+            match self
                 .stop_root_now(
                     &c.root_id,
                     &op,
                     Some(StopScope::Root(c.root_id.clone())),
                     self.stop_grace,
                 )
-                .await?;
-            out.push((c.root_id, state));
+                .await
+            {
+                Ok(state) => out.push((c.root_id, state)),
+                // Each root's pass is its own unit of work: a failure is retried next pass and
+                // never blocks the other roots' stops.
+                Err(e) => failed.push((c.root_id, e.to_string())),
+            }
         }
-        Ok(out)
+        Ok((out, failed))
     }
 
     /// One execution pass of a root's stop, fenced to the generation it covers: only launches
@@ -564,6 +614,9 @@ impl RunSupervisor {
     pub async fn run(self: Arc<Self>, every: Duration) {
         while !self.stopping.load(Ordering::SeqCst) {
             let _ = self.tick().await;
+            // Backstop: a periodic restart of the dispatcher's eligibility scan, in case a
+            // change outside supervision made a root eligible without a wakeup.
+            self.wake_dispatcher();
             if self.stopping.load(Ordering::SeqCst) {
                 break;
             }

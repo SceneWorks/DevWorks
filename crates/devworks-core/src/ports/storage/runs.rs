@@ -347,6 +347,8 @@ pub enum BlockerFilter {
     RootLevel(RootId),
     Assignment(AssignmentId),
     Operation(OperationId),
+    /// Active root-level blockers of one cause, across every root (the supervisor's sweeps).
+    RootLevelCause(HoldCause),
 }
 
 /// Assignment states (AD17). Waiting is not a manual pause.

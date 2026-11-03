@@ -225,6 +225,44 @@ impl ControlService {
         Ok(())
     }
 
+    /// Clears every capacity or rate-limit wait (on any root) whose ready time has passed, and
+    /// returns the roots it cleared one on: their queued work may be eligible again, so the
+    /// caller wakes the dispatcher.
+    pub fn sweep_expired_waits(
+        &self,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Vec<RootId>, StorageError> {
+        let now = tx.now_ms();
+        let actor = host(tx);
+        let mut cleared: Vec<RootId> = Vec::new();
+        for b in active_blockers(
+            tx.runs(),
+            &BlockerFilter::RootLevelCause(HoldCause::Capacity),
+        )? {
+            let ready = b.clearance.get("readyAtMs").and_then(Value::as_i64);
+            let Some(root_id) = b.root_id.clone() else {
+                continue;
+            };
+            if !ready.is_some_and(|t| t <= now) {
+                continue;
+            }
+            let Some(root) = work_root(tx, &root_id)? else {
+                continue;
+            };
+            clear_blocker(
+                tx,
+                &actor,
+                &root,
+                &b,
+                json!({"readyAtMs": ready, "observedAtMs": now}),
+            )?;
+            if !cleared.contains(&root_id) {
+                cleared.push(root_id);
+            }
+        }
+        Ok(cleared)
+    }
+
     /// Claims the oldest pending activation of this boot that is ready and whose root permits
     /// it to resume, under a fresh claim epoch and lease. A pending activation of a superseded
     /// generation is stopped (`Prevented`) instead. Paused, held or stopped roots are never
@@ -248,53 +286,75 @@ impl ControlService {
             )?;
             let more = page.len() == 50;
             for a in &page {
-                let Some(root) = work_root(tx, &a.root_id)? else {
-                    continue;
-                };
-                let control = control_of(tx.runs(), &root.id)?;
-                if control.generation != a.generation {
-                    let mut stopped = a.clone();
-                    stopped.phase = ActivationPhase::Stopped;
-                    stopped.stopped_at_ms = Some(now);
-                    stopped.stop_cause = Some(StopCause::Superseded);
-                    stopped.outcome = Some(ActivationOutcome::Prevented);
-                    self.update(
-                        tx,
-                        &root,
-                        a,
-                        stopped,
-                        "ActivationPrevented",
-                        json!({"cause": "Superseded"}),
-                    )?;
-                    continue;
+                // Each candidate in its own savepoint: one root's storage or record failure is
+                // rolled back and skipped, never blocking every other root's claims.
+                let sp = tx.savepoint()?;
+                match self.try_claim(tx, a, owner, now) {
+                    Ok(Some(claimed)) => {
+                        tx.release(sp)?;
+                        return Ok(Some(claimed));
+                    }
+                    Ok(None) => tx.release(sp)?,
+                    Err(_) => tx.rollback_to(sp)?,
                 }
-                self.sweep_waits(tx, &root)?;
-                if !self
-                    .evaluate(tx.runs(), &root, &Target::Root, ActivationPurpose::Resume)?
-                    .eligible
-                {
-                    continue;
-                }
-                let mut claimed = a.clone();
-                claimed.phase = ActivationPhase::Claimed;
-                claimed.owner = Some(owner.clone());
-                claimed.lease_until_ms = Some(now + self.config.lease_ms);
-                claimed.owner_epoch += 1;
-                let claimed = self.update(
-                    tx,
-                    &root,
-                    a,
-                    claimed,
-                    "ActivationClaimed",
-                    json!({"owner": owner.as_str(), "ownerEpoch": a.owner_epoch + 1, "attempt": a.attempts}),
-                )?;
-                return Ok(Some(claimed));
             }
             if !more {
                 return Ok(None);
             }
             after = page.last().map(|a| a.id.clone());
         }
+    }
+
+    /// One claim candidate: `Some` when claimed, `None` when it was skipped (superseded,
+    /// prevented or not eligible).
+    fn try_claim(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        a: &StoredActivation,
+        owner: &Id,
+        now: i64,
+    ) -> Result<Option<StoredActivation>, StorageError> {
+        let Some(root) = work_root(tx, &a.root_id)? else {
+            return Ok(None);
+        };
+        let control = control_of(tx.runs(), &root.id)?;
+        if control.generation != a.generation {
+            let mut stopped = a.clone();
+            stopped.phase = ActivationPhase::Stopped;
+            stopped.stopped_at_ms = Some(now);
+            stopped.stop_cause = Some(StopCause::Superseded);
+            stopped.outcome = Some(ActivationOutcome::Prevented);
+            self.update(
+                tx,
+                &root,
+                a,
+                stopped,
+                "ActivationPrevented",
+                json!({"cause": "Superseded"}),
+            )?;
+            return Ok(None);
+        }
+        self.sweep_waits(tx, &root)?;
+        if !self
+            .evaluate(tx.runs(), &root, &Target::Root, ActivationPurpose::Resume)?
+            .eligible
+        {
+            return Ok(None);
+        }
+        let mut claimed = a.clone();
+        claimed.phase = ActivationPhase::Claimed;
+        claimed.owner = Some(owner.clone());
+        claimed.lease_until_ms = Some(now + self.config.lease_ms);
+        claimed.owner_epoch += 1;
+        let claimed = self.update(
+            tx,
+            &root,
+            a,
+            claimed,
+            "ActivationClaimed",
+            json!({"owner": owner.as_str(), "ownerEpoch": a.owner_epoch + 1, "attempt": a.attempts}),
+        )?;
+        Ok(Some(claimed))
     }
 
     /// Marks a claimed activation `Running` (it launched), adopts the active approved plan and

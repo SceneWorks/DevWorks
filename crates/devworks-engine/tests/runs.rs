@@ -2121,13 +2121,20 @@ fn composition(
     launcher: Option<Arc<dyn ActivationLauncher>>,
     power: Arc<FakePower>,
 ) -> Composition {
-    composition_with(fx, launcher, power, Arc::new(Authority))
+    composition_with(
+        fx,
+        launcher,
+        power,
+        Arc::new(Authority),
+        Arc::new(FakeHost::default()),
+    )
 }
 fn composition_with(
     fx: &Fx,
     launcher: Option<Arc<dyn ActivationLauncher>>,
     power: Arc<FakePower>,
     authority: Arc<dyn devworks_core::ports::AuthorityPort>,
+    host: Arc<dyn ProcessHost>,
 ) -> Composition {
     let h = &fx.h;
     let artifacts = Arc::new(ArtifactService::new(
@@ -2153,7 +2160,7 @@ fn composition_with(
         authority,
         artifacts,
         resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
-        process_host: Arc::new(FakeHost::default()),
+        process_host: host,
         runs,
         power,
         use_cases: UseCases::new(),
@@ -2940,6 +2947,7 @@ fn shutdown_drains_admitted_commands_before_the_quiescence_snapshot() {
             None,
             Arc::new(FakePower::default()),
             authority,
+            Arc::new(FakeHost::default()),
         )))
         .unwrap_or_else(|e| panic!("boot: {e:?}"));
     let frame = json!({"protocol": PROTOCOL, "requestKey": fx.key(), "command": {
@@ -3274,4 +3282,291 @@ fn pending_stops_beyond_one_batch_are_executed_in_rotation() {
     assert_eq!(first, vec![rid("root-b"), rid("root-g")]);
     assert_eq!(second, vec![rid("root-i")], "the third root is not starved");
     assert_eq!(third, first, "the rotation wraps around");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes, round 6: supervision wakes the dispatcher, bounded shutdown, bounded hold
+// reasons and per-root isolation
+
+fn hold_with(
+    fx: &Fx,
+    root: &str,
+    cause: HoldCause,
+    origin: &str,
+    reason: &str,
+    clearance: Value,
+) -> StoredBlocker {
+    let (root, origin, reason) = (fx.root(root), origin.to_owned(), reason.to_owned());
+    fx.tx(move |_, tx| {
+        let host = tx.store().host_actor.clone();
+        devworks_core::services::runs::raise_blocker(
+            tx,
+            &host,
+            &root,
+            Default::default(),
+            cause,
+            &origin,
+            1,
+            &reason,
+            clearance,
+        )
+    })
+}
+
+#[test]
+fn supervision_commits_that_unblock_a_root_wake_the_dispatcher() {
+    let fx = Fx::new();
+    let handler = Recorder::ok();
+    let mut c = consumer("root-work", handler.clone());
+    c.eligibility = Some(Arc::new(RunGate::new(fx.service.clone(), None)));
+    let rt = runtime();
+    let dispatcher = dispatcher(&fx.h, fx.store.clone(), vec![c]);
+    rt.block_on(dispatcher.recover()).unwrap();
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host.clone(), None);
+    let mut sup = Arc::try_unwrap(sup).ok().expect("the only handle");
+    sup.stop_grace = Duration::from_millis(20);
+    sup.stop_bound = Duration::from_millis(100);
+    let sup = Arc::new(sup);
+    sup.set_dispatcher_wakeup(dispatcher.wakeup());
+    // A rate-limit wait holds root-i's queued work until it expires.
+    let until = fx.h.now() + 1_000;
+    hold_with(
+        &fx,
+        "root-i",
+        HoldCause::Capacity,
+        "provider",
+        "RateLimited: 429",
+        json!({"kind": "RateLimited", "readyAtMs": until}),
+    );
+    seed_delivery(&fx, "root-i");
+    rt.block_on(dispatcher.run_until_idle()).unwrap();
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+    fx.h.advance(1_000);
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(tick.swept, vec![rid("root-i")]);
+    rt.block_on(dispatcher.run_until_idle()).unwrap();
+    assert_eq!(
+        handler.calls.load(Ordering::SeqCst),
+        1,
+        "the expired wait woke the dispatcher"
+    );
+    // A stop's reconciliation hold holds root-b's work until settlement verifies its tree.
+    applied(&fx.start(&fx.user, "root-b", 1, 1));
+    host.stubborn.store(true, Ordering::SeqCst);
+    spawn_tree(&fx, &processes, "root-b", "project-b");
+    assert!(matches!(
+        decision(&fx.stop(&fx.user, "root-b")),
+        DomainDecision::Accepted { .. }
+    ));
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-b"), OperationState::OutcomeUnknown)]
+    );
+    applied(&fx.resume(&fx.user, "root-b"));
+    seed_delivery(&fx, "root-b");
+    rt.block_on(dispatcher.run_until_idle()).unwrap();
+    assert_eq!(
+        handler.calls.load(Ordering::SeqCst),
+        1,
+        "held by reconciliation"
+    );
+    host.stubborn.store(false, Ordering::SeqCst);
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-b"), OperationState::ObservedComplete)]
+    );
+    rt.block_on(dispatcher.run_until_idle()).unwrap();
+    assert_eq!(
+        handler.calls.load(Ordering::SeqCst),
+        2,
+        "the settled stop woke the dispatcher"
+    );
+}
+
+#[test]
+fn shutdown_respects_its_bound_while_root_stops_are_pending() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    host.stubborn.store(true, Ordering::SeqCst);
+    let mut composition = composition_with(
+        &fx,
+        None,
+        Arc::new(FakePower::default()),
+        Arc::new(Authority),
+        host.clone(),
+    );
+    let bound = Duration::from_secs(2);
+    composition.config.shutdown_bound = bound;
+    composition.config.shutdown_grace = Duration::from_millis(100);
+    let rt = runtime();
+    let app = rt
+        .block_on(boot(composition))
+        .unwrap_or_else(|e| panic!("boot: {e:?}"));
+    let roots = [
+        ("root-b", "project-b"),
+        ("root-f", "project-a"),
+        ("root-g", "project-a"),
+        ("root-i", "project-a"),
+    ];
+    for (r, p) in roots {
+        applied(&fx.start(&fx.user, r, 1, 1));
+        spawn_tree(&fx, app.processes(), r, p);
+    }
+    for (r, _) in roots {
+        assert!(matches!(
+            decision(&fx.stop(&fx.user, r)),
+            DomainDecision::Accepted { .. }
+        ));
+    }
+    // Shutdown begins while the first root's stop is blocked on a tree that will not stop.
+    app.runs().notify();
+    let first = fx.control("root-b").stop_operation_id.unwrap();
+    rt.block_on(within("the first root stop is executing", async {
+        loop {
+            let o = first.clone();
+            let state = read(&*fx.store, move |s| s.operations().operation(&o))
+                .unwrap()
+                .state;
+            if state != OperationState::IntentRecorded {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    }));
+    let started = std::time::Instant::now();
+    rt.block_on(app.shutdown());
+    let took = started.elapsed();
+    assert!(
+        took < bound + Duration::from_secs(1),
+        "shutdown took {took:?} with a {bound:?} bound"
+    );
+}
+
+#[test]
+fn extending_a_large_reconciliation_hold_bounds_its_reason_and_keeps_every_identity() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    host.stubborn.store(true, Ordering::SeqCst);
+    let (sup, processes) = supervisor(&fx, host, None);
+    let mut sup = Arc::try_unwrap(sup).ok().expect("the only handle");
+    sup.stop_grace = Duration::from_millis(20);
+    sup.stop_bound = Duration::from_millis(100);
+    let sup = Arc::new(sup);
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    let real = processes.owned()[0].clone();
+    let op = match decision(&fx.stop(&fx.user, "root-i")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("stop not accepted: {other:?}"),
+    };
+    // The stop already holds many trees (its display reason is near its bound).
+    let earlier: Vec<String> = (0..400)
+        .map(|n| format!("process-earlier-{n:04}"))
+        .collect();
+    hold_with(
+        &fx,
+        "root-i",
+        HoldCause::Reconciliation,
+        op.0.as_str(),
+        "Owned processes could not be verified stopped",
+        json!({"operationId": op.0.as_str(), "processes": earlier}),
+    );
+    let tick = runtime().block_on(sup.tick()).unwrap();
+    assert!(tick.failed.is_empty(), "{:?}", tick.failed);
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::OutcomeUnknown)]
+    );
+    let hold = fx
+        .holds("root-i")
+        .into_iter()
+        .find(|b| b.cause == HoldCause::Reconciliation)
+        .unwrap();
+    assert!(hold.reason.chars().count() <= 4096);
+    let names = hold.clearance["processes"].as_array().unwrap();
+    assert_eq!(names.len(), 401);
+    assert!(names.iter().any(|n| n == real.as_str()));
+}
+
+#[test]
+fn one_roots_failure_does_not_block_other_roots_stops_or_claims() {
+    let fx = Fx::new();
+    let (sup, processes) = supervisor(&fx, Arc::new(FakeHost::default()), None);
+    // root-b's stop operation record is unreadable; root-i's is fine.
+    for (r, p) in [("root-b", "project-b"), ("root-i", "project-a")] {
+        applied(&fx.start(&fx.user, r, 1, 1));
+        spawn_tree(&fx, &processes, r, p);
+        assert!(matches!(
+            decision(&fx.stop(&fx.user, r)),
+            DomainDecision::Accepted { .. }
+        ));
+    }
+    let broken = fx.control("root-b").stop_operation_id.unwrap();
+    let c = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute(
+        "UPDATE operations SET state='Unreadable' WHERE id=?1",
+        [broken.0.as_str()],
+    )
+    .unwrap();
+    let tick = runtime().block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::ObservedComplete)]
+    );
+    assert_eq!(tick.failed.len(), 1);
+    assert_eq!(tick.failed[0].0, rid("root-b"));
+    // Claims too: root-g's record is unreadable, root-f's activation is still claimed.
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    applied(&fx.start(&fx.user, "root-g", 1, 1));
+    let bad = hold_with(
+        &fx,
+        "root-g",
+        HoldCause::Dependency,
+        "task-x",
+        "fixture",
+        json!({}),
+    );
+    c.execute(
+        "UPDATE blockers SET cause='Unreadable' WHERE id=?1",
+        [bad.id.as_str()],
+    )
+    .unwrap();
+    drop(c);
+    let owner = id("supervisor-1");
+    let first = fx.tx({
+        let owner = owner.clone();
+        move |svc, tx| svc.claim_activation(tx, &owner)
+    });
+    assert_eq!(first.map(|a| a.root_id), Some(rid("root-f")));
+    let second = fx.tx(move |svc, tx| svc.claim_activation(tx, &owner));
+    assert!(
+        second.is_none(),
+        "the unreadable root is skipped, not fatal"
+    );
+}
+
+#[test]
+fn no_root_stop_is_admitted_once_shutdown_is_requested() {
+    let fx = Fx::new();
+    let (sup, processes) = supervisor(&fx, Arc::new(FakeHost::default()), None);
+    for (r, p) in [("root-b", "project-b"), ("root-i", "project-a")] {
+        applied(&fx.start(&fx.user, r, 1, 1));
+        spawn_tree(&fx, &processes, r, p);
+        assert!(matches!(
+            decision(&fx.stop(&fx.user, r)),
+            DomainDecision::Accepted { .. }
+        ));
+    }
+    // Shutdown is requested: a pass executes no further root stop, leaving the trees to the
+    // shared, bounded shutdown of owned trees and the stops to settle on the next boot.
+    sup.stop();
+    let tick = runtime().block_on(sup.tick()).unwrap();
+    assert!(tick.stops.is_empty(), "{:?}", tick.stops);
+    assert_eq!(processes.owned().len(), 2);
+    let pending = read(&*fx.store, |s| s.runs().pending_stops(None, 10));
+    assert_eq!(pending.len(), 2);
 }
