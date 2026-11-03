@@ -14,7 +14,9 @@
 //! * **Attributed.** The host sets the actor, the invocation correlation, the project of the
 //!   invocation and the origin (`Host` for host work, `Reported` for everything else). A
 //!   reporter cannot write a host-reserved component ([`RESERVED`]), so a package, agent, MCP
-//!   client or the UI cannot impersonate host health.
+//!   client or the UI cannot impersonate host health. Components are canonical
+//!   ([`canonical_component`]) and matched exactly and case-sensitively, by the service and the
+//!   store alike, so no other spelling passes for a host channel.
 //! * **Redacted and bounded before persistence.** Every free-text member passes the authority
 //!   [`Redactor`] (known secret values the host registered, credential headers and
 //!   credential-shaped tokens) and the record keeps the number of replacements. Messages keep
@@ -31,7 +33,8 @@
 //! * **Health (OPS-01).** `workspace.diagnostics` reports one host check per component (module
 //!   [`health`]). A metric the host cannot measure is `Unavailable` with its reason, never zero.
 //! * **Local only (OPS-02).** No central account, remote control plane, telemetry or upload:
-//!   an export is an artifact a person saves locally ([`DiagnosticService::export`]).
+//!   an export is an artifact a person saves locally ([`DiagnosticService::export`]); a retry of
+//!   its request key replays the recorded save.
 //!
 //! # Retained CodeGraph behavior
 //!
@@ -63,17 +66,19 @@
 pub mod health;
 
 use crate::authority::redact::{REDACTED, Redactor};
-use crate::context::{InvocationContext, PrincipalKind};
+use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery, CommandOutcome};
 use crate::operations::OperationInput;
 use crate::operations::workspace::{Input, LogsInput, RecordDiagnosticInput};
-use crate::ports::diagnostics::{ExportRefused, ExportStaging, Metric, StorageHealthProbe};
+use crate::ports::diagnostics::{
+    ExportRefused, ExportStaging, Metric, StorageDatabase, StorageHealthProbe,
+};
 use crate::ports::storage::{
     ApplicationStore, ArtifactState, AuthorityRead, ConfigScope, ConfigurationRead,
-    DiagnosticAudience, DiagnosticFilter, PrunedDiagnostics, ReadOptions, ReadSnapshot,
-    StorageError, StoredDiagnostic, Unavailable, WriteOptions, WriteTransaction, read_snapshot,
-    run_write, severity_rank,
+    DiagnosticAudience, DiagnosticFilter, LedgerEntry, PrunedDiagnostics, ReadOptions,
+    ReadSnapshot, StorageError, StoredDiagnostic, Unavailable, WriteOptions, WriteTransaction,
+    read_snapshot, run_write, severity_rank,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
@@ -86,8 +91,8 @@ use crate::protocol::records::{
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
-    ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, Id, OperationId, ProjectId,
-    RetryAdvice, Revision,
+    ActorId, CommandReply, CorrelationId, Counter, DomainErrorCode, DomainFault, Id, OperationId,
+    ProjectId, Protocol, RequestKey, RetryAdvice, Revision,
 };
 use crate::registry;
 use crate::services::artifacts::{Viewer, visible};
@@ -96,6 +101,7 @@ use crate::settings::model::{chain, current_chain};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
@@ -160,6 +166,8 @@ pub const EXPORT_MAX_BYTES: usize = 8 * 1024 * 1024;
 pub const EXPORT_FORMAT: &str = "devworks.diagnostics-export/1";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const CURSOR_VERSION: &str = "l1";
+/// Exports whose staged command is kept for an in-process retry.
+const STAGED_EXPORTS: usize = 64;
 
 /// `component` is `prefix` or lies beneath it (`indexing.repository` under `indexing`).
 pub fn under(component: &str, prefix: &str) -> bool {
@@ -314,8 +322,25 @@ impl From<StorageError> for LogRefusal {
     }
 }
 
+/// Whether `component` is canonical: dot-separated segments of lowercase ASCII letters, digits,
+/// `_` and `-`, at most 256 bytes. Matching is exact and case-sensitive everywhere (the
+/// reserved prefixes, health and the store), so a component can never pass for another by
+/// case.
+pub fn canonical_component(component: &str) -> bool {
+    component.len() <= 256
+        && component.split('.').all(|seg| {
+            !seg.is_empty()
+                && seg
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+        })
+}
+
 fn check_entry(e: &LogEntry) -> Result<(), &'static str> {
-    if e.component.trim().is_empty() || e.code.trim().is_empty() {
+    if !canonical_component(&e.component) {
+        return Err("a component is dot-separated lowercase segments of a-z, 0-9, _ and -");
+    }
+    if e.code.trim().is_empty() {
         return Err("a diagnostic needs a component and a code");
     }
     if let (Some(s), Some(f)) = (e.started_at_ms, e.finished_at_ms)
@@ -367,11 +392,16 @@ fn build_record(
     let target_kind = s.label(e.target_kind.as_deref());
     let stage = s.label(e.stage.as_deref());
     let source_revision = s.label(e.source_revision.as_deref());
-    let metrics: Vec<DiagnosticMetric> = e.metrics.iter().take(128).map(metric).collect();
+    let metrics: Vec<DiagnosticMetric> = e
+        .metrics
+        .iter()
+        .take(128)
+        .map(|m| metric(&mut s, m))
+        .collect();
     let recovery: Vec<RecoveryAction> = e
         .recovery
         .iter()
-        .filter_map(recovery_action)
+        .filter_map(|l| recovery_action(&mut s, l))
         .take(128)
         .collect();
     StoredDiagnostic {
@@ -452,6 +482,9 @@ pub struct MonitorState {
     pub write_probe: Option<(i64, Result<u64, String>)>,
     /// The last retention pass: when, and what it removed (or why it failed).
     pub retention: Option<(i64, Result<PrunedDiagnostics, String>)>,
+    /// The last store inspection (ledger, journal, sizes, schema objects): when, and what it
+    /// found (or why it could not run). Read outside any caller's snapshot.
+    pub database: Option<(i64, Result<StorageDatabase, String>)>,
 }
 
 /// Effective retention settings.
@@ -633,23 +666,26 @@ pub fn entry(d: &StoredDiagnostic) -> Result<DiagnosticEntry, StorageError> {
     })
 }
 
-/// The wire metric of a native reading (an unavailable value is never reported as zero).
-pub fn metric(m: &MetricReading) -> DiagnosticMetric {
+/// The wire metric of a native reading (an unavailable value is never reported as zero). Every
+/// text member passes the record's redaction, which counts its replacements.
+fn metric(s: &mut Scrub<'_>, m: &MetricReading) -> DiagnosticMetric {
+    let name = label(&s.text(&m.name));
+    let unit = m.unit.as_deref().map(|u| label(&s.text(u)));
     match &m.value {
         Metric::Available(v) => DiagnosticMetric {
-            name: label(&m.name),
+            name,
             availability: MetricAvailability::Available,
             value: Some(Counter::new(i64::try_from(*v).unwrap_or(i64::MAX)).expect("positive")),
-            unit: m.unit.as_deref().map(label),
+            unit,
             reason: None,
         },
         Metric::Unavailable(why) => DiagnosticMetric {
-            name: label(&m.name),
+            name,
             availability: MetricAvailability::Unavailable,
             value: None,
-            unit: m.unit.as_deref().map(label),
+            unit,
             reason: Some(BoundedText({
-                let r = chars(&Redactor::new().redact_text(why), 4096);
+                let r = chars(&s.text(why), 4096);
                 if r.is_empty() {
                     "unavailable".into()
                 } else {
@@ -659,15 +695,16 @@ pub fn metric(m: &MetricReading) -> DiagnosticMetric {
         },
     }
 }
-fn recovery_action(l: &RecoveryLink) -> Option<RecoveryAction> {
+/// The wire link of a recovery action (catalog operations only), redacted like [`metric`].
+fn recovery_action(s: &mut Scrub<'_>, l: &RecoveryLink) -> Option<RecoveryAction> {
     registry::find(l.operation)?;
     Some(RecoveryAction {
         operation: label(l.operation),
         label: BoundedText({
-            let t = chars(&l.label, 4096);
+            let t = chars(&s.text(&l.label), 4096);
             if t.is_empty() { l.operation.into() } else { t }
         }),
-        target_kind: l.target_kind.as_deref().map(label),
+        target_kind: l.target_kind.as_deref().map(|k| label(&s.text(k))),
         target_id: l.target_id.clone(),
     })
 }
@@ -706,6 +743,8 @@ pub struct DiagnosticService {
     sources: RwLock<Vec<Arc<dyn HealthSource>>>,
     consumers: RwLock<Option<Vec<String>>>,
     monitor: Mutex<MonitorState>,
+    /// The staged `artifacts.save` command of recent exports, by receipt identity.
+    staged: Mutex<VecDeque<(ReceiptIdentity, Vec<u8>)>>,
 }
 
 impl DiagnosticService {
@@ -726,6 +765,7 @@ impl DiagnosticService {
             sources: RwLock::new(Vec::new()),
             consumers: RwLock::new(None),
             monitor: Mutex::new(MonitorState::default()),
+            staged: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -893,9 +933,17 @@ impl DiagnosticService {
         outcome
     }
 
-    /// Runs the monitor probes: the full integrity check and a write-owner probe (an empty unit
-    /// of work on the one write owner, the memory-write probe's replacement).
+    /// Runs the monitor probes: the store inspection (migration ledger, journal, sizes, schema
+    /// objects), the full integrity check and a write-owner probe (an empty unit of work on the
+    /// one write owner, the memory-write probe's replacement). Call it outside any read
+    /// snapshot: the inspection takes a reader of its own.
     pub fn refresh_monitor(&self) -> MonitorState {
+        let database = self.storage.as_ref().map(|p| {
+            let r = p
+                .database()
+                .map_err(|e| Redactor::new().redact_text(&format!("{e:?}")));
+            (self.now(), r)
+        });
         let integrity = self.storage.as_ref().map(|p| {
             let r = p
                 .integrity()
@@ -913,6 +961,9 @@ impl DiagnosticService {
         if integrity.is_some() {
             m.integrity = integrity;
         }
+        if database.is_some() {
+            m.database = database;
+        }
         m.write_probe = Some((self.now(), probe));
         m.clone()
     }
@@ -922,6 +973,21 @@ impl DiagnosticService {
         read_snapshot(&*self.store, &ReadOptions::default(), |s| {
             Ok(health::checks(self, ctx, s, self.now()))
         })
+    }
+
+    /// The current health checks as wire records (what `workspace.diagnostics` returns at
+    /// revision 2), redacted with the registered secrets.
+    pub fn health_entries(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Vec<DiagnosticEntry>, StorageError> {
+        let now = self.now();
+        let host = self.store.info().host_actor;
+        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
+        self.health(ctx)?
+            .iter()
+            .map(|c| health::wire(c, &host, now, &redactor))
+            .collect()
     }
 
     /// Reads one page of the log for `ctx` (the native form of `workspace.logs`).
@@ -1018,7 +1084,10 @@ impl DiagnosticService {
                 }
                 let health: Vec<Value> = health::checks(self, ctx, s, now)
                     .iter()
-                    .filter_map(|c| health::wire(c, &self.store.info().host_actor, now).ok())
+                    .filter_map(|c| {
+                        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
+                        health::wire(c, &self.store.info().host_actor, now, &redactor).ok()
+                    })
                     .filter_map(|e| serde_json::to_value(e).ok())
                     .collect();
                 Ok(Some((records, truncated, health)))
@@ -1065,6 +1134,38 @@ impl DiagnosticService {
         let Some(project) = ctx.project_id().cloned() else {
             return Err(ExportFailure::Staging(ExportRefused::NoProject));
         };
+        let key = Id::new(request_key)
+            .map_err(|_| ExportFailure::Invalid("a request key is an opaque identifier"))?;
+        let identity = ReceiptIdentity::bind(ctx, RequestKey(key));
+        // A retry of this request key must replay, not stage again: a new upload ticket would
+        // change the save's input and turn the retry into an idempotency conflict. In this
+        // process the staged command is resubmitted unchanged (the gateway replays its receipt
+        // under current authority); after a restart (tickets do not survive one) the recorded
+        // receipt is returned as the replay.
+        let staged = self
+            .staged
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|(k, _)| *k == identity)
+            .map(|(_, frame)| frame.clone());
+        if let Some(frame) = staged {
+            return Ok(submit(&frame));
+        }
+        let recorded = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
+            s.receipts().lookup(&identity)
+        })
+        .map_err(ExportFailure::Storage)?;
+        if let Some(LedgerEntry::Current(stored)) = recorded
+            && stored.operation == "artifacts.save"
+            && ctx.principal_kind() == PrincipalKind::Human
+        {
+            return Ok(Ok(CommandReply::Recorded {
+                protocol: Protocol::Draft1,
+                receipt: stored.receipt,
+                replayed: true,
+            }));
+        }
         let rendered = self.render_export(ctx, query)?;
         let name = format!("devworks-diagnostics-{}.json", self.now());
         let source = staging
@@ -1075,7 +1176,15 @@ impl DiagnosticService {
             "mediaType": "application/json", "source": source,
             "expectedDigest": sha256_hex(&rendered.bytes),
             "expectedBytes": rendered.bytes.len().to_string()}});
-        Ok(submit(frame.to_string().as_bytes()))
+        let frame = frame.to_string().into_bytes();
+        {
+            let mut staged = self.staged.lock().unwrap_or_else(|p| p.into_inner());
+            if staged.len() >= STAGED_EXPORTS {
+                staged.pop_front();
+            }
+            staged.push_back((identity, frame.clone()));
+        }
+        Ok(submit(&frame))
     }
 }
 
@@ -1325,7 +1434,10 @@ impl QueryHandler for DiagnosticService {
                 let next_cursor = (end < checks.len()).then(|| encode_cursor(end as i64, &binding));
                 let items = page
                     .into_iter()
-                    .map(|c| health::wire(c, &host, now))
+                    .map(|c| {
+                        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
+                        health::wire(c, &host, now, &redactor)
+                    })
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(storage)?;
                 let stats = snapshot.diagnostics().diagnostic_stats().map_err(storage)?;

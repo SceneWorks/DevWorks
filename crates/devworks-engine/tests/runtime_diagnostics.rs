@@ -424,3 +424,64 @@ fn the_retention_settings_bound_the_log() {
     assert_eq!(left, 1, "only this pass's own record remains");
     rt.block_on(app.shutdown());
 }
+
+#[test]
+fn an_export_retried_with_its_request_key_replays_instead_of_conflicting() {
+    let h = Harness::new();
+    let rt = runtime();
+    drop(h.open());
+    seed_root(&h, "root-a");
+    let (composition, parts) = compose(&h, Vec::new());
+    let app = rt.block_on(boot(composition)).expect("boot");
+    let user = principal(&**app.store(), "user-a", PrincipalKind::Human).with_lineage(
+        Some(ProjectId(id("project-a"))),
+        None,
+        None,
+    );
+    let exports = DiagnosticExports::new(
+        h.root.join("diagnostics").join("exports"),
+        parts.sources.clone(),
+    );
+    let saved =
+        |outcome: devworks_core::gateway::CommandOutcome| match outcome.expect("addressable") {
+            CommandReply::Recorded {
+                receipt, replayed, ..
+            } => match receipt.decision {
+                DomainDecision::Applied {
+                    result: OperationResult::ArtifactsSave { value },
+                } => (value.artifact, replayed),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("expected the recorded save, got {other:?}"),
+        };
+    // The first attempt commits, but its response is lost on the way back to the caller.
+    let lost = app
+        .export_diagnostics(&user, &LogQuery::default(), &exports, "export-lost")
+        .expect("exported");
+    let (first, replayed) = saved(lost);
+    assert!(!replayed);
+    // More happened since; a retry with the same key replays the recorded save.
+    parts
+        .diagnostics
+        .log(LogEntry::new("client", "later", Severity::Info, "later"))
+        .unwrap();
+    let retry = app
+        .export_diagnostics(&user, &LogQuery::default(), &exports, "export-lost")
+        .expect("exported");
+    let (again, replayed) = saved(retry);
+    assert!(replayed, "the retry replays");
+    assert_eq!(again.artifact_id, first.artifact_id);
+    assert_eq!(again.version_id, first.version_id);
+    // After a restart of the service (no staged command in memory) the recorded receipt is
+    // the replay, and nothing is staged or submitted again.
+    let fresh = DiagnosticService::new(app.store().clone(), h.ids.clone(), h.clock(), None);
+    let outcome = fresh
+        .export(&user, &LogQuery::default(), &exports, "export-lost", |_| {
+            panic!("a recorded export is not submitted again")
+        })
+        .expect("replayed");
+    let (durable, replayed) = saved(outcome);
+    assert!(replayed);
+    assert_eq!(durable.version_id, first.version_id);
+    rt.block_on(app.shutdown());
+}

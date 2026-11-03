@@ -4,8 +4,8 @@
 //! | Component | Source | Degraded / failed when |
 //! | --- | --- | --- |
 //! | `health.readiness` | the essential checks below | any essential check is not healthy (the retained readiness word) |
-//! | `storage.migrations` | the migration ledger | the store is read-only for this build, or newer than it |
-//! | `storage.schema` | schema objects against a freshly migrated store | an expected table, index, trigger or view is missing |
+//! | `storage.migrations` | the migration ledger (the monitor's last store inspection) | the store is read-only for this build, or newer than it |
+//! | `storage.schema` | schema objects against a freshly migrated store (same inspection) | an expected table, index, trigger or view is missing |
 //! | `storage.wal` | journal mode, database, WAL and free-list sizes | not in WAL mode, or the WAL exceeds [`WAL_DEGRADED_BYTES`] |
 //! | `storage.disk` | free space on the data-root volume | below [`DISK_DEGRADED_BYTES`] or 5 %; failed below [`DISK_FAILED_BYTES`] |
 //! | `storage.integrity` | the monitor's last integrity and foreign-key check | any problem |
@@ -22,7 +22,7 @@
 //! nothing to report yet (no indexing run, no provider attempt, no monitor pass) is
 //! `Unavailable`, never healthy with zero counts.
 use super::{
-    DAY_MS, DiagnosticService, audience, channels, chars, label, metric, recovery_action,
+    DAY_MS, DiagnosticService, Scrub, audience, channels, chars, label, metric, recovery_action,
     severity_of,
 };
 use crate::authority::redact::Redactor;
@@ -179,8 +179,21 @@ fn storage_checks(svc: &DiagnosticService, now: i64, out: &mut Vec<HealthCheck>)
         storage_monitor(svc, out);
         return;
     };
+    // File facts are read live (no database connection). Database facts come from the monitor's
+    // last pass: inspecting the store here would need a second reader while the caller's
+    // snapshot holds one, and the pool may have no other.
     let files = probe.files();
-    let database = probe.database();
+    let (inspected_at, database) = match svc.monitor().database {
+        Some((at, r)) => (Some(at), r),
+        None => (
+            None,
+            Err("the store has not been inspected yet in this boot (the diagnostics monitor inspects it at boot and hourly)".to_owned()),
+        ),
+    };
+    let stamp = |c: HealthCheck| match inspected_at {
+        Some(at) => c.at(at),
+        None => c,
+    };
     match &database {
         Ok(db) => {
             let c = &db.compatibility;
@@ -205,7 +218,7 @@ fn storage_checks(svc: &DiagnosticService, now: i64, out: &mut Vec<HealthCheck>)
                     ),
                 ),
             };
-            out.push(
+            out.push(stamp(
                 HealthCheck::new("storage.migrations", health, message)
                     .metric(MetricReading::count(
                         "storeSchemaVersion",
@@ -218,7 +231,7 @@ fn storage_checks(svc: &DiagnosticService, now: i64, out: &mut Vec<HealthCheck>)
                     .metric(MetricReading::count("minimumReader", c.minimum_reader))
                     .metric(MetricReading::count("minimumWriter", c.minimum_writer))
                     .metric(MetricReading::count("appliedMigrations", applied)),
-            );
+            ));
             let missing = db.missing_objects.len() as u64;
             let schema = if missing == 0 {
                 HealthCheck::new(
@@ -247,7 +260,7 @@ fn storage_checks(svc: &DiagnosticService, now: i64, out: &mut Vec<HealthCheck>)
                     ),
                 )
             };
-            out.push(
+            out.push(stamp(
                 schema
                     .metric(MetricReading::new(
                         "expectedObjects",
@@ -259,10 +272,10 @@ fn storage_checks(svc: &DiagnosticService, now: i64, out: &mut Vec<HealthCheck>)
                         Some("count"),
                         Metric::Available(missing),
                     )),
-            );
+            ));
         }
         Err(e) => {
-            let why = format!("The store could not be inspected: {}", storage_error(e));
+            let why = format!("The store could not be inspected: {e}");
             out.push(unavailable("storage.migrations", &why));
             out.push(unavailable("storage.schema", &why));
         }
@@ -319,7 +332,7 @@ fn storage_checks(svc: &DiagnosticService, now: i64, out: &mut Vec<HealthCheck>)
                 ));
         }
         Err(e) => {
-            let why = storage_error(e);
+            let why = e.clone();
             for name in ["pageSize", "pages", "freePages"] {
                 wal = wal.metric(MetricReading::new(
                     name,
@@ -962,16 +975,37 @@ fn health_id(component: &str) -> Id {
     Id::new(s).unwrap_or_else(|_| Id::new("health").expect("valid"))
 }
 
-/// The wire record of a check (origin `Host`, attributed to the host).
-pub fn wire(c: &HealthCheck, host: &ActorId, now: i64) -> Result<DiagnosticEntry, StorageError> {
-    let redactor = Redactor::new();
+/// The wire record of a check (origin `Host`, attributed to the host). Every text member,
+/// nested metric reasons and recovery labels included, passes `redactor` (the service's, with
+/// its registered secrets), and the replacements are counted.
+pub(crate) fn wire(
+    c: &HealthCheck,
+    host: &ActorId,
+    now: i64,
+    redactor: &Redactor,
+) -> Result<DiagnosticEntry, StorageError> {
+    let mut s = Scrub { redactor, count: 0 };
     let at = c.checked_at_ms.unwrap_or(now).max(0);
+    let message = BoundedText(chars(&s.text(&c.message), 65_536));
+    let code = label(&s.text(&c.code));
+    let metrics: Vec<_> = c
+        .metrics
+        .iter()
+        .take(128)
+        .map(|m| metric(&mut s, m))
+        .collect();
+    let links: Vec<RecoveryAction> = c
+        .recovery
+        .iter()
+        .filter_map(|l| recovery_action(&mut s, l))
+        .take(128)
+        .collect();
     Ok(DiagnosticEntry {
         id: health_id(&c.component),
         severity: severity_of(&c.health),
         component: label(&c.component),
-        code: label(&c.code),
-        message: BoundedText(chars(&redactor.redact_text(&c.message), 65_536)),
+        code,
+        message,
         correlation_id: None,
         evidence: None,
         sequence: None,
@@ -995,17 +1029,11 @@ pub fn wire(c: &HealthCheck, host: &ActorId, now: i64) -> Result<DiagnosticEntry
         health: Some(c.health.clone()),
         output: None,
         output_omitted_bytes: None,
-        redactions: None,
-        metrics: (!c.metrics.is_empty())
-            .then(|| BoundedList(c.metrics.iter().take(128).map(metric).collect())),
-        recovery: {
-            let links: Vec<RecoveryAction> = c
-                .recovery
-                .iter()
-                .filter_map(recovery_action)
-                .take(128)
-                .collect();
-            (!links.is_empty()).then_some(BoundedList(links))
-        },
+        redactions: (s.count > 0)
+            .then(|| Counter::new(s.count))
+            .transpose()
+            .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        metrics: (!metrics.is_empty()).then_some(BoundedList(metrics)),
+        recovery: (!links.is_empty()).then_some(BoundedList(links)),
     })
 }

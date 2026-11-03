@@ -11,7 +11,15 @@ CREATE TABLE diagnostic_records (
     severity_rank INTEGER NOT NULL CHECK (
         severity_rank = CASE severity WHEN 'Info' THEN 0 WHEN 'Warning' THEN 1 ELSE 2 END
     ),
-    component TEXT NOT NULL CHECK (length(component) BETWEEN 1 AND 1024),
+    -- Canonical components: dot-separated segments of lowercase a-z, 0-9, '_' and '-'. GLOB is
+    -- case-sensitive, so no other spelling of a host channel can be stored.
+    component TEXT NOT NULL CHECK (
+        length(component) BETWEEN 1 AND 256
+        AND component NOT GLOB '*[^a-z0-9._-]*'
+        AND component NOT GLOB '.*'
+        AND component NOT GLOB '*.'
+        AND component NOT GLOB '*..*'
+    ),
     code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 1024),
     message TEXT NOT NULL CHECK (length(CAST(message AS BLOB)) <= 65536),
     origin TEXT NOT NULL CHECK (origin IN ('Host', 'Reported')),

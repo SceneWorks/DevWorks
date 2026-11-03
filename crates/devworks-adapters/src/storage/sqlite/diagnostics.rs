@@ -130,13 +130,6 @@ fn record(r: Raw) -> Result<StoredDiagnostic, StorageError> {
     })
 }
 
-/// `LIKE` pattern text with its wildcards escaped (escape character `\`).
-fn like_escaped(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
-
 fn equals(column: &str, v: Option<String>, clauses: &mut Vec<String>, p: &mut Vec<Sql>) {
     if let Some(v) = v {
         clauses.push(format!("{column} = ?"));
@@ -153,9 +146,12 @@ fn predicate(f: &DiagnosticFilter) -> (String, Vec<Sql>) {
         p.push(Sql::Integer(b));
     }
     if let Some(c) = &f.component {
-        clauses.push("(component = ? OR component LIKE ? ESCAPE '\\')".into());
+        // Exact, case-sensitive: `LIKE` folds ASCII case, which would let a component spelled in
+        // another case pass for a host channel.
+        clauses.push("(component = ? OR substr(component, 1, ?) = ?)".into());
         p.push(Sql::Text(c.clone()));
-        p.push(Sql::Text(format!("{}.%", like_escaped(c))));
+        p.push(Sql::Integer(c.chars().count() as i64 + 1));
+        p.push(Sql::Text(format!("{c}.")));
     }
     if let Some(r) = f.min_severity {
         clauses.push("severity_rank >= ?".into());

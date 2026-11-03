@@ -17,6 +17,7 @@ use devworks_core::ports::diagnostics::{
 };
 use devworks_core::ports::storage::*;
 use devworks_core::ports::{AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization};
+use devworks_core::protocol::records::HealthState;
 use devworks_core::protocol::records::{
     DiagnosticEntry, DiagnosticErrorClass, DiagnosticOutcome, DiagnosticPage, Severity,
 };
@@ -30,8 +31,8 @@ use devworks_core::protocol::{
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::replies::REPLY_CONSUMER;
 use devworks_core::services::diagnostics::{
-    DiagnosticService, LogEntry, MESSAGE_LIMIT, OUTPUT_LIMIT, RESERVED_TARGET, RecoveryLink,
-    channels,
+    DiagnosticService, HealthCheck, LogEntry, MESSAGE_LIMIT, MetricReading, OUTPUT_LIMIT,
+    RESERVED_TARGET, RecoveryLink, channels,
 };
 use devworks_core::settings::catalog::AgentRole;
 use serde_json::{Value, json};
@@ -102,7 +103,10 @@ impl Fx {
         Self::with_probe(true)
     }
     fn with_probe(probe: bool) -> Self {
-        let fx = Self::open(Harness::new(), Arc::new(AtomicU64::new(0)), probe);
+        Self::with(Harness::new(), probe)
+    }
+    fn with(h: Harness, probe: bool) -> Self {
+        let fx = Self::open(h, Arc::new(AtomicU64::new(0)), probe);
         fx.store
             .with_writer_connection(|c| {
                 super::super::conn::db(c.execute_batch(
@@ -1052,12 +1056,7 @@ fn an_unavailable_metric_is_reported_unavailable_never_zero() {
         fx.h.clock.clone(),
         Some(probe),
     ));
-    let entries: Vec<DiagnosticEntry> = svc
-        .health(&fx.user())
-        .unwrap()
-        .iter()
-        .map(|c| devworks_core::services::diagnostics::health::wire(c, &actor("host"), T0).unwrap())
-        .collect();
+    let entries: Vec<DiagnosticEntry> = svc.health_entries(&fx.user()).unwrap();
     let disk = check(&entries, "storage.disk");
     assert_eq!(health(disk), "Unavailable");
     let free = metric(disk, "freeBytes");
@@ -1070,12 +1069,7 @@ fn an_unavailable_metric_is_reported_unavailable_never_zero() {
     );
     // A real zero stays a measured zero (no integrity problems once checked).
     svc.refresh_monitor();
-    let entries: Vec<DiagnosticEntry> = svc
-        .health(&fx.user())
-        .unwrap()
-        .iter()
-        .map(|c| devworks_core::services::diagnostics::health::wire(c, &actor("host"), T0).unwrap())
-        .collect();
+    let entries: Vec<DiagnosticEntry> = svc.health_entries(&fx.user()).unwrap();
     let integrity = check(&entries, "storage.integrity");
     assert_eq!(health(integrity), "Healthy");
     assert_eq!(metric(integrity, "problems")["availability"], "Available");
@@ -1125,6 +1119,7 @@ fn storage_health_reports_the_ledger_journal_disk_integrity_and_missing_schema_o
             super::super::conn::db(c.execute_batch("DROP INDEX diagnostic_records_recorded"))
         })
         .unwrap();
+    fx.svc.refresh_monitor();
     let checks = fx.health(&user);
     let schema = check(&checks, "storage.schema");
     assert_eq!(health(schema), "Degraded");
@@ -1244,4 +1239,181 @@ fn migration_12_adds_the_diagnostic_log_to_a_version_10_store() {
             .append_diagnostic(&dup)),
         Err(StorageError::Duplicate { .. })
     ));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes
+
+#[test]
+fn components_are_canonical_so_no_case_variant_passes_for_a_host_channel() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let agent = fx.ctx("agent-a", PrincipalKind::Agent, Some("project-a"));
+    // A case variant of a host channel, or any other non-canonical component, is refused.
+    for component in [
+        "INDEXING.repository.fake",
+        "Indexing.repository",
+        "PROVIDER",
+        "client..x",
+        ".client",
+        "client ui",
+    ] {
+        let fault = refused(fx.record(
+            &agent,
+            json!({"component": component, "code": "done", "severity": "Info",
+                "message": "Indexed", "outcome": "Succeeded"}),
+        ));
+        assert_eq!(fault.code, DomainErrorCode::InvalidArgument, "{component}");
+    }
+    assert!(
+        fx.svc
+            .log(LogEntry::new(
+                "Indexing.repository",
+                "x",
+                Severity::Info,
+                "m"
+            ))
+            .is_err()
+    );
+    // Nothing reported can mask the host channel: it still has no run, and its real failure
+    // shows once the host records one.
+    let checks = fx.health(&user);
+    assert_eq!(
+        health(check(&checks, channels::REPOSITORY_INDEXING)),
+        "Unavailable"
+    );
+    assert_eq!(health(check(&checks, channels::PROVIDER)), "Unavailable");
+    fx.log(LogEntry {
+        outcome: Some(DiagnosticOutcome::Failed),
+        ..LogEntry::new(
+            channels::REPOSITORY_INDEXING,
+            "failed",
+            Severity::Error,
+            "real failure",
+        )
+    });
+    assert_eq!(
+        health(check(&fx.health(&user), channels::REPOSITORY_INDEXING)),
+        "Failed"
+    );
+    // The store refuses a non-canonical component even past the service, and matching is
+    // exact and case-sensitive.
+    let mut raw =
+        fx.read(|s| s.diagnostics().diagnostics(&DiagnosticFilter::default(), 1))[0].clone();
+    raw.id = id("raw-upper");
+    raw.component = "INDEXING.repository".into();
+    assert!(
+        run_write(&*fx.store, WriteOptions::default(), move |tx| tx
+            .diagnostics()
+            .append_diagnostic(&raw))
+        .is_err()
+    );
+    assert_eq!(
+        fx.logs(&user, json!({"component": "INDEXING"}))
+            .items
+            .0
+            .len(),
+        0
+    );
+    assert_eq!(
+        fx.logs(&user, json!({"component": "indexing"}))
+            .items
+            .0
+            .len(),
+        1
+    );
+    assert_eq!(
+        fx.logs(&user, json!({"component": "indexin"}))
+            .items
+            .0
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn nested_metric_reasons_and_recovery_labels_pass_the_registered_redactor() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let stored = fx
+        .svc
+        .log(LogEntry {
+            metrics: vec![MetricReading::new(
+                "quota",
+                Some("bytes"),
+                Metric::Unavailable(format!("the provider refused key {SECRET}")),
+            )],
+            recovery: vec![RecoveryLink::new(
+                "router.connections",
+                &format!("Reconnect with {SECRET} or {TOKEN}"),
+            )],
+            ..LogEntry::new("client", "nested", Severity::Warning, "plain message")
+        })
+        .unwrap();
+    assert!(
+        !stored.metrics_json.contains(SECRET),
+        "{}",
+        stored.metrics_json
+    );
+    assert!(
+        !stored.recovery_json.contains(SECRET),
+        "{}",
+        stored.recovery_json
+    );
+    assert!(
+        !stored.recovery_json.contains(TOKEN),
+        "{}",
+        stored.recovery_json
+    );
+    assert!(stored.redactions >= 3, "{}", stored.redactions);
+    let page = fx.logs(&user, json!({}));
+    let text = json_of!(&page);
+    assert!(!text.contains(SECRET) && !text.contains(TOKEN), "{text}");
+    // Health sources pass it too.
+    fx.svc.register_source(Arc::new(|_now: i64| {
+        vec![
+            HealthCheck::new(
+                "boot.recovery",
+                HealthState::Degraded,
+                format!("held by {SECRET}"),
+            )
+            .metric(MetricReading::new(
+                "held",
+                None,
+                Metric::Unavailable(format!("reason {SECRET}")),
+            ))
+            .link(RecoveryLink::new(
+                "queue.inspect",
+                &format!("label {SECRET}"),
+            )),
+        ]
+    }));
+    let entries = fx.svc.health_entries(&user).unwrap();
+    let boot = check(&entries, "boot.recovery");
+    assert!(!json_of!(boot).contains(SECRET), "{}", json_of!(boot));
+    assert!(boot.redactions.as_ref().unwrap().get() >= 3);
+    assert!(!json_of!(&fx.health(&user)).contains(SECRET));
+}
+
+#[test]
+fn health_with_a_single_reader_needs_no_second_connection() {
+    let fx = Fx::with(Harness::tuned(|c| c.read_connections = 1), true);
+    let user = fx.user();
+    fx.svc.refresh_monitor();
+    let started = std::time::Instant::now();
+    let checks = fx.health(&user);
+    let elapsed = started.elapsed();
+    assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+    for c in [
+        "storage.migrations",
+        "storage.schema",
+        "storage.wal",
+        "storage.integrity",
+    ] {
+        assert_eq!(health(check(&checks, c)), "Healthy", "{c}");
+    }
+    assert_eq!(
+        metric(check(&checks, "storage.wal"), "pageSize")["availability"],
+        "Available"
+    );
 }

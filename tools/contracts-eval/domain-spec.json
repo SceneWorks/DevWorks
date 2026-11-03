@@ -6177,7 +6177,7 @@
       "result": "DiagnosticEntry",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Host attributes actor/correlation and redacts secrets/source rows before persistence; package cannot impersonate host health. Schema revision 2: the record also carries operation/target/stage/source revision, attempt, lifecycle times (start at most finish), progress (completed at most total), outcome, error class and helper output, which the host bounds (16 KiB kept, the rest counted) and redacts. Host-reserved components (host., storage., queue., process., boot., health.) are refused for any principal but the host; a reported record is origin Reported. Evidence must be a live artifact version the caller can see.",
+      "rules": "Host attributes actor/correlation and redacts secrets/source rows before persistence; package cannot impersonate host health. Schema revision 2: the record also carries operation/target/stage/source revision, attempt, lifecycle times (start at most finish), progress (completed at most total), outcome, error class and helper output, which the host bounds (16 KiB kept, the rest counted) and redacts. A component is dot-separated lowercase segments of a-z, 0-9, _ and - (anything else is InvalidArgument) and is matched exactly and case-sensitively. Host-reserved components (host, health, storage, queue, process, boot, access, diagnostics, artifacts, indexing, provider and beneath them) are refused for any principal but the host; a reported record is origin Reported. Evidence must be a live artifact version the caller can see.",
       "since": {
         "operation": 2,
         "operation_id": 2,
