@@ -69,5 +69,5 @@ pub mod shell;
 pub use policy::{AccessProfile, DenialReason, EffectivePolicy, Verdict};
 pub use service::{
     AdminError, Denied, EffectivePermissions, GrantBinding, HostAuthority, HostRoles,
-    authorization_holds, fences_hold,
+    authorization_holds, fences_hold, mint_resume_grant, revoke_resume_grant,
 };

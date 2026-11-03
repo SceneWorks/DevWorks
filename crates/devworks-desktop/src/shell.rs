@@ -53,12 +53,19 @@ impl Dialogs for NativeDialogs {
 /// The engine's bounded shutdown, driven by the close lifecycle.
 pub trait HostControl {
     /// The Quiescing seam (AD 20 step 1): asked once when the close starts, while the shell
-    /// stops admitting new requests. The run-control item (DW-9) plugs in here to pause every
-    /// active work root before anything is persisted or stopped; this build has no run
-    /// controls, so the engine pauses nothing.
+    /// stops admitting new requests. The engine starts its shutdown here, whose run-control
+    /// step holds every active work root for manual Continue before anything is persisted.
     fn begin_quiesce(&mut self);
-    /// Whether what `begin_quiesce` started has finished (bounded by [`QUIESCE_BOUND`]).
+    /// Whether what `begin_quiesce` started has finished (bounded by [`Self::quiesce_bound`]).
     fn quiesced(&mut self) -> bool;
+    /// How long Quiescing waits for [`Self::quiesced`].
+    fn quiesce_bound(&self) -> Duration {
+        QUIESCE_BOUND
+    }
+    /// The host's shutdown progress, shown while closing.
+    fn progress(&self) -> Option<String> {
+        None
+    }
     fn begin_shutdown(&mut self);
     /// A short description of the finished shutdown, once it finished.
     fn poll_shutdown(&mut self) -> Option<String>;
@@ -1390,7 +1397,11 @@ impl Shell {
                     .as_ref()
                     .is_none_or(|c| c.activities().is_empty());
                 let quiesced = self.control.as_mut().is_none_or(|c| c.quiesced());
-                if (idle && quiesced) || since.elapsed() > QUIESCE_BOUND {
+                let bound = self
+                    .control
+                    .as_ref()
+                    .map_or(QUIESCE_BOUND, |c| c.quiesce_bound());
+                if (idle && quiesced) || since.elapsed() > bound {
                     self.lifecycle = Lifecycle::Persisting;
                 }
             }
@@ -2587,13 +2598,16 @@ impl Shell {
             self.updates_open = open;
         }
         if !matches!(self.lifecycle, Lifecycle::Open | Lifecycle::Closed) {
-            let step = match &self.lifecycle {
-                Lifecycle::Quiescing { .. } => "Finishing requests in flight…".to_owned(),
-                Lifecycle::Persisting => "Saving the window state…".to_owned(),
-                Lifecycle::ShuttingDown => {
-                    "Stopping delivery, collection and owned processes (at most 30 s)…".to_owned()
+            let progress = self.control.as_ref().and_then(|c| c.progress());
+            let step = match (&self.lifecycle, progress) {
+                (Lifecycle::Exiting { summary }, _) => summary.clone(),
+                (Lifecycle::Persisting, _) => "Saving the window state…".to_owned(),
+                // The runtime's own shutdown stage, when a runtime is running.
+                (Lifecycle::Quiescing { .. } | Lifecycle::ShuttingDown, Some(stage)) => stage,
+                (Lifecycle::Quiescing { .. }, None) => "Finishing requests in flight…".to_owned(),
+                (Lifecycle::ShuttingDown, None) => {
+                    "Stopping delivery, collection and owned processes…".to_owned()
                 }
-                Lifecycle::Exiting { summary } => summary.clone(),
                 _ => String::new(),
             };
             egui::Modal::new(egui::Id::unique("closing")).show(ctx, |ui| {

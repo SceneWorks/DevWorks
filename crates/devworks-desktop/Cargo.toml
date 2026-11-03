@@ -37,3 +37,5 @@ libc = "=0.2.191"
 
 [dev-dependencies]
 egui_kittest = "=0.37.0"
+# Seeds a work root the desktop does not create yet (the close-lifecycle test).
+rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }

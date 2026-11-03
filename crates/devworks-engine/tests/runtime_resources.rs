@@ -162,6 +162,9 @@ fn composition(
         artifacts,
         resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(NativeProcessHost),
+        runs: devworks_engine::RunComposition::new(Arc::new(
+            devworks_core::services::runs::ControlService::new(h.ids.clone()),
+        )),
         power,
         use_cases: UseCases::new().with_settings(Arc::new(SettingsService {
             roles: Arc::new(HostRoles { store }),

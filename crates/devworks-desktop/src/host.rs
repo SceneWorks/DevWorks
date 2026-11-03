@@ -28,10 +28,13 @@ use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::history::HistoryService;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::resources::ResourceService;
+use devworks_core::services::runs::ControlService;
 use devworks_core::services::sessions::SessionService;
 use devworks_core::settings::service::SettingsService;
 use devworks_core::settings::view::Health;
-use devworks_engine::{BootError, BootReport, Composition, Runtime, RuntimeConfig, boot};
+use devworks_engine::{
+    BootError, BootReport, Composition, RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
+};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -161,6 +164,11 @@ async fn compose(
     });
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
+    // The run-control quiesce (live work held for Continue) gets this cooperative period; it
+    // stays within the shell's Quiescing bound, so the window persists only after it ended.
+    runtime_config.shutdown_grace = runtime_config
+        .shutdown_grace
+        .min(quiesce_bound(config.shutdown_bound));
     let composition = Composition {
         store: store.clone(),
         clock: clock.clone(),
@@ -169,6 +177,9 @@ async fn compose(
         artifacts,
         resources: Arc::new(ResourceService::new(id_source.clone(), clock.clone())),
         process_host: Arc::new(NativeProcessHost),
+        // The production run-control service (stored plan approval, no coordinator launcher
+        // until the agent supervisor exists): accepted work is held at shutdown and boot.
+        runs: RunComposition::new(Arc::new(ControlService::new(id_source.clone()))),
         power: Arc::new(NativePower),
         use_cases,
         consumers: Vec::new(),
@@ -216,9 +227,16 @@ pub struct ShutdownSummary {
     pub processes: ShutdownReport,
 }
 
+/// How long the shell's Quiescing step waits for the runtime's: the shell's own bound, never
+/// longer than the runtime's whole shutdown bound.
+pub fn quiesce_bound(shutdown_bound: Duration) -> Duration {
+    crate::shell::QUIESCE_BOUND.min(shutdown_bound)
+}
+
 /// The running engine: its thread, its Tokio runtime and the booted [`Host`].
 pub struct Engine {
     host: Arc<Host>,
+    shutdown_bound: Duration,
     stop: Option<oneshot::Sender<()>>,
     done: mpsc::Receiver<ShutdownSummary>,
     finished: Option<ShutdownSummary>,
@@ -229,6 +247,7 @@ impl Engine {
     /// Opens the store and boots on a dedicated engine thread; returns once recovery finished
     /// and the runtime admits requests (or why it could not).
     pub fn start(config: DesktopConfig) -> Result<Self, StartError> {
+        let shutdown_bound = config.shutdown_bound;
         let (booted_tx, booted_rx) = mpsc::channel::<Result<Arc<Host>, StartError>>();
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let (done_tx, done_rx) = mpsc::channel::<ShutdownSummary>();
@@ -299,6 +318,7 @@ impl Engine {
             .map_err(|_| StartError::Thread("the engine thread stopped during boot".into()))??;
         Ok(Self {
             host,
+            shutdown_bound,
             stop: Some(stop_tx),
             done: done_rx,
             finished: None,
@@ -355,15 +375,31 @@ impl Drop for Engine {
     }
 }
 
-/// The engine's Quiescing step pauses nothing yet: run controls (`runs.*`, DW-9) are not part of
-/// this build. When they land, `begin_quiesce` asks the run-control service to pause every
-/// active work root (recording the shutdown hold that makes them need an explicit Continue at
-/// the next boot) and `quiesced` reports when those pauses committed; the shell already waits
-/// for both, within its bound, before it persists and shuts the runtime down.
+/// The close lifecycle drives [`Runtime::shutdown`] (AD 20): Quiescing starts it, which fences
+/// admission and holds every live feature/issue root for manual Continue (the run-control
+/// shutdown path); the shell persists once that quiesce stage has passed, then waits for the
+/// rest of the same shutdown (delivery, collection, owned trees), whose stages it shows.
 impl crate::shell::HostControl for Engine {
-    fn begin_quiesce(&mut self) {}
+    fn begin_quiesce(&mut self) {
+        Engine::begin_shutdown(self);
+    }
     fn quiesced(&mut self) -> bool {
-        true
+        self.host.runtime.shutdown_stage() >= ShutdownStage::StoppingWork
+    }
+    fn quiesce_bound(&self) -> Duration {
+        quiesce_bound(self.shutdown_bound)
+    }
+    fn progress(&self) -> Option<String> {
+        Some(
+            match self.host.runtime.shutdown_stage() {
+                ShutdownStage::Open => "Finishing requests in flight…",
+                ShutdownStage::DrainingAdmission => "Finishing admitted requests…",
+                ShutdownStage::Quiescing => "Holding active work for Continue at the next launch…",
+                ShutdownStage::StoppingWork => "Stopping delivery, collection and owned processes…",
+                ShutdownStage::Done => "Runtime stopped.",
+            }
+            .to_owned(),
+        )
     }
     fn begin_shutdown(&mut self) {
         Engine::begin_shutdown(self);

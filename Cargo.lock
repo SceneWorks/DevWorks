@@ -786,6 +786,7 @@ dependencies = [
  "jiff",
  "libc",
  "rfd",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

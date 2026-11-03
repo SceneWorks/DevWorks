@@ -42,6 +42,15 @@
 //!   supervisor's recovery and the resource boot reconciliation at startup, periodic sweeps with
 //!   the same sleep/wake detection as the dispatcher, and the bounded shutdown of owned trees.
 //!   [`runtime::boot`] drives it (see "Boot sequence").
+//! * **Run root controls.** [`runs::RunSupervisor`] runs core's `ControlService` for the
+//!   application lifecycle: boot recovery of run roots (activations of earlier boots
+//!   interrupted, their roots held for an explicit selective Continue), supervision ticks
+//!   (lease reassertion after a sleep/wake jump, bounded retry of expired leases, execution of
+//!   journaled stops through the process owner, and — once a coordinator
+//!   [`runs::ActivationLauncher`] is installed — claim, launch, renewal and stop signalling), the
+//!   immediate stop of an archived project, and the run-control steps of shutdown. Every
+//!   consumer's root-scoped deliveries pass the run-control gate ([`runs::RunGate`]), so queued
+//!   work of a paused, held or stopped root waits until the root is continued.
 //!
 //! # Boot sequence
 //!
@@ -72,23 +81,40 @@
 //!    then the resource boot reconciliation runs (earlier boots' waiters cancelled, logical grants
 //!    marked owner-unreachable, physical grants uncertain until their trees are settled, then
 //!    transferred).
-//! 5. **Applies keep-awake** from the effective `power.keepAwake` setting through the
+//! 5. **Recovers run roots** ([`runs::RunSupervisor::boot`], core
+//!    `ControlService::recover_boot`): every activation an earlier boot left live — running,
+//!    stopping, claimed, or accepted but never launched — is recorded `Interrupted` and its
+//!    feature or issue root is held (`RestartContinue`, desired `Paused`) until an explicit,
+//!    authorized, selective Continue (CONTROL-10); its coordinator, assignment lineage and results
+//!    are kept and its active assignments go dormant. Continuation turns left in flight are
+//!    ended. Journaled stops of earlier boots are settled from what step 4 verified (a tree it
+//!    could not verify stopped holds the root for reconciliation). The schedules and
+//!    keep-working hooks recover in the same unit of work and cannot clear these holds.
+//! 6. **Applies keep-awake** from the effective `power.keepAwake` setting through the
 //!    composition's `PowerPort`.
-//! 6. **Starts delivery** ([`Dispatcher::run`]).
-//! 7. **Starts artifact collection**: one pass at once, then every
+//! 7. **Starts delivery** ([`Dispatcher::run`]); every consumer was composed with the
+//!    run-control gate.
+//! 8. **Starts artifact collection**: one pass at once, then every
 //!    [`runtime::RuntimeConfig::collect_interval`] and after every applied `artifacts.delete`
 //!    admitted through the runtime. A pass removes pending blob generations no reader or pin
 //!    holds (`ArtifactService::collect`) and clears derived previews (`collect_derived`). Resource
 //!    housekeeping ticks start too (every [`runtime::RuntimeConfig::housekeeping_interval`]:
-//!    expiry, transfer, promotion, and a `Wake` reconciliation after a sleep/wake jump).
-//! 8. **Returns the [`runtime::Runtime`]**, the only handle through which commands and queries
+//!    expiry, transfer, promotion, and a `Wake` reconciliation after a sleep/wake jump), and run
+//!    supervision ticks at the same interval and after every committed `runs.*` command.
+//! 9. **Returns the [`runtime::Runtime`]**, the only handle through which commands and queries
 //!    are admitted: a committed command wakes delivery for the reply intent its receipt
 //!    committed, and a committed `settings.save_revision` re-applies keep-awake.
 //!
-//! [`runtime::Runtime::shutdown`] stops delivery, collection and housekeeping, waits for
-//! in-flight deliveries, then stops every owned process tree within one bound
-//! ([`runtime::RuntimeConfig::shutdown_bound`]), records the `Shutdown` reconciliation and
-//! releases keep-awake.
+//! [`runtime::Runtime::shutdown`] (AD20) first closes command admission — every command holds
+//! the admission fence for its whole unit of work, so closing it drains the commands already
+//! admitted and refuses later ones, and none commits after the snapshot that follows — then
+//! commits the run-control transition (live feature/issue work held for manual Continue and asked to
+//! stop; launched coordinators get the cooperative grace), then stops delivery, collection,
+//! housekeeping and run supervision, waits for in-flight deliveries, stops every owned process
+//! tree within one bound ([`runtime::RuntimeConfig::shutdown_bound`]), records the `Shutdown`
+//! reconciliation, records every activation still live as `Interrupted` and releases keep-awake.
+//! A storage failure on the way is not fatal: the next boot holds the same work from its boot
+//! epoch (step 5).
 //!
 //! Steps 2 and 3 commute. Queue recovery writes only queue claims and the journal state of
 //! non-terminal operations; artifact recovery resolves only staging operations (which commit as
@@ -101,10 +127,18 @@
 //! `boot_recovery_orders_commute_and_publish_the_reply_once`). The order above is fixed so a
 //! boot is reproducible.
 //!
+//! Step 5 follows steps 2 and 4 and precedes steps 7–9: it settles journaled stops from the
+//! journal state step 2 classified (an interrupted `Dispatching` stop is `OutcomeUnknown`) and the
+//! process state step 4 verified, and the first claim or command of the boot must already see
+//! every earlier boot's feature/issue work held. It writes only run-control records, the journal
+//! state of `runs.stop` operations and their history, and reads no artifact record, so it commutes
+//! with step 3. Root-scoped deliveries step 2 held awaiting eligibility stay held: the run-control
+//! gate refuses them until their root is continued.
+//!
 //! Step 4 commutes with steps 2 and 3 as well: it writes only owned-process records, resource
 //! definitions and leases and their history, and reads no queue row, journal state or artifact
 //! record, while queue and artifact recovery never read or write those tables. It must however
-//! precede steps 6–8: until it finishes, a tree of the earlier boot may still be running and
+//! precede steps 5–9: until it finishes, a tree of the earlier boot may still be running and
 //! holding a physical resource (the desktop, a device, a port), so neither a recovered delivery
 //! nor an admitted command may launch a process or be granted that resource. Recovery kills such
 //! trees and transfers their leases only once they are verified gone, so the first new work of
@@ -118,6 +152,7 @@ pub mod dispatch;
 pub mod package;
 pub mod replies;
 pub mod resources;
+pub mod runs;
 pub mod runtime;
 mod store;
 
@@ -126,6 +161,10 @@ pub use dispatch::{
     DeliveryHandler, Dispatcher, DispatcherConfig, EffectExecutor, EffectFuture, EffectResult,
     Outcome, RecoveryReport, RetryPolicy, RootEligibility, TickReport, Wakeup,
 };
+pub use runs::{
+    ActivationLauncher, Launch, LaunchEnd, LaunchFuture, RunGate, RunSupervisor, RunTick,
+};
 pub use runtime::{
-    BootError, BootReport, CollectionPass, Composition, Runtime, RuntimeConfig, boot,
+    BootError, BootReport, CollectionPass, Composition, RunComposition, Runtime, RuntimeConfig,
+    ShutdownStage, boot,
 };

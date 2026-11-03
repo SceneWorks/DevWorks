@@ -966,3 +966,94 @@ fn the_shell_reaches_only_validated_operations() {
         }
     }
 }
+
+#[test]
+fn closing_the_window_with_an_active_root_leaves_it_held_for_continue_after_reopen() {
+    let root = Root::new("close-holds-runs");
+    let engine = start(&root);
+    // A standalone issue root (work items arrive with later items; seeded here directly).
+    let db = rusqlite::Connection::open(root.0.join("workspace.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(5)).unwrap();
+    db.execute_batch(
+        "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) \
+         VALUES('project-a','A','Active',1,1,0); \
+         INSERT INTO work_items VALUES('root-i','project-a','issue',NULL,NULL,NULL,'root-i',1,0,1,1,1,'{}');",
+    )
+    .unwrap();
+    drop(db);
+    let backend = engine.backend();
+    // `runs.*` frames use the specialized command and query envelopes.
+    let start_frame = |key: &str, control: &str| {
+        json!({"protocol": ops::PROTOCOL, "requestKey": key, "command": {"kind": "runs.start",
+            "rootId": "root-i", "expectedWorkRevision": "1", "expectedControlRevision": control}})
+        .to_string()
+        .into_bytes()
+    };
+    let started = backend.command("runs.start", &start_frame("start-1", "1"));
+    assert!(
+        matches!(
+            started,
+            Ok(devworks_core::protocol::CommandReply::Recorded { .. })
+        ),
+        "{started:?}"
+    );
+    let shell = shell_with(
+        Ok(backend),
+        &root,
+        Script::default(),
+        Some(Box::new(engine)),
+    );
+    let mut h = harness(shell, 1440.0, 900.0);
+    settle(&mut h);
+    let held = || {
+        let db = rusqlite::Connection::open(root.0.join("workspace.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(5)).unwrap();
+        db.query_row(
+            "SELECT count(*) FROM blockers WHERE root_id='root-i' AND cause='RestartContinue' \
+             AND state='Active'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(held(), 0);
+    h.state_mut().request_close();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut held_before_persisting = None;
+    while h.state().lifecycle() != &Lifecycle::Closed {
+        assert!(Instant::now() < deadline, "the window closes");
+        h.step();
+        // Quiescing ends only after the runtime held the live work (AD 20 step 1): by the
+        // time the window state is persisted, the hold is committed.
+        if held_before_persisting.is_none() && h.state().lifecycle() == &Lifecycle::Persisting {
+            held_before_persisting = Some(held());
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        held_before_persisting,
+        Some(1),
+        "held before the window state was persisted"
+    );
+    drop(h);
+    // Reopen: the root is held, and only an explicit Continue runs it again.
+    let engine = start(&root);
+    let backend = engine.backend();
+    let inspected = backend.query(
+        "runs.inspect",
+        json!({"protocol": ops::PROTOCOL, "queryId": "q-1",
+            "query": {"kind": "runs.inspect", "rootId": "root-i"}})
+        .to_string()
+        .as_bytes(),
+    );
+    let text = format!("{inspected:?}");
+    assert!(
+        text.contains("desired_state: Paused") && text.contains("cause: RestartContinue"),
+        "{text}"
+    );
+    let again = format!(
+        "{:?}",
+        backend.command("runs.start", &start_frame("start-2", "2"))
+    );
+    assert!(again.contains("code: ContinueRequired"), "{again}");
+}
