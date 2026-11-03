@@ -43,6 +43,9 @@ impl Check for SearchInput {
         Ok(())
     }
 }
+impl Revisioned for SearchInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.read` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -61,6 +64,9 @@ impl Check for ReadInput {
         Ok(())
     }
 }
+impl Revisioned for ReadInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.record` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -75,6 +81,9 @@ impl Check for RecordInput {
         self.batch.check()?;
         Ok(())
     }
+}
+impl Revisioned for RecordInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `knowledge.revise` Command input.
@@ -94,6 +103,9 @@ impl Check for ReviseInput {
         self.replacement.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReviseInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `knowledge.relate` Command input.
@@ -116,6 +128,9 @@ impl Check for RelateInput {
         Ok(())
     }
 }
+impl Revisioned for RelateInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.tag` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -134,6 +149,9 @@ impl Check for TagInput {
         self.tags.check()?;
         Ok(())
     }
+}
+impl Revisioned for TagInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `knowledge.verify` Command input.
@@ -156,6 +174,9 @@ impl Check for VerifyInput {
         Ok(())
     }
 }
+impl Revisioned for VerifyInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.retract` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -177,6 +198,9 @@ impl Check for RetractInput {
         Ok(())
     }
 }
+impl Revisioned for RetractInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.scope` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -192,6 +216,9 @@ impl Check for ScopeInput {
         Ok(())
     }
 }
+impl Revisioned for ScopeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.diagnostics` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -204,6 +231,9 @@ impl Check for DiagnosticsInput {
         self.scope.check()?;
         Ok(())
     }
+}
+impl Revisioned for DiagnosticsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `knowledge.delete_by_source` Command input.
@@ -227,6 +257,9 @@ impl Check for DeleteBySourceInput {
         Ok(())
     }
 }
+impl Revisioned for DeleteBySourceInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.delete_selected` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -245,6 +278,9 @@ impl Check for DeleteSelectedInput {
         Ok(())
     }
 }
+impl Revisioned for DeleteSelectedInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.write_status` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -257,6 +293,9 @@ impl Check for WriteStatusInput {
         self.write_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for WriteStatusInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `knowledge.subgraph` Query input.
@@ -273,6 +312,9 @@ impl Check for SubgraphInput {
         Ok(())
     }
 }
+impl Revisioned for SubgraphInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.entity_bundle` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -287,6 +329,9 @@ impl Check for EntityBundleInput {
         self.query.check()?;
         Ok(())
     }
+}
+impl Revisioned for EntityBundleInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `knowledge.entity_graph` Query input.
@@ -303,6 +348,9 @@ impl Check for EntityGraphInput {
         Ok(())
     }
 }
+impl Revisioned for EntityGraphInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.claim_bundle` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -317,6 +365,9 @@ impl Check for ClaimBundleInput {
         self.query.check()?;
         Ok(())
     }
+}
+impl Revisioned for ClaimBundleInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `knowledge.expand_frontier` Query input.
@@ -333,6 +384,9 @@ impl Check for ExpandFrontierInput {
         Ok(())
     }
 }
+impl Revisioned for ExpandFrontierInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.render_summary` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -348,6 +402,9 @@ impl Check for RenderSummaryInput {
         Ok(())
     }
 }
+impl Revisioned for RenderSummaryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.query` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -362,6 +419,9 @@ impl Check for QueryInput {
         self.query.check()?;
         Ok(())
     }
+}
+impl Revisioned for QueryInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `knowledge.import_user_data` Command input.
@@ -382,6 +442,9 @@ impl Check for ImportUserDataInput {
         Ok(())
     }
 }
+impl Revisioned for ImportUserDataInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.promote` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -401,6 +464,9 @@ impl Check for PromoteInput {
         self.proposal_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for PromoteInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `knowledge.challenge` Command input.
@@ -423,6 +489,9 @@ impl Check for ChallengeInput {
         Ok(())
     }
 }
+impl Revisioned for ChallengeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `knowledge.tagged_lessons` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -439,6 +508,9 @@ impl Check for TaggedLessonsInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for TaggedLessonsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `knowledge` family, built only for the selected operation and mode.

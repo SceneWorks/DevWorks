@@ -40,6 +40,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `issues.get` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -57,6 +60,9 @@ impl Check for GetInput {
         self.detail_page.check()?;
         Ok(())
     }
+}
+impl Revisioned for GetInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `issues.create` Command input.
@@ -84,6 +90,9 @@ impl Check for CreateInput {
         Ok(())
     }
 }
+impl Revisioned for CreateInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `issues.edit` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -101,6 +110,9 @@ impl Check for EditInput {
         Ok(())
     }
 }
+impl Revisioned for EditInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `issues.prioritize` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -117,6 +129,9 @@ impl Check for PrioritizeInput {
         self.ordered_work_ids.check()?;
         Ok(())
     }
+}
+impl Revisioned for PrioritizeInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `issues.publish` Command input.
@@ -138,6 +153,9 @@ impl Check for PublishInput {
         Ok(())
     }
 }
+impl Revisioned for PublishInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `issues.link` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -156,6 +174,9 @@ impl Check for LinkInput {
         self.remote_issue_number.check()?;
         Ok(())
     }
+}
+impl Revisioned for LinkInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `issues` family, built only for the selected operation and mode.

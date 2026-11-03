@@ -3,7 +3,7 @@
 
 //! Domain records, enums and tagged unions shared by catalog operations (AD69-AD71).
 //! `Check` applies nested bounds and the recorded pure cross-field rules in `protocol::rules`.
-use crate::protocol::data::{Coverage, DataScope, GitOid, ViewSelection};
+use crate::protocol::data::{ArtifactTags, Coverage, DataScope, GitOid, ViewSelection};
 use crate::protocol::provider::{ArtifactRef, Digest, SchemaRef};
 #[allow(unused_imports)]
 use crate::protocol::support::*;
@@ -4775,6 +4775,13 @@ pub struct ArtifactRecord {
     pub created_at_ms: Counter,
     pub scope: DataScope,
     pub reference_count: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ArtifactTags", extend("x-since" = 2))]
+    pub tags: Option<ArtifactTags>,
 }
 impl Check for ArtifactRecord {
     fn check(&self) -> Result<(), String> {
@@ -4783,11 +4790,20 @@ impl Check for ArtifactRecord {
         self.created_at_ms.check()?;
         self.scope.check()?;
         self.reference_count.check()?;
+        self.tags.check()?;
         crate::protocol::rules::record(
             "ArtifactRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ArtifactRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.tags = None;
+        }
     }
 }
 

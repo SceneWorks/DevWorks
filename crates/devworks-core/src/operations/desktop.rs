@@ -26,6 +26,9 @@ impl Check for InspectInput {
         Ok(())
     }
 }
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `desktop.capture` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -40,6 +43,9 @@ impl Check for CaptureInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for CaptureInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `desktop.request_control` Command input.
@@ -59,6 +65,9 @@ impl Check for RequestControlInput {
         self.lease_ms.check()?;
         Ok(())
     }
+}
+impl Revisioned for RequestControlInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `desktop.input` Command input.
@@ -83,6 +92,9 @@ impl Check for InputInput {
         Ok(())
     }
 }
+impl Revisioned for InputInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `desktop.release_control` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -99,6 +111,9 @@ impl Check for ReleaseControlInput {
         self.expected_fence.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReleaseControlInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `desktop` family, built only for the selected operation and mode.

@@ -30,10 +30,11 @@ use devworks_core::protocol::{
     ActorId, Check, CommandReply, Counter, DomainErrorCode, DomainFault, Id, ProjectId,
     RetryAdvice, Revision,
 };
+use devworks_core::registry::SchemaRevision;
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::lifecycle::VersionResolution;
 use devworks_core::services::artifacts::replies::{
-    REPLY_AGGREGATE, REPLY_CONSUMER, REPLY_MEDIA_TYPE, ReceiptReplies, ReplyOutcome,
+    REPLY_AGGREGATE, REPLY_CONSUMER, REPLY_MEDIA_TYPE, ReceiptReplies, ReplyOutcome, reply_schema,
 };
 use devworks_core::services::artifacts::{
     ArtifactService, RECEIPT_RETAINED, SHARED_REFERENCES_REMAIN, versions_digest,
@@ -527,9 +528,11 @@ fn a_recorded_receipt_publishes_its_reply_and_then_observes_recorded() {
     let schema = o.reply_schema.clone().unwrap();
     let descriptor = devworks_core::registry::find("sessions.start").unwrap();
     assert_eq!(schema.schema_id.as_str(), "devworks.reply/sessions.start");
+    // A request that negotiates no revision is recorded (and typed) at revision 1.
+    assert_eq!(schema.revision.get(), 1);
     assert_eq!(
-        schema.revision.get(),
-        i64::from(descriptor.schema_revision.0)
+        serde_json::to_value(&schema).unwrap(),
+        serde_json::to_value(reply_schema(descriptor, SchemaRevision(1)).unwrap()).unwrap()
     );
 
     // The artifact bytes are the canonical recorded reply and decode to it.
@@ -1468,9 +1471,45 @@ fn every_operation_has_a_qualified_reply_schema() {
         if d.binding(devworks_core::registry::Mode::Command).is_none() {
             continue;
         }
-        let s = devworks_core::services::artifacts::replies::reply_schema(d)
-            .unwrap_or_else(|| panic!("{}", d.name));
-        assert_eq!(s.schema_id.as_str(), format!("devworks.reply/{}", d.name));
+        for r in d.revisions {
+            let s = reply_schema(d, *r).unwrap_or_else(|| panic!("{} r{}", d.name, r.0));
+            assert_eq!(s.schema_id.as_str(), format!("devworks.reply/{}", d.name));
+            assert_eq!(s.revision.get(), i64::from(r.0));
+        }
+        // A revision the operation does not register has no reply schema.
+        assert!(reply_schema(d, SchemaRevision::MAX).is_none());
+    }
+    // Each revision is its own schema document.
+    let save = devworks_core::registry::find("artifacts.save").unwrap();
+    assert_ne!(
+        reply_schema(save, SchemaRevision(1)).unwrap().sha256,
+        reply_schema(save, SchemaRevision(2)).unwrap().sha256
+    );
+}
+
+#[test]
+fn a_reply_is_typed_at_its_receipts_stored_schema_revision() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let save = devworks_core::registry::find("artifacts.save").unwrap();
+    for (key, revision) in [("save-r1", None), ("save-r2", Some(2u32))] {
+        let mut frame = json!({"protocol": "1.0-draft.1", "requestKey": key, "command": {
+            "kind": "Save", "projectId": "project-a", "title": "T", "mediaType": "text/plain",
+            "source": {"kind": "Upload", "ticketId": "missing"},
+            "expectedDigest": sha256_hex(b"x"), "expectedBytes": "1"}});
+        if let Some(r) = revision {
+            frame["schemaRevision"] = json!(r);
+        }
+        recorded(&fx.gateway_command(&user, "artifacts.save", frame));
+        published(fx.publish_all());
+        let o = observation(fx.receipt(&user, key));
+        o.check().unwrap();
+        let at = SchemaRevision(revision.unwrap_or(1));
+        assert_eq!(
+            serde_json::to_value(o.reply_schema.unwrap()).unwrap(),
+            serde_json::to_value(reply_schema(save, at).unwrap()).unwrap(),
+            "{key}"
+        );
     }
 }
 

@@ -35,6 +35,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `sessions.get` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -47,6 +50,9 @@ impl Check for GetInput {
         self.session_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for GetInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `sessions.briefing` Query input.
@@ -62,6 +68,9 @@ impl Check for BriefingInput {
         self.expected_context_epoch.check()?;
         Ok(())
     }
+}
+impl Revisioned for BriefingInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `sessions.context_sources` Query input.
@@ -79,6 +88,9 @@ impl Check for ContextSourcesInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for ContextSourcesInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `sessions.start` Command input.
@@ -98,6 +110,9 @@ impl Check for StartInput {
         Ok(())
     }
 }
+impl Revisioned for StartInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `sessions.end` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -112,6 +127,9 @@ impl Check for EndInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for EndInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `sessions` family, built only for the selected operation and mode.

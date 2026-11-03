@@ -135,6 +135,48 @@ impl<T: Check> Check for Page<T> {
         Ok(())
     }
 }
+/// A wire value whose shape grew in a later operation schema revision. A member introduced at
+/// revision N is optional and annotated `x-since: N` in its JSON Schema; `retain_revision(r)`
+/// clears every member introduced after `r`, which yields revision `r`'s exact wire shape.
+/// Admission uses it to refuse later-revision members in an earlier-revision request, and the
+/// gateway uses it to project a result or receipt onto the negotiated revision.
+pub trait Revisioned {
+    fn retain_revision(&mut self, revision: u32);
+}
+impl<T: Revisioned> Revisioned for Option<T> {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Some(x) = self {
+            x.retain_revision(revision)
+        }
+    }
+}
+impl<T: Revisioned> Revisioned for Vec<T> {
+    fn retain_revision(&mut self, revision: u32) {
+        for x in self {
+            x.retain_revision(revision)
+        }
+    }
+}
+impl<T: Revisioned, const MIN: usize, const MAX: usize> Revisioned for BoundedList<T, MIN, MAX> {
+    fn retain_revision(&mut self, revision: u32) {
+        self.0.retain_revision(revision)
+    }
+}
+impl<T: Revisioned> Revisioned for Page<T> {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision)
+    }
+}
+/// Deserializer of a member introduced in a later schema revision: it is either omitted or
+/// carries a value. It has no explicit-null spelling, so its presence is always visible to the
+/// strict reader of an earlier revision (which refuses it rather than discarding it).
+pub fn gated_member<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(d)?
+        .map(Some)
+        .ok_or_else(|| D::Error::custom("a revision-gated member is omitted, never null"))
+}
 macro_rules! int_bound {($n:ident,$lo:expr,$hi:expr)=>{
  #[derive(Clone,Debug,Serialize)]#[serde(transparent)]pub struct $n(u32);
  impl<'de> Deserialize<'de> for $n{fn deserialize<D:Deserializer<'de>>(d:D)->Result<Self,D::Error>{let x=u32::deserialize(d)?;if !($lo..=$hi).contains(&x){return Err(D::Error::custom("integer bound"))}Ok(Self(x))}}

@@ -32,6 +32,9 @@ impl Check for ServersInput {
         Ok(())
     }
 }
+impl Revisioned for ServersInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `mcp.configure` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -55,6 +58,9 @@ impl Check for ConfigureInput {
         Ok(())
     }
 }
+impl Revisioned for ConfigureInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `mcp.connect` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -70,6 +76,9 @@ impl Check for ConnectInput {
         Ok(())
     }
 }
+impl Revisioned for ConnectInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `mcp.discover` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -84,6 +93,9 @@ impl Check for DiscoverInput {
         self.expected_catalog_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for DiscoverInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `mcp.select_tools` Command input.
@@ -104,6 +116,9 @@ impl Check for SelectToolsInput {
         Ok(())
     }
 }
+impl Revisioned for SelectToolsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `mcp.resources` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -123,6 +138,9 @@ impl Check for ResourcesInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for ResourcesInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `mcp.prompts` Query input.
@@ -147,6 +165,9 @@ impl Check for PromptsInput {
         Ok(())
     }
 }
+impl Revisioned for PromptsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `mcp.capabilities` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -163,6 +184,9 @@ impl Check for CapabilitiesInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for CapabilitiesInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `mcp` family, built only for the selected operation and mode.

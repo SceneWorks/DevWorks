@@ -695,6 +695,56 @@ pub enum ArtifactSource {
     Attachment { attachment_id: Id },
     WorkOutput { file_handle: Id },
 }
+/// Most tags one artifact carries.
+pub const MAX_ARTIFACT_TAGS: usize = 32;
+/// Longest tag, in characters.
+pub const MAX_ARTIFACT_TAG_CHARS: usize = 64;
+/// A set of opaque artifact labels (schema revision 2): at most 32, each 1-64 characters without
+/// NUL, no duplicates. Decoding sorts it, so equal sets normalize identically.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ArtifactTags(pub Vec<String>);
+impl ArtifactTags {
+    pub fn new(mut tags: Vec<String>) -> Result<Self, &'static str> {
+        if tags.len() > MAX_ARTIFACT_TAGS {
+            return Err("too many artifact tags");
+        }
+        if tags.iter().any(|t| {
+            let n = t.chars().count();
+            n == 0 || n > MAX_ARTIFACT_TAG_CHARS || t.contains('\0')
+        }) {
+            return Err("artifact tag length or NUL outside contract");
+        }
+        tags.sort();
+        if tags.windows(2).any(|w| w[0] == w[1]) {
+            return Err("duplicate artifact tag");
+        }
+        Ok(Self(tags))
+    }
+}
+impl<'de> Deserialize<'de> for ArtifactTags {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::new(Vec::<String>::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+}
+impl JsonSchema for ArtifactTags {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ArtifactTags".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "array",
+            "maxItems": MAX_ARTIFACT_TAGS,
+            "uniqueItems": true,
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_ARTIFACT_TAG_CHARS,
+                "pattern": "^[^\\u0000]*$"
+            }
+        })
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ArtifactCommand {
@@ -705,6 +755,14 @@ pub enum ArtifactCommand {
         source: ArtifactSource,
         expected_digest: Digest,
         expected_bytes: Counter,
+        /// Labels of the new artifact (schema revision 2).
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::domain_support::gated_member"
+        )]
+        #[schemars(with = "ArtifactTags", extend("x-since" = 2))]
+        tags: Option<ArtifactTags>,
     },
     Replace {
         artifact_id: Id,
@@ -759,11 +817,32 @@ pub struct ArtifactCommandRequest {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ArtifactQuery {
-    List { project_id: ProjectId },
-    Read { artifact_id: Id, version_id: Id },
-    Preview { artifact_id: Id, version_id: Id },
-    Export { artifact_id: Id, version_id: Id },
-    ResolveCitation { citation: Citation },
+    List {
+        project_id: ProjectId,
+        /// Only artifacts carrying every listed tag (schema revision 2).
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::domain_support::gated_member"
+        )]
+        #[schemars(with = "ArtifactTags", extend("x-since" = 2))]
+        tags: Option<ArtifactTags>,
+    },
+    Read {
+        artifact_id: Id,
+        version_id: Id,
+    },
+    Preview {
+        artifact_id: Id,
+        version_id: Id,
+    },
+    Export {
+        artifact_id: Id,
+        version_id: Id,
+    },
+    ResolveCitation {
+        citation: Citation,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1282,6 +1361,29 @@ impl ArtifactCommandRequest {
             }
         }
         Ok(())
+    }
+}
+impl crate::domain_support::Revisioned for ArtifactCommandRequest {
+    fn retain_revision(&mut self, revision: u32) {
+        if let ArtifactCommand::Save { tags, .. } = &mut self.command {
+            if revision < 2 {
+                *tags = None;
+            }
+        }
+    }
+}
+impl crate::domain_support::Revisioned for ArtifactQueryRequest {
+    fn retain_revision(&mut self, revision: u32) {
+        if let ArtifactQuery::List { tags, .. } = &mut self.query {
+            if revision < 2 {
+                *tags = None;
+            }
+        }
+    }
+}
+impl crate::domain_support::Check for ArtifactTags {
+    fn check(&self) -> Result<(), String> {
+        Self::new(self.0.clone()).map(|_| ()).map_err(str::to_owned)
     }
 }
 

@@ -38,11 +38,14 @@
 //! receipt, whose decision the gateway redacted before storing it; nothing is re-derived or
 //! re-run. The decision is redacted again when the bytes are rendered (defence in depth for a
 //! receipt an earlier build stored, including backfilled ones); one that cannot be redacted is
-//! held, never published. The media type is `application/json`; the reply schema ([`reply_schema`]) names the
-//! operation's registered binding (`devworks.reply/<operation>` at its schema revision) with the
-//! digest of the schema document combining the generic command reply envelope and that
-//! operation's registered result schema. A receipt recorded under another contract or schema
-//! revision than this build registers is held with its cause rather than typed by a guess.
+//! held, never published.
+//!
+//! The media type is `application/json`; the reply schema ([`reply_schema`]) names the
+//! operation's binding at the receipt's stored schema revision (`devworks.reply/<operation>` at
+//! that revision) with the digest of the schema document combining the generic command reply
+//! envelope and that operation's result schema, both at that revision. A receipt recorded under
+//! another contract or a revision this build does not register is held with its cause rather
+//! than typed by a guess.
 //!
 //! **Owner scope.** The reply belongs to the project its decision was recorded in — taken from the
 //! receipt's own `CommandDecided` event, which the delivery must name, never from the delivery's
@@ -88,11 +91,13 @@ use crate::ports::{IdKind, StoredReceipt};
 use crate::protocol::provider::{ArtifactRef, Digest, QualifiedId, SchemaRef};
 use crate::protocol::records::{ReceiptLookupState, ReceiptObservation};
 use crate::protocol::results::DomainCommandReply;
+use crate::protocol::results::DomainDecision;
+use crate::protocol::support::Revisioned;
 use crate::protocol::{
     ActorId, CONTRACT, Check, CommandId, CommandReply, EventId, Id, ProjectId, Protocol,
     RequestKey, Revision,
 };
-use crate::registry::OperationDescriptor;
+use crate::registry::{OperationDescriptor, SchemaRevision};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -159,33 +164,49 @@ impl Intent {
     }
 }
 
-/// The reply schema reference of `descriptor`'s registered binding: `devworks.reply/<operation>`
-/// at its schema revision, with the SHA-256 of the canonical schema document (the contract, the
-/// generic command reply envelope and the operation's registered result schema). `None` when the
-/// operation name cannot form a qualified schema ID.
-pub fn reply_schema(descriptor: &OperationDescriptor) -> Option<SchemaRef> {
+/// The reply schema reference of `descriptor`'s binding at `revision` (a receipt's stored
+/// revision): `devworks.reply/<operation>` at that revision, with the SHA-256 of the canonical
+/// schema document (the contract, the generic command reply envelope and the operation's result
+/// schema, both at that revision). `None` when the operation does not register `revision` or its
+/// name cannot form a qualified schema ID.
+pub fn reply_schema(
+    descriptor: &OperationDescriptor,
+    revision: SchemaRevision,
+) -> Option<SchemaRef> {
+    if !descriptor.supports(revision) {
+        return None;
+    }
     let schema_id = format!("{REPLY_SCHEMA_NAMESPACE}/{}", descriptor.name);
     let qualified = QualifiedId::try_from(schema_id.clone()).ok()?;
+    let reply = crate::registry::schema_at(schemars::schema_for!(DomainCommandReply), revision);
     let document = json!({
         "$id": schema_id,
         "contract": CONTRACT,
-        "revision": descriptor.schema_revision.0,
-        "reply": serde_json::to_value(schemars::schema_for!(DomainCommandReply)).ok()?,
-        "result": serde_json::to_value(descriptor.result_schema()).ok()?,
+        "revision": revision.0,
+        "reply": serde_json::to_value(reply).ok()?,
+        "result": serde_json::to_value(descriptor.result_schema(revision)).ok()?,
     });
     let canonical = crate::jcs::canonicalize(&document).ok()?;
     Some(SchemaRef {
         schema_id: qualified,
-        revision: Revision::new(i64::from(descriptor.schema_revision.0)).ok()?,
+        revision: Revision::new(i64::from(revision.0)).ok()?,
         sha256: Digest(sha256_hex(canonical.as_bytes())),
     })
 }
 
-/// The canonical reply bytes of a stored receipt: the `Recorded` reply it was returned as, with
-/// its decision redacted again (an earlier build may have stored it unredacted).
+/// The canonical reply bytes of a stored receipt: the `Recorded` reply it was returned as, at its
+/// stored schema revision, with its decision redacted again (an earlier build may have stored it
+/// unredacted). The gateway stores the decision already projected onto the negotiated revision
+/// and replays it under that projection; projecting again here is idempotent and keeps the bytes
+/// exactly what a replay returns.
 pub fn reply_bytes(stored: &StoredReceipt) -> Result<Vec<u8>, String> {
     let mut receipt = stored.receipt.clone();
     receipt.decision = crate::authority::redact::redact_decision(receipt.decision)?;
+    if let DomainDecision::Applied { result } | DomainDecision::NoChange { result } =
+        &mut receipt.decision
+    {
+        result.retain_revision(stored.schema_revision.0);
+    }
     let reply: DomainCommandReply = CommandReply::Recorded {
         protocol: Protocol::Draft1,
         receipt,
@@ -225,7 +246,7 @@ enum Committed {
 /// The receipt reply publisher (see the module documentation).
 pub struct ReceiptReplies {
     artifacts: Arc<ArtifactService>,
-    schemas: Mutex<HashMap<&'static str, SchemaRef>>,
+    schemas: Mutex<HashMap<(&'static str, SchemaRevision), SchemaRef>>,
 }
 
 impl ReceiptReplies {
@@ -236,13 +257,17 @@ impl ReceiptReplies {
         }
     }
 
-    fn schema(&self, descriptor: &'static OperationDescriptor) -> Option<SchemaRef> {
+    fn schema(
+        &self,
+        descriptor: &'static OperationDescriptor,
+        revision: SchemaRevision,
+    ) -> Option<SchemaRef> {
         let mut cache = self.schemas.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(s) = cache.get(descriptor.name) {
+        if let Some(s) = cache.get(&(descriptor.name, revision)) {
             return Some(s.clone());
         }
-        let s = reply_schema(descriptor)?;
-        cache.insert(descriptor.name, s.clone());
+        let s = reply_schema(descriptor, revision)?;
+        cache.insert((descriptor.name, revision), s.clone());
         Some(s)
     }
 
@@ -315,13 +340,15 @@ impl ReceiptReplies {
                 stored.operation
             )));
         };
-        if stored.contract != CONTRACT || stored.schema_revision != descriptor.schema_revision {
+        if stored.contract != CONTRACT || !descriptor.supports(stored.schema_revision) {
             return Ok(ReplyOutcome::Hold(format!(
-                "receipt recorded under {} schema revision {}; this build registers {}",
-                stored.contract, stored.schema_revision.0, descriptor.schema_revision.0
+                "receipt recorded under {} schema revision {}; this build registers {:?}",
+                stored.contract,
+                stored.schema_revision.0,
+                descriptor.revisions.iter().map(|r| r.0).collect::<Vec<_>>()
             )));
         }
-        let Some(schema) = self.schema(descriptor) else {
+        let Some(schema) = self.schema(descriptor, stored.schema_revision) else {
             return Ok(ReplyOutcome::Hold(format!(
                 "operation {} has no qualified reply schema",
                 stored.operation

@@ -41,6 +41,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `features.get` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -59,6 +62,9 @@ impl Check for GetInput {
         Ok(())
     }
 }
+impl Revisioned for GetInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `features.create` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -73,6 +79,9 @@ impl Check for CreateInput {
         self.creation.check()?;
         Ok(())
     }
+}
+impl Revisioned for CreateInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `features.edit_plan` Command input.
@@ -91,6 +100,9 @@ impl Check for EditPlanInput {
         Ok(())
     }
 }
+impl Revisioned for EditPlanInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `features.prioritize` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -108,6 +120,9 @@ impl Check for PrioritizeInput {
         Ok(())
     }
 }
+impl Revisioned for PrioritizeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `features.dependencies` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -124,6 +139,9 @@ impl Check for DependenciesInput {
         self.replacement.check()?;
         Ok(())
     }
+}
+impl Revisioned for DependenciesInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `features.request_plan_approval` Command input.
@@ -144,6 +162,9 @@ impl Check for RequestPlanApprovalInput {
         Ok(())
     }
 }
+impl Revisioned for RequestPlanApprovalInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `features.edit` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -160,6 +181,9 @@ impl Check for EditInput {
         self.changes.check()?;
         Ok(())
     }
+}
+impl Revisioned for EditInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `features` family, built only for the selected operation and mode.

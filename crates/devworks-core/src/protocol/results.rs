@@ -1452,6 +1452,16 @@ impl Check for OperationResult {
         )
     }
 }
+/// Projects a result onto a negotiated schema revision: members introduced after it are removed.
+impl Revisioned for OperationResult {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::ArtifactsSave { value } => value.retain_revision(revision),
+            Self::ArtifactsList { value } => value.retain_revision(revision),
+            _ => {}
+        }
+    }
+}
 
 /// Generic recorded decision. Outcome variants cannot mint human authority or turn an external
 /// uncertainty into success.

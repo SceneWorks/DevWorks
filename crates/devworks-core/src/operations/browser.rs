@@ -33,6 +33,9 @@ impl Check for SessionsQueryInput {
         Ok(())
     }
 }
+impl Revisioned for SessionsQueryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `browser.sessions` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -46,6 +49,9 @@ impl Check for SessionsCommandInput {
         Ok(())
     }
 }
+impl Revisioned for SessionsCommandInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `browser.inspect` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -58,6 +64,9 @@ impl Check for InspectInput {
         self.target.check()?;
         Ok(())
     }
+}
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `browser.navigate` Command input.
@@ -79,6 +88,9 @@ impl Check for NavigateInput {
         Ok(())
     }
 }
+impl Revisioned for NavigateInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `browser.input` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -96,6 +108,9 @@ impl Check for InputInput {
         Ok(())
     }
 }
+impl Revisioned for InputInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `browser.upload` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -111,6 +126,9 @@ impl Check for UploadInput {
         Ok(())
     }
 }
+impl Revisioned for UploadInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `browser.screenshot` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -125,6 +143,9 @@ impl Check for ScreenshotInput {
         self.full_page.check()?;
         Ok(())
     }
+}
+impl Revisioned for ScreenshotInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `browser.console` Query input.
@@ -143,6 +164,9 @@ impl Check for ConsoleInput {
         Ok(())
     }
 }
+impl Revisioned for ConsoleInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `browser.network` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -159,6 +183,9 @@ impl Check for NetworkInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for NetworkInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `browser` family, built only for the selected operation and mode.

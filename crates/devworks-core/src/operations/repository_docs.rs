@@ -38,6 +38,9 @@ impl Check for GenerateInput {
         Ok(())
     }
 }
+impl Revisioned for GenerateInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// An admitted input of the `repository_docs` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]

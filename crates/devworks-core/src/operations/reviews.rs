@@ -36,6 +36,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `reviews.inspect` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +51,9 @@ impl Check for InspectInput {
         self.review_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `reviews.request` Command input.
@@ -68,6 +74,9 @@ impl Check for RequestInput {
         Ok(())
     }
 }
+impl Revisioned for RequestInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `reviews.findings` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -82,6 +91,9 @@ impl Check for FindingsInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for FindingsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `reviews.respond` Command input.
@@ -101,6 +113,9 @@ impl Check for RespondInput {
         self.evidence.check()?;
         Ok(())
     }
+}
+impl Revisioned for RespondInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `reviews.adjudicate` Command input.
@@ -123,6 +138,9 @@ impl Check for AdjudicateInput {
         Ok(())
     }
 }
+impl Revisioned for AdjudicateInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `reviews.readiness` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -139,6 +157,9 @@ impl Check for ReadinessInput {
         self.policy_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReadinessInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `reviews` family, built only for the selected operation and mode.

@@ -260,6 +260,12 @@
     },
     "requestKey": {
       "$ref": "#/$defs/Id"
+    },
+    "schemaRevision": {
+      "description": "Negotiated operation schema revision. Absent means 1. Only revisions the selected operation registers are admitted; any other is UnsupportedSchema before authority.",
+      "maximum": 65535,
+      "minimum": 1,
+      "type": "integer"
     }
   },
   "required": [

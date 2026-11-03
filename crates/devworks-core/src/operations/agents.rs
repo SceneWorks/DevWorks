@@ -30,6 +30,9 @@ impl Check for InspectInput {
         Ok(())
     }
 }
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `agents.delegate` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -54,6 +57,9 @@ impl Check for DelegateInput {
         Ok(())
     }
 }
+impl Revisioned for DelegateInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `agents.messages` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -72,6 +78,9 @@ impl Check for MessagesInput {
         self.attachments.check()?;
         Ok(())
     }
+}
+impl Revisioned for MessagesInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `agents.inbox` Query input.
@@ -92,6 +101,9 @@ impl Check for InboxInput {
         Ok(())
     }
 }
+impl Revisioned for InboxInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `agents.acknowledge` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -108,6 +120,9 @@ impl Check for AcknowledgeInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for AcknowledgeInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `agents.checkpoint` Command input.
@@ -127,6 +142,9 @@ impl Check for CheckpointInput {
         self.content.check()?;
         Ok(())
     }
+}
+impl Revisioned for CheckpointInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `agents` family, built only for the selected operation and mode.

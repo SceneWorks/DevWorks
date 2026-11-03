@@ -31,6 +31,9 @@ impl Check for WorkLineageInput {
         Ok(())
     }
 }
+impl Revisioned for WorkLineageInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `history.git_links` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -45,6 +48,9 @@ impl Check for GitLinksInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for GitLinksInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `history.evidence_links` Query input.
@@ -61,6 +67,9 @@ impl Check for EvidenceLinksInput {
         Ok(())
     }
 }
+impl Revisioned for EvidenceLinksInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `history.tool_usage` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -75,6 +84,9 @@ impl Check for ToolUsageInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for ToolUsageInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `history` family, built only for the selected operation and mode.

@@ -35,6 +35,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `jobs.create` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -55,6 +58,9 @@ impl Check for CreateInput {
         self.enabled.check()?;
         Ok(())
     }
+}
+impl Revisioned for CreateInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `jobs.edit` Command input.
@@ -77,6 +83,9 @@ impl Check for EditInput {
         Ok(())
     }
 }
+impl Revisioned for EditInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `jobs.enable` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -91,6 +100,9 @@ impl Check for EnableInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for EnableInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `jobs.run_now` Command input.
@@ -107,6 +119,9 @@ impl Check for RunNowInput {
         Ok(())
     }
 }
+impl Revisioned for RunNowInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `jobs.inspect` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -122,6 +137,9 @@ impl Check for InspectInput {
         self.run_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `jobs.cancel` Command input.
@@ -140,6 +158,9 @@ impl Check for CancelInput {
         Ok(())
     }
 }
+impl Revisioned for CancelInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `jobs.delete` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -155,6 +176,9 @@ impl Check for DeleteInput {
         Ok(())
     }
 }
+impl Revisioned for DeleteInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `jobs.disable` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -169,6 +193,9 @@ impl Check for DisableInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for DisableInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `jobs` family, built only for the selected operation and mode.

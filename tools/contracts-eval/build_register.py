@@ -1,9 +1,12 @@
 """Bind common candidate schemas to every operation in the retained catalog."""
+import argparse
+import datetime
 import hashlib
 import json
 from pathlib import Path
-from domain_spec import OPS, LEGACY_RESULTS, FAMILY_RULES
+from domain_spec import OPS, LEGACY_RESULTS, FAMILY_RULES, REVISIONS
 ROOT=Path(__file__).resolve().parents[2]
+p=argparse.ArgumentParser();p.add_argument('--date',default=datetime.date.today().isoformat(),help='Report date (default: the run date)');DATE=p.parse_args().date
 D=ROOT/'docs/architecture'
 CATALOG=json.loads((D/'devworks-capability-catalog.json').read_text())
 BINDINGS={
@@ -53,6 +56,17 @@ def pointer(schema):
     if schema in {'query-request','graph-read-request','artifact-query-request'}: return '/query/kind'
     if schema=='release-command-request': return '/action'
     return '/command/kind'
+def revision_doc(base,revision):
+    # The schema document of `base` at `revision`: the latest `<base>.rK` with K <= revision.
+    for k in range(revision,1,-1):
+        if (D/'contracts'/f'{base}.r{k}.schema.json').exists(): return f'{base}.r{k}.schema.json'
+    return base+'.schema.json'
+def revisions(name,schema,modes):
+    return [{'revision':r,'inputSchema':revision_doc(schema,r),'resultSchema':revision_doc('operation-result',r),
+             'queryReplySchema':revision_doc('domain-query-reply',r) if 'Query' in modes else None,
+             'commandReplySchema':revision_doc('domain-command-reply',r) if 'Command' in modes else None,
+             'completionSchema':revision_doc('operation-completion',r) if 'Command' in modes else None}
+            for r in REVISIONS.get(name,[1])]
 entries=[]
 for f in CATALOG['families']:
     ops=[]
@@ -65,6 +79,7 @@ for f in CATALOG['families']:
             'requestModes':modes,'modePolicies':[{'mode':m,'authority':'ScopedRead' if m=='Query' else descriptor['authority'] if descriptor else 'Existing host command authority','effect':'ReadOnly or declared external read' if m=='Query' else descriptor['effect'] if descriptor else 'Existing journaled command contract'} for m in modes],'resultSchema':'operation-result.schema.json','resultSelectionConstraint':{'pointer':'/kind','equals':qualified},'resultValueType':descriptor['result'] if descriptor else LEGACY_RESULTS[qualified],
             'queryReplySchema':'domain-query-reply.schema.json' if 'Query' in modes else None,'commandReplySchema':'domain-command-reply.schema.json' if 'Command' in modes else None,
             'completionSchema':'operation-completion.schema.json' if 'Command' in modes else None,
+            'schemaRevisions':revisions(qualified,binding[0],modes),
             'authority':descriptor['authority'] if descriptor else 'Existing host authority contract',
             'effect':descriptor['effect'] if descriptor else 'Existing exact-view/immutable-read contract' if 'Query' in modes else 'Existing journaled command contract',
             'semanticRules':descriptor['rules'] if descriptor else 'Preserve existing concrete input/authority/receipt/recovery contract; selected result kind must match operation.',
@@ -76,7 +91,7 @@ for f in CATALOG['families']:
     entries.append({'family':f['family'],'owner':f['owner'],'effectAndAuthority':f['effectAndAuthority'],'operations':ops})
 all_names=[o['operation'] for f in entries for o in f['operations']]
 assert len(all_names)==len(set(all_names));assert set(BINDINGS)<=set(all_names)
-(D/'contracts/family-coverage.json').write_text(json.dumps({'status':'All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage','date':'2026-11-02','catalogSha256':hashlib.sha256((D/'devworks-capability-catalog.json').read_bytes()).hexdigest(),'familyCount':len(entries),'operationCount':len(all_names),'concreteInputCandidates':len(BINDINGS),'domainInputsPending':len(all_names)-len(BINDINGS),'families':entries},indent=2)+'\n')
+(D/'contracts/family-coverage.json').write_text(json.dumps({'status':'All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage','date':DATE,'catalogSha256':hashlib.sha256((D/'devworks-capability-catalog.json').read_bytes()).hexdigest(),'familyCount':len(entries),'operationCount':len(all_names),'concreteInputCandidates':len(BINDINGS),'domainInputsPending':len(all_names)-len(BINDINGS),'families':entries},indent=2)+'\n')
 files=[{'file':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted((D/'contracts').glob('*.schema.json'))]
-(D/'contracts/manifest.json').write_text(json.dumps({'contract':'1.0-draft.1','date':'2026-11-02','status':'Adopted architecture candidate; not public SDK v1, production service or platform proof','schemaSource':'../../../tools/contracts-eval/src/lib.rs','schemaSources':['../../../tools/contracts-eval/src/lib.rs','../../../tools/contracts-eval/src/provider.rs','../../../tools/contracts-eval/src/package.rs','../../../tools/contracts-eval/src/data_delivery.rs','../../../tools/contracts-eval/src/domain_generated.rs','../../../tools/contracts-eval/src/domain_support.rs','../../../tools/contracts-eval/src/domain_rules.rs','../../../tools/contracts-eval/domain_spec.py','../../../tools/contracts-eval/domain-spec.json'],'schemas':files,'fixtures':'fixtures.json','fixtureSets':['fixtures.json','provider-package-fixtures.json','data-delivery-fixtures.json','domain-fixtures.json'],'scenarioSets':['provider-package-scenarios.json'],'operationCoverage':'family-coverage.json','notes':['Schema checks structural constraints; typed decoding checks signed-64 range and cross-field consistency.','Authority, relationships, current eligibility and receipt/dispatch transitions remain application service obligations.','All registered operations now have concrete input/result candidates and explicit mode, authority, effect and recovery metadata. New query/command/completion envelopes coexist with earlier specialized candidate replies; no published SDK compatibility or production behavior claimed. Selection constraints must be applied before dispatch and before result publication.']},indent=2)+'\n')
+(D/'contracts/manifest.json').write_text(json.dumps({'contract':'1.0-draft.1','date':DATE,'status':'Adopted architecture candidate; not public SDK v1, production service or platform proof','schemaSource':'../../../tools/contracts-eval/src/lib.rs','schemaSources':['../../../tools/contracts-eval/src/lib.rs','../../../tools/contracts-eval/src/provider.rs','../../../tools/contracts-eval/src/package.rs','../../../tools/contracts-eval/src/data_delivery.rs','../../../tools/contracts-eval/src/domain_generated.rs','../../../tools/contracts-eval/src/domain_support.rs','../../../tools/contracts-eval/src/domain_rules.rs','../../../tools/contracts-eval/domain_spec.py','../../../tools/contracts-eval/domain-spec.json'],'schemas':files,'fixtures':'fixtures.json','fixtureSets':['fixtures.json','provider-package-fixtures.json','data-delivery-fixtures.json','domain-fixtures.json'],'scenarioSets':['provider-package-scenarios.json'],'operationCoverage':'family-coverage.json','notes':['Schema checks structural constraints; typed decoding checks signed-64 range and cross-field consistency.','Authority, relationships, current eligibility and receipt/dispatch transitions remain application service obligations.','All registered operations now have concrete input/result candidates and explicit mode, authority, effect and recovery metadata. New query/command/completion envelopes coexist with earlier specialized candidate replies; no published SDK compatibility or production behavior claimed. Selection constraints must be applied before dispatch and before result publication.','Each operation lists the schema revisions it negotiates (schemaRevisions). A request names one with the optional envelope member schemaRevision (absent means 1); <name>.rN.schema.json documents the shape at revision N and later and base documents are revision 1. Members introduced at N carry x-since N.']},indent=2)+'\n')
 print(json.dumps({'families':len(entries),'catalogOperations':len(all_names),'concreteInputs':len(BINDINGS),'pendingDomainInputs':len(all_names)-len(BINDINGS),'schemas':len(files)}))

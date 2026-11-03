@@ -39,6 +39,9 @@ impl Check for PruneDiagnosticsInput {
         Ok(())
     }
 }
+impl Revisioned for PruneDiagnosticsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `maintenance.prune_index_runs` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -61,6 +64,9 @@ impl Check for PruneIndexRunsInput {
         self.max_items.check()?;
         Ok(())
     }
+}
+impl Revisioned for PruneIndexRunsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `maintenance.prune_messages` Command input.
@@ -85,6 +91,9 @@ impl Check for PruneMessagesInput {
         Ok(())
     }
 }
+impl Revisioned for PruneMessagesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `maintenance.prune_sessions` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -107,6 +116,9 @@ impl Check for PruneSessionsInput {
         self.max_items.check()?;
         Ok(())
     }
+}
+impl Revisioned for PruneSessionsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `maintenance` family, built only for the selected operation and mode.

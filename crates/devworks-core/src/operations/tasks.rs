@@ -41,6 +41,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `tasks.get` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -58,6 +61,9 @@ impl Check for GetInput {
         self.detail_page.check()?;
         Ok(())
     }
+}
+impl Revisioned for GetInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `tasks.create` Command input.
@@ -85,6 +91,9 @@ impl Check for CreateInput {
         Ok(())
     }
 }
+impl Revisioned for CreateInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `tasks.edit` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -101,6 +110,9 @@ impl Check for EditInput {
         self.changes.check()?;
         Ok(())
     }
+}
+impl Revisioned for EditInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `tasks.prioritize` Command input.
@@ -124,6 +136,9 @@ impl Check for PrioritizeInput {
         Ok(())
     }
 }
+impl Revisioned for PrioritizeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `tasks.move` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -142,6 +157,9 @@ impl Check for MoveInput {
         self.expected_workflow_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for MoveInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `tasks.assign` Command input.
@@ -163,6 +181,9 @@ impl Check for AssignInput {
         Ok(())
     }
 }
+impl Revisioned for AssignInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `tasks.dependency_links` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -180,6 +201,9 @@ impl Check for DependencyLinksInput {
         Ok(())
     }
 }
+impl Revisioned for DependencyLinksInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `tasks.acceptance_evidence` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -196,6 +220,9 @@ impl Check for AcceptanceEvidenceInput {
         self.criteria.check()?;
         Ok(())
     }
+}
+impl Revisioned for AcceptanceEvidenceInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `tasks.sync_plan` Command input.
@@ -222,6 +249,9 @@ impl Check for SyncPlanInput {
         Ok(())
     }
 }
+impl Revisioned for SyncPlanInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `tasks.set_feature` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -241,6 +271,9 @@ impl Check for SetFeatureInput {
         self.clear_feature.check()?;
         Ok(())
     }
+}
+impl Revisioned for SetFeatureInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `tasks` family, built only for the selected operation and mode.

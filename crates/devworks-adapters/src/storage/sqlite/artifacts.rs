@@ -1,5 +1,6 @@
 //! SQLite artifact records: `artifacts`, `artifact_versions`, `blobs`, `artifact_links`,
-//! `artifact_shares` (migration 1, extended by migration 6) and `artifact_blob_pins`.
+//! `artifact_shares`, `artifact_tags` (migration 1, extended by migration 6) and
+//! `artifact_blob_pins`.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
@@ -240,6 +241,7 @@ fn version_by_operation(
 fn list(
     conn: &Connection,
     project: &ProjectId,
+    tags: &[String],
     after: Option<&ListPosition>,
     limit: u16,
 ) -> Result<Vec<StoredArtifact>, StorageError> {
@@ -248,18 +250,32 @@ fn list(
         Some(p) => (p.created_at_ms, p.id.as_str().to_owned()),
         None => (i64::MAX, String::new()),
     };
+    // All-of tag filter: the artifact carries as many of the (distinct) requested tags as there
+    // are requested tags.
+    let wanted = Value::from(tags.to_vec()).to_string();
     let mut s = db(conn.prepare_cached(&format!(
         "SELECT {ARTIFACT_COLUMNS} FROM artifacts a
          WHERE a.state='Live' AND a.current_version_id IS NOT NULL AND a.retention='Explicit'
            AND (a.current_project_id=?1 OR EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND s.project_id=?1))
            AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
+           AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
+                         AND t.tag IN (SELECT value FROM json_each(?5)))=?6)
          ORDER BY a.created_at DESC, a.id DESC LIMIT ?4"
     )))?;
-    let rows = db(
-        db(s.query_map(params![project.0.as_str(), at, id, limit], artifact_row))?
-            .collect::<rusqlite::Result<Vec<_>>>(),
-    )?;
+    let rows = db(db(s.query_map(
+        params![project.0.as_str(), at, id, limit, wanted, tags.len() as i64],
+        artifact_row,
+    ))?
+    .collect::<rusqlite::Result<Vec<_>>>())?;
     rows.into_iter().map(artifact_of).collect()
+}
+fn tags(conn: &Connection, artifact: &Id) -> Result<Vec<String>, StorageError> {
+    let mut s =
+        db(conn.prepare_cached("SELECT tag FROM artifact_tags WHERE artifact_id=?1 ORDER BY tag"))?;
+    db(
+        db(s.query_map([artifact.as_str()], |r| r.get::<_, String>(0)))?
+            .collect::<rusqlite::Result<Vec<_>>>(),
+    )
 }
 fn shares(conn: &Connection, artifact: &Id) -> Result<Vec<ProjectId>, StorageError> {
     let mut s = db(conn.prepare_cached(
@@ -384,10 +400,14 @@ macro_rules! artifact_reads {
             fn list(
                 &self,
                 project: &ProjectId,
+                tags: &[String],
                 after: Option<&ListPosition>,
                 limit: u16,
             ) -> Result<Vec<StoredArtifact>, StorageError> {
-                list(self.conn, project, after, limit)
+                list(self.conn, project, tags, after, limit)
+            }
+            fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
+                tags(self.conn, artifact)
             }
             fn shares(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError> {
                 shares(self.conn, artifact)
@@ -719,6 +739,30 @@ impl ArtifactRepository for Unit<'_> {
             link.purpose.as_str(),
         ]))?;
         Ok(n == 1)
+    }
+
+    fn set_tags(&mut self, artifact: &Id, tags: &[String]) -> Result<(), StorageError> {
+        if !exists(
+            self.conn,
+            "SELECT 1 FROM artifacts WHERE id=?1",
+            [artifact.as_str()],
+        )? {
+            return Err(StorageError::NotFound {
+                kind: "artifact",
+                id: artifact.as_str().to_owned(),
+            });
+        }
+        db(db(self
+            .conn
+            .prepare_cached("DELETE FROM artifact_tags WHERE artifact_id=?1"))?
+        .execute([artifact.as_str()]))?;
+        let mut insert = db(self
+            .conn
+            .prepare_cached("INSERT INTO artifact_tags(artifact_id,tag) VALUES(?1,?2)"))?;
+        for tag in tags {
+            db(insert.execute([artifact.as_str(), tag.as_str()]))?;
+        }
+        Ok(())
     }
 
     fn add_share(&mut self, artifact: &Id, project: &ProjectId) -> Result<bool, StorageError> {

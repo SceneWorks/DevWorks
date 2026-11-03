@@ -25,6 +25,9 @@ impl Check for CurrentScreenInput {
         Ok(())
     }
 }
+impl Revisioned for CurrentScreenInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// An admitted input of the `ui` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]

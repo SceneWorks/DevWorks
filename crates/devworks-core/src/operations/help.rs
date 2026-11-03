@@ -31,6 +31,9 @@ impl Check for SearchInput {
         Ok(())
     }
 }
+impl Revisioned for SearchInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `help.read` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -46,6 +49,9 @@ impl Check for ReadInput {
         Ok(())
     }
 }
+impl Revisioned for ReadInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `help.topic_for_screen` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -60,6 +66,9 @@ impl Check for TopicForScreenInput {
         self.capability_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for TopicForScreenInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `help.package_guides` Query input.
@@ -78,6 +87,9 @@ impl Check for PackageGuidesInput {
         Ok(())
     }
 }
+impl Revisioned for PackageGuidesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `help.generate_capability_docs` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -92,6 +104,9 @@ impl Check for GenerateCapabilityDocsInput {
         self.expected_help_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for GenerateCapabilityDocsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `help` family, built only for the selected operation and mode.

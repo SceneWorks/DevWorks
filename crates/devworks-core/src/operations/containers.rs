@@ -31,6 +31,9 @@ impl Check for CapabilitiesInput {
         Ok(())
     }
 }
+impl Revisioned for CapabilitiesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `containers.build` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -52,6 +55,9 @@ impl Check for BuildInput {
         Ok(())
     }
 }
+impl Revisioned for BuildInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `containers.pull` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -70,6 +76,9 @@ impl Check for PullInput {
         Ok(())
     }
 }
+impl Revisioned for PullInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `containers.create` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -82,6 +91,9 @@ impl Check for CreateInput {
         self.spec.check()?;
         Ok(())
     }
+}
+impl Revisioned for CreateInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `containers.start` Command input.
@@ -97,6 +109,9 @@ impl Check for StartInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for StartInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `containers.exec` Command input.
@@ -119,6 +134,9 @@ impl Check for ExecInput {
         Ok(())
     }
 }
+impl Revisioned for ExecInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `containers.inspect` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -131,6 +149,9 @@ impl Check for InspectInput {
         self.container_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `containers.logs` Query input.
@@ -149,6 +170,9 @@ impl Check for LogsInput {
         Ok(())
     }
 }
+impl Revisioned for LogsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `containers.stop` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -163,6 +187,9 @@ impl Check for StopInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for StopInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `containers` family, built only for the selected operation and mode.

@@ -1,7 +1,9 @@
 //! Replays every recorded positive/negative fixture message through the production native path
 //! and asserts the recorded typed outcome. Request entries go through `admission::decode` under a
 //! host selection derived from the message (as a host that selected exactly what it claims);
-//! reply/result/event entries go through strict framing plus the adopted DTO checks.
+//! reply/result/event entries go through strict framing plus the adopted DTO checks. An entry
+//! `<schema>.rN` is described by schema revision N's document; a result entry is read by the
+//! strict reader of its document's revision.
 mod common;
 
 use devworks_core::admission::{self, Selection};
@@ -10,8 +12,9 @@ use devworks_core::protocol::addons::AddonCommandReply;
 use devworks_core::protocol::data::*;
 use devworks_core::protocol::provider::*;
 use devworks_core::protocol::results::*;
+use devworks_core::protocol::support::Revisioned;
 use devworks_core::protocol::*;
-use devworks_core::registry::{self, Envelope, Mode};
+use devworks_core::registry::{self, Envelope, Mode, SchemaRevision};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -48,6 +51,27 @@ fn dto<T: DeserializeOwned>(
 fn ok<T>(_: &T) -> Result<(), String> {
     Ok(())
 }
+/// `<schema>.rN` is schema revision N's document of `<schema>`; a plain name is revision 1.
+fn entry_revision(entry: &str) -> (&str, u32) {
+    entry
+        .rsplit_once(".r")
+        .and_then(|(base, r)| Some((base, r.parse::<u32>().ok().filter(|r| *r >= 2)?)))
+        .unwrap_or((entry, 1))
+}
+/// The strict reader of `revision`: a member introduced later is a decoding failure.
+fn at_revision<T: Revisioned + Clone + serde::Serialize>(
+    v: &T,
+    revision: u32,
+) -> Result<(), String> {
+    let mut at = v.clone();
+    at.retain_revision(revision);
+    if serde_json::to_value(&at).unwrap() != serde_json::to_value(v).unwrap() {
+        return Err(format!(
+            "a member introduced after schema revision {revision} is present"
+        ));
+    }
+    Ok(())
+}
 fn s(r: Result<(), &'static str>) -> Result<(), String> {
     r.map_err(str::to_owned)
 }
@@ -65,6 +89,7 @@ const UNBOUND_VARIANT_CASES: [&str; 4] = [
 /// the message claims (several for disclosed aliases). `false` means no operation selects it and
 /// the returned selection is a mismatching one.
 fn selections(entry: &str, value: &Value) -> (Vec<(&'static str, Mode)>, bool) {
+    let entry = entry_revision(entry).0;
     if entry == "domain-request" {
         let mode = match value.pointer("/mode").and_then(Value::as_str) {
             Some("Command") => Mode::Command,
@@ -112,7 +137,7 @@ fn selections(entry: &str, value: &Value) -> (Vec<(&'static str, Mode)>, bool) {
 /// DTO-level validity of a specialized envelope, independent of operation binding.
 fn envelope_dto(case: &Fixture) -> Result<(), String> {
     let raw = case.raw.as_str();
-    match case.entry.as_str() {
+    match entry_revision(&case.entry).0 {
         "artifact-command-request" => dto::<ArtifactCommandRequest>(raw, |v| s(v.validate())),
         "artifact-query-request" => dto::<ArtifactQueryRequest>(raw, |v| s(v.validate())),
         "graph-read-request" => dto::<GraphReadRequest>(raw, |v| s(v.validate())),
@@ -187,7 +212,8 @@ fn request(case: &Fixture) -> Result<(), String> {
 
 fn check(case: &Fixture) -> Result<(), String> {
     let raw = case.raw.as_str();
-    match case.entry.as_str() {
+    let (entry, revision) = entry_revision(&case.entry);
+    match entry {
         "domain-request"
         | "command-request"
         | "query-request"
@@ -204,7 +230,10 @@ fn check(case: &Fixture) -> Result<(), String> {
         | "addon-command-request" => request(case),
         "domain-query-reply" => dto::<DomainQueryReply>(raw, |v| v.validate()),
         "domain-command-reply" => dto::<DomainCommandReply>(raw, validate_command_reply),
-        "operation-result" => dto::<OperationResult>(raw, |v| v.check()),
+        "operation-result" => dto::<OperationResult>(raw, |v| {
+            at_revision(v, revision)?;
+            v.check()
+        }),
         "operation-completion" => dto::<OperationCompletion>(raw, |v| v.validate()),
         "command-reply" => dto::<CommandReply>(raw, |v| s(v.validate())),
         "query-reply" => dto::<QueryReply>(raw, |v| s(v.validate())),
@@ -271,7 +300,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 770), 770);
+    assert_eq!(run("domain-fixtures.json", 795), 795);
 }
 
 #[test]
@@ -285,6 +314,7 @@ fn provider_and_package_fixtures_match_recorded_outcomes() {
     assert_eq!(run("provider-package-fixtures.json", 120), 54);
 }
 
+/// Every (operation, mode, schema revision) binding is admitted for at least one recorded message.
 #[test]
 fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     let text =
@@ -306,15 +336,17 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
             let Ok(value) = framing::parse(case.raw.as_bytes()) else {
                 continue;
             };
-            if !case.entry.ends_with("-request")
-                || case.entry == "publication-request"
-                || case.entry == "inference-request"
+            let entry = entry_revision(&case.entry).0;
+            if !entry.ends_with("-request")
+                || entry == "publication-request"
+                || entry == "inference-request"
             {
                 continue;
             }
             for (operation, mode) in selections(&case.entry, &value).0 {
-                if admission::decode(Selection { operation, mode }, case.raw.as_bytes()).is_ok() {
-                    admitted.insert((operation, mode));
+                if let Ok(d) = admission::decode(Selection { operation, mode }, case.raw.as_bytes())
+                {
+                    admitted.insert((operation, mode, d.revision));
                 }
             }
         }
@@ -322,14 +354,19 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     drop(cases);
     let missing: Vec<_> = registry::all()
         .iter()
-        .flat_map(|d| d.modes.iter().map(move |b| (d.name, b.mode)))
+        .flat_map(|d| {
+            d.modes
+                .iter()
+                .flat_map(move |b| d.revisions.iter().map(move |r| (d.name, b.mode, *r)))
+        })
         .filter(|binding| !admitted.contains(binding))
         .collect();
     assert!(
         missing.is_empty(),
         "bindings without an admitted recorded fixture: {missing:?}"
     );
-    assert_eq!(admitted.len(), 358);
+    // 358 operation/mode bindings at revision 1, plus artifacts.save and artifacts.list at 2.
+    assert_eq!(admitted.len(), 360);
 }
 
 #[test]
@@ -346,4 +383,116 @@ fn oversized_frame_is_rejected_before_typed_parsing() {
         refusal.error,
         admission::AdmissionError::Frame(framing::FrameError::TooLarge { .. })
     ));
+}
+
+/// Every `x-since` member a schema declares, with the revision that introduced it.
+fn gated_members(v: &Value, out: &mut std::collections::BTreeSet<(String, u64)>) {
+    match v {
+        Value::Object(m) => {
+            if let Some(Value::Object(props)) = m.get("properties") {
+                for (name, p) in props {
+                    if let Some(since) = p.get("x-since").and_then(Value::as_u64) {
+                        out.insert((name.clone(), since));
+                    }
+                }
+            }
+            m.values().for_each(|x| gated_members(x, out));
+        }
+        Value::Array(a) => a.iter().for_each(|x| gated_members(x, out)),
+        _ => {}
+    }
+}
+fn has_member(v: &Value, member: &str) -> bool {
+    match v {
+        Value::Object(m) => m.contains_key(member) || m.values().any(|x| has_member(x, member)),
+        Value::Array(a) => a.iter().any(|x| has_member(x, member)),
+        _ => false,
+    }
+}
+
+/// Fail-closed revision readers: every `x-since` member of every specialized envelope schema is
+/// refused at the revision before the one that introduced it. Each conforming revision-N fixture
+/// carrying the member is replayed with its `schemaRevision` lowered (stripped, for revision 1).
+#[test]
+fn every_gated_envelope_member_is_refused_before_its_revision() {
+    let mut cases = Vec::new();
+    for file in [
+        "fixtures.json",
+        "domain-fixtures.json",
+        "data-delivery-fixtures.json",
+        "provider-package-fixtures.json",
+    ] {
+        let text = std::fs::read_to_string(common::contracts_dir().join(file)).unwrap();
+        cases.extend(serde_json::from_str::<Vec<Fixture>>(&text).unwrap());
+    }
+    let envelopes: std::collections::BTreeSet<&str> = registry::all()
+        .iter()
+        .filter_map(|d| match d.envelope {
+            Envelope::Specialized { schema } => Some(schema),
+            Envelope::Domain => None,
+        })
+        .collect();
+    let mut exercised_members = Vec::new();
+    for schema in envelopes {
+        let users: Vec<_> = registry::all()
+            .iter()
+            .filter(|d| d.envelope == (Envelope::Specialized { schema }))
+            .collect();
+        // The envelope type's full schema: the members of every revision.
+        let canonical =
+            serde_json::to_value(users[0].modes[0].input_schema(SchemaRevision::MAX)).unwrap();
+        let mut gated = std::collections::BTreeSet::new();
+        gated_members(&canonical, &mut gated);
+        for (member, since) in gated {
+            let mut exercised = 0;
+            for case in cases.iter().filter(|c| {
+                c.typed_valid && {
+                    let (entry, revision) = entry_revision(&c.entry);
+                    entry == schema && u64::from(revision) >= since
+                }
+            }) {
+                let value: Value = serde_json::from_str(&case.raw).unwrap();
+                if !has_member(&value, &member) {
+                    continue;
+                }
+                for d in &users {
+                    let selection = Selection {
+                        operation: d.name,
+                        mode: d.modes[0].mode,
+                    };
+                    if admission::decode(selection, case.raw.as_bytes()).is_err() {
+                        continue; // selected by another operation sharing the envelope
+                    }
+                    let mut earlier = value.clone();
+                    let envelope = earlier.as_object_mut().unwrap();
+                    envelope.remove("schemaRevision");
+                    if since - 1 > 1 {
+                        envelope.insert("schemaRevision".into(), (since - 1).into());
+                    }
+                    let refusal = admission::decode(selection, earlier.to_string().as_bytes())
+                        .expect_err("an earlier revision must refuse the member");
+                    assert!(
+                        matches!(refusal.error, admission::AdmissionError::Decode(_)),
+                        "{}: {member} at revision {} refused for the wrong reason: {}",
+                        case.id,
+                        since - 1,
+                        refusal.error
+                    );
+                    exercised += 1;
+                }
+            }
+            assert!(
+                exercised > 0,
+                "{schema}: no conforming fixture exercises the revision-{since} member {member}"
+            );
+            exercised_members.push(format!("{schema}/{member}"));
+        }
+    }
+    assert_eq!(
+        exercised_members,
+        [
+            "artifact-command-request/tags",
+            "artifact-query-request/tags"
+        ]
+    );
 }

@@ -35,6 +35,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `projects.get` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -47,6 +50,9 @@ impl Check for GetInput {
         self.project_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for GetInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `projects.create` Command input.
@@ -68,6 +74,9 @@ impl Check for CreateInput {
         Ok(())
     }
 }
+impl Revisioned for CreateInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `projects.edit` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -85,6 +94,9 @@ impl Check for EditInput {
         Ok(())
     }
 }
+impl Revisioned for EditInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `projects.membership` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -101,6 +113,9 @@ impl Check for MembershipInput {
         self.repository_ids.check()?;
         Ok(())
     }
+}
+impl Revisioned for MembershipInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `projects.archive` Command input.
@@ -120,6 +135,9 @@ impl Check for ArchiveInput {
         Ok(())
     }
 }
+impl Revisioned for ArchiveInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `projects.restore` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -138,6 +156,9 @@ impl Check for RestoreInput {
         Ok(())
     }
 }
+impl Revisioned for RestoreInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `projects.delete` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -155,6 +176,9 @@ impl Check for DeleteInput {
         self.proposal_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for DeleteInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `projects` family, built only for the selected operation and mode.
