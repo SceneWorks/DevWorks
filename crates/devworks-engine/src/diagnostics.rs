@@ -13,6 +13,7 @@ use crate::dispatch::{self, Dispatcher};
 use crate::runtime::{BootError, BootReport, CollectionPass};
 use devworks_core::ports::diagnostics::Metric;
 use devworks_core::ports::storage::StorageError;
+use devworks_core::protocol::OperationState;
 use devworks_core::protocol::records::{
     DiagnosticErrorClass, DiagnosticOutcome, HealthState, Severity,
 };
@@ -50,7 +51,33 @@ fn boot_metrics(r: &BootReport) -> Vec<MetricReading> {
         count("processesKilled", p.killed),
         count("processesUncertain", p.uncertain),
         count("processesLost", p.lost),
+        count("activationsInterrupted", r.runs.interrupted.len()),
+        count("rootsHeldForContinue", r.runs.held.len()),
+        count("stopsUnresolved", unresolved_stops(r)),
     ]
+}
+
+/// Journaled stops of earlier boots that recovery could not settle: an owned tree was not
+/// verified stopped, so their roots stay held for reconciliation.
+fn unresolved_stops(r: &BootReport) -> usize {
+    r.runs
+        .stops
+        .iter()
+        .filter(|(_, state)| matches!(state, OperationState::OutcomeUnknown))
+        .count()
+}
+
+/// What recovery established that a person should know without it being a fault: roots held for
+/// an explicit Continue are the designed restart behaviour, not degraded health.
+fn notes(r: &BootReport) -> Vec<String> {
+    let mut out = Vec::new();
+    if !r.runs.held.is_empty() {
+        out.push(format!(
+            "{} feature or issue roots interrupted by the restart are held for an explicit Continue",
+            r.runs.held.len()
+        ));
+    }
+    out
 }
 
 /// Up to five digests, then how many more.
@@ -59,6 +86,15 @@ fn digests(all: &[String]) -> String {
     match all.len().saturating_sub(5) {
         0 => shown.join(", "),
         more => format!("{} and {more} more", shown.join(", ")),
+    }
+}
+
+fn with_notes(message: String, r: &BootReport) -> String {
+    let notes = notes(r);
+    if notes.is_empty() {
+        message
+    } else {
+        format!("{message} {}.", notes.join("; "))
     }
 }
 
@@ -96,6 +132,12 @@ fn attention(r: &BootReport) -> Vec<String> {
             p.uncertain + p.lost
         ));
     }
+    let unresolved = unresolved_stops(r);
+    if unresolved > 0 {
+        out.push(format!(
+            "{unresolved} stops of earlier boots could not be verified complete; their roots are held for reconciliation"
+        ));
+    }
     if let KeepAwakeStatus::Unavailable(why) = &r.keep_awake {
         out.push(format!("keep-awake is unavailable: {why}"));
     }
@@ -125,6 +167,16 @@ fn boot_links(r: &BootReport) -> Vec<RecoveryLink> {
             "Find the artifacts whose files are affected",
         ));
     }
+    if !r.runs.held.is_empty() || unresolved_stops(r) > 0 {
+        links.push(RecoveryLink::new(
+            "runs.inspect",
+            "Inspect the roots held by recovery",
+        ));
+        links.push(RecoveryLink::new(
+            "runs.continue",
+            "Continue a held root once its work is understood",
+        ));
+    }
     let p = &r.resources.recovery;
     if p.uncertain + p.lost > 0 {
         links.push(RecoveryLink::new(
@@ -151,6 +203,7 @@ pub fn record_boot(service: &DiagnosticService, report: &BootReport) {
             format!("Boot recovery completed: {}.", attention.join("; ")),
         )
     };
+    let message = with_notes(message, report);
     let entry = LogEntry {
         operation: Some("runtime.boot".into()),
         stage: Some("recovery".into()),
@@ -171,6 +224,7 @@ pub fn record_boot_failure(service: &DiagnosticService, error: &BootError) {
         BootError::Artifacts(e) => ("artifacts", e),
         BootError::Resources(e) => ("resources", e),
         BootError::Settings(e) => ("settings", e),
+        BootError::Runs(e) => ("runs", e),
     };
     let class = match cause {
         StorageError::Busy | StorageError::CommitUnknown => DiagnosticErrorClass::Transient,
@@ -212,6 +266,7 @@ fn boot_check(r: &BootReport, at: i64) -> HealthCheck {
         )
     };
     let mut check = check.at(at);
+    check.message = with_notes(check.message, r);
     check.metrics = boot_metrics(r);
     check.recovery = boot_links(r);
     check
@@ -343,5 +398,61 @@ impl Monitor {
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         self.wake.notify_one();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devworks_core::protocol::{Id, OperationId, RootId};
+    use devworks_core::services::runs::recovery::BootRecovery;
+
+    fn report(runs: BootRecovery) -> BootReport {
+        BootReport {
+            queue: Default::default(),
+            artifacts: Default::default(),
+            resources: Default::default(),
+            runs,
+            keep_awake: KeepAwakeStatus::Off,
+        }
+    }
+
+    #[test]
+    fn run_recovery_is_reported_and_unresolved_stops_need_attention() {
+        let root = RootId(Id::new("root-a").unwrap());
+        // Roots held for Continue are named, but they are the designed restart behaviour.
+        let held = report(BootRecovery {
+            held: vec![root.clone()],
+            ..Default::default()
+        });
+        let check = boot_check(&held, 1);
+        assert!(matches!(check.health, HealthState::Healthy));
+        assert!(
+            check.message.contains("held for an explicit Continue"),
+            "{}",
+            check.message
+        );
+        assert!(
+            check
+                .recovery
+                .iter()
+                .any(|l| l.operation == "runs.continue")
+        );
+        // A stop whose trees were not verified stopped holds its root for reconciliation.
+        let unresolved = report(BootRecovery {
+            held: vec![root],
+            stops: vec![(
+                OperationId(Id::new("op-stop").unwrap()),
+                OperationState::OutcomeUnknown,
+            )],
+            ..Default::default()
+        });
+        let check = boot_check(&unresolved, 1);
+        assert!(matches!(check.health, HealthState::Degraded));
+        assert!(
+            check.message.contains("held for reconciliation"),
+            "{}",
+            check.message
+        );
     }
 }

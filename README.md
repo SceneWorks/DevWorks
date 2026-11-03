@@ -4,12 +4,12 @@ DevWorks is a planned local desktop application for autonomous software developm
 
 Architecture baseline 1.1 is complete, following requirements, UI design and targeted feasibility review. Native implementation is under way in the root Cargo workspace:
 
-- `crates/devworks-core`: domain contracts, the operation registry, the shared admission gateway with receipts, the persistence and file ports, host authority (principal bindings, grants, access policy, destructive-action and repository-deletion seams) and the first application services: queue operations, settings, artifacts (with durable receipt replies), sessions and history.
+- `crates/devworks-core`: domain contracts, the operation registry, the shared admission gateway with receipts, the persistence and file ports, host authority (principal bindings, grants, access policy, destructive-action and repository-deletion seams) and the first application services: queue operations, settings, artifacts (with durable receipt replies), sessions and history, resources and owned processes, and run root controls (`runs.*`: Start, Pause, Continue, Redirect, Stop, Inspect and Eligibility, with the dispatch-admission substrate and resume grants).
 - `crates/devworks-adapters`: the SQLite store (single write owner, migrations, operational and domain repositories) and native file adapters (managed artifact files, verified source reads).
-- `crates/devworks-engine`: durable event delivery (fenced-claim dispatcher, sleep/wake recovery, the package event-handler commit path, the receipt reply consumer) and the one boot entry point that recovers, starts delivery and artifact collection, and admits commands.
+- `crates/devworks-engine`: durable event delivery (fenced-claim dispatcher, sleep/wake recovery, the package event-handler commit path, the receipt reply consumer) run supervision and recovery of run roots (activations held for manual Continue after a restart, journaled stops, shutdown), and the one boot entry point that recovers, starts delivery and artifact collection, and admits commands.
 - `crates/devworks-extension-protocol`: the versioned package wire protocol.
 
-Not implemented yet: the egui shell and any host executable, the package process host, provider and model routing, code intelligence and indexing (sqlite-vec), Git and work execution (`runs.*` and the other operation families without a registered use case), and MCP serving. The HTML prototype simulates agent and integration behavior with local sample data.
+Not implemented yet: the egui shell and any host executable, the package process host, provider and model routing, code intelligence and indexing (sqlite-vec), Git and agent work execution (the coordinator launcher, delegation, plans and readiness assessments that plug into the run-control ports, and the other operation families without a registered use case), and MCP serving. The HTML prototype simulates agent and integration behavior with local sample data.
 
 - [Planning index](docs/planning/README.md)
 - [Architectural design baseline](docs/architecture/devworks-architecture.html)

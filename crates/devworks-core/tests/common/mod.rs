@@ -369,6 +369,9 @@ impl ReadSnapshot for MemSnapshot {
     fn resources(&self) -> &dyn ResourceRead {
         &self.unsupported
     }
+    fn runs(&self) -> &dyn RunRead {
+        &self.unsupported
+    }
     fn diagnostics(&self) -> &dyn DiagnosticRead {
         &self.unsupported
     }
@@ -437,6 +440,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn resources(&mut self) -> &mut dyn ResourceRepository {
+        &mut self.unsupported
+    }
+    fn runs(&mut self) -> &mut dyn RunRepository {
         &mut self.unsupported
     }
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
@@ -516,6 +522,14 @@ impl QueueRead for MemQueue {
     }
 }
 impl DurableQueue for MemQueue {
+    fn hold_for_eligibility(
+        &mut self,
+        _: &Id,
+        _: &QueueFence,
+        _: &str,
+    ) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
     fn enqueue(&mut self, e: NewQueueEntry) -> Result<QueueEntry, StorageError> {
         self.0.push(e.clone());
         Ok(QueueEntry {
@@ -731,6 +745,14 @@ impl PackageHandlerLedger for Unsupported {
     }
 }
 impl DurableQueue for Unsupported {
+    fn hold_for_eligibility(
+        &mut self,
+        _: &Id,
+        _: &QueueFence,
+        _: &str,
+    ) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
     fn enqueue(&mut self, _: NewQueueEntry) -> Result<QueueEntry, StorageError> {
         nope()
     }
@@ -830,6 +852,9 @@ impl GrantLedger for Unsupported {
         nope()
     }
     fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
+        nope()
+    }
+    fn revoke(&mut self, _: &Id, _: i64) -> Result<GrantRecord, StorageError> {
         nope()
     }
 }
@@ -1443,6 +1468,127 @@ impl ResourceRepository for Unsupported {
         nope()
     }
     fn update_process(&mut self, _: &StoredProcess, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+}
+impl RunRead for Unsupported {
+    fn root_control(&self, _: &RootId) -> Result<Option<StoredRootControl>, StorageError> {
+        nope()
+    }
+    fn pending_stops(
+        &self,
+        _: Option<&RootId>,
+        _: u16,
+    ) -> Result<Vec<StoredRootControl>, StorageError> {
+        nope()
+    }
+    fn activation(&self, _: &Id) -> Result<Option<StoredActivation>, StorageError> {
+        nope()
+    }
+    fn live_activation(&self, _: &RootId) -> Result<Option<StoredActivation>, StorageError> {
+        nope()
+    }
+    fn activations(
+        &self,
+        _: &ActivationFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredActivation>, StorageError> {
+        nope()
+    }
+    fn blocker(&self, _: &Id) -> Result<Option<StoredBlocker>, StorageError> {
+        nope()
+    }
+    fn blockers(
+        &self,
+        _: &BlockerFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredBlocker>, StorageError> {
+        nope()
+    }
+    fn assignment(&self, _: &AssignmentId) -> Result<Option<StoredAssignment>, StorageError> {
+        nope()
+    }
+    fn assignments(
+        &self,
+        _: &RootId,
+        _: bool,
+        _: Option<&AssignmentId>,
+        _: u16,
+    ) -> Result<Vec<StoredAssignment>, StorageError> {
+        nope()
+    }
+    fn instruction(&self, _: &Id) -> Result<Option<StoredInstruction>, StorageError> {
+        nope()
+    }
+    fn instructions(
+        &self,
+        _: &RootId,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredInstruction>, StorageError> {
+        nope()
+    }
+    fn session_turn(&self, _: &Id) -> Result<Option<StoredTurn>, StorageError> {
+        nope()
+    }
+    fn turns_prior_boots(&self, _: &Id, _: u16) -> Result<Vec<StoredTurn>, StorageError> {
+        nope()
+    }
+    fn feature_plan(&self, _: &RootId) -> Result<Option<StoredPlanState>, StorageError> {
+        nope()
+    }
+    fn project_lifecycle(&self, _: &ProjectId) -> Result<Option<String>, StorageError> {
+        nope()
+    }
+    fn project_roots(
+        &self,
+        _: &ProjectId,
+        _: Option<&RootId>,
+        _: u16,
+    ) -> Result<Vec<RootId>, StorageError> {
+        nope()
+    }
+    fn root_deliveries(&self, _: &RootId, _: Option<&Id>, _: u16) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+}
+impl RunRepository for Unsupported {
+    fn insert_root_control(&mut self, _: &StoredRootControl) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_root_control(&mut self, _: &StoredRootControl, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_activation(&mut self, _: &StoredActivation) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_activation(&mut self, _: &StoredActivation, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_blocker(&mut self, _: &StoredBlocker) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_blocker(&mut self, _: &StoredBlocker, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_assignment(&mut self, _: &StoredAssignment) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_assignment(&mut self, _: &StoredAssignment, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_instruction(&mut self, _: &StoredInstruction) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_instruction(&mut self, _: &StoredInstruction, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_turn(&mut self, _: &StoredTurn) -> Result<(), StorageError> {
+        nope()
+    }
+    fn delete_turn(&mut self, _: &Id, _: &Id) -> Result<(), StorageError> {
         nope()
     }
 }

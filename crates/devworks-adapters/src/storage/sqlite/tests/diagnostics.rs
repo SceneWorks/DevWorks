@@ -1182,7 +1182,7 @@ fn queue_and_owned_process_health_come_from_the_queue_service_and_process_record
 // Migration 12
 
 #[test]
-fn migration_12_adds_the_diagnostic_log_to_a_version_10_store() {
+fn migration_12_adds_the_diagnostic_log_to_a_version_11_store() {
     let m = MIGRATIONS
         .iter()
         .find(|m| m.version == 12)
@@ -1192,13 +1192,20 @@ fn migration_12_adds_the_diagnostic_log_to_a_version_10_store() {
         MIGRATION_0012_SHA256,
         "an applied migration was edited"
     );
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 9));
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 11));
+    assert!(
+        MIGRATIONS
+            .iter()
+            .filter(|e| e.version < 12)
+            .all(|e| e.minimum_reader <= m.minimum_reader && e.minimum_writer <= m.minimum_writer)
+    );
     assert!(!m.rebuilds_tables);
     // Independent of migration 11: it names no table but its own.
     assert!(!m.sql.contains("REFERENCES"));
     let h = Harness::new();
-    drop(SqliteStore::open_with(h.config(), &through(10)).unwrap());
-    let s = h.store();
+    drop(SqliteStore::open_with(h.config(), &through(11)).unwrap());
+    // Exactly migration 12 on top of version 11.
+    let s = SqliteStore::open_with(h.config(), &through(12)).unwrap();
     let report = s.compatibility().unwrap();
     assert_eq!(
         (
@@ -1206,7 +1213,7 @@ fn migration_12_adds_the_diagnostic_log_to_a_version_10_store() {
             report.minimum_reader,
             report.minimum_writer
         ),
-        (MIGRATIONS.last().unwrap().version, 8, 9)
+        (12, 8, 11)
     );
     let s = Arc::new(s);
     let svc = DiagnosticService::new(s.clone(), h.ids.clone(), h.clock.clone(), None);

@@ -110,6 +110,7 @@ mod authority;
 mod diagnostics;
 mod replies;
 mod resources;
+mod runs;
 mod sessions;
 mod settings;
 

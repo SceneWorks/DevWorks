@@ -96,6 +96,9 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
             artifacts,
             resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
             process_host: Arc::new(NativeProcessHost),
+            runs: devworks_engine::RunComposition::new(Arc::new(
+                devworks_core::services::runs::ControlService::new(h.ids.clone()),
+            )),
             power: Arc::new(NativePower),
             diagnostics: diagnostics.clone(),
             use_cases: UseCases::new().with_queue(),

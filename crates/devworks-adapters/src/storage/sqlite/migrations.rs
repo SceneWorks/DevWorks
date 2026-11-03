@@ -141,15 +141,33 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0010_resources_processes.sql"),
         rebuilds_tables: false,
     },
+    // Additive columns (all defaulted or nullable), tables and indexes for run root controls.
+    // The writer floor rises to 11: a build 10 or older has no run-control gate, so as a writer
+    // it would claim and run the root-scoped deliveries of a paused, held or stopped root and
+    // bypass the restart hold; it must open this store read-only. The reader floor stays at 8:
+    // no earlier build reads root controls, activations, assignments, blockers, run instructions
+    // or session turns (the migration 1 tables were never written by a build), and the defaulted
+    // columns leave every query an earlier reader makes unchanged, so reading stays safe. Both
+    // are at least every earlier floor.
+    Migration {
+        version: 11,
+        minimum_reader: 8,
+        minimum_writer: 11,
+        sql: include_str!("migrations/0011_run_controls.sql"),
+        rebuilds_tables: false,
+    },
     // Additive: the retained diagnostic log, its retention boundary and export intents (three
-    // tables and their indexes), independent of every table of migration 11 (version 11 is
-    // another item's). The reader floor stays at 8: no earlier build reads diagnostic records.
-    // The writer floor stays at 9: no earlier build writes them, so it cannot break their
-    // sequence or bounds. Both are at least every earlier floor.
+    // tables and their indexes), independent of every table of migration 11. The writer floor is
+    // 11, the floor migration 11 set: applying a migration overwrites the store's floors, so a
+    // lower value would re-admit the build-10 writers that migration 11 refuses (they would
+    // bypass run controls). It need not rise to 12: a build-11 writer never writes these tables,
+    // so it cannot break the log's sequence, retention boundary or export claims, and every
+    // other record it writes is unchanged here. The reader floor stays at 8: no earlier build
+    // reads these tables, and they leave every query an earlier reader makes unchanged.
     Migration {
         version: 12,
         minimum_reader: 8,
-        minimum_writer: 9,
+        minimum_writer: 11,
         sql: include_str!("migrations/0012_diagnostics.sql"),
         rebuilds_tables: false,
     },
@@ -157,6 +175,9 @@ pub const MIGRATIONS: &[Migration] = &[
 /// Recorded checksum of migration 12; a test fails if the shipped text changes.
 pub const MIGRATION_0012_SHA256: &str =
     "dbcf28e8dc5a8eb6e4b801fb9f976021cd5e14cbf9e2b5b82af38f008c6cedba";
+/// Recorded checksum of migration 11; a test fails if the shipped text changes.
+pub const MIGRATION_0011_SHA256: &str =
+    "8607df6d8f6fd0fe885e21595e7e5245422916b8bdf0d0679fd7f0ca5b0f19af";
 /// Recorded checksum of migration 10; a test fails if the shipped text changes.
 pub const MIGRATION_0010_SHA256: &str =
     "7fab1dd563202155578de4ffe4e14bf89647e97815685f0e58a886a051c20f01";

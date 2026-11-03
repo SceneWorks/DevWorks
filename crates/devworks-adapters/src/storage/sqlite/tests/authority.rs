@@ -2239,6 +2239,9 @@ impl WriteTransaction for Lying<'_> {
     fn resources(&mut self) -> &mut dyn ResourceRepository {
         self.inner.resources()
     }
+    fn runs(&mut self) -> &mut dyn devworks_core::ports::storage::RunRepository {
+        self.inner.runs()
+    }
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
         self.inner.diagnostics()
     }
