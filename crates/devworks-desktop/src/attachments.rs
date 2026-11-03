@@ -2,7 +2,7 @@
 //! workspace artifacts tagged with their conversation, through a user-ingress upload ticket and
 //! `artifacts.save` — the artifact service hashes, verifies and publishes the bytes. Previews are
 //! decoded off the UI thread; content is never claimed to be analyzed.
-use crate::backend::{Backend, TaskOutput};
+use crate::backend::{Backend, TaskOutput, is_unknown, resolve_command};
 use crate::ops;
 use eframe::egui::ColorImage;
 use sha2::{Digest, Sha256};
@@ -98,8 +98,9 @@ pub fn max_attachment_bytes(backend: &dyn Backend) -> u64 {
 }
 
 /// Stores `path` as a workspace artifact for `session`: mint the user's upload ticket, hash the
-/// file, `artifacts.save` it with the conversation tag. Removes `remove_after` (a materialized
-/// paste) once the service holds its own copy.
+/// file, `artifacts.save` it with the conversation tag (resubmitting the identical frame while
+/// the outcome is unknown). Removes `remove_after` (a materialized paste) once the outcome is
+/// known; while it is not, the file stays so a later identical resubmission can still read it.
 pub fn store(
     backend: &dyn Backend,
     path: &Path,
@@ -121,14 +122,30 @@ pub fn store(
             bytes,
             &tags,
         );
-        Ok(TaskOutput::Stored(
-            backend.command("artifacts.save", &frame),
-        ))
+        let outcome = resolve_command(backend, "artifacts.save", &frame);
+        Ok(TaskOutput::Stored { outcome, frame })
     })();
-    if remove_after {
+    let unresolved =
+        matches!(&result, Ok(TaskOutput::Stored { outcome, .. }) if is_unknown(outcome));
+    if remove_after && !unresolved {
         let _ = std::fs::remove_file(path);
     }
     result
+}
+
+/// Resubmits an attachment's unconfirmed `artifacts.save` frame unchanged (same request key).
+pub fn confirm(
+    backend: &dyn Backend,
+    frame: Vec<u8>,
+    materialized: Option<&Path>,
+) -> Result<TaskOutput, String> {
+    let outcome = resolve_command(backend, "artifacts.save", &frame);
+    if !is_unknown(&outcome)
+        && let Some(p) = materialized
+    {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(TaskOutput::Stored { outcome, frame })
 }
 
 /// Decodes a bounded preview of an image file.
@@ -293,7 +310,7 @@ mod tests {
                 assert_eq!(size, [3, 2]);
                 assert_eq!(&rgba[..4], &[255, 0, 0, 255]);
             }
-            TaskOutput::Stored(_) => panic!("expected a preview"),
+            TaskOutput::Stored { .. } => panic!("expected a preview"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

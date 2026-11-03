@@ -173,7 +173,14 @@ pub fn click_nav(h: &mut Harness<'_, Shell>, label: &str) {
     settle(h);
 }
 
+/// Scrolls the control into view (as a user would) and clicks it. The scroll request is taken
+/// in one pass, becomes the area's offset at the end of the next and is laid out in the third,
+/// so the control is clicked where that third pass drew it.
 pub fn click(h: &mut Harness<'_, Shell>, role: egui::accesskit::Role, label: &str) {
+    h.get_by_role_and_label(role, label).scroll_to_me();
+    for _ in 0..3 {
+        h.step();
+    }
     h.get_by_role_and_label(role, label).click();
     settle(h);
 }
@@ -204,12 +211,34 @@ pub fn png() -> Vec<u8> {
 pub struct Gate {
     operation: &'static str,
     open: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    /// Hold the reply after the request ran (its snapshot or commit is already taken), rather
+    /// than the request before it runs.
+    after: bool,
+    /// Forward the runtime's change hints (off: every hint is missed, so only the shell's own
+    /// bookkeeping can repair a stale reply).
+    hints: bool,
 }
 impl Gate {
     pub fn new(operation: &'static str) -> Self {
         Self {
             operation,
             open: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
+            after: false,
+            hints: true,
+        }
+    }
+    /// A gate that lets the request run and holds only its reply (a slow response).
+    pub fn holding_replies(operation: &'static str) -> Self {
+        Self {
+            after: true,
+            ..Self::new(operation)
+        }
+    }
+    /// The same gate over a backend whose change hints never arrive.
+    pub fn missing_hints(self) -> Self {
+        Self {
+            hints: false,
+            ..self
         }
     }
     pub fn close(&self) {
@@ -241,12 +270,107 @@ struct Gated {
 }
 impl Backend for Gated {
     fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
-        self.gate.wait(operation);
+        if !self.gate.after {
+            self.gate.wait(operation);
+        }
+        let out = self.inner.query(operation, frame);
+        if self.gate.after {
+            self.gate.wait(operation);
+        }
+        out
+    }
+    fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+        if !self.gate.after {
+            self.gate.wait(operation);
+        }
+        let out = self.inner.command(operation, frame);
+        if self.gate.after {
+            self.gate.wait(operation);
+        }
+        out
+    }
+    fn mint_workspace_upload(&self, file: &Path) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_workspace_upload(file)
+    }
+    fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
+        self.inner.keep_awake_health()
+    }
+    fn hints(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        self.gate.hints.then(|| self.inner.hints()).flatten()
+    }
+    fn set_waker(&self, waker: devworks_desktop::backend::Waker) {
+        self.inner.set_waker(waker)
+    }
+    fn token(&self, prefix: &str) -> String {
+        self.inner.token(prefix)
+    }
+    fn scratch_dir(&self) -> PathBuf {
+        self.inner.scratch_dir()
+    }
+    fn read_stream(
+        &self,
+        stream: &devworks_core::protocol::Id,
+        max: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.inner.read_stream(stream, max)
+    }
+}
+
+/// A real backend that loses the acknowledgment of the next `losses` admissions of one
+/// command: each still runs (and commits) but replies `CommandStatusUnknown`, as after a
+/// crash between commit and reply. Every frame it saw is recorded.
+pub struct LoseAcks {
+    inner: Arc<dyn Backend>,
+    operation: &'static str,
+    losses: std::sync::atomic::AtomicUsize,
+    pub frames: Mutex<Vec<Vec<u8>>>,
+}
+impl LoseAcks {
+    pub fn over(inner: Arc<dyn Backend>, operation: &'static str, losses: usize) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            operation,
+            losses: std::sync::atomic::AtomicUsize::new(losses),
+            frames: Mutex::new(Vec::new()),
+        })
+    }
+    /// Request keys of every admission of the command, in order.
+    pub fn request_keys(&self) -> Vec<String> {
+        self.frames
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                serde_json::from_slice::<serde_json::Value>(f).unwrap()["requestKey"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    }
+}
+impl Backend for LoseAcks {
+    fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
         self.inner.query(operation, frame)
     }
     fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
-        self.gate.wait(operation);
-        self.inner.command(operation, frame)
+        let out = self.inner.command(operation, frame);
+        if operation != self.operation {
+            return out;
+        }
+        self.frames.lock().unwrap().push(frame.to_vec());
+        let lose = self
+            .losses
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if !lose {
+            return out;
+        }
+        Ok(
+            serde_json::from_value(serde_json::json!({"kind": "CommandStatusUnknown",
+            "protocol": "1.0-draft.1", "requestKey": "lost", "correlationId": "lost"}))
+            .unwrap(),
+        )
     }
     fn mint_workspace_upload(&self, file: &Path) -> Result<devworks_core::protocol::Id, String> {
         self.inner.mint_workspace_upload(file)
@@ -273,4 +397,30 @@ impl Backend for Gated {
     ) -> Result<Vec<u8>, String> {
         self.inner.read_stream(stream, max)
     }
+}
+
+/// Steps (with a short pause, failure-only bounded) until `done` holds.
+pub fn step_until(h: &mut Harness<'_, Shell>, what: &str, done: impl Fn(&Shell) -> bool) {
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while !done(h.state()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} never happened"
+        );
+        h.step();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Workspace sessions as the runtime lists them.
+pub fn listed_sessions(backend: &dyn Backend) -> Vec<String> {
+    devworks_desktop::ops::sessions(backend.query(
+        "sessions.list",
+        &devworks_desktop::ops::sessions_list(backend),
+    ))
+    .unwrap()
+    .0
+    .into_iter()
+    .map(|s| s.id.as_str().to_owned())
+    .collect()
 }

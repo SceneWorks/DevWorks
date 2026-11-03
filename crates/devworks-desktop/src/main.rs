@@ -130,7 +130,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("DevWorks")
             .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([760.0, 520.0]),
+            .with_min_inner_size(devworks_desktop::theme::MIN_WINDOW),
         ..Default::default()
     };
     let shell = Shell::new(ShellInit {

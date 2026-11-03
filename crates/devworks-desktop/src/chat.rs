@@ -23,6 +23,8 @@ use std::path::PathBuf;
 
 /// Draft key of the conversation not started yet.
 pub const NEW_DRAFT: &str = "new";
+/// Widest text column of an attachment chip.
+pub const ATTACHMENT_CHIP_WIDTH: f32 = 180.0;
 /// Accessible name and tooltip of the plus-only attachment control (UI-08).
 pub const ATTACH_LABEL: &str = "Attach images or files";
 pub const COMPOSER_LABEL: &str = "Message the workspace coordinator";
@@ -38,6 +40,8 @@ pub enum AttachState {
     WaitingForConversation,
     Storing,
     Stored(ArtifactRef),
+    /// The save's outcome is not known yet; confirmed by resubmitting this exact frame.
+    Unconfirmed(Vec<u8>),
     Failed(String),
 }
 
@@ -106,7 +110,9 @@ impl Draft {
         self.attachments.iter().any(|a| {
             matches!(
                 a.state,
-                AttachState::Storing | AttachState::WaitingForConversation
+                AttachState::Storing
+                    | AttachState::WaitingForConversation
+                    | AttachState::Unconfirmed(_)
             )
         })
     }
@@ -184,6 +190,16 @@ pub struct Chat {
     /// Submitted attachments the user removed while the append was in flight: deleted only if
     /// the append did not commit (a committed message references them).
     pub removed_while_sending: Vec<ArtifactRef>,
+    /// Removed attachments whose save outcome is not confirmed yet: (frame, materialized file).
+    /// They are confirmed, then deleted, by "Confirm outcomes".
+    pub removed_unconfirmed: Vec<(Vec<u8>, Option<PathBuf>)>,
+    /// The bounded composer height each surface measured last frame (Home, sidebar).
+    pub composer_heights: [f32; 2],
+    /// The composer's height besides its scrolling draft and attachment areas (controls,
+    /// metadata line, margins), measured last frame: the draft area gets the rest of the bound.
+    pub composer_overheads: [f32; 2],
+    /// The height each surface's conversation (transcript and composer) had last frame.
+    pub conversation_heights: [f32; 2],
     pub notice: Option<(Tone, String)>,
     /// The overlay sidebar is shown on narrow Home layouts.
     pub narrow_sidebar_open: bool,
@@ -208,6 +224,10 @@ impl Chat {
             sending: None,
             submitted: None,
             removed_while_sending: Vec::new(),
+            removed_unconfirmed: Vec::new(),
+            composer_heights: [150.0, 170.0],
+            composer_overheads: [110.0, 110.0],
+            conversation_heights: [0.0, 0.0],
             notice: None,
             narrow_sidebar_open: false,
             scrolls: Scrolls::default(),
@@ -379,6 +399,8 @@ pub enum ChatAction {
     RetrySessions,
     RetryTranscript,
     CloseSidebar,
+    /// Resubmit an attachment's unconfirmed save frame.
+    ConfirmAttachment(u64),
 }
 
 /// Which surface renders the conversation.
@@ -394,6 +416,12 @@ impl Surface {
             Self::Sidebar => "sidebar",
         }
     }
+    fn index(self) -> usize {
+        match self {
+            Self::Home => 0,
+            Self::Sidebar => 1,
+        }
+    }
 }
 
 /// The conversation transcript and its composer.
@@ -404,20 +432,58 @@ pub fn conversation(
     online: Result<(), &str>,
     actions: &mut Vec<ChatAction>,
 ) {
-    let composer_height = if surface == Surface::Home {
-        150.0
-    } else {
-        170.0
-    };
-    let transcript_height = (ui.available_height() - composer_height).max(80.0);
-    ui.allocate_ui(egui::vec2(ui.available_width(), transcript_height), |ui| {
-        ui.set_min_height(transcript_height);
-        transcript_view(ui, chat, surface, online, actions);
-    });
-    composer(ui, chat, surface, online, actions);
+    // The composer is bounded (its draft and attachment rows scroll) and the transcript gets the
+    // rest, sized from the composer's measured height so the action row is always on screen.
+    let available = ui.available_height();
+    chat.conversation_heights[surface.index()] = available;
+    let bound = composer_bound(available);
+    let measured = chat.composer_heights[surface.index()];
+    let transcript_height = (available - measured).max(0.0);
+    // Exactly that rect, clipped: taller content (an empty or error state) scrolls inside it
+    // and never pushes the composer down.
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), transcript_height),
+        egui::Sense::hover(),
+    );
+    let mut transcript = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    transcript.set_clip_rect(rect.intersect(ui.clip_rect()));
+    transcript_view(&mut transcript, chat, surface, online, actions);
+    composer(ui, chat, surface, online, actions, bound);
+}
+
+/// The most height a composer may take of `available`: at most two thirds, so the
+/// conversation stays visible, and never less than its fixed controls need.
+pub fn composer_bound(available: f32) -> f32 {
+    (available * 0.66).max(110.0)
 }
 
 fn transcript_view(
+    ui: &mut Ui,
+    chat: &mut Chat,
+    surface: Surface,
+    online: Result<(), &str>,
+    actions: &mut Vec<ChatAction>,
+) {
+    let showing_entries = online.is_ok()
+        && chat
+            .selected
+            .as_ref()
+            .and_then(|id| chat.transcripts.get(id))
+            .is_some_and(|t| t.loaded && !t.entries.is_empty());
+    if showing_entries {
+        transcript_state(ui, chat, surface, online, actions);
+    } else {
+        // A state block scrolls within the transcript's height (the entries scroll themselves).
+        egui::ScrollArea::vertical()
+            .id_salt(("transcript-state", surface.salt()))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                transcript_state(ui, chat, surface, online, actions)
+            });
+    }
+}
+
+fn transcript_state(
     ui: &mut Ui,
     chat: &mut Chat,
     surface: Surface,
@@ -609,7 +675,11 @@ fn composer(
     surface: Surface,
     online: Result<(), &str>,
     actions: &mut Vec<ChatAction>,
+    bound: f32,
 ) {
+    let start = ui.cursor().min.y;
+    let overhead = chat.composer_overheads[surface.index()];
+    let mut scrolled = 0.0;
     let enabled = online.is_ok() && chat.sending.is_none();
     let input_id = egui::Id::unique(("composer", surface.salt()));
     // The send shortcut is taken before the multiline input can turn it into a newline.
@@ -625,23 +695,70 @@ fn composer(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let draft = chat.draft_mut();
+            // The draft and attachment areas scroll within what the measured overhead (the
+            // action row, metadata line and margins) leaves of the bound.
+            let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+            // At least one row of draft; the two areas share exactly what is left.
+            let room = (bound - overhead).max(row);
+            let attachments_height = if draft.attachments.is_empty() {
+                0.0
+            } else {
+                (room * 0.4).min(96.0)
+            };
             if !draft.attachments.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    for a in &draft.attachments {
-                        attachment_chip(ui, a, actions);
-                    }
-                });
+                // Attachment chips wrap inside a bounded, vertically scrolling area.
+                scrolled += egui::ScrollArea::vertical()
+                    .id_salt(("composer-attachments", surface.salt()))
+                    .max_height(attachments_height)
+                    .min_scrolled_height(attachments_height)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
+                        // Chips are framed groups, which egui does not wrap: lay them out in
+                        // rows of as many fixed-width slots as fit.
+                        let slot = ATTACHMENT_CHIP_WIDTH + 96.0;
+                        let per_row = ((ui.available_width() / slot) as usize).max(1);
+                        for row in draft.attachments.chunks(per_row) {
+                            ui.horizontal(|ui| {
+                                for a in row {
+                                    ui.scope(|ui| {
+                                        ui.set_max_width(slot);
+                                        attachment_chip(ui, a, actions);
+                                    });
+                                }
+                            });
+                        }
+                    })
+                    .inner_rect
+                    .height();
             }
-            let input = egui::TextEdit::multiline(&mut draft.text)
-                .id(input_id)
-                .hint_text("Ask about any project, feature, PR, or agent…")
-                .desired_rows(if surface == Surface::Home { 2 } else { 3 })
-                .desired_width(f32::INFINITY)
-                .frame(egui::Frame::NONE);
-            let response = ui.add_enabled(online.is_ok(), input);
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::TextInput, online.is_ok(), COMPOSER_LABEL)
-            });
+            let input_height = room - attachments_height;
+            scrolled += egui::ScrollArea::vertical()
+                .id_salt(("composer-input", surface.salt()))
+                .max_height(input_height)
+                // egui's default minimum (64) would let a small window's draft area overflow.
+                .min_scrolled_height(input_height.min(row * 2.0))
+                .stick_to_bottom(true)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.set_max_width(ui.available_width());
+                    let input = egui::TextEdit::multiline(&mut draft.text)
+                        .id(input_id)
+                        .hint_text("Ask about any project, feature, PR, or agent…")
+                        .desired_rows(if surface == Surface::Home { 2 } else { 3 })
+                        .desired_width(f32::INFINITY)
+                        .frame(egui::Frame::NONE);
+                    let response = ui.add_enabled(online.is_ok(), input);
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::TextInput,
+                            online.is_ok(),
+                            COMPOSER_LABEL,
+                        )
+                    });
+                })
+                .inner_rect
+                .height();
             ui.horizontal_wrapped(|ui| {
                 if widgets::icon_button(
                     ui,
@@ -701,6 +818,16 @@ fn composer(
             widgets::caption(ui, "Cmd / Ctrl + Enter to send");
         });
     });
+    // Measure for the next frame: the transcript is sized from the total, the draft area from
+    // the overhead. A change repaints once more so both converge immediately.
+    let total = ui.cursor().min.y - start;
+    let i = surface.index();
+    let (old_total, old_overhead) = (chat.composer_heights[i], chat.composer_overheads[i]);
+    chat.composer_heights[i] = total;
+    chat.composer_overheads[i] = (total - scrolled).max(0.0);
+    if (total - old_total).abs() > 0.5 || (chat.composer_overheads[i] - old_overhead).abs() > 0.5 {
+        ui.ctx().request_repaint();
+    }
 }
 
 fn attachment_chip(ui: &mut Ui, a: &Attachment, actions: &mut Vec<ChatAction>) {
@@ -719,7 +846,9 @@ fn attachment_chip(ui: &mut Ui, a: &Attachment, actions: &mut Vec<ChatAction>) {
                     );
                 }
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(&a.name).small());
+                    // A chip never grows wider than this: long names and notes wrap.
+                    ui.set_max_width(ATTACHMENT_CHIP_WIDTH);
+                    ui.add(egui::Label::new(RichText::new(&a.name).small()).wrap());
                     let (text, tone) = match &a.state {
                         AttachState::WaitingForConversation => {
                             ("Waiting for the conversation".to_owned(), Tone::Neutral)
@@ -729,9 +858,23 @@ fn attachment_chip(ui: &mut Ui, a: &Attachment, actions: &mut Vec<ChatAction>) {
                             format!("Stored · {}", bytes_label(r.byte_length.get())),
                             Tone::Good,
                         ),
+                        AttachState::Unconfirmed(_) => {
+                            ("Not confirmed".to_owned(), Tone::Attention)
+                        }
                         AttachState::Failed(e) => (format!("Failed: {e}"), Tone::Bad),
                     };
                     chip(ui, text, tone);
+                    if matches!(a.state, AttachState::Unconfirmed(_)) {
+                        let label = format!("Confirm upload of {}", a.name);
+                        if ui
+                            .small_button("Confirm")
+                            .on_hover_text(&label)
+                            .widget_info_labeled(&label)
+                            .clicked()
+                        {
+                            actions.push(ChatAction::ConfirmAttachment(a.local));
+                        }
+                    }
                     if let Some(note) = &a.preview_note {
                         widgets::caption(ui, note.clone());
                     }

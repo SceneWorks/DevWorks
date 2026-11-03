@@ -2,7 +2,7 @@
 //! app-level sidebar, Settings, the completion overlay, status and the close lifecycle. It holds
 //! view state only; every record comes through [`Client`] from the runtime's gateway.
 use crate::attachments;
-use crate::backend::{Backend, Client, Reply, Slot, TaskOutput};
+use crate::backend::{Backend, Client, Reply, Slot, TaskOutput, is_unknown};
 use crate::chat::{self, AttachState, Attachment, Chat, ChatAction, StartReason, Surface};
 use crate::memory::{Memory, RouteMemory};
 use crate::notifications::{CardAction, Completions};
@@ -141,9 +141,23 @@ pub struct Shell {
     last_save: Instant,
     last_poll: Instant,
     restored_selection: Option<String>,
+    /// Applied session mutations (start, message) and artifact mutations (save, delete). A
+    /// list query started before the latest mutation may miss it: its reply is dropped and
+    /// the list re-queried, so it never overwrites newer records.
+    session_mutations: u64,
+    artifact_mutations: u64,
+    sessions_list_at: u64,
+    artifacts_list_at: u64,
+    /// The drafts the pending `settings.validate` checked; a report for other drafts is stale.
+    validated_drafts: Option<BTreeMap<String, serde_json::Value>>,
+    /// The settings revision each pending `settings.explain_source` was asked at; a chain read
+    /// before the view moved to another revision is stale.
+    explained_at: BTreeMap<String, Option<i64>>,
     notifications_open: bool,
     updates_open: bool,
     shutdown_summary: Option<String>,
+    /// The text scale the native minimum window size was last set for.
+    applied_scale: f32,
     // Dropped last: the engine's shutdown and thread join run after the request workers stop.
     control: Option<Box<dyn HostControl>>,
 }
@@ -216,9 +230,16 @@ impl Shell {
             last_save: Instant::now(),
             last_poll: Instant::now(),
             restored_selection: memory.selected_session,
+            session_mutations: 0,
+            artifact_mutations: 0,
+            sessions_list_at: 0,
+            artifacts_list_at: 0,
+            validated_drafts: None,
+            explained_at: BTreeMap::new(),
             notifications_open: false,
             updates_open: false,
             shutdown_summary: None,
+            applied_scale: 0.0,
             control: init.control,
         }
     }
@@ -370,6 +391,7 @@ impl Shell {
     }
 
     pub fn load_sessions(&mut self) {
+        self.sessions_list_at = self.session_mutations;
         self.query(
             Slot::SessionsList,
             "Loading conversations",
@@ -413,6 +435,7 @@ impl Shell {
         );
     }
     fn load_artifacts(&mut self) {
+        self.artifacts_list_at = self.artifact_mutations;
         self.query(
             Slot::ArtifactsList,
             "Loading artifacts",
@@ -644,6 +667,12 @@ impl Shell {
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
         match (slot, reply) {
+            // Started before a session mutation was applied: it may lack that change.
+            (Slot::SessionsList, Reply::Query(_))
+                if self.sessions_list_at != self.session_mutations =>
+            {
+                self.load_sessions();
+            }
             (Slot::SessionsList, Reply::Query(q)) => match ops::sessions(q) {
                 Ok((items, more)) => {
                     self.chat.sessions = items;
@@ -657,7 +686,21 @@ impl Shell {
             (Slot::SessionStart, Reply::Command(c)) => {
                 let reason = self.chat.starting.take();
                 match ops::started(c) {
+                    Err(Failure::Unknown) => {
+                        // Not known whether it started: keep waiting for it (no second start);
+                        // "Confirm outcomes" resubmits the identical request.
+                        self.chat.starting = reason;
+                        self.chat.notice = Some((
+                            Tone::Attention,
+                            "Not yet confirmed whether the conversation started. Use Confirm \
+                             outcomes to check again; nothing is started twice."
+                                .into(),
+                        ));
+                        self.announce("Starting a conversation: outcome not confirmed.");
+                    }
                     Ok(record) => {
+                        self.session_mutations += 1;
+                        self.chat.notice = None;
                         let id = record.id.as_str().to_owned();
                         self.chat.upsert(record);
                         self.chat.selected = Some(id.clone());
@@ -704,18 +747,32 @@ impl Shell {
             },
             (Slot::Append(id), Reply::Command(c)) => {
                 self.chat.sending = None;
+                let outcome = ops::appended(c);
+                if matches!(outcome, Err(Failure::Unknown)) {
+                    // Not known whether the message was saved: the composer keeps it as
+                    // submitted until the identical request is confirmed.
+                    self.chat.sending = Some(id.clone());
+                    self.chat.notice = Some((
+                        Tone::Attention,
+                        "Not yet confirmed whether your message was saved. Use Confirm \
+                         outcomes to check again; it is never saved twice."
+                            .into(),
+                    ));
+                    self.announce("Your message: outcome not confirmed.");
+                    return;
+                }
                 let submitted = self.chat.submitted.take();
                 let removed = std::mem::take(&mut self.chat.removed_while_sending);
-                let outcome = ops::appended(c);
                 if outcome.is_err() {
-                    // Not committed (or unknown: the artifact service refuses deleting an
-                    // artifact a committed message references, at its stale reference revision).
+                    // Not committed (and should it ever have been, the artifact service refuses
+                    // deleting an artifact a committed message references).
                     for r in removed {
                         self.delete_removed(r);
                     }
                 }
                 match outcome {
                     Ok(record) => {
+                        self.session_mutations += 1;
                         self.chat.upsert(record);
                         if let (Some(d), Some(sent)) = (self.chat.drafts.get_mut(&id), &submitted) {
                             d.settle_sent(sent);
@@ -738,8 +795,14 @@ impl Shell {
             }
             (Slot::Attach(_, local), Reply::Task(t)) => {
                 let state = match t {
-                    Ok(TaskOutput::Stored(c)) => match ops::saved_artifact(c) {
-                        Ok(record) => AttachState::Stored(record.artifact),
+                    Ok(TaskOutput::Stored { outcome, frame }) if is_unknown(&outcome) => {
+                        AttachState::Unconfirmed(frame)
+                    }
+                    Ok(TaskOutput::Stored { outcome, .. }) => match ops::saved_artifact(outcome) {
+                        Ok(record) => {
+                            self.artifact_mutations += 1;
+                            AttachState::Stored(record.artifact)
+                        }
                         Err(e) => AttachState::Failed(e.describe()),
                     },
                     Ok(TaskOutput::Preview { .. }) => {
@@ -748,21 +811,27 @@ impl Shell {
                     Err(e) => AttachState::Failed(e),
                 };
                 let stored = matches!(state, AttachState::Stored(_));
+                let unconfirmed = matches!(state, AttachState::Unconfirmed(_));
                 match self.chat.attachment_mut(local) {
                     Some(a) => {
                         self.status = Some(if stored {
                             format!("{} stored.", a.name)
+                        } else if unconfirmed {
+                            format!("{}: not yet confirmed whether it was stored.", a.name)
                         } else {
                             format!("{} could not be stored.", a.name)
                         });
                         a.state = state;
                     }
                     // Removed while it was being stored: nothing the user removed survives.
-                    None => {
-                        if let AttachState::Stored(r) = state {
-                            self.delete_removed(r);
+                    None => match state {
+                        AttachState::Stored(r) => self.delete_removed(r),
+                        // Confirmed (then deleted) by "Confirm outcomes".
+                        AttachState::Unconfirmed(frame) => {
+                            self.chat.removed_unconfirmed.push((frame, None))
                         }
-                    }
+                        _ => {}
+                    },
                 }
             }
             (Slot::Preview(_, local), Reply::Task(t)) => {
@@ -776,7 +845,7 @@ impl Shell {
                                 egui::TextureOptions::LINEAR,
                             ));
                         }
-                        Ok(TaskOutput::Stored(_)) => {}
+                        Ok(TaskOutput::Stored { .. }) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
                 }
@@ -796,6 +865,16 @@ impl Shell {
                     self.settings.error = Some(e.describe());
                 }
             },
+            (Slot::SettingsValidate, Reply::Query(_))
+                if self.validated_drafts.take() != Some(self.settings.drafts()) =>
+            {
+                // The drafts changed while it ran: its findings describe other values.
+                self.settings.validating = false;
+                self.settings.message = Some((
+                    Tone::Neutral,
+                    "Values changed while validating; validate again.".into(),
+                ));
+            }
             (Slot::SettingsValidate, Reply::Query(q)) => {
                 self.settings.validating = false;
                 match ops::settings_report(q) {
@@ -830,7 +909,19 @@ impl Shell {
                 }
             }
             (Slot::SettingsSave, Reply::Command(c)) => {
-                match ops::settings_saved(c) {
+                let outcome = ops::settings_saved(c);
+                self.settings.unconfirmed = matches!(outcome, Err(Failure::Unknown));
+                match outcome {
+                    Err(Failure::Unknown) => {
+                        // Still "saving": the identical request confirms it, never a new one.
+                        self.settings.message = Some((
+                            Tone::Attention,
+                            "Not yet confirmed whether the settings were saved. Use Confirm \
+                             outcomes to check again."
+                                .into(),
+                        ));
+                        self.announce("Settings: outcome not confirmed.");
+                    }
                     Ok(()) => {
                         // Still saving until the follow-up read settles the drafts.
                         self.settings.after_save = true;
@@ -858,6 +949,12 @@ impl Shell {
                     }
                 }
             }
+            (Slot::SettingsExplain(key), Reply::Query(_))
+                if self.explained_at.get(&key).copied().flatten() != self.settings_revision() =>
+            {
+                // The view moved to another revision meanwhile: explain it at that one.
+                self.explain(key);
+            }
             (Slot::SettingsExplain(key), Reply::Query(q)) => match ops::settings_chain(q) {
                 Ok(chain) => {
                     if let Some(v) = &mut self.settings.view {
@@ -868,12 +965,23 @@ impl Shell {
                 Err(e) => self.settings.message = Some((Tone::Bad, e.describe())),
             },
             (Slot::DeleteAttachment(_), Reply::Command(c)) => match ops::deleted(c) {
-                Ok(()) => self.announce("The removed attachment was deleted."),
+                Ok(()) => {
+                    self.artifact_mutations += 1;
+                    self.announce("The removed attachment was deleted.");
+                }
+                Err(Failure::Unknown) => {
+                    self.announce("Deleting a removed attachment: outcome not confirmed.")
+                }
                 Err(e) => self.announce(format!(
                     "The removed attachment could not be deleted: {}",
                     e.describe()
                 )),
             },
+            (Slot::ArtifactsList, Reply::Query(_))
+                if self.artifacts_list_at != self.artifact_mutations =>
+            {
+                self.load_artifacts();
+            }
             (Slot::ArtifactsList, Reply::Query(q)) => match ops::artifacts(q) {
                 Ok((items, more)) => {
                     self.artifacts = ListState {
@@ -933,6 +1041,22 @@ impl Shell {
                 self.load_transcript(&id);
             }
         }
+    }
+
+    fn settings_revision(&self) -> Option<i64> {
+        self.settings.view.as_ref().map(|v| v.revision)
+    }
+
+    fn explain(&mut self, key: String) {
+        self.explained_at
+            .insert(key.clone(), self.settings_revision());
+        let k = key.clone();
+        self.query(
+            Slot::SettingsExplain(key),
+            "Explaining a setting",
+            "settings.explain_source",
+            move |b| ops::settings_explain(b, &k),
+        );
     }
 
     fn check_settings_health(&mut self, revision: i64) {
@@ -1025,6 +1149,7 @@ impl Shell {
                     }
                 }
                 ChatAction::CloseSidebar => self.coordinator_open = false,
+                ChatAction::ConfirmAttachment(local) => self.confirm_attachment(local),
             }
         }
         let _ = ctx;
@@ -1045,6 +1170,7 @@ impl Shell {
                         continue;
                     };
                     self.settings.validating = true;
+                    self.validated_drafts = Some(self.settings.drafts());
                     if let Some(c) = &mut self.client {
                         c.query(
                             Slot::SettingsValidate,
@@ -1085,15 +1211,7 @@ impl Shell {
                         );
                     }
                 }
-                SettingsAction::Explain(key) => {
-                    let k = key.clone();
-                    self.query(
-                        Slot::SettingsExplain(key),
-                        "Explaining a setting",
-                        "settings.explain_source",
-                        move |b| ops::settings_explain(b, &k),
-                    );
-                }
+                SettingsAction::Explain(key) => self.explain(key),
                 SettingsAction::ChooseDirectory(key) => {
                     let start = self
                         .settings
@@ -1253,6 +1371,7 @@ impl Shell {
             self.load_route();
             self.restore_previews();
         }
+        self.apply_text_scale(&ctx);
         self.advance_lifecycle(&ctx);
         self.drain(&ctx);
         if self.lifecycle == Lifecycle::Open {
@@ -1274,6 +1393,23 @@ impl Shell {
         }
         // Periodic re-query of visible data (missed-hint repair) needs a frame now and then.
         ctx.request_repaint_after(Duration::from_secs(5));
+    }
+
+    /// Clamps the text scale to [`theme::MAX_TEXT_SCALE`] and keeps the native minimum window
+    /// at [`theme::MIN_WINDOW`] logical points for the current scale (UI-07: layouts are
+    /// designed and tested at that logical minimum).
+    fn apply_text_scale(&mut self, ctx: &egui::Context) {
+        let mut scale = ctx.zoom_factor();
+        if scale > theme::MAX_TEXT_SCALE {
+            scale = theme::MAX_TEXT_SCALE;
+            ctx.set_zoom_factor(scale);
+        }
+        if (scale - self.applied_scale).abs() > f32::EPSILON {
+            self.applied_scale = scale;
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(
+                egui::vec2(theme::MIN_WINDOW[0], theme::MIN_WINDOW[1]) * scale,
+            ));
+        }
     }
 
     fn composer_focused(&self, ctx: &egui::Context) -> bool {
@@ -1396,8 +1532,10 @@ impl Shell {
             (None, _) => ("Closing", Tone::Attention),
         };
         let status = self.status.clone();
+        let unconfirmed = self.unconfirmed_count();
+        let mut confirm = false;
         Panel::bottom("statusbar")
-            .exact_size(28.0)
+            .exact_size(theme::STATUS_BAR)
             .frame(
                 Frame::new()
                     .fill(theme::BG)
@@ -1408,6 +1546,28 @@ impl Shell {
                 ui.horizontal_centered(|ui| {
                     widgets::caption(ui, "Local workspace");
                     chip(ui, runtime.0, runtime.1);
+                    // Before the (changing) activity list, so the control never moves under
+                    // the pointer as requests come and go.
+                    if unconfirmed > 0 {
+                        chip(
+                            ui,
+                            format!(
+                                "{unconfirmed} outcome{} not confirmed",
+                                if unconfirmed == 1 { "" } else { "s" }
+                            ),
+                            Tone::Attention,
+                        );
+                        if ui
+                            .small_button("Confirm outcomes")
+                            .on_hover_text(
+                                "Resubmit each unconfirmed request unchanged: a request that \
+                                 was recorded is replayed, never repeated.",
+                            )
+                            .clicked()
+                        {
+                            confirm = true;
+                        }
+                    }
                     for a in activities.iter().take(3) {
                         ui.add(egui::Spinner::new().size(11.0));
                         let secs = a.elapsed.as_secs();
@@ -1425,10 +1585,15 @@ impl Shell {
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         // A polite live region: status changes are announced (UI-07).
-                        let r = ui.label(
-                            RichText::new(status.unwrap_or_default())
-                                .small()
-                                .color(theme::MUTED),
+                        // Truncated to the space left, so it never covers the controls.
+                        let r = ui.add(
+                            egui::Label::new(
+                                RichText::new(status.unwrap_or_default())
+                                    .small()
+                                    .color(theme::MUTED),
+                            )
+                            .truncate()
+                            .selectable(false),
                         );
                         ui.ctx().accesskit_node_builder(r.id, |n| {
                             n.set_live(accesskit::Live::Polite);
@@ -1436,6 +1601,79 @@ impl Shell {
                     });
                 });
             });
+        if confirm {
+            self.confirm_outcomes();
+        }
+    }
+
+    /// Commands and attachment saves whose outcome is not confirmed yet.
+    pub fn unconfirmed_count(&self) -> usize {
+        let attachments = self
+            .chat
+            .drafts
+            .values()
+            .flat_map(|d| d.attachments.iter())
+            .filter(|a| matches!(a.state, AttachState::Unconfirmed(_)))
+            .count();
+        self.client.as_ref().map_or(0, |c| c.unresolved().len())
+            + attachments
+            + self.chat.removed_unconfirmed.len()
+    }
+
+    /// Resubmits every unconfirmed request with its identical frame (same request key).
+    pub fn confirm_outcomes(&mut self) {
+        if let Some(c) = &mut self.client {
+            c.resubmit_unresolved();
+        }
+        // The resubmitted save runs again (and says so) until its outcome arrives.
+        self.settings.unconfirmed = false;
+        let locals: Vec<u64> = self
+            .chat
+            .drafts
+            .values()
+            .flat_map(|d| d.attachments.iter())
+            .filter(|a| matches!(a.state, AttachState::Unconfirmed(_)))
+            .map(|a| a.local)
+            .collect();
+        for local in locals {
+            self.confirm_attachment(local);
+        }
+        for (n, (frame, path)) in std::mem::take(&mut self.chat.removed_unconfirmed)
+            .into_iter()
+            .enumerate()
+        {
+            // A removed attachment: confirmed under a slot no draft holds, then deleted.
+            let local = u64::MAX - n as u64;
+            if let Some(c) = &mut self.client {
+                c.task(
+                    Slot::Attach(String::new(), local),
+                    "Confirming a removed attachment",
+                    move |b| attachments::confirm(b, frame, path.as_deref()),
+                );
+            }
+        }
+    }
+
+    fn confirm_attachment(&mut self, local: u64) {
+        let Some(a) = self.chat.attachment_mut(local) else {
+            return;
+        };
+        let AttachState::Unconfirmed(frame) = &a.state else {
+            return;
+        };
+        let frame = frame.clone();
+        let path = a.path.clone();
+        a.state = AttachState::Storing;
+        let scratch = self.backend().map(|b| b.scratch_dir());
+        let materialized = path.filter(|p| scratch.as_ref().is_some_and(|s| p.starts_with(s)));
+        let key = self.chat.draft_key();
+        if let Some(c) = &mut self.client {
+            c.task(
+                Slot::Attach(key, local),
+                "Confirming an attachment",
+                move |b| attachments::confirm(b, frame, materialized.as_deref()),
+            );
+        }
     }
 
     fn navigation(&mut self, ui: &mut Ui) {
@@ -1579,10 +1817,13 @@ impl Shell {
     fn coordinator_sidebar(&mut self, ui: &mut Ui) {
         let online = self.online();
         let mut actions = Vec::new();
+        // The screen beside it keeps at least MIN_SCREEN of the width, down to the minimum
+        // window (where the sidebar narrows instead of crushing the screen).
+        let widest = (ui.available_width() - theme::MIN_SCREEN).clamp(260.0, 560.0);
         Panel::right("coordinator-sidebar")
             .resizable(true)
-            .default_size(380.0)
-            .size_range(300.0..=560.0)
+            .default_size(380.0_f32.min(widest))
+            .size_range(260.0_f32.min(widest)..=widest)
             .frame(
                 Frame::new()
                     .fill(theme::PANEL)

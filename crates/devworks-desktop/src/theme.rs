@@ -31,6 +31,15 @@ pub const GUTTER: f32 = 20.0;
 pub const SIDEBAR: f32 = 320.0;
 /// Width of the left navigation.
 pub const NAV: f32 = 206.0;
+/// Narrowest a screen gets beside the coordinator sidebar.
+pub const MIN_SCREEN: f32 = 240.0;
+/// The smallest logical window (points at text scale 1). The native minimum grows with the
+/// text scale, so the logical layout never gets smaller than this at any scale.
+pub const MIN_WINDOW: [f32; 2] = [760.0, 520.0];
+/// Height of the status bar along the window's bottom edge.
+pub const STATUS_BAR: f32 = 28.0;
+/// The largest supported text scale (egui zoom factor); larger requests are clamped.
+pub const MAX_TEXT_SCALE: f32 = 2.0;
 /// Below this content width, inner sidebars stack or overlay instead of sitting alongside.
 pub const NARROW: f32 = 760.0;
 

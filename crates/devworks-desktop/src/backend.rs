@@ -10,6 +10,7 @@
 //! overwrites fresher state. [`Client::wait_idle`] is the synchronization point tests use
 //! (a condition variable, never a sleep).
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::Id;
 use devworks_core::settings::view::Health;
 use std::collections::HashMap;
@@ -78,19 +79,58 @@ pub enum Reply {
 
 /// The output of a multi-step task.
 pub enum TaskOutput {
-    /// An attachment stored as a workspace artifact.
-    Stored(CommandOutcome),
+    /// An attachment's `artifacts.save` outcome with the exact frame it submitted (an unknown
+    /// outcome is confirmed by resubmitting that frame, never a new one).
+    Stored {
+        outcome: CommandOutcome,
+        frame: Vec<u8>,
+    },
     /// A decoded preview image (RGBA, unmultiplied).
     Preview { size: [usize; 2], rgba: Vec<u8> },
 }
 
 type Job = Box<dyn FnOnce(&dyn Backend) -> Reply + Send>;
 
+/// Identical resubmissions of a command whose outcome came back unknown, before the shell
+/// reports it as not confirmed.
+pub const UNKNOWN_RESUBMISSIONS: usize = 3;
+
+/// Whether a command's outcome is not known (a lost acknowledgment).
+pub fn is_unknown(outcome: &CommandOutcome) -> bool {
+    matches!(outcome, Ok(CommandReply::CommandStatusUnknown { .. }))
+}
+
+/// Admits `frame`; while its outcome is unknown, resubmits the **identical** frame (same
+/// request key and fingerprint) up to [`UNKNOWN_RESUBMISSIONS`] times. The gateway replays the
+/// recorded receipt of a command that committed, and decides one that did not, so a
+/// resubmission never duplicates an effect. A fresh request key is never used for a retry.
+pub fn resolve_command(backend: &dyn Backend, operation: &str, frame: &[u8]) -> CommandOutcome {
+    let mut outcome = backend.command(operation, frame);
+    for _ in 0..UNKNOWN_RESUBMISSIONS {
+        if !is_unknown(&outcome) {
+            break;
+        }
+        outcome = backend.command(operation, frame);
+    }
+    outcome
+}
+
 struct Pending {
     slot: Slot,
     ticket: u64,
     label: String,
     started: Instant,
+    /// A command's operation and exact frame, kept until its outcome is known.
+    command: Option<(&'static str, Vec<u8>)>,
+}
+
+/// A command whose outcome is still not known after its resubmissions.
+#[derive(Clone, Debug)]
+pub struct Unresolved {
+    pub slot: Slot,
+    pub label: String,
+    operation: &'static str,
+    frame: Vec<u8>,
 }
 
 struct Shared {
@@ -135,6 +175,7 @@ pub struct Client {
     shared: Arc<Shared>,
     waker: Arc<Mutex<Option<Waker>>>,
     open: bool,
+    unresolved: Vec<Unresolved>,
     workers: Vec<std::thread::JoinHandle<()>>,
     join_bound: Duration,
 }
@@ -205,6 +246,7 @@ impl Client {
             shared,
             waker,
             open: true,
+            unresolved: Vec::new(),
             workers,
             join_bound: WORKER_JOIN_BOUND,
         }
@@ -234,7 +276,13 @@ impl Client {
         self.open = false;
     }
 
-    fn submit(&mut self, slot: Slot, label: &str, job: Job) -> Option<u64> {
+    fn submit(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        job: Job,
+        command: Option<(&'static str, Vec<u8>)>,
+    ) -> Option<u64> {
         if !self.open {
             return None;
         }
@@ -246,6 +294,7 @@ impl Client {
             ticket,
             label: label.to_owned(),
             started: Instant::now(),
+            command,
         });
         *self
             .shared
@@ -273,15 +322,33 @@ impl Client {
             slot,
             label,
             Box::new(move |b| Reply::Query(b.query(operation, &frame))),
+            None,
         );
     }
 
+    /// Admits a command through [`resolve_command`]. If its outcome is still unknown, the exact
+    /// frame is kept as [`Unresolved`] until [`Self::resubmit`] confirms it.
     pub fn command(&mut self, slot: Slot, label: &str, operation: &'static str, frame: Vec<u8>) {
+        let kept = frame.clone();
+        self.unresolved.retain(|u| u.slot != slot);
         self.submit(
             slot,
             label,
-            Box::new(move |b| Reply::Command(b.command(operation, &frame))),
+            Box::new(move |b| Reply::Command(resolve_command(b, operation, &frame))),
+            Some((operation, kept)),
         );
+    }
+
+    /// Commands whose outcome is still not known.
+    pub fn unresolved(&self) -> &[Unresolved] {
+        &self.unresolved
+    }
+
+    /// Resubmits every unresolved command with its identical frame.
+    pub fn resubmit_unresolved(&mut self) {
+        for u in std::mem::take(&mut self.unresolved) {
+            self.command(u.slot, &u.label, u.operation, u.frame);
+        }
     }
 
     /// Runs a multi-step task (for example: mint a ticket, hash the file, save the artifact).
@@ -291,7 +358,7 @@ impl Client {
         label: &str,
         task: impl FnOnce(&dyn Backend) -> Result<TaskOutput, String> + Send + 'static,
     ) {
-        self.submit(slot, label, Box::new(move |b| Reply::Task(task(b))));
+        self.submit(slot, label, Box::new(move |b| Reply::Task(task(b))), None);
     }
 
     /// Replies that arrived since the last call, for the slots still waiting for them.
@@ -302,6 +369,16 @@ impl Client {
                 continue;
             };
             let p = self.pending.remove(at);
+            if let (Some((operation, frame)), Reply::Command(outcome)) = (&p.command, &reply)
+                && is_unknown(outcome)
+            {
+                self.unresolved.push(Unresolved {
+                    slot: p.slot.clone(),
+                    label: p.label.clone(),
+                    operation,
+                    frame: frame.clone(),
+                });
+            }
             // Superseded by a newer request for the same slot: drop the stale reply.
             if self.latest.get(&p.slot) == Some(&ticket) {
                 self.latest.remove(&p.slot);

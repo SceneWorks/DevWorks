@@ -22,6 +22,9 @@ pub struct SettingsScreen {
     pub loading: bool,
     pub error: Option<String>,
     pub saving: bool,
+    /// The save's outcome is not known: still blocking a second save, but nothing is running
+    /// until "Confirm outcomes" resubmits it.
+    pub unconfirmed: bool,
     pub validating: bool,
     /// The next read follows a successful save (drafts are cleared, not kept as a conflict).
     pub after_save: bool,
@@ -372,13 +375,15 @@ impl SettingsScreen {
                         .add_enabled(!blocked && !self.saving, egui::Button::new("Save changes"))
                         .on_disabled_hover_text(if blocked {
                             "Fix the highlighted values first."
+                        } else if self.unconfirmed {
+                            "The previous save is not confirmed yet."
                         } else {
                             "Saving…"
                         });
                     if save.clicked() {
                         actions.push(SettingsAction::Save);
                     }
-                    if self.saving {
+                    if self.saving && !self.unconfirmed {
                         ui.add(egui::Spinner::new());
                     }
                 });
@@ -476,6 +481,19 @@ impl SettingsScreen {
         } else if let Some(v) = edit {
             let _ = view.edit(key, v);
         }
+    }
+
+    /// The current drafts by key (what a validation or save would submit).
+    pub fn drafts(&self) -> BTreeMap<String, Value> {
+        self.view
+            .as_ref()
+            .map(|v| {
+                v.dirty_keys()
+                    .into_iter()
+                    .filter_map(|k| Some((k.to_owned(), v.item(k)?.draft.clone()?)))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Applies a chosen directory to its setting as a draft.
