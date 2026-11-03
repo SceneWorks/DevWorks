@@ -1,4 +1,4 @@
-//! DW-4 settings use cases end to end: wire frames through the real gateway, the settings
+//! Settings use cases end to end: wire frames through the real gateway, the settings
 //! handler and the real SQLite configuration repository. Deterministic; no inference.
 use super::Harness;
 use crate::paths::FsPathProbe;
@@ -7,13 +7,13 @@ use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::storage::*;
 use devworks_core::ports::{AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization};
-use devworks_core::protocol::records::SettingEntry;
+use devworks_core::protocol::records::{SettingAssignment, SettingEntry};
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
 };
 use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, ProjectId, Rejection,
-    Revision, RevisionDimension,
+    RetryAdvice, Revision, RevisionDimension,
 };
 use devworks_core::settings::catalog::{AgentRole, descriptor};
 use devworks_core::settings::model::AdoptedRevisions;
@@ -63,6 +63,7 @@ struct Fixture {
     h: Harness,
     store: SqliteStore,
     service: Arc<svc::SettingsService>,
+    roles: Arc<Roles>,
     n: std::sync::atomic::AtomicU64,
 }
 
@@ -101,6 +102,7 @@ impl Fixture {
             h,
             store,
             service,
+            roles,
             n: Default::default(),
         }
     }
@@ -129,6 +131,29 @@ impl Fixture {
             Counter::new(info.restore_epoch).unwrap(),
             Revision::new(1).unwrap(),
         )
+    }
+    /// The proposal-staging seam the proposal commands call, run in its own unit of work.
+    fn propose(
+        &self,
+        actor: &str,
+        expected: i64,
+        entries: &[(&str, Value)],
+    ) -> Result<ProposalRecord, svc::Failure> {
+        let assignments: Vec<SettingAssignment> = entries
+            .iter()
+            .map(|(k, v)| serde_json::from_value(assignment(k, v.clone())).unwrap())
+            .collect();
+        let (ctx, roles) = (self.ctx(actor), self.roles.clone());
+        self.write(move |tx| {
+            Ok(svc::stage_proposal(
+                tx,
+                &ctx,
+                &*roles,
+                &ConfigScope::Workspace,
+                expected,
+                &assignments,
+            ))
+        })
     }
     fn key(&self) -> String {
         let n = self.n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -626,14 +651,16 @@ fn reviewers_cannot_write_and_policies_are_not_values() {
 fn agent_proposals_need_human_approval_and_keep_history() {
     let f = Fixture::new();
     let key = "roles.worker.instructions";
-    let d = f.save(
-        "agent-a",
-        ws(),
-        1,
-        &[(key, json!("Always write tests first."))],
+    let staged = f
+        .propose("agent-a", 1, &[(key, json!("Always write tests first."))])
+        .unwrap();
+    assert_eq!((staged.base_revision, staged.revision), (1, 1));
+    let proposal = staged.id.clone();
+    assert_eq!(
+        pending_ids(&f),
+        std::slice::from_ref(&proposal),
+        "exactly one proposal"
     );
-    assert!(matches!(d, DomainDecision::NoChange { .. }));
-    let proposal = pending_ids(&f).pop().unwrap();
     assert_eq!(
         ws_revision(&f),
         1,
@@ -742,9 +769,10 @@ fn agent_proposals_need_human_approval_and_keep_history() {
 fn rejection_and_concurrent_edits_require_reconciliation() {
     let f = Fixture::new();
     let key = "roles.dreaming.instructions";
-    let first = f.save("agent-a", ws(), 1, &[(key, json!("Dream less."))]);
-    assert!(matches!(first, DomainDecision::NoChange { .. }));
-    let rejected_id = pending_ids(&f).pop().unwrap();
+    let rejected_id = f
+        .propose("agent-a", 1, &[(key, json!("Dream less."))])
+        .unwrap()
+        .id;
     let user = f.ctx("user-a");
     let r = f
         .write(move |tx| Ok(svc::reject_proposal(tx, &user, &rejected_id, 1)))
@@ -756,9 +784,10 @@ fn rejection_and_concurrent_edits_require_reconciliation() {
         "rejection leaves the current instructions effective"
     );
 
-    let second = f.save("agent-a", ws(), 1, &[(key, json!("Dream more."))]);
-    assert!(matches!(second, DomainDecision::NoChange { .. }));
-    let pid = pending_ids(&f).pop().unwrap();
+    let pid = f
+        .propose("agent-a", 1, &[(key, json!("Dream more."))])
+        .unwrap()
+        .id;
     // A concurrent user edit moves the scope past the proposal's base revision.
     applied(&f.save("user-b", ws(), 1, &[("power.keepAwake", json!(true))]));
     assert!(
@@ -981,11 +1010,23 @@ fn the_view_model_round_trips_through_the_gateway() {
     assert!(!view.is_dirty());
 }
 
+fn all_event_kinds(f: &Fixture) -> Vec<String> {
+    read_snapshot(&f.store, &ReadOptions::default(), |s| {
+        s.history().page(&EventFilter::All, 0, 500)
+    })
+    .unwrap()
+    .events
+    .into_iter()
+    .map(|e| e.kind)
+    .collect()
+}
+
 #[test]
-fn an_agent_save_stages_exactly_one_proposal_and_replays_without_restaging() {
+fn an_agent_save_is_a_receipt_only_approval_refusal() {
     let f = Fixture::new();
     let key = "roles.featureCoordinator.instructions";
     let before = f.effective(ws(), key);
+    let events_before = all_event_kinds(&f).len();
     let body = save_body(ws(), 1, &[(key, json!("Plan in smaller slices."))]);
     let first = f.save_raw("agent-a", "agent-key", body.clone());
     let CommandReply::Recorded {
@@ -996,22 +1037,21 @@ fn an_agent_save_stages_exactly_one_proposal_and_replays_without_restaging() {
     else {
         panic!("{first:?}")
     };
-    let DomainDecision::NoChange {
-        result: OperationResult::SettingsSaveRevision { value },
-    } = &original.decision
-    else {
-        panic!("{:?}", original.decision)
-    };
-    // The result is the unchanged effective value; nothing was applied.
-    assert_eq!(value.items.0[0].value.value.0, before.value.value.0);
+    let fault = refused(&original.decision);
+    assert!(matches!(fault.code, DomainErrorCode::ApprovalRequired));
+    assert!(matches!(fault.retry, RetryAdvice::Never));
+    assert_eq!(target_kind(fault), svc::PROPOSAL_COMMAND);
+    assert!(
+        f.read(|r| r.proposals(&ConfigScope::Workspace, "settings", None, None, 10))
+            .is_empty(),
+        "the save staged nothing"
+    );
     assert_eq!(f.effective(ws(), key).value.value.0, before.value.value.0);
     assert_eq!(ws_revision(&f), 1);
-    let staged = pending_ids(&f);
-    assert_eq!(staged.len(), 1, "exactly one proposal is staged");
-    let record = f.read(|r| r.proposal(&staged[0])).unwrap();
     assert_eq!(
-        (record.base_revision, record.author.0.as_str()),
-        (1, "agent-a")
+        all_event_kinds(&f)[events_before..],
+        ["CommandDecided".to_owned()],
+        "only the receipt's history persists"
     );
 
     let again = f.save_raw("agent-a", "agent-key", body);
@@ -1025,18 +1065,42 @@ fn an_agent_save_stages_exactly_one_proposal_and_replays_without_restaging() {
     };
     assert_eq!(replayed.command_id, original.command_id);
     assert_eq!(replayed.committed_sequence, original.committed_sequence);
-    assert_eq!(pending_ids(&f), staged, "a replay stages nothing more");
-    let staged_events = read_snapshot(&f.store, &ReadOptions::default(), |s| {
-        s.history().page(
-            &EventFilter::Aggregate {
-                kind: svc::PROPOSAL_AGGREGATE.into(),
-                id: staged[0].as_str().into(),
-            },
-            0,
-            10,
-        )
-    })
-    .unwrap();
-    assert_eq!(staged_events.events.len(), 1);
-    assert_eq!(staged_events.events[0].kind, "SettingsProposalStaged");
+    assert!(pending_ids(&f).is_empty());
+}
+
+#[test]
+fn the_proposal_seam_stages_once_bound_to_the_revision_it_read() {
+    let f = Fixture::new();
+    let key = "roles.issueCoordinator.instructions";
+    let before = f.effective(ws(), key);
+    let staged = f
+        .propose("agent-a", 1, &[(key, json!("Reproduce first."))])
+        .unwrap();
+    assert_eq!(
+        (staged.base_revision, staged.state),
+        (1, ProposalState::Pending)
+    );
+    assert_eq!(staged.author.0.as_str(), "agent-a");
+    assert_eq!(pending_ids(&f), std::slice::from_ref(&staged.id));
+    assert_eq!(f.effective(ws(), key).value.value.0, before.value.value.0);
+    assert_eq!(ws_revision(&f), 1);
+    // Refusals of the seam leave no proposal behind.
+    let refusals = [
+        f.propose("reviewer-a", 1, &[(key, json!("x"))]),
+        f.propose("pkg-a", 1, &[(key, json!("x"))]),
+        f.propose("agent-a", 1, &[("safety.reviewersReadOnly", json!(false))]),
+        f.propose("agent-a", 1, &[("delivery.maxReviewFixCycles", json!(99))]),
+        // Clearing a value that is not configured changes nothing.
+        f.propose("agent-a", 1, &[(key, Value::Null)]),
+    ];
+    for r in refusals {
+        assert!(matches!(r, Err(svc::Failure::Refused(_))), "{r:?}");
+    }
+    applied(&f.save("user-a", ws(), 1, &[("power.keepAwake", json!(true))]));
+    let stale = f.propose("agent-a", 1, &[(key, json!("y"))]);
+    assert!(matches!(
+        stale,
+        Err(svc::Failure::Storage(StorageError::RevisionConflict(_)))
+    ));
+    assert_eq!(pending_ids(&f).len(), 1);
 }

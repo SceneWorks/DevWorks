@@ -2,6 +2,11 @@
 //! `settings.save_revision` and `settings.explain_source`, plus the settings-owned proposal
 //! lifecycle (stage → reconcile → approve/reject) and rollback.
 //!
+//! Agent drafting of settings and role instructions reaches users through the proposal commands
+//! owned by the approvals and roles services (`approvals.propose`, `roles.propose`), and human
+//! decisions through `approvals.record_human_decision` and `roles.rollback`. Those handlers call
+//! the transaction-scoped functions here, so proposals have one store and one set of rules.
+//!
 //! Every surface reaches the four operations through the gateway with [`SettingsService`] as the
 //! registered handler; the proposal and rollback functions are transaction-scoped so the owning
 //! decision operations (`approvals.record_human_decision`, `roles.rollback`) run them inside
@@ -10,9 +15,9 @@
 //! Principal invariants enforced here, on top of the gateway's authority port:
 //! * a principal whose host-resolved role is read-only (code reviewers) can never write or
 //!   propose settings;
-//! * agents never apply settings: an agent save stages one proposal bound to the revision it
-//!   read and is recorded as `NoChange` (the effective configuration is unchanged until a human
-//!   approves; an exact replay returns the same receipt and stages nothing more);
+//! * agents never apply settings: an agent `settings.save_revision` is a receipt-only
+//!   `ApprovalRequired` refusal that writes and stages nothing; agents draft changes through the
+//!   proposal command, which calls [`stage_proposal`];
 //! * only a host-bound human principal applies, approves, rejects, reconciles or rolls back, and
 //!   nobody approves their own proposal;
 //! * harness-enforced policies are not values: every write to them is refused, and instruction
@@ -51,8 +56,11 @@ use std::sync::Arc;
 /// History aggregate of a scope's configuration revisions (`aggregate_id` = scope key).
 pub const REVISION_AGGREGATE: &str = "configuration_scope";
 /// History aggregate of a settings proposal (`aggregate_id` = proposal ID). Approval inboxes and
-/// notifications (DW-14) observe proposals through these events.
+/// notifications observe proposals through these events.
 pub const PROPOSAL_AGGREGATE: &str = "settings_proposal";
+/// Fault target kind of an agent `settings.save_revision`: the change must be drafted through
+/// the proposal command instead, which stages it with [`stage_proposal`].
+pub const PROPOSAL_COMMAND: &str = "approvals.propose";
 
 /// The four operations [`SettingsService`] is registered for.
 pub const OPERATIONS: [&str; 4] = [
@@ -374,20 +382,62 @@ fn save(
             })
         }
         Writer::Propose => {
-            // A refusal is receipt-only (its writes are rolled back), so staging is a successful
-            // decision. The configuration itself does not change until a human approves, which
-            // is exactly what `NoChange` reports: the result is the unchanged effective values
-            // of the proposed keys. The staged proposal is announced by its
-            // `SettingsProposalStaged` history event and listed by [`proposals`].
-            stage(tx, ctx, &current, &input.entries.0, &planned)?;
-            let entries = effective_entries(&*tx.configuration(), &scope, &keys)?;
-            Ok(DomainDecision::NoChange {
-                result: OperationResult::SettingsSaveRevision {
-                    value: page(entries),
-                },
-            })
+            // An agent never applies settings and this command never stages: it is a
+            // receipt-only refusal that points the caller at the proposal command.
+            let mut refusal = Refusal::new(
+                DomainErrorCode::ApprovalRequired,
+                PROPOSAL_COMMAND,
+                Some(scope.target_id()),
+            );
+            refusal.retry = RetryAdvice::Never;
+            Err(refusal.into())
         }
     }
+}
+
+/// Stages a proposal for human approval, bound to the scope revision the author read. This is
+/// the transaction-scoped seam behind the approvals and roles proposal commands: it validates
+/// exactly like a save, writes nothing to the effective configuration and records the proposal
+/// plus its `SettingsProposalStaged` history. Read-only roles, packages, schedules and the host
+/// cannot propose; humans save directly but may also propose.
+pub fn stage_proposal(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    roles: &dyn PrincipalRoles,
+    scope: &ConfigScope,
+    expected_revision: i64,
+    entries: &[SettingAssignment],
+) -> Result<ProposalRecord, Failure> {
+    require_scope(&*tx.configuration(), scope)?;
+    match ctx.principal_kind() {
+        PrincipalKind::Human => require_human(tx, ctx)?,
+        PrincipalKind::Agent => {
+            if roles.role(ctx).is_some_and(AgentRole::read_only) {
+                return Err(denied("read_only_role"));
+            }
+        }
+        PrincipalKind::Package | PrincipalKind::Schedule | PrincipalKind::Host => {
+            return Err(denied("settings_proposal"));
+        }
+    }
+    let current = current_layer(&*tx.configuration(), scope)?;
+    if current.revision != expected_revision {
+        return Err(stale(scope, expected_revision, current.revision));
+    }
+    let planned = plan(&current, entries);
+    let blocking: Vec<&Issue> = planned.blocking().collect();
+    if !blocking.is_empty() {
+        return Err(plan_refusal(&blocking, scope).into());
+    }
+    if !planned.differs {
+        return Err(Refusal::new(
+            DomainErrorCode::InvalidArgument,
+            "settings_proposal",
+            Some(scope.target_id()),
+        )
+        .into());
+    }
+    Ok(stage(tx, ctx, &current, entries, &planned)?)
 }
 
 fn provenance(ctx: &InvocationContext) -> Value {

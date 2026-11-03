@@ -1,4 +1,4 @@
-//! Configuration repository (DW-4): scoped, revisioned configuration documents and the staged
+//! Configuration repository: scoped, revisioned configuration documents and the staged
 //! proposals that agents may author but never apply.
 //!
 //! A scope's configuration in one namespace is an append-only chain of **complete** revisions.

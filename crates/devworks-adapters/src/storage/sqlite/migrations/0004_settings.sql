@@ -1,4 +1,4 @@
--- DW-4: staged configuration proposals. Agents may author them; only an authenticated human
+-- Staged configuration proposals. Agents may author them; only an authenticated human
 -- decision applies one, as a new configuration revision. Proposals never rewrite revisions.
 CREATE TABLE configuration_proposals (
  id TEXT PRIMARY KEY, scope_key TEXT NOT NULL, namespace TEXT NOT NULL,
