@@ -111,6 +111,20 @@ fn absolute(path: &str, working_directory: Option<&str>) -> Result<PathBuf, Reso
         return Err(ResolveError::Invalid("empty or NUL path".into()));
     }
     let p = expand_home(path)?;
+    // Windows forms whose target no saved working directory determines, or that name devices
+    // rather than files, are not resolved: the preflight holds them instead of guessing.
+    if let Some(Component::Prefix(prefix)) = p.components().next() {
+        if matches!(prefix.kind(), std::path::Prefix::DeviceNS(_)) {
+            return Err(ResolveError::Invalid(
+                "device namespace paths are not file targets".into(),
+            ));
+        }
+        if !p.has_root() {
+            return Err(ResolveError::Invalid(
+                "a drive-relative path depends on that drive's current directory".into(),
+            ));
+        }
+    }
     if p.is_absolute() {
         return Ok(p);
     }
