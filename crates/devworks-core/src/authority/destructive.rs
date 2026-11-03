@@ -718,9 +718,7 @@ fn classify(
     if affected.iter().any(|a| a.volume_root) {
         return Err(BlockReason::FilesystemRoot);
     }
-    if r.entry_kind == EntryKind::Missing && r.target.is_none() {
-        return Ok(TargetClass::NoTarget);
-    }
+    let missing = r.entry_kind == EntryKind::Missing && r.target.is_none();
     let hits = |p: &Protected| {
         affected
             .iter()
@@ -775,6 +773,11 @@ fn classify(
                 });
             }
         }
+    }
+    // A missing target destroys nothing, but only after the protected checks: creating or
+    // writing a new entry inside a Git directory (a hook, a ref) is refused like changing one.
+    if missing {
+        return Ok(TargetClass::NoTarget);
     }
     match &plan.scope {
         IntendedScope::Ordinary => Ok(TargetClass::Ordinary),

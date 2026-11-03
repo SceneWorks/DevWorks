@@ -2790,3 +2790,51 @@ fn redaction_keeps_ordinary_values_and_refuses_what_it_cannot_redact() {
     .unwrap();
     assert!(ops.iter().all(|o| !o.id.0.as_str().starts_with("ghp_")));
 }
+
+#[test]
+fn a_blocked_command_records_every_refused_step_with_its_rationale() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command, record_verdict};
+    let fx = Fx::new();
+    let scratch = Scratch::new("verdict");
+    let repo = scratch.path("repo");
+    std::fs::create_dir_all(format!("{repo}/.git")).unwrap();
+    register_repository(&fx, "repo-a", &repo);
+    let argv: Vec<String> = vec![
+        "sh".into(),
+        "-c".into(),
+        format!("rm -rf {repo}; git push -f origin main; cp a b"),
+    ];
+    let verdict = preflight_command(&NativeFilesystem::new(), &roots(&fx), &argv, None, &[]);
+    assert!(
+        matches!(verdict, CommandVerdict::Blocked { .. }),
+        "{verdict:?}"
+    );
+    let ctx = fx.agent("agent-a").with_authority_source(id("approval-3"));
+    let (c, a, v) = (ctx.clone(), argv.clone(), verdict.clone());
+    fx.write(move |tx| record_verdict(tx, &c, "process.execute", &a, &v));
+    let event = fx
+        .events()
+        .into_iter()
+        .find(|e| e.kind == "DestructiveOperationBlocked")
+        .unwrap();
+    assert_eq!(event.actor, actor("agent-a"));
+    let reasons: Vec<&str> = event.payload["blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["reason"].as_str().unwrap())
+        .collect();
+    assert_eq!(reasons, ["ProtectedBranch", "PrimaryRepository"]);
+    assert!(
+        event.payload["blocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| !b["rationale"].as_str().unwrap().is_empty())
+    );
+    assert_eq!(
+        event.payload["held"],
+        json!(["UnmodeledConsequentialCommand"])
+    );
+    assert_eq!(event.payload["authoritySources"], json!(["approval-3"]));
+}

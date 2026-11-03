@@ -35,11 +35,21 @@
 //! `branch -D`, `gc`, `prune`, …) are refused for protected branches and roots and held
 //! otherwise; they are never allowed by default.
 //!
+//! **Precedence ([`preflight_command`]):** Blocked > NeedsInput > allowed plans > residual,
+//! across every step and both layers. Resolvable operands are planned even when the command is
+//! also held, so a refusable step (a filesystem root, a primary repository, Git metadata, a
+//! protected branch) makes the whole command Blocked with every reason recorded
+//! ([`record_verdict`]). Resolving a held command by approval must re-run the preflight and can
+//! only dispatch [`CommandVerdict::dispatchable_after_approval`], which is empty for Blocked.
+//!
 //! **Trade-off, accepted:** benign scripts that merely mention these programs (`echo rm`, a
 //! directory named `git`) are held more often. Residual risk ([`record_assessment`]) is reported
 //! only for commands without any consequential token; arbitrary programs are still not proven
 //! harmless by inspection.
-use super::destructive::{DestructiveKind, EffectPlan, InputNeeded, IntendedScope};
+use super::destructive::{
+    DestructiveKind, EffectPlan, FilesystemResolver, InputNeeded, IntendedScope, PreflightDecision,
+    PreflightVerdict, ProtectedRoots, preflight,
+};
 use super::policy::protected_ref;
 use super::redact::Redactor;
 use crate::context::InvocationContext;
@@ -427,6 +437,17 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                 );
                 lx.tokens.push(Token::Group);
             }
+            '{' | '}' if dialect == Dialect::PowerShell => {
+                // Script blocks delimit commands; every command inside is checked.
+                flush(
+                    &mut lx,
+                    &mut word,
+                    &mut unquoted,
+                    &mut in_word,
+                    &mut dynamic,
+                );
+                lx.tokens.push(Token::Group);
+            }
             '<' => {
                 flush(
                     &mut lx,
@@ -521,8 +542,8 @@ enum Cwd {
 
 struct Collector<'p> {
     plans: Vec<EffectPlan>,
-    needs: Option<InputNeeded>,
-    protected: Option<String>,
+    needs: Vec<InputNeeded>,
+    protected: Vec<String>,
     cwd: Cwd,
     protected_branches: &'p [String],
     /// Consequential tokens accounted for by fully modeled commands.
@@ -530,7 +551,9 @@ struct Collector<'p> {
 }
 impl Collector<'_> {
     fn hold(&mut self, n: InputNeeded) {
-        self.needs.get_or_insert(n);
+        if !self.needs.contains(&n) {
+            self.needs.push(n);
+        }
     }
     fn unmodeled(&mut self) {
         self.hold(InputNeeded::UnmodeledConsequentialCommand);
@@ -544,28 +567,29 @@ impl Collector<'_> {
             Cwd::Unknown => None,
         }
     }
-    /// Literal operands of a destructive step, or a hold when they cannot be resolved.
-    fn operands(&mut self, words: &[Word]) -> Option<Vec<String>> {
-        if words.iter().any(|w| w.dynamic) {
-            self.hold(InputNeeded::UnresolvedExpansion);
-            return None;
-        }
-        if self.cwd == Cwd::Unknown && words.iter().any(|w| !absolute(&w.text)) {
-            self.hold(InputNeeded::UnresolvedWorkingDirectory);
-            return None;
-        }
-        Some(words.iter().map(|w| w.text.clone()).collect())
-    }
-    /// Adds a plan; returns whether its operands resolved.
+    /// Adds a plan for every operand that resolves (literal, and absolute when the working
+    /// directory is unknown) and holds for the rest; returns whether all of them resolved.
+    /// Resolvable operands are planned even when others are held, so a step that would be
+    /// refused is refused whatever else the command holds.
     fn push(&mut self, kind: DestructiveKind, words: &[Word]) -> bool {
-        match self.operands(words) {
-            Some(t) => {
-                let cwd = self.cwd().map(str::to_owned);
-                self.plans.push(plan(kind, t, cwd.as_deref()));
-                true
+        let mut resolved = Vec::new();
+        let mut complete = true;
+        for w in words {
+            if w.dynamic {
+                self.hold(InputNeeded::UnresolvedExpansion);
+                complete = false;
+            } else if self.cwd == Cwd::Unknown && !absolute(&w.text) {
+                self.hold(InputNeeded::UnresolvedWorkingDirectory);
+                complete = false;
+            } else {
+                resolved.push(w.text.clone());
             }
-            None => false,
         }
+        if !resolved.is_empty() {
+            let cwd = self.cwd().map(str::to_owned);
+            self.plans.push(plan(kind, resolved, cwd.as_deref()));
+        }
+        complete
     }
 }
 
@@ -597,25 +621,41 @@ pub fn assess_command_with(
     assess(argv, working_directory, protected_branches, true)
 }
 
-fn assess(
+/// Everything the analysis found in one command, without precedence applied: every plan
+/// (including those of steps that are also held), every hold and every protected-branch
+/// refusal.
+#[derive(Debug)]
+pub struct ShellAnalysis {
+    pub plans: Vec<EffectPlan>,
+    pub held: Vec<InputNeeded>,
+    pub protected_branches: Vec<String>,
+}
+
+/// Runs the structured analysis and the lexical backstop over one argv.
+pub fn analyze_command(
+    argv: &[String],
+    working_directory: Option<&str>,
+    protected_branches: &[String],
+) -> ShellAnalysis {
+    analyze(argv, working_directory, protected_branches, true)
+}
+
+fn analyze(
     argv: &[String],
     working_directory: Option<&str>,
     protected_branches: &[String],
     backstop: bool,
-) -> ShellAssessment {
+) -> ShellAnalysis {
     let words: Vec<Word> = argv.iter().map(|a| literal(a)).collect();
     let mut c = Collector {
         plans: Vec::new(),
-        needs: None,
-        protected: None,
+        needs: Vec::new(),
+        protected: Vec::new(),
         cwd: Cwd::Known(working_directory.map(str::to_owned)),
         protected_branches,
         claimed: BTreeMap::new(),
     };
     command(&words, Dialect::Posix, false, &mut c, 0);
-    if let Some(target) = c.protected {
-        return ShellAssessment::ProtectedBranch { target };
-    }
     // The backstop: every consequential token in the raw input must have been accounted for
     // by a fully modeled command.
     let mut found = BTreeMap::new();
@@ -629,16 +669,33 @@ fn assess(
     {
         c.unmodeled();
     }
-    if let Some(n) = c.needs {
+    ShellAnalysis {
+        plans: c.plans,
+        held: c.needs,
+        protected_branches: c.protected,
+    }
+}
+
+fn assess(
+    argv: &[String],
+    working_directory: Option<&str>,
+    protected_branches: &[String],
+    backstop: bool,
+) -> ShellAssessment {
+    let a = analyze(argv, working_directory, protected_branches, backstop);
+    if let Some(target) = a.protected_branches.into_iter().next() {
+        return ShellAssessment::ProtectedBranch { target };
+    }
+    if let Some(n) = a.held.into_iter().next() {
         return ShellAssessment::NeedsInput(n);
     }
-    if c.plans.is_empty() {
+    if a.plans.is_empty() {
         ShellAssessment::NoRecognizedDestruction {
             residual: RESIDUAL_RISK,
         }
     } else {
         ShellAssessment::Destructive {
-            plans: c.plans,
+            plans: a.plans,
             residual: RESIDUAL_RISK,
         }
     }
@@ -649,6 +706,179 @@ fn assess(
 #[doc(hidden)]
 pub fn assess_structured_only(argv: &[String], working_directory: Option<&str>) -> ShellAssessment {
     assess(argv, working_directory, &[], false)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Verdict across every step: Blocked > NeedsInput > allowed plans > residual
+
+/// One refused step of a command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Blocking {
+    /// A target the destructive preflight refused (filesystem root, primary repository, Git
+    /// metadata, …), with its decision and rationale.
+    Target(PreflightDecision),
+    /// A forced or deleting ref update of a protected branch.
+    ProtectedBranch { target: String },
+}
+impl Blocking {
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::Target(d) => match &d.verdict {
+                PreflightVerdict::Blocked(r) => r.as_str(),
+                _ => "Blocked",
+            },
+            Self::ProtectedBranch { .. } => "ProtectedBranch",
+        }
+    }
+    pub fn rationale(&self) -> &'static str {
+        match self {
+            Self::Target(d) => d.rationale(),
+            Self::ProtectedBranch { .. } => super::DenialReason::ProtectedBranch.rationale(),
+        }
+    }
+}
+
+/// The verdict on a whole command after every step was preflighted.
+///
+/// **Precedence:** any step or resolvable target that would be refused makes the command
+/// `Blocked`, whatever else it holds; otherwise any hold makes it `NeedsInput`; otherwise its
+/// plans are `Allowed`; a command without consequential tokens is `Residual`.
+///
+/// **Approval never unlocks a refusal.** A `NeedsInput` command may be resolved by a person
+/// approving it, but that resolution must re-run [`preflight_command`] on the current state and
+/// dispatch only what [`CommandVerdict::dispatchable_after_approval`] returns: a `Blocked`
+/// command yields nothing, so deleting a filesystem root, a primary repository or Git metadata
+/// stays reserved to the dedicated permit path that no approval or Full access stands in for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommandVerdict {
+    Blocked {
+        blocked: Vec<Blocking>,
+        /// Holds found as well (secondary information).
+        held: Vec<InputNeeded>,
+    },
+    NeedsInput {
+        held: Vec<InputNeeded>,
+        /// Steps that would be allowed once the holds are resolved.
+        allowed: Vec<PreflightDecision>,
+    },
+    Allowed {
+        decisions: Vec<PreflightDecision>,
+    },
+    Residual {
+        residual: &'static str,
+    },
+}
+impl CommandVerdict {
+    /// The preflight decisions an approval of this verdict may dispatch: the allowed steps of a
+    /// held command (or of an allowed one); nothing for a blocked command. A caller must obtain
+    /// this from a fresh [`preflight_command`] at approval time, never from a stored verdict.
+    pub fn dispatchable_after_approval(&self) -> Option<&[PreflightDecision]> {
+        match self {
+            Self::Blocked { .. } | Self::Residual { .. } => None,
+            Self::NeedsInput { allowed, .. } => Some(allowed),
+            Self::Allowed { decisions } => Some(decisions),
+        }
+    }
+}
+
+/// Analyzes a command and preflights every one of its steps, applying the precedence above.
+pub fn preflight_command(
+    fs: &dyn FilesystemResolver,
+    roots: &ProtectedRoots,
+    argv: &[String],
+    working_directory: Option<&str>,
+    protected_branches: &[String],
+) -> CommandVerdict {
+    let analysis = analyze_command(argv, working_directory, protected_branches);
+    let mut blocked: Vec<Blocking> = analysis
+        .protected_branches
+        .into_iter()
+        .map(|target| Blocking::ProtectedBranch { target })
+        .collect();
+    let mut held = analysis.held;
+    let mut allowed = Vec::new();
+    for p in &analysis.plans {
+        let decision = preflight(fs, roots, p);
+        match decision.verdict.clone() {
+            PreflightVerdict::Blocked(_) => blocked.push(Blocking::Target(decision)),
+            PreflightVerdict::NeedsInput(n) => {
+                if !held.contains(&n) {
+                    held.push(n);
+                }
+            }
+            PreflightVerdict::Allowed => allowed.push(decision),
+        }
+    }
+    if !blocked.is_empty() {
+        CommandVerdict::Blocked { blocked, held }
+    } else if !held.is_empty() {
+        CommandVerdict::NeedsInput { held, allowed }
+    } else if !allowed.is_empty() {
+        CommandVerdict::Allowed { decisions: allowed }
+    } else {
+        CommandVerdict::Residual {
+            residual: RESIDUAL_RISK,
+        }
+    }
+}
+
+/// Records a blocked or held command verdict in history, attributed to the invoking principal,
+/// with every blocked reason and rationale and the holds as secondary information.
+pub fn record_verdict(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    operation: &str,
+    argv: &[String],
+    verdict: &CommandVerdict,
+) -> Result<Option<i64>, StorageError> {
+    let (kind, blocked, held) = match verdict {
+        CommandVerdict::Blocked { blocked, held } => {
+            ("DestructiveOperationBlocked", &blocked[..], &held[..])
+        }
+        CommandVerdict::NeedsInput { held, .. } => ("DestructiveOperationHeld", &[][..], &held[..]),
+        _ => return Ok(None),
+    };
+    let digest = sha256_hex(argv.join("\u{0}").as_bytes());
+    let reasons: Vec<serde_json::Value> = blocked
+        .iter()
+        .map(|b| {
+            json!({
+                "reason": b.reason(),
+                "rationale": b.rationale(),
+                "target": match b {
+                    Blocking::Target(d) => d.offending.clone(),
+                    Blocking::ProtectedBranch { target } => Some(target.clone()),
+                },
+            })
+        })
+        .collect();
+    let held: Vec<&str> = held.iter().map(|n| n.as_str()).collect();
+    let sources: Vec<&str> = ctx.authority_sources().iter().map(Id::as_str).collect();
+    let id = EventId(tx.new_id(IdKind::Event));
+    tx.history()
+        .append(NewEvent {
+            id,
+            actor: ctx.principal().clone(),
+            project_id: ctx.project_id().cloned(),
+            root_id: ctx.root_id().cloned(),
+            operation_id: None,
+            aggregate_kind: "shell_preflight".into(),
+            aggregate_id: sha256_hex(
+                format!("{}/{digest}", ctx.invocation_id().as_str()).as_bytes(),
+            ),
+            aggregate_revision: 1,
+            kind: kind.into(),
+            payload: json!({
+                "operation": operation,
+                "blocked": reasons,
+                "held": held,
+                "program": argv.first().map(|p| Redactor::new().redact_text(&normalize(p))),
+                "argvSha256": digest,
+                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "authoritySources": sources,
+            }),
+        })
+        .map(Some)
 }
 
 const MAX_DEPTH: u8 = 8;
@@ -913,6 +1143,36 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
         if dialect == Dialect::Posix && transparent_keyword(t) {
             i += 1;
             continue;
+        }
+        if dialect == Dialect::PowerShell
+            && matches!(
+                t.to_ascii_lowercase().as_str(),
+                "if" | "elseif"
+                    | "else"
+                    | "try"
+                    | "catch"
+                    | "finally"
+                    | "while"
+                    | "do"
+                    | "until"
+                    | "foreach-object"
+                    | "%"
+                    | "where-object"
+                    | "?"
+            )
+        {
+            // Keywords and block-taking cmdlets whose block was split off as its own command.
+            i += 1;
+            continue;
+        }
+        if dialect == Dialect::PowerShell
+            && matches!(
+                t.to_ascii_lowercase().as_str(),
+                "foreach" | "for" | "switch"
+            )
+        {
+            // The loop header executes nothing destructive; the block is checked separately.
+            return;
         }
         if dialect == Dialect::Posix && t == "time" {
             i += 1;
@@ -1620,7 +1880,7 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
             if let Some(t) = target
                 && protected_branch(c, &t.text)
             {
-                c.protected = Some(t.text.clone());
+                c.protected.push(t.text.clone());
                 return true;
             }
             if delete || target.is_some() {
@@ -1643,7 +1903,7 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
                 .iter()
                 .find(|a| !a.text.starts_with('-') && protected_branch(c, &a.text))
             {
-                c.protected = Some(p.text.clone());
+                c.protected.push(p.text.clone());
                 return true;
             }
             consequential(c, &dir)
@@ -1751,8 +2011,8 @@ fn push(rest: &[Word], c: &mut Collector) {
             rewrites = true;
         }
         if (forced || force || delete || src.is_empty()) && protected_branch(c, dest) {
-            c.protected = Some(dest.to_owned());
-            return;
+            c.protected.push(dest.to_owned());
+            continue;
         }
         rewrites |= forced;
         if r.dynamic || glob(t) {

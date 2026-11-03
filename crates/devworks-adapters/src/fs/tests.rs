@@ -1244,3 +1244,131 @@ mod probe {
         }
     }
 }
+
+/// Blocked > NeedsInput > allowed plans > residual, across every step and both layers.
+mod precedence {
+    use super::*;
+    use devworks_core::authority::shell::{Blocking, CommandVerdict, preflight_command};
+
+    fn verdict(t: &Tree, argv: &[&str], cwd: &str) -> CommandVerdict {
+        let argv: Vec<String> = argv.iter().map(|s| (*s).to_owned()).collect();
+        preflight_command(&NativeFilesystem::new(), &t.roots, &argv, Some(cwd), &[])
+    }
+    fn blocked_reasons(v: &CommandVerdict) -> Vec<&'static str> {
+        match v {
+            CommandVerdict::Blocked { blocked, .. } => {
+                blocked.iter().map(Blocking::reason).collect()
+            }
+            other => panic!("expected Blocked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_refusable_step_blocks_the_whole_command_whatever_else_it_holds() {
+        let t = tree("precedence");
+        let repo = t.s.p("repo");
+        let cwd = t.s.p("outside");
+        let sh = |script: String| verdict(&t, &["sh", "-c", &script], &cwd);
+        assert_eq!(
+            blocked_reasons(&sh(format!("if true; then rm -rf {repo}; fi; echo $(x)"))),
+            ["PrimaryRepository"]
+        );
+        // Held by the backstop as well: still Blocked, with the hold kept as secondary.
+        match sh(format!("rm -rf {repo}; cp a b")) {
+            CommandVerdict::Blocked { blocked, held } => {
+                assert_eq!(blocked.len(), 1);
+                assert!(held.contains(&InputNeeded::UnmodeledConsequentialCommand));
+                assert!(blocked[0].rationale().contains("dedicated"));
+            }
+            other => panic!("{other:?}"),
+        }
+        // A resolvable operand next to a dynamic one is still checked.
+        assert_eq!(
+            blocked_reasons(&sh(format!("rm -rf {repo} $X"))),
+            ["PrimaryRepository"]
+        );
+        // Every refused step is reported.
+        assert_eq!(
+            blocked_reasons(&sh(format!(
+                "rm -rf {repo}/.git/objects; : > {repo}/.git/HEAD; rm -rf {repo}"
+            ))),
+            [
+                "RepositoryMetadata",
+                "RepositoryMetadata",
+                "PrimaryRepository"
+            ]
+        );
+        // A protected-branch push mixed with an unmodeled command.
+        assert_eq!(
+            blocked_reasons(&sh("git push -f origin main; cp a b".into())),
+            ["ProtectedBranch"]
+        );
+        // A PowerShell block deleting the repository next to an unmodeled construct.
+        let ps = verdict(
+            &t,
+            &[
+                "pwsh",
+                "-Command",
+                &format!("Rename-Item x y; if (1) {{ Remove-Item {repo} -Recurse }}"),
+            ],
+            &cwd,
+        );
+        assert_eq!(blocked_reasons(&ps), ["PrimaryRepository"]);
+        let ps = verdict(
+            &t,
+            &[
+                "pwsh",
+                "-Command",
+                &format!("try {{ Remove-Item {repo} -Recurse }} catch {{ Set-Content x y }}"),
+            ],
+            &cwd,
+        );
+        assert_eq!(blocked_reasons(&ps), ["PrimaryRepository"]);
+    }
+
+    #[test]
+    fn approving_a_held_command_never_dispatches_a_refused_step() {
+        let t = tree("approval");
+        let repo = t.s.p("repo");
+        let cwd = t.s.p("outside");
+        let argv = |script: String| vec!["sh".to_owned(), "-c".to_owned(), script];
+        let run = |roots: &ProtectedRoots, script: String| {
+            preflight_command(
+                &NativeFilesystem::new(),
+                roots,
+                &argv(script),
+                Some(&cwd),
+                &[],
+            )
+        };
+        // Blocked: an approval has nothing to dispatch.
+        let blocked = run(&t.roots, format!("rm -rf {repo}; cp a b"));
+        assert!(matches!(blocked, CommandVerdict::Blocked { .. }));
+        assert!(blocked.dispatchable_after_approval().is_none());
+        // Held only: approval may dispatch exactly the allowed steps.
+        std::fs::create_dir_all(t.s.0.join("outside/build")).unwrap();
+        let script = format!("rm -rf {}; cp a b", t.s.p("outside/build"));
+        let held = run(&t.roots, script.clone());
+        let CommandVerdict::NeedsInput { allowed, .. } = &held else {
+            panic!("{held:?}")
+        };
+        assert_eq!(allowed.len(), 1);
+        assert_eq!(held.dispatchable_after_approval().map(<[_]>::len), Some(1));
+        // If the target became protected before the approval is acted on, the required fresh
+        // preflight refuses it and the approval dispatches nothing.
+        let mut repos = t.roots.repositories.clone();
+        repos.push(RegisteredRepository {
+            id: id("build"),
+            location: t.s.p("outside/build"),
+            revision: 1,
+        });
+        let now = ProtectedRoots::new(
+            repos,
+            t.roots.worktrees.clone(),
+            t.roots.app_data_root.clone(),
+        );
+        let fresh = run(&now, script);
+        assert_eq!(blocked_reasons(&fresh), ["PrimaryRepository"]);
+        assert!(fresh.dispatchable_after_approval().is_none());
+    }
+}
