@@ -41,14 +41,15 @@
 //! * **Resources and owned processes.** [`resources::Housekeeper`] runs the process
 //!   supervisor's recovery and the resource boot reconciliation at startup, periodic sweeps with
 //!   the same sleep/wake detection as the dispatcher, and the bounded shutdown of owned trees.
-//!
+//!   [`runtime::boot`] drives it (see "Boot sequence").
 //!
 //! # Boot sequence
 //!
 //! Restart correctness depends on what runs before the first claim, so there is one entry point,
 //! [`runtime::boot`], and the composition root uses nothing else to start the engine. It takes
-//! one [`runtime::Composition`] of core ports and services (one store for everything; the engine
-//! still depends on no adapter) and, in this fixed order:
+//! one [`runtime::Composition`] of core ports and services (one store for everything; the native
+//! process launcher and power facility arrive as the core `ProcessHost` and `PowerPort` ports, so
+//! the engine still depends on no adapter) and, in this fixed order:
 //!
 //! 1. **Composes delivery.** The dispatcher is built with every required consumer — the receipt
 //!    reply consumer ([`replies::reply_consumer`], over the composition's one artifact service and
@@ -63,14 +64,31 @@
 //!    earlier boots are completed or failed from durable metadata, staged files and orphaned
 //!    generations (a crash between a reply file and its metadata) are removed, interrupted
 //!    removals finished and present generations verified.
-//! 4. **Starts delivery** ([`Dispatcher::run`]).
-//! 5. **Starts artifact collection**: one pass at once, then every
+//! 4. **Recovers owned processes and resource leases** ([`resources::Housekeeper::boot`]): the
+//!    machine resources ([`runtime::RuntimeConfig::machine_resources`], the desktop by default)
+//!    are registered; every process tree an earlier boot recorded is reconciled by its native
+//!    identity (pid plus birth token): a live one is killed with its group or job, a vanished one
+//!    is `Reaped`, an unverifiable one stays `Uncertain`, a launch without an identity is `Lost`;
+//!    then the resource boot reconciliation runs (earlier boots' waiters cancelled, logical grants
+//!    marked owner-unreachable, physical grants uncertain until their trees are settled, then
+//!    transferred).
+//! 5. **Applies keep-awake** from the effective `power.keepAwake` setting through the
+//!    composition's `PowerPort`.
+//! 6. **Starts delivery** ([`Dispatcher::run`]).
+//! 7. **Starts artifact collection**: one pass at once, then every
 //!    [`runtime::RuntimeConfig::collect_interval`] and after every applied `artifacts.delete`
 //!    admitted through the runtime. A pass removes pending blob generations no reader or pin
-//!    holds (`ArtifactService::collect`) and clears derived previews (`collect_derived`).
-//! 6. **Returns the [`runtime::Runtime`]**, the only handle through which commands and queries
+//!    holds (`ArtifactService::collect`) and clears derived previews (`collect_derived`). Resource
+//!    housekeeping ticks start too (every [`runtime::RuntimeConfig::housekeeping_interval`]:
+//!    expiry, transfer, promotion, and a `Wake` reconciliation after a sleep/wake jump).
+//! 8. **Returns the [`runtime::Runtime`]**, the only handle through which commands and queries
 //!    are admitted: a committed command wakes delivery for the reply intent its receipt
-//!    committed.
+//!    committed, and a committed `settings.save_revision` re-applies keep-awake.
+//!
+//! [`runtime::Runtime::shutdown`] stops delivery, collection and housekeeping, waits for
+//! in-flight deliveries, then stops every owned process tree within one bound
+//! ([`runtime::RuntimeConfig::shutdown_bound`]), records the `Shutdown` reconciliation and
+//! releases keep-awake.
 //!
 //! Steps 2 and 3 commute. Queue recovery writes only queue claims and the journal state of
 //! non-terminal operations; artifact recovery resolves only staging operations (which commit as
@@ -82,6 +100,17 @@
 //! the reply published exactly once (adapter test
 //! `boot_recovery_orders_commute_and_publish_the_reply_once`). The order above is fixed so a
 //! boot is reproducible.
+//!
+//! Step 4 commutes with steps 2 and 3 as well: it writes only owned-process records, resource
+//! definitions and leases and their history, and reads no queue row, journal state or artifact
+//! record, while queue and artifact recovery never read or write those tables. It must however
+//! precede steps 6–8: until it finishes, a tree of the earlier boot may still be running and
+//! holding a physical resource (the desktop, a device, a port), so neither a recovered delivery
+//! nor an admitted command may launch a process or be granted that resource. Recovery kills such
+//! trees and transfers their leases only once they are verified gone, so the first new work of
+//! the boot never runs beside an earlier boot's writer. An operation journaled `OutcomeUnknown`
+//! by step 2 stays held for reconciliation even when step 4 killed the tree that ran it: killing
+//! a process is not evidence of what it did. Keep-awake (step 5) only reads settings.
 //!
 //! Nothing here establishes product acceptance: tests run the real SQLite adapter with injected
 //! clocks and scripted handlers, without inference, network or containers.

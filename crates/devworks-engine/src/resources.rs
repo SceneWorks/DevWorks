@@ -21,6 +21,7 @@ use devworks_core::services::resources::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 
 /// What boot housekeeping found.
@@ -39,6 +40,7 @@ pub struct Housekeeper {
     pub wake_jump_ms: i64,
     last: Mutex<Option<(Instant, i64)>>,
     stopping: AtomicBool,
+    wake: Notify,
 }
 
 impl Housekeeper {
@@ -56,7 +58,13 @@ impl Housekeeper {
             wake_jump_ms: 10_000,
             last: Mutex::new(None),
             stopping: AtomicBool::new(false),
+            wake: Notify::new(),
         }
+    }
+
+    /// The process supervisor every owned tree is launched through.
+    pub fn supervisor(&self) -> &Arc<ProcessSupervisor> {
+        &self.supervisor
     }
 
     /// Registers `machine` resources, then recovers earlier boots' trees and leases.
@@ -99,17 +107,21 @@ impl Housekeeper {
         Ok((cause, report))
     }
 
-    /// Ticks every `every` until [`Self::stop`]. Transient storage failures are retried on the
-    /// next tick.
+    /// Ticks every `every` until [`Self::stop`], which ends the wait at once. Transient storage
+    /// failures are retried on the next tick.
     pub async fn run(&self, every: Duration) {
         while !self.stopping.load(Ordering::SeqCst) {
             let _ = self.tick().await;
-            tokio::time::sleep(every).await;
+            if self.stopping.load(Ordering::SeqCst) {
+                break;
+            }
+            let _ = crate::dispatch::first(self.wake.notified(), tokio::time::sleep(every)).await;
         }
     }
 
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
+        self.wake.notify_one();
     }
 
     /// Cancels every owned tree within one bound and records the shutdown reconciliation.
