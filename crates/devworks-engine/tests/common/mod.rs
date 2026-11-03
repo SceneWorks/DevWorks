@@ -85,6 +85,16 @@ impl Drop for Harness {
     }
 }
 
+/// Failure-only guard for a test body whose regression mode is a hang (it awaits a signal that
+/// only arrives if the code under test works). It never orders anything: a passing run finishes
+/// long before it, and on expiry it fails the test instead of leaving it hung.
+pub async fn within<F: std::future::Future>(what: &str, body: F) -> F::Output {
+    match tokio::time::timeout(std::time::Duration::from_secs(30), body).await {
+        Ok(output) => output,
+        Err(_) => panic!("{what}: did not finish within 30 s; the awaited signal never arrived"),
+    }
+}
+
 /// A current-thread runtime with timers.
 pub fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()

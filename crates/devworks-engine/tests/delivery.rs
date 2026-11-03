@@ -456,65 +456,68 @@ fn a_missing_wakeup_is_repaired_by_the_bounded_sweep() {
     );
     let (asked_tx, mut asked) = tokio::sync::mpsc::unbounded_channel::<Duration>();
     let sweep = Arc::new(tokio::sync::Notify::new());
-    runtime().block_on(async {
-        let (tick, d2) = (sweep.clone(), d.clone());
-        let looping = tokio::spawn(async move {
-            d2.run_with_sweep(move |wait| {
-                let (asked_tx, tick) = (asked_tx.clone(), tick.clone());
-                async move {
-                    let _ = asked_tx.send(wait);
-                    tick.notified().await;
-                }
+    runtime().block_on(within(
+        "a_missing_wakeup_is_repaired_by_the_bounded_sweep",
+        async {
+            let (tick, d2) = (sweep.clone(), d.clone());
+            let looping = tokio::spawn(async move {
+                d2.run_with_sweep(move |wait| {
+                    let (asked_tx, tick) = (asked_tx.clone(), tick.clone());
+                    async move {
+                        let _ = asked_tx.send(wait);
+                        tick.notified().await;
+                    }
+                })
+                .await
+            });
+            // First pass over an empty queue: the loop waits one full sweep interval.
+            assert_eq!(asked.recv().await, Some(interval));
+            // A delivery due later, committed without a wakeup: the loop stays parked until the
+            // sweep; that pass sees nothing ready and shortens its next wait to the saved time.
+            let later = write(&*s, |tx| {
+                let event_id = event(tx, "Later")?;
+                let entry_id = tx.new_id(IdKind::QueueEntry);
+                let ready_at_ms = tx.now_ms() + 5_000;
+                tx.queue().enqueue(NewQueueEntry {
+                    id: entry_id,
+                    consumer: "work".into(),
+                    event_id,
+                    root_id: None,
+                    operation_id: None,
+                    partition: None,
+                    priority: 0,
+                    ready_at_ms,
+                    payload: json!({}),
+                })
             })
-            .await
-        });
-        // First pass over an empty queue: the loop waits one full sweep interval.
-        assert_eq!(asked.recv().await, Some(interval));
-        // A delivery due later, committed without a wakeup: the loop stays parked until the
-        // sweep; that pass sees nothing ready and shortens its next wait to the saved time.
-        let later = write(&*s, |tx| {
-            let event_id = event(tx, "Later")?;
-            let entry_id = tx.new_id(IdKind::QueueEntry);
-            let ready_at_ms = tx.now_ms() + 5_000;
-            tx.queue().enqueue(NewQueueEntry {
-                id: entry_id,
-                consumer: "work".into(),
-                event_id,
-                root_id: None,
-                operation_id: None,
-                partition: None,
-                priority: 0,
-                ready_at_ms,
-                payload: json!({}),
-            })
-        })
-        .unwrap();
-        assert!(asked.is_empty() && recorder.seen().is_empty());
-        sweep.notify_one();
-        assert_eq!(asked.recv().await, Some(Duration::from_millis(5_000)));
-        // Time passes; without a sweep nothing is delivered. The sweep delivers it.
-        h.advance(5_000);
-        assert!(recorder.seen().is_empty());
-        sweep.notify_one();
-        // The pass that claimed it waits at most until the claim's lease would expire, if the
-        // claim was still live when the next due time was read.
-        let claimed_wait = |w: Option<Duration>| w == Some(interval) || w == Some(lease);
-        assert!(claimed_wait(asked.recv().await));
-        d.idle().await;
-        assert_eq!(recorder.seen().len(), 1);
-        assert_eq!(entry(&*s, &later.id).state, QueueState::Completed);
-        // The finished delivery freed capacity, which wakes exactly one further pass.
-        assert_eq!(asked.recv().await, Some(interval));
-        // A wakeup needs no sweep.
-        let woken = enqueue(&*s, "work", None, json!({}));
-        d.wakeup().wake();
-        assert!(claimed_wait(asked.recv().await));
-        d.idle().await;
-        assert_eq!(entry(&*s, &woken.id).state, QueueState::Completed);
-        assert_eq!(recorder.seen().len(), 2);
-        d.stop();
-        looping.await.unwrap();
-    });
+            .unwrap();
+            assert!(asked.is_empty() && recorder.seen().is_empty());
+            sweep.notify_one();
+            assert_eq!(asked.recv().await, Some(Duration::from_millis(5_000)));
+            // Time passes; without a sweep nothing is delivered. The sweep delivers it.
+            h.advance(5_000);
+            assert!(recorder.seen().is_empty());
+            sweep.notify_one();
+            // The pass that claimed it waits at most until the claim's lease would expire, if the
+            // claim was still live when the next due time was read.
+            let claimed_wait = |w: Option<Duration>| w == Some(interval) || w == Some(lease);
+            assert!(claimed_wait(asked.recv().await));
+            d.idle().await;
+            assert_eq!(recorder.seen().len(), 1);
+            assert_eq!(entry(&*s, &later.id).state, QueueState::Completed);
+            // The finished delivery freed capacity, which wakes exactly one further pass.
+            assert_eq!(asked.recv().await, Some(interval));
+            // A wakeup needs no sweep.
+            let woken = enqueue(&*s, "work", None, json!({}));
+            d.wakeup().wake();
+            assert!(claimed_wait(asked.recv().await));
+            d.idle().await;
+            assert_eq!(entry(&*s, &woken.id).state, QueueState::Completed);
+            assert_eq!(recorder.seen().len(), 2);
+            d.stop();
+            looping.await.unwrap();
+        },
+    ));
 }
 
 #[test]
@@ -742,29 +745,32 @@ fn a_claimed_delivery_cancelled_before_its_next_check_never_applies_or_dispatche
         let d = dispatcher(&h, interposer.clone(), vec![c]);
         let mut held = interposer.hold_while_claimed(&queued.id);
         let rt = runtime();
-        let claimed = rt.block_on(async {
-            assert_eq!(d.tick().await.unwrap().claimed, 1);
-            let (options, job) = held.recv().await.expect("the delivery's first transaction");
-            // The dispatcher holds the claim; nothing of the delivery has run yet.
-            let claimed = entry(&*s, &queued.id);
-            assert_eq!(claimed.state, QueueState::Claimed);
-            assert_eq!(d.in_flight(), 1);
-            assert_eq!(recorder.calls.load(Ordering::SeqCst), 0);
-            let qid = queued.id.clone();
-            let asked = write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
-            assert_eq!(
-                (asked.state, asked.generation, asked.cancellation_epoch),
-                (
-                    QueueState::Claimed,
-                    claimed.generation,
-                    claimed.cancellation_epoch + 1
-                ),
-                "cancellation asks the owner to stop; it does not revoke the claim"
-            );
-            s.submit_write(options, job).unwrap();
-            d.idle().await;
-            claimed
-        });
+        let claimed = rt.block_on(within(
+            "a_claimed_delivery_cancelled_before_its_next_check_never_applies_or_dispatches",
+            async {
+                assert_eq!(d.tick().await.unwrap().claimed, 1);
+                let (options, job) = held.recv().await.expect("the delivery's first transaction");
+                // The dispatcher holds the claim; nothing of the delivery has run yet.
+                let claimed = entry(&*s, &queued.id);
+                assert_eq!(claimed.state, QueueState::Claimed);
+                assert_eq!(d.in_flight(), 1);
+                assert_eq!(recorder.calls.load(Ordering::SeqCst), 0);
+                let qid = queued.id.clone();
+                let asked = write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+                assert_eq!(
+                    (asked.state, asked.generation, asked.cancellation_epoch),
+                    (
+                        QueueState::Claimed,
+                        claimed.generation,
+                        claimed.cancellation_epoch + 1
+                    ),
+                    "cancellation asks the owner to stop; it does not revoke the claim"
+                );
+                s.submit_write(options, job).unwrap();
+                d.idle().await;
+                claimed
+            },
+        ));
         let after = entry(&*s, &queued.id);
         assert_eq!(after.state, QueueState::Cancelled, "effect={with_effect}");
         assert_eq!(recorder.calls.load(Ordering::SeqCst), 0, "handler ran");
@@ -823,20 +829,23 @@ fn cancelling_after_dispatch_reconciles_the_effect_instead_of_undoing_it() {
         .unwrap();
         let d = dispatcher(&h, s.clone(), vec![c]);
         let rt = runtime();
-        rt.block_on(async {
-            assert_eq!(d.tick().await.unwrap().claimed, 1);
-            fx.started.notified().await;
-            // `Dispatching` is committed and the effect is running under the claim.
-            assert_eq!(
-                read(&*s, |r| r.operations().operation(&op)).unwrap().state,
-                OperationState::Dispatching
-            );
-            let qid = queued.id.clone();
-            let asked = write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
-            assert_eq!(asked.state, QueueState::Claimed);
-            gate.send(true).unwrap();
-            d.idle().await;
-        });
+        rt.block_on(within(
+            "cancelling_after_dispatch_reconciles_the_effect_instead_of_undoing_it",
+            async {
+                assert_eq!(d.tick().await.unwrap().claimed, 1);
+                fx.started.notified().await;
+                // `Dispatching` is committed and the effect is running under the claim.
+                assert_eq!(
+                    read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+                    OperationState::Dispatching
+                );
+                let qid = queued.id.clone();
+                let asked = write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+                assert_eq!(asked.state, QueueState::Claimed);
+                gate.send(true).unwrap();
+                d.idle().await;
+            },
+        ));
         let rec = read(&*s, |r| r.operations().operation(&op)).unwrap();
         let after = entry(&*s, &queued.id);
         assert_eq!(fx.executed(), 1, "dispatched exactly once");
@@ -901,15 +910,18 @@ fn cancel_during_dispatch_then_not_applied_cancels_instead_of_retrying() {
     let s = h.open();
     let (fx, gate, op, queued, d) = gated_effect(&h, &s, EffectResult::NotApplied("503".into()));
     let rt = runtime();
-    rt.block_on(async {
-        assert_eq!(d.tick().await.unwrap().claimed, 1);
-        fx.started.notified().await;
-        let qid = queued.id.clone();
-        let asked = write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
-        assert!(asked.cancel_requested && asked.state == QueueState::Claimed);
-        gate.send(true).unwrap();
-        d.idle().await;
-    });
+    rt.block_on(within(
+        "cancel_during_dispatch_then_not_applied_cancels_instead_of_retrying",
+        async {
+            assert_eq!(d.tick().await.unwrap().claimed, 1);
+            fx.started.notified().await;
+            let qid = queued.id.clone();
+            let asked = write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+            assert!(asked.cancel_requested && asked.state == QueueState::Claimed);
+            gate.send(true).unwrap();
+            d.idle().await;
+        },
+    ));
     // Settled by the attempt that saw NotApplied, not left ready for another attempt.
     let settled = entry(&*s, &queued.id);
     assert_eq!(
@@ -946,15 +958,18 @@ fn a_cancel_request_survives_a_hold_and_wins_over_a_later_retry() {
             let qid = queued.id.clone();
             write(&**s, move |tx| tx.queue().cancel(&qid)).unwrap()
         };
-        rt.block_on(async {
-            assert_eq!(d.tick().await.unwrap().claimed, 1);
-            fx.started.notified().await;
-            if !cancel_while_held {
-                cancel(&s);
-            }
-            gate.send(true).unwrap();
-            d.idle().await;
-        });
+        rt.block_on(within(
+            "a_cancel_request_survives_a_hold_and_wins_over_a_later_retry",
+            async {
+                assert_eq!(d.tick().await.unwrap().claimed, 1);
+                fx.started.notified().await;
+                if !cancel_while_held {
+                    cancel(&s);
+                }
+                gate.send(true).unwrap();
+                d.idle().await;
+            },
+        ));
         let held = entry(&*s, &queued.id);
         assert_eq!(held.state, QueueState::Reconciling, "{resolution}");
         if cancel_while_held {
@@ -1098,14 +1113,17 @@ fn cancelling_a_claim_with_a_preflighted_operation_cancels_the_operation() {
     let interposer = Interposer::new(s.clone());
     let d = dispatcher(&h, interposer.clone(), vec![c]);
     let mut held = interposer.hold_while_claimed(&queued.id);
-    runtime().block_on(async {
-        assert_eq!(d.tick().await.unwrap().claimed, 1);
-        let (options, job) = held.recv().await.expect("the delivery's first transaction");
-        let qid = queued.id.clone();
-        write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
-        s.submit_write(options, job).unwrap();
-        d.idle().await;
-    });
+    runtime().block_on(within(
+        "cancelling_a_claim_with_a_preflighted_operation_cancels_the_operation",
+        async {
+            assert_eq!(d.tick().await.unwrap().claimed, 1);
+            let (options, job) = held.recv().await.expect("the delivery's first transaction");
+            let qid = queued.id.clone();
+            write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+            s.submit_write(options, job).unwrap();
+            d.idle().await;
+        },
+    ));
     assert_eq!(entry(&*s, &queued.id).state, QueueState::Cancelled);
     assert_eq!(
         read(&*s, |r| r.operations().operation(&op)).unwrap().state,
@@ -1248,16 +1266,19 @@ fn an_undetected_sleep_holds_the_live_effect_and_never_re_executes_it() {
     // No wall-clock jump is ever treated as a sleep.
     let d = dispatcher_with(&h, s.clone(), vec![c], |c| c.wake_jump_ms = i64::MAX);
     let rt = runtime();
-    rt.block_on(async {
-        assert_eq!(d.tick().await.unwrap().claimed, 1);
-        fx.started.notified().await;
-        h.advance(3_600_000);
-        let report = d.tick().await.unwrap();
-        assert!(!report.woke);
-        assert_eq!(report.recovered.held, std::slice::from_ref(&queued.id));
-        gate.send(true).unwrap();
-        d.idle().await;
-    });
+    rt.block_on(within(
+        "an_undetected_sleep_holds_the_live_effect_and_never_re_executes_it",
+        async {
+            assert_eq!(d.tick().await.unwrap().claimed, 1);
+            fx.started.notified().await;
+            h.advance(3_600_000);
+            let report = d.tick().await.unwrap();
+            assert!(!report.woke);
+            assert_eq!(report.recovered.held, std::slice::from_ref(&queued.id));
+            gate.send(true).unwrap();
+            d.idle().await;
+        },
+    ));
     assert_eq!(entry(&*s, &queued.id).state, QueueState::Reconciling);
     assert_eq!(
         read(&*s, |r| r.operations().operation(&op)).unwrap().state,

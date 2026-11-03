@@ -644,32 +644,35 @@ fn an_async_handler_keeps_a_renewed_claim_and_commits_under_its_fence() {
     // Sleep/wake reassertion stays out of the way: only the handler supervisor renews.
     let d = dispatcher_with(&h, s.clone(), vec![c], |c| c.wake_jump_ms = i64::MAX);
     let rt = runtime();
-    rt.block_on(async {
-        assert_eq!(d.tick().await.unwrap().claimed, 1);
-        pkg.started.notified().await;
-        let original = entry(&*s, &e.id);
-        let lease = original.lease_until_ms.unwrap();
-        // 20 s later the supervisor renews when prompted.
-        h.advance(20_000);
-        let mut status = d.subscribe();
-        d.wakeup().wake();
-        let want = h.now() + 30_000;
-        while entry(&*s, &e.id).lease_until_ms != Some(want) {
-            status.changed().await.unwrap();
-        }
-        // Past the original expiry, recovery leaves the renewed claim alone.
-        h.advance(20_000);
-        assert!(h.now() > lease);
-        let report = d.tick().await.unwrap();
-        assert!(report.recovered.requeued.is_empty() && report.recovered.held.is_empty());
-        let still = entry(&*s, &e.id);
-        assert_eq!(
-            (still.state, still.generation),
-            (QueueState::Claimed, original.generation)
-        );
-        gate.send(true).unwrap();
-        d.idle().await;
-    });
+    rt.block_on(within(
+        "an_async_handler_keeps_a_renewed_claim_and_commits_under_its_fence",
+        async {
+            assert_eq!(d.tick().await.unwrap().claimed, 1);
+            pkg.started.notified().await;
+            let original = entry(&*s, &e.id);
+            let lease = original.lease_until_ms.unwrap();
+            // 20 s later the supervisor renews when prompted.
+            h.advance(20_000);
+            let mut status = d.subscribe();
+            d.wakeup().wake();
+            let want = h.now() + 30_000;
+            while entry(&*s, &e.id).lease_until_ms != Some(want) {
+                status.changed().await.unwrap();
+            }
+            // Past the original expiry, recovery leaves the renewed claim alone.
+            h.advance(20_000);
+            assert!(h.now() > lease);
+            let report = d.tick().await.unwrap();
+            assert!(report.recovered.requeued.is_empty() && report.recovered.held.is_empty());
+            let still = entry(&*s, &e.id);
+            assert_eq!(
+                (still.state, still.generation),
+                (QueueState::Claimed, original.generation)
+            );
+            gate.send(true).unwrap();
+            d.idle().await;
+        },
+    ));
     assert!(matches!(
         pkg.outcome.lock().unwrap().as_ref(),
         Some(CommitOutcome::Accepted(_))
@@ -702,14 +705,17 @@ fn an_async_handler_observes_cancellation_and_cannot_commit_after_it() {
     c.async_handler = Some(Arc::new(Process(pkg.clone())));
     let d = dispatcher(&h, s.clone(), vec![c]);
     let rt = runtime();
-    rt.block_on(async {
-        assert_eq!(d.tick().await.unwrap().claimed, 1);
-        pkg.started.notified().await;
-        let qid = e.id.clone();
-        write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
-        d.wakeup().wake();
-        d.idle().await;
-    });
+    rt.block_on(within(
+        "an_async_handler_observes_cancellation_and_cannot_commit_after_it",
+        async {
+            assert_eq!(d.tick().await.unwrap().claimed, 1);
+            pkg.started.notified().await;
+            let qid = e.id.clone();
+            write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+            d.wakeup().wake();
+            d.idle().await;
+        },
+    ));
     assert!(
         pkg.saw_cancel.load(Ordering::SeqCst),
         "cancellation not signalled"
