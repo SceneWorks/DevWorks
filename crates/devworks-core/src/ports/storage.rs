@@ -48,8 +48,9 @@
 //! operational subset every command already needs: receipts, history, the operation journal,
 //! the durable queue/outbox (with ordered partitions and consumer progress), package event-handler
 //! state and processing receipts, grants and actor/store identity, plus the scoped configuration
-//! repository ([`ConfigurationRepository`]), the host authority ledger ([`AuthorityLedger`]) and
-//! the artifact store records ([`ArtifactRepository`]).
+//! repository ([`ConfigurationRepository`]), the host authority ledger ([`AuthorityLedger`]), the
+//! artifact store records ([`ArtifactRepository`]) and the session, transcript and lineage
+//! records ([`SessionRepository`]).
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -68,9 +69,11 @@ use std::sync::mpsc;
 mod artifacts;
 mod authority;
 mod configuration;
+mod sessions;
 pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
+pub use sessions::*;
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -445,6 +448,7 @@ pub trait WriteTransaction {
         Ok(self.grants())
     }
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository;
+    fn sessions(&mut self) -> &mut dyn SessionRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -481,6 +485,7 @@ pub trait ReadSnapshot {
     fn configuration(&self) -> &dyn ConfigurationRead;
     fn authority(&self) -> &dyn AuthorityRead;
     fn artifacts(&self) -> &dyn ArtifactRead;
+    fn sessions(&self) -> &dyn SessionRead;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -2144,6 +2144,9 @@ impl WriteTransaction for Lying<'_> {
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository {
         self.inner.artifacts()
     }
+    fn sessions(&mut self) -> &mut dyn SessionRepository {
+        self.inner.sessions()
+    }
 }
 
 fn seams_run(
