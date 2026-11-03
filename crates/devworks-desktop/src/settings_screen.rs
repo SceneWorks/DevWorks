@@ -25,6 +25,9 @@ pub struct SettingsScreen {
     pub validating: bool,
     /// The next read follows a successful save (drafts are cleared, not kept as a conflict).
     pub after_save: bool,
+    /// The draft values the pending save submitted, by key. Drafts that differ from them when
+    /// the save's follow-up read arrives were edited meanwhile and stay unsaved.
+    pub submitted: BTreeMap<String, Value>,
     pub message: Option<(Tone, String)>,
     pub category: Option<Category>,
     pub query: String,
@@ -90,8 +93,25 @@ impl SettingsScreen {
                 self.view = Some(view);
             }
             Some(view) if self.after_save => {
+                // Edits made while the save or this read were pending are not part of what
+                // was saved: re-apply them as drafts against the new revision.
+                let submitted = std::mem::take(&mut self.submitted);
+                let later: Vec<(&'static str, Value)> = view
+                    .dirty_keys()
+                    .into_iter()
+                    .filter_map(|k| Some((k, view.item(k)?.draft.clone()?)))
+                    .filter(|(k, v)| submitted.get(*k) != Some(v))
+                    .collect();
                 view.saved(revision, entries);
+                for (k, v) in later {
+                    let _ = if v.is_null() {
+                        view.inherit(k)
+                    } else {
+                        view.edit(k, v).map(|_| ())
+                    };
+                }
                 self.after_save = false;
+                self.saving = false;
             }
             Some(view) => view.refresh(revision, entries),
         }

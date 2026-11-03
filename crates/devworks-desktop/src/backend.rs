@@ -96,7 +96,25 @@ struct Pending {
 struct Shared {
     in_flight: Mutex<usize>,
     idle: Condvar,
+    /// Worker threads still running (a guard decrements it on exit, panics included).
+    alive: Mutex<usize>,
+    exited: Condvar,
 }
+
+/// Decrements [`Shared::alive`] when a worker thread ends, however it ends.
+struct Alive(Arc<Shared>);
+impl Drop for Alive {
+    fn drop(&mut self) {
+        let mut n = self.0.alive.lock().unwrap_or_else(|p| p.into_inner());
+        *n = n.saturating_sub(1);
+        self.0.exited.notify_all();
+    }
+}
+
+/// Longest wait for request workers when the client is dropped. A request stuck in the
+/// operating system (for example a read that never returns) must not keep the app from
+/// exiting: after this bound its thread is detached and ends with the process.
+pub const WORKER_JOIN_BOUND: Duration = Duration::from_secs(15);
 
 /// A long-running request as the status surface shows it (UI-06).
 #[derive(Clone, Debug)]
@@ -118,6 +136,7 @@ pub struct Client {
     waker: Arc<Mutex<Option<Waker>>>,
     open: bool,
     workers: Vec<std::thread::JoinHandle<()>>,
+    join_bound: Duration,
 }
 
 /// Worker threads; requests rarely contend, but an attachment upload must not hold up a
@@ -132,6 +151,8 @@ impl Client {
         let shared = Arc::new(Shared {
             in_flight: Mutex::new(0),
             idle: Condvar::new(),
+            alive: Mutex::new(0),
+            exited: Condvar::new(),
         });
         let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
         let mut workers = Vec::with_capacity(WORKERS);
@@ -143,9 +164,12 @@ impl Client {
                 shared.clone(),
                 waker.clone(),
             );
+            *shared.alive.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+            let guard = Alive(shared.clone());
             let spawned = std::thread::Builder::new()
                 .name(format!("devworks-ui-request-{n}"))
                 .spawn(move || {
+                    let _alive = guard;
                     loop {
                         let next = rx.lock().unwrap_or_else(|p| p.into_inner()).recv();
                         let Ok((ticket, job)) = next else { return };
@@ -165,6 +189,7 @@ impl Client {
                         }
                     }
                 });
+            // A worker that could not start already dropped its guard with the closure.
             if let Ok(handle) = spawned {
                 workers.push(handle);
             }
@@ -181,7 +206,13 @@ impl Client {
             waker,
             open: true,
             workers,
+            join_bound: WORKER_JOIN_BOUND,
         }
+    }
+
+    /// Changes how long dropping the client waits for its workers (tests).
+    pub fn set_join_bound(&mut self, bound: Duration) {
+        self.join_bound = bound;
     }
 
     pub fn backend(&self) -> &Arc<dyn Backend> {
@@ -328,8 +359,30 @@ impl Drop for Client {
     fn drop(&mut self) {
         let (closed, _) = channel();
         drop(std::mem::replace(&mut self.jobs, closed));
-        for w in self.workers.drain(..) {
-            let _ = w.join();
+        // Wait (bounded) for every worker to end; join only then, so no join can block.
+        let deadline = Instant::now() + self.join_bound;
+        let mut alive = self.shared.alive.lock().unwrap_or_else(|p| p.into_inner());
+        while *alive > 0 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            alive = self
+                .shared
+                .exited
+                .wait_timeout(alive, left)
+                .unwrap_or_else(|p| p.into_inner())
+                .0;
+        }
+        let all_ended = *alive == 0;
+        drop(alive);
+        if all_ended {
+            for w in self.workers.drain(..) {
+                let _ = w.join();
+            }
+        } else {
+            // A stuck worker is detached; it holds its backend until the process exits.
+            self.workers.clear();
         }
     }
 }

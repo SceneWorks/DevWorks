@@ -443,9 +443,11 @@ impl Shell {
             return;
         }
         let (text, refs) = (draft.text.clone(), draft.stored());
+        let submitted = draft.submission();
         let id = session.id.as_str().to_owned();
         let revision = session.revision.get();
         self.chat.sending = Some(id.clone());
+        self.chat.submitted = Some(submitted);
         let sid = id.clone();
         self.command(
             Slot::Append(id),
@@ -691,12 +693,12 @@ impl Shell {
             },
             (Slot::Append(id), Reply::Command(c)) => {
                 self.chat.sending = None;
+                let submitted = self.chat.submitted.take();
                 match ops::appended(c) {
                     Ok(record) => {
                         self.chat.upsert(record);
-                        if let Some(d) = self.chat.drafts.get_mut(&id) {
-                            d.text.clear();
-                            d.attachments.clear();
+                        if let (Some(d), Some(sent)) = (self.chat.drafts.get_mut(&id), &submitted) {
+                            d.settle_sent(sent);
                         }
                         self.chat.notice = None;
                         self.announce("Message saved to the conversation. No coordinator is connected to reply (DW-16).");
@@ -766,7 +768,11 @@ impl Shell {
                 }
                 Err(e) => {
                     self.settings.loading = false;
+                    // The save committed but its result could not be read back: keep every
+                    // draft (a later save of an already-saved value is a no-op change).
                     self.settings.after_save = false;
+                    self.settings.saving = false;
+                    self.settings.submitted.clear();
                     self.settings.error = Some(e.describe());
                 }
             },
@@ -804,15 +810,17 @@ impl Shell {
                 }
             }
             (Slot::SettingsSave, Reply::Command(c)) => {
-                self.settings.saving = false;
                 match ops::settings_saved(c) {
                     Ok(()) => {
+                        // Still saving until the follow-up read settles the drafts.
                         self.settings.after_save = true;
                         self.settings.message = Some((Tone::Good, "Settings saved.".into()));
                         self.announce("Settings saved.");
                         self.load_settings();
                     }
                     Err(e) => {
+                        self.settings.saving = false;
+                        self.settings.submitted.clear();
                         let conflict = matches!(&e, Failure::Refused(f) if f.code == DomainErrorCode::RevisionConflict);
                         self.settings.message = Some((
                             Tone::Bad,
@@ -1037,6 +1045,17 @@ impl Shell {
                         continue;
                     };
                     self.settings.saving = true;
+                    self.settings.submitted = self
+                        .settings
+                        .view
+                        .as_ref()
+                        .map(|v| {
+                            v.dirty_keys()
+                                .into_iter()
+                                .filter_map(|k| Some((k.to_owned(), v.item(k)?.draft.clone()?)))
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     if let Some(c) = &mut self.client {
                         c.command(
                             Slot::SettingsSave,

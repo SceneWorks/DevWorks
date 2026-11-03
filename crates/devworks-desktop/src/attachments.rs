@@ -45,21 +45,86 @@ pub fn previewable(media_type: &str) -> bool {
     matches!(media_type, "image/png" | "image/jpeg")
 }
 
-fn sha256_file(path: &Path) -> std::io::Result<(String, u64)> {
-    let mut f = std::fs::File::open(path)?;
+/// Opens `path` for reading only if it is a regular file, without blocking on or following
+/// into anything else: the name is checked without following links, the open itself neither
+/// follows a final link nor waits for a FIFO writer (Unix `O_NOFOLLOW | O_NONBLOCK`; Windows
+/// `FILE_FLAG_OPEN_REPARSE_POINT`), and the opened handle is checked again, so a FIFO, device,
+/// socket, directory or link swapped in between is refused before a byte is read.
+pub fn open_regular(path: &Path) -> std::io::Result<(std::fs::File, u64)> {
+    let not_regular =
+        || std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file");
+    if !std::fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(not_regular());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_OPEN_REPARSE_POINT: open a link itself, never its target.
+        options.custom_flags(0x0020_0000);
+    }
+    let file = options.open(path)?;
+    let meta = file.metadata()?;
+    if !meta.file_type().is_file() {
+        return Err(not_regular());
+    }
+    Ok((file, meta.len()))
+}
+
+/// SHA-256 and length of a regular file of at most `max` bytes.
+fn sha256_file(path: &Path, max: u64) -> Result<(String, u64), String> {
+    let (file, len) = open_regular(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::InvalidInput => "only regular files can be attached".to_owned(),
+        _ => format!("could not read the file: {e}"),
+    })?;
+    let too_large = || format!("larger than the attachment limit of {max} bytes");
+    if len > max {
+        return Err(too_large());
+    }
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut n = 0u64;
+    // One byte past the limit detects a file that grew since it was checked.
+    let mut f = file.take(max.saturating_add(1));
     loop {
-        let read = f.read(&mut buf)?;
+        let read = f
+            .read(&mut buf)
+            .map_err(|e| format!("could not read the file: {e}"))?;
         if read == 0 {
             break;
         }
         hasher.update(&buf[..read]);
         n += read as u64;
     }
+    if n > max {
+        return Err(too_large());
+    }
     let digest = hasher.finalize();
     Ok((digest.iter().map(|b| format!("{b:02x}")).collect(), n))
+}
+
+/// The configured largest artifact file (`storage.artifactMaxFileBytes`), read through
+/// `settings.read_effective`; the catalog default when it cannot be read. The artifact service
+/// enforces the same limit again at save.
+pub fn max_attachment_bytes(backend: &dyn Backend) -> u64 {
+    use devworks_core::settings::catalog::{ARTIFACT_MAX_FILE_KEY, descriptor};
+    let frame = ops::query_frame(
+        backend,
+        "settings.read_effective",
+        serde_json::json!({"scope": {"kind": "Workspace"}, "keys": [ARTIFACT_MAX_FILE_KEY],
+            "page": {"limit": 1}}),
+    );
+    ops::settings_entries(backend.query("settings.read_effective", &frame))
+        .ok()
+        .and_then(|(_, e)| e.into_iter().next()?.value.value.0.as_u64())
+        .or_else(|| descriptor(ARTIFACT_MAX_FILE_KEY)?.default_value().as_u64())
+        .unwrap_or(64 << 20)
 }
 
 /// Stores `path` as a workspace artifact for `session`: mint the user's upload ticket, hash the
@@ -74,8 +139,7 @@ pub fn store(
     remove_after: bool,
 ) -> Result<TaskOutput, String> {
     let result = (|| {
-        let (digest, bytes) =
-            sha256_file(path).map_err(|e| format!("could not read the file: {e}"))?;
+        let (digest, bytes) = sha256_file(path, max_attachment_bytes(backend))?;
         let ticket = backend.mint_workspace_upload(path)?;
         let tags: Vec<String> = ops::conversation_tag(session).into_iter().collect();
         let frame = ops::save_workspace_artifact(
@@ -197,6 +261,54 @@ mod tests {
         assert_eq!(pasted_path(&f.display().to_string()), Some(f.clone()));
         assert_eq!(pasted_path("relative.txt"), None);
         assert_eq!(pasted_path("two\nlines"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_regular_files_within_the_limit_are_hashed() {
+        let dir = std::env::temp_dir().join(format!("devworks-regular-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, b"abcdef").unwrap();
+        assert_eq!(sha256_file(&file, 6).unwrap().1, 6);
+        assert!(
+            sha256_file(&file, 5)
+                .unwrap_err()
+                .contains("attachment limit")
+        );
+        assert!(sha256_file(&dir, 100).unwrap_err().contains("regular"));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&file, dir.join("link")).unwrap();
+            assert!(
+                sha256_file(&dir.join("link"), 100)
+                    .unwrap_err()
+                    .contains("regular")
+            );
+            // A FIFO without a writer would block a plain open forever.
+            let fifo = dir.join("fifo");
+            assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&fifo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            let f = fifo.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(sha256_file(&f, 100));
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                Ok(r) => assert!(r.unwrap_err().contains("regular")),
+                Err(_) => {
+                    // Release the blocked reader before failing (failure-only bound).
+                    let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+                    panic!("hashing a FIFO blocked");
+                }
+            }
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

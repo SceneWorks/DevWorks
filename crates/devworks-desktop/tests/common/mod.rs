@@ -177,3 +177,80 @@ pub fn png() -> Vec<u8> {
     img.write_to(&mut out, image::ImageFormat::Png).unwrap();
     out.into_inner()
 }
+
+/// A gate on one operation of a real backend: while closed, that operation waits (a request
+/// "in flight"); everything else passes straight through.
+#[derive(Clone)]
+pub struct Gate {
+    operation: &'static str,
+    open: Arc<(Mutex<bool>, std::sync::Condvar)>,
+}
+impl Gate {
+    pub fn new(operation: &'static str) -> Self {
+        Self {
+            operation,
+            open: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
+        }
+    }
+    pub fn close(&self) {
+        *self.open.0.lock().unwrap() = false;
+    }
+    pub fn open(&self) {
+        *self.open.0.lock().unwrap() = true;
+        self.open.1.notify_all();
+    }
+    pub fn over(&self, inner: Arc<dyn Backend>) -> Arc<dyn Backend> {
+        Arc::new(Gated {
+            inner,
+            gate: self.clone(),
+        })
+    }
+    fn wait(&self, operation: &str) {
+        if operation == self.operation {
+            let mut open = self.open.0.lock().unwrap();
+            while !*open {
+                open = self.open.1.wait(open).unwrap();
+            }
+        }
+    }
+}
+
+struct Gated {
+    inner: Arc<dyn Backend>,
+    gate: Gate,
+}
+impl Backend for Gated {
+    fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
+        self.gate.wait(operation);
+        self.inner.query(operation, frame)
+    }
+    fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+        self.gate.wait(operation);
+        self.inner.command(operation, frame)
+    }
+    fn mint_workspace_upload(&self, file: &Path) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_workspace_upload(file)
+    }
+    fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
+        self.inner.keep_awake_health()
+    }
+    fn hints(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        self.inner.hints()
+    }
+    fn set_waker(&self, waker: devworks_desktop::backend::Waker) {
+        self.inner.set_waker(waker)
+    }
+    fn token(&self, prefix: &str) -> String {
+        self.inner.token(prefix)
+    }
+    fn scratch_dir(&self) -> PathBuf {
+        self.inner.scratch_dir()
+    }
+    fn read_stream(
+        &self,
+        stream: &devworks_core::protocol::Id,
+        max: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.inner.read_stream(stream, max)
+    }
+}

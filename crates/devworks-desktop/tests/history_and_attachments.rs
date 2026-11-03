@@ -4,11 +4,8 @@
 mod common;
 
 use common::*;
-use devworks_core::gateway::{CommandOutcome, QueryOutcome};
-use devworks_core::protocol::Id;
 use devworks_core::protocol::records::SessionRecord;
-use devworks_core::settings::view::Health;
-use devworks_desktop::backend::{Backend, Waker};
+use devworks_desktop::backend::Backend;
 use devworks_desktop::chat::{
     self, ATTACH_LABEL, AttachState, Chat, ChatAction, DateGroup, date_group,
 };
@@ -18,9 +15,6 @@ use eframe::egui::{self, accesskit::Role};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
-use tokio::sync::watch;
 
 fn zoned(s: &str) -> jiff::Zoned {
     s.parse().unwrap()
@@ -184,48 +178,6 @@ fn a_restored_image_attachment_gets_its_preview_back_from_the_stored_artifact() 
 // ---------------------------------------------------------------------------------------------
 // Removal while a save is in flight
 
-/// The real backend whose `artifacts.save` waits until the test opens the gate.
-struct Gated {
-    inner: Arc<dyn Backend>,
-    open: Arc<(Mutex<bool>, Condvar)>,
-}
-impl Backend for Gated {
-    fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome {
-        self.inner.query(operation, frame)
-    }
-    fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome {
-        if operation == "artifacts.save" {
-            let (lock, cv) = &*self.open;
-            let mut open = lock.lock().unwrap();
-            while !*open {
-                open = cv.wait(open).unwrap();
-            }
-        }
-        self.inner.command(operation, frame)
-    }
-    fn mint_workspace_upload(&self, file: &Path) -> Result<Id, String> {
-        self.inner.mint_workspace_upload(file)
-    }
-    fn keep_awake_health(&self) -> Health {
-        self.inner.keep_awake_health()
-    }
-    fn hints(&self) -> Option<watch::Receiver<u64>> {
-        self.inner.hints()
-    }
-    fn set_waker(&self, waker: Waker) {
-        self.inner.set_waker(waker)
-    }
-    fn token(&self, prefix: &str) -> String {
-        self.inner.token(prefix)
-    }
-    fn scratch_dir(&self) -> PathBuf {
-        self.inner.scratch_dir()
-    }
-    fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
-        self.inner.read_stream(stream, max)
-    }
-}
-
 fn workspace_artifacts(backend: &dyn Backend) -> Vec<String> {
     ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend)))
         .unwrap()
@@ -240,11 +192,8 @@ fn an_attachment_removed_while_it_is_being_stored_does_not_survive() {
     let root = Root::new("remove-in-flight");
     let engine = start(&root);
     let real = engine.backend();
-    let open = Arc::new((Mutex::new(true), Condvar::new()));
-    let gated: Arc<dyn Backend> = Arc::new(Gated {
-        inner: real.clone(),
-        open: open.clone(),
-    });
+    let gate = Gate::new("artifacts.save");
+    let gated = gate.over(real.clone());
     let slow = root.file("slow.txt", b"removed before its save finished");
     let kept = root.file("kept.txt", b"kept");
     let script = Script::default();
@@ -266,7 +215,7 @@ fn an_attachment_removed_while_it_is_being_stored_does_not_survive() {
     );
 
     // Now the save is held in flight while the user removes the attachment.
-    *open.0.lock().unwrap() = false;
+    gate.close();
     script.files.lock().unwrap().push(vec![slow.clone()]);
     h.get_by_role_and_label(Role::Button, ATTACH_LABEL).click();
     h.run_steps(3);
@@ -276,11 +225,7 @@ fn an_attachment_removed_while_it_is_being_stored_does_not_survive() {
         .click();
     h.run_steps(2);
     assert!(h.state().chat.draft().unwrap().attachments.is_empty());
-    {
-        let (lock, cv) = &*open;
-        *lock.lock().unwrap() = true;
-        cv.notify_all();
-    }
+    gate.open();
     settle(&mut h);
     assert!(
         workspace_artifacts(&*real).is_empty(),

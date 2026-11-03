@@ -62,7 +62,37 @@ pub struct Draft {
     pub text: String,
     pub attachments: Vec<Attachment>,
 }
+
+/// What one `sessions.append_message` submitted from a draft: its text and the local IDs of
+/// the stored attachments it carried. The composer stays editable while it is in flight.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Submitted {
+    pub text: String,
+    pub locals: Vec<u64>,
+}
+
 impl Draft {
+    /// What sending the draft now would submit.
+    pub fn submission(&self) -> Submitted {
+        Submitted {
+            text: self.text.clone(),
+            locals: self
+                .attachments
+                .iter()
+                .filter(|a| matches!(a.state, AttachState::Stored(_)))
+                .map(|a| a.local)
+                .collect(),
+        }
+    }
+    /// Removes what `sent` saved, keeping every edit made while it was in flight: attachments
+    /// added since stay, and text typed after the submitted text stays. Text that no longer
+    /// starts with the submitted text was rewritten by the user and is kept whole.
+    pub fn settle_sent(&mut self, sent: &Submitted) {
+        self.attachments.retain(|a| !sent.locals.contains(&a.local));
+        if let Some(rest) = self.text.strip_prefix(sent.text.as_str()) {
+            self.text = rest.trim_start().to_owned();
+        }
+    }
     pub fn stored(&self) -> Vec<ArtifactRef> {
         self.attachments
             .iter()
@@ -149,6 +179,8 @@ pub struct Chat {
     /// Send once the started session exists.
     pub send_after_start: bool,
     pub sending: Option<String>,
+    /// What the in-flight append submitted (cleared from the draft only on success).
+    pub submitted: Option<Submitted>,
     pub notice: Option<(Tone, String)>,
     /// The overlay sidebar is shown on narrow Home layouts.
     pub narrow_sidebar_open: bool,
@@ -171,6 +203,7 @@ impl Chat {
             starting: None,
             send_after_start: false,
             sending: None,
+            submitted: None,
             notice: None,
             narrow_sidebar_open: false,
             scrolls: Scrolls::default(),
