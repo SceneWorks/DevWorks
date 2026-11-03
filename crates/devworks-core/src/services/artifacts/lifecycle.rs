@@ -252,7 +252,8 @@ pub struct CollectReport {
     pub unlinked: Vec<String>,
     pub deferred_pinned: Vec<String>,
     pub deferred_reading: Vec<String>,
-    /// Removal failures: visible on the blob and in history, retried by the next collection.
+    /// Removal failures (also of adopted claims): visible on the blob and in history; the
+    /// generation is retired (never reused) and retried by the next collection.
     pub failed: Vec<(String, String)>,
 }
 
@@ -273,6 +274,11 @@ pub struct RecoveryReport {
     pub missing: Vec<String>,
     /// Corrupt digest files (wrong digest, even with the right length) moved into quarantine.
     pub quarantined: Vec<String>,
+    /// Corrupt generations that could not be moved into quarantine (digest, failure).
+    pub quarantine_failed: Vec<(String, String)>,
+    /// Removals of adopted or retired generations that failed again (digest, failure); the
+    /// generation stays retired and is retried.
+    pub failed_unlinks: Vec<(String, String)>,
 }
 
 /// Resolution of one exact version reference (citation seam).
@@ -521,15 +527,36 @@ impl ArtifactService {
         self.retry_pending(&Preparation::new(store, None, None));
         let owner = self.claimant(store);
         let mut report = CollectReport::default();
+        // Retired generations first: a removal that fails in this pass is retried by the next.
+        for state in [BlobState::Retired, BlobState::UnlinkPending] {
+            self.claim_and_remove(store, &owner, state, &mut report)?;
+        }
+        let (done, failed) = self.adopt_claims(store, &owner)?;
+        report.unlinked.extend(done);
+        report.failed.extend(failed);
+        Ok(report)
+    }
+
+    /// Claims and removes every generation in `state` (pending removal, or retired after a
+    /// failed removal) that no live version names, no backup pins and no reader holds.
+    fn claim_and_remove(
+        &self,
+        store: &dyn ApplicationStore,
+        owner: &str,
+        state: BlobState,
+        report: &mut CollectReport,
+    ) -> Result<(), StorageError> {
         let mut after: Option<String> = None;
         loop {
             let page = read_snapshot(store, &ReadOptions::default(), |s| {
-                s.artifacts()
-                    .blobs_in(BlobState::UnlinkPending, after.as_deref(), 500)
+                s.artifacts().blobs_in(state, after.as_deref(), 500)
             })?;
+            if page.is_empty() {
+                return Ok(());
+            }
             let more = page.len() == 500;
             after = page.last().map(|b| b.digest.clone());
-            let (readers, me) = (self.readers.clone(), owner.clone());
+            let (readers, me) = (self.readers.clone(), owner.to_owned());
             let (claimed, deferred_pinned, deferred_reading) =
                 run_write(store, WriteOptions::default(), move |tx| {
                     let (mut claimed, mut pinned, mut reading) =
@@ -538,8 +565,7 @@ impl ArtifactService {
                         let Some(current) = tx.artifacts().blob(&b.digest)? else {
                             continue;
                         };
-                        if current.state != BlobState::UnlinkPending
-                            || tx.artifacts().live_references(&b.digest)? > 0
+                        if current.state != state || tx.artifacts().live_references(&b.digest)? > 0
                         {
                             continue;
                         }
@@ -558,15 +584,13 @@ impl ArtifactService {
                 })?;
             report.deferred_pinned.extend(deferred_pinned);
             report.deferred_reading.extend(deferred_reading);
-            let (done, failed) = self.finish_claims(store, &owner, claimed)?;
+            let (done, failed) = self.finish_claims(store, owner, claimed)?;
             report.unlinked.extend(done);
             report.failed.extend(failed);
             if !more {
-                break;
+                return Ok(());
             }
         }
-        report.unlinked.extend(self.adopt_claims(store, &owner)?);
-        Ok(report)
     }
 
     /// A claim owner identity: this boot plus a fresh nonce, so claims of earlier boots and of
@@ -581,7 +605,7 @@ impl ArtifactService {
     }
 
     /// Removes the files of claims `owner` holds (exact generations) and records each outcome
-    /// under that ownership: `Unlinked`, or back to `UnlinkPending` with the visible error. A
+    /// under that ownership: `Unlinked`, or `Retired` with the visible error (dead, retried). A
     /// claim adopted by another holder meanwhile is left to it (the removal of the exact
     /// generation was idempotent).
     fn finish_claims(
@@ -592,12 +616,27 @@ impl ArtifactService {
     ) -> Result<Unlinked, StorageError> {
         let mut outcomes = Vec::new();
         for (digest, generation) in claimed {
+            // Best effort only: other passes of this service skip a removal in progress here.
+            // Correctness never depends on it: a claimed generation is dead and never reused, so
+            // a concurrent or late removal can only remove dead bytes.
+            let key = (digest.clone(), generation.clone());
+            self.removing
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(key.clone());
             let error = self
                 .files
                 .unlink(&digest, &generation)
                 .err()
                 .map(|f| format!("{f:?}"));
+            self.removing
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&key);
             outcomes.push((digest, generation, error));
+        }
+        if outcomes.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
         }
         let host = store.info().host_actor;
         let me = owner.to_owned();
@@ -646,20 +685,31 @@ impl ArtifactService {
         &self,
         store: &dyn ApplicationStore,
         owner: &str,
-    ) -> Result<Vec<String>, StorageError> {
-        let mut finished = Vec::new();
+    ) -> Result<Unlinked, StorageError> {
+        let (mut finished, mut failures) = (Vec::new(), Vec::new());
         let mut after: Option<String> = None;
         loop {
             let page = read_snapshot(store, &ReadOptions::default(), |s| {
                 s.artifacts()
                     .blobs_in(BlobState::Unlinking, after.as_deref(), 500)
             })?;
+            if page.is_empty() {
+                break;
+            }
             let more = page.len() == 500;
             after = page.last().map(|b| b.digest.clone());
             let me = owner.to_owned();
+            let busy = self
+                .removing
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
             let adopted = run_write(store, WriteOptions::default(), move |tx| {
                 let mut adopted = Vec::new();
                 for b in page {
+                    if busy.contains(&(b.digest.clone(), b.generation.clone())) {
+                        continue;
+                    }
                     let Some(from) = b.claim_owner.as_deref() else {
                         continue;
                     };
@@ -673,13 +723,14 @@ impl ArtifactService {
                 }
                 Ok(adopted)
             })?;
-            let (done, _) = self.finish_claims(store, owner, adopted)?;
+            let (done, failed) = self.finish_claims(store, owner, adopted)?;
             finished.extend(done);
+            failures.extend(failed);
             if !more {
                 break;
             }
         }
-        Ok(finished)
+        Ok((finished, failures))
     }
 
     /// Reconciles staging and managed files. Safe while commands are admitted, and safe to run
@@ -759,7 +810,15 @@ impl ArtifactService {
                 report.removed_orphans.push(digest);
             }
         }
-        report.finished_unlinks = self.adopt_claims(store, &owner)?;
+        // Retired generations of earlier passes first; an adopted removal that fails now is
+        // retired and retried by the next pass.
+        let mut retired = CollectReport::default();
+        self.claim_and_remove(store, &owner, BlobState::Retired, &mut retired)?;
+        let (done, failed) = self.adopt_claims(store, &owner)?;
+        report.finished_unlinks = retired.unlinked;
+        report.finished_unlinks.extend(done);
+        report.failed_unlinks = retired.failed;
+        report.failed_unlinks.extend(failed);
         let mut after: Option<String> = None;
         loop {
             let page = read_snapshot(store, &ReadOptions::default(), |s| {
@@ -771,10 +830,13 @@ impl ArtifactService {
                     Ok(Some(len)) if len == b.byte_count as u64 => {}
                     Ok(None) => report.missing.push(b.digest.clone()),
                     Ok(Some(_)) | Err(FileFault::Corrupt(_)) => {
-                        self.files
-                            .quarantine(&b.digest, &b.generation)
-                            .map_err(file_failure)?;
-                        report.quarantined.push(b.digest.clone());
+                        // One failed quarantine is reported; verification continues.
+                        match self.files.quarantine(&b.digest, &b.generation) {
+                            Ok(()) => report.quarantined.push(b.digest.clone()),
+                            Err(f) => report
+                                .quarantine_failed
+                                .push((b.digest.clone(), format!("{f:?}"))),
+                        }
                     }
                     Err(_) => report.missing.push(b.digest.clone()),
                 }

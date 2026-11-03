@@ -401,6 +401,9 @@ impl NativeArtifactFiles {
         generation: &str,
         byte_count: u64,
     ) -> Result<File, FileFault> {
+        // The verification time is taken before the stamp: however long hashing takes, a
+        // timestamp close to the stamp is never treated as settled.
+        let verified_at = SystemTime::now();
         let mut f = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
         let before = stamp(&f).map_err(fault)?;
         if before.len != byte_count {
@@ -422,7 +425,7 @@ impl NativeArtifactFiles {
             // Remember it only if the handle did not change while it was hashed and its
             // timestamps are settled (racy-timestamp rule).
             let after = stamp(&f).map_err(fault)?;
-            if after == before && before.settled(SystemTime::now()) {
+            if after == before && before.settled(verified_at) {
                 self.verified
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())

@@ -678,7 +678,7 @@ impl ArtifactRepository for Unit<'_> {
         owner: &str,
     ) -> Result<bool, StorageError> {
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE blobs SET state='Unlinking',claim_owner=?3 WHERE digest=?1 AND generation=?2 AND state='UnlinkPending'",
+            "UPDATE blobs SET state='Unlinking',claim_owner=?3 WHERE digest=?1 AND generation=?2 AND state IN ('UnlinkPending','Retired')",
         ))?
         .execute(params![digest, generation, owner]))?;
         Ok(n == 1)
@@ -706,7 +706,7 @@ impl ArtifactRepository for Unit<'_> {
         error: Option<&str>,
     ) -> Result<bool, StorageError> {
         let to = if error.is_some() {
-            "UnlinkPending"
+            "Retired"
         } else {
             "Unlinked"
         };

@@ -3264,3 +3264,284 @@ fn recovery_quarantines_a_corrupt_present_generation_and_a_save_heals_it() {
     assert_ne!(fx.blob(&d).unwrap().generation, before.generation, "healed");
     assert_eq!(read_text(&fx, &user, &r).as_bytes(), bytes);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Retire on claim: a generation ever claimed for removal is permanently dead.
+
+/// The native adapter with injectable removal and quarantine failures (a transient sharing
+/// violation or EIO).
+struct Faulty {
+    inner: Arc<NativeArtifactFiles>,
+    fail_unlink: bool,
+    fail_quarantine_of: Option<String>,
+}
+impl ArtifactFiles for Faulty {
+    fn publish(
+        &self,
+        s: &str,
+        src: &mut dyn Read,
+        d: &str,
+        n: u64,
+        r: Option<&str>,
+        g: &str,
+    ) -> Result<devworks_core::ports::files::PublishedBlob, FileFault> {
+        self.inner.publish(s, src, d, n, r, g)
+    }
+    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
+        self.inner.managed_path(d, g)
+    }
+    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
+        self.inner.present(d, g, n)
+    }
+    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
+        self.inner.inspect(d, g)
+    }
+    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
+        self.inner.read_range(d, g, n, o, m)
+    }
+    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
+        self.inner.open(d, g, n)
+    }
+    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
+        if self.fail_unlink {
+            return Err(FileFault::Io("sharing violation".into()));
+        }
+        self.inner.unlink(d, g)
+    }
+    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
+        if self.fail_quarantine_of.as_deref() == Some(d) {
+            return Err(FileFault::Io("quarantine refused".into()));
+        }
+        self.inner.quarantine(d, g)
+    }
+    fn staged(&self) -> Result<Vec<String>, FileFault> {
+        self.inner.staged()
+    }
+    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
+        self.inner.remove_staged(n)
+    }
+    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
+        self.inner.stored_files()
+    }
+    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
+        self.inner.write_derived(k, b)
+    }
+    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
+        self.inner.read_derived(k, m)
+    }
+    fn collect_derived(&self) -> Result<u64, FileFault> {
+        self.inner.collect_derived()
+    }
+    fn export(
+        &self,
+        d: &str,
+        g: &str,
+        n: u64,
+        p: &std::path::Path,
+        o: bool,
+    ) -> Result<(), FileFault> {
+        self.inner.export(d, g, n, p, o)
+    }
+}
+impl Fx {
+    fn faulty(&self, fail_unlink: bool, fail_quarantine_of: Option<String>) -> Arc<Faulty> {
+        Arc::new(Faulty {
+            inner: self.files.clone(),
+            fail_unlink,
+            fail_quarantine_of,
+        })
+    }
+}
+
+#[test]
+fn an_adopted_claim_whose_removal_failed_is_retired_and_never_reused() {
+    // Collector A claims G and is about to remove it. Recovery B adopts A's live claim, its
+    // removal fails transiently, so G is retired. A save of the same bytes must bind a fresh
+    // generation, and A's late removal of G can then only remove dead bytes.
+    let fx = Fx::new();
+    let bytes = b"adopted live claim, failed retry";
+    let old = fx.deleted("t1", bytes);
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let hook = HookFiles::new(fx.files.clone());
+    let (collector_a, _) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (recovery_b, _) = fx.service_with(fx.faulty(true, None), fx.sources.clone());
+    let slot = Arc::new(Mutex::new(None));
+    let save = save_into(&fx, "t2", bytes, slot.clone());
+    let (store, b_report) = (fx.store.clone(), Arc::new(Mutex::new(None)));
+    let out = b_report.clone();
+    *hook.on_unlink.lock().unwrap() = Some(Box::new(move || {
+        *out.lock().unwrap() = Some(recovery_b.recover(&*store).unwrap());
+        save();
+    }));
+    let a = collector_a.collect(&*fx.store).unwrap();
+    assert!(a.unlinked.is_empty(), "adopted meanwhile: {a:?}");
+    let b = b_report.lock().unwrap().take().unwrap();
+    assert_eq!(
+        b.failed_unlinks.len(),
+        1,
+        "the adopted failure is reported: {b:?}"
+    );
+    let new = saved(slot.lock().unwrap().take().expect("save ran")).artifact;
+    let row = fx.blob(&old.digest).unwrap();
+    assert_eq!(row.state, BlobState::Present);
+    assert_ne!(
+        row.generation, old.generation,
+        "a retired generation is never reused"
+    );
+    assert_eq!(read_text(&fx, &fx.user(), &new).as_bytes(), bytes);
+    assert_eq!(fx.generations(&old.digest), vec![row.generation]);
+    assert!(fx.svc.recover(&*fx.store).unwrap().missing.is_empty());
+}
+
+#[test]
+fn a_failed_removal_retires_the_generation_and_a_later_pass_removes_it() {
+    let fx = Fx::new();
+    let bytes = b"retired, then removed";
+    let old = fx.deleted("t1", bytes);
+    let (failing, _) = fx.service_with(fx.faulty(true, None), fx.sources.clone());
+    let report = failing.collect(&*fx.store).unwrap();
+    assert_eq!(report.failed.len(), 1);
+    let row = fx.blob(&old.digest).unwrap();
+    assert_eq!(
+        (row.state, row.generation.as_str()),
+        (BlobState::Retired, old.generation.as_str())
+    );
+    // Never offered for reuse: a save binds a fresh generation.
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let r = saved(fx.save(&fx.user(), "project-a", "Again", "text/plain", "t2", bytes)).artifact;
+    let row = fx.blob(&old.digest).unwrap();
+    assert_ne!(row.generation, old.generation);
+    assert_eq!(read_text(&fx, &fx.user(), &r).as_bytes(), bytes);
+    // The dead generation's file is removed by the next recovery.
+    assert_eq!(fx.generations(&old.digest).len(), 2);
+    fx.svc.recover(&*fx.store).unwrap();
+    assert_eq!(fx.generations(&old.digest), vec![row.generation]);
+    // Without a new save, a retired generation is retried by the next collection.
+    let other = fx.deleted("t3", b"retired then collected");
+    failing.collect(&*fx.store).unwrap();
+    assert_eq!(fx.blob(&other.digest).unwrap().state, BlobState::Retired);
+    let report = fx.svc.collect(&*fx.store).unwrap();
+    assert_eq!(report.unlinked, vec![other.digest.clone()]);
+    assert!(fx.generations(&other.digest).is_empty());
+}
+
+#[test]
+fn reusing_a_pending_generation_while_collection_claims_it_is_refused() {
+    // A save verifies and reuses UnlinkPending G; a full collection claims and removes G before
+    // the save binds. The bind refuses (Busy) instead of naming the removed generation.
+    let fx = Fx::new();
+    let bytes = b"reuse vs claim";
+    let old = fx.deleted("t1", bytes);
+    fx.source("t2", "t2.bin", bytes, SourceOrigin::default());
+    let hook = HookFiles::new(fx.files.clone());
+    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    let (svc, store) = (fx.svc.clone(), fx.store.clone());
+    *hook.after_publish.lock().unwrap() = Some(Box::new(move || {
+        assert_eq!(svc.collect(&*store).unwrap().unlinked.len(), 1);
+    }));
+    let frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "Reuse",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t2"}),
+        bytes,
+    );
+    let authority = fx.authority();
+    let reply = fx.command_via(
+        &cases,
+        &authority,
+        &fx.user(),
+        &frame,
+        WriteOptions::default(),
+    );
+    assert_eq!(rejected(reply), Rejection::StorageUnavailable);
+    let row = fx.blob(&old.digest).unwrap();
+    assert_eq!(row.state, BlobState::Unlinked);
+    fx.assert_present_blobs_have_files();
+    // The retry publishes a fresh generation.
+    let r = saved(fx.command_via(
+        &cases,
+        &authority,
+        &fx.user(),
+        &frame,
+        WriteOptions::default(),
+    ))
+    .artifact;
+    assert_eq!(read_text(&fx, &fx.user(), &r).as_bytes(), bytes);
+    assert_ne!(fx.blob(&old.digest).unwrap().generation, old.generation);
+}
+
+#[test]
+fn healing_past_a_wrong_length_generation_quarantines_it() {
+    let fx = Fx::new();
+    let bytes = b"wrong length theirs";
+    let old = fx.deleted("t1", bytes);
+    fx.svc.collect(&*fx.store).unwrap();
+    assert_eq!(fx.blob(&old.digest).unwrap().state, BlobState::Unlinked);
+    fx.source("ta", "ta.bin", bytes, SourceOrigin::default());
+    fx.source("tb", "tb.bin", bytes, SourceOrigin::default());
+    let hook = HookFiles::new(fx.files.clone());
+    let (_, cases) = fx.service_with(hook.clone(), fx.sources.clone());
+    // After A published its own generation, B commits its own and B's file is truncated.
+    let slot = Arc::new(Mutex::new(None));
+    let save_b = save_into(&fx, "tb", bytes, slot.clone());
+    let (store, root) = (fx.store.clone(), fx.h.root.0.clone());
+    let digest = old.digest.clone();
+    *hook.after_publish.lock().unwrap() = Some(Box::new(move || {
+        save_b();
+        let d = digest.clone();
+        let b = read_snapshot(&*store, &ReadOptions::default(), |s| s.artifacts().blob(&d))
+            .unwrap()
+            .unwrap();
+        std::fs::write(root.join(b.relative_path), b"short").unwrap();
+    }));
+    let frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "A",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "ta"}),
+        bytes,
+    );
+    let authority = fx.authority();
+    let a = saved(fx.command_via(
+        &cases,
+        &authority,
+        &fx.user(),
+        &frame,
+        WriteOptions::default(),
+    ))
+    .artifact;
+    let b = saved(slot.lock().unwrap().take().unwrap()).artifact;
+    // The corrupt generation was moved into quarantine (evidence), not swept away.
+    assert_eq!(
+        std::fs::read_dir(fx.h.root.0.join("quarantine"))
+            .unwrap()
+            .count(),
+        1
+    );
+    let row = fx.blob(&old.digest).unwrap();
+    assert_eq!(fx.generations(&old.digest), vec![row.generation]);
+    assert_eq!(read_text(&fx, &fx.user(), &a).as_bytes(), bytes);
+    assert_eq!(read_text(&fx, &fx.user(), &b).as_bytes(), bytes);
+}
+
+#[test]
+fn one_failed_quarantine_does_not_stop_verification() {
+    let fx = Fx::new();
+    let first = fx
+        .saved("t1", "One", "text/plain", b"first rotting file")
+        .artifact;
+    let second = fx
+        .saved("t2", "Two", "text/plain", b"second rotting file")
+        .artifact;
+    let (d1, d2) = (hex(&first.sha256), hex(&second.sha256));
+    std::fs::write(fx.blob_file(&d1), b"FIRST ROTTING FILE").unwrap();
+    std::fs::write(fx.blob_file(&d2), b"SECOND ROTTING FILE").unwrap();
+    let (svc, _) = fx.service_with(fx.faulty(false, Some(d1.clone())), fx.sources.clone());
+    let report = svc.recover(&*fx.store).unwrap();
+    assert_eq!(report.quarantine_failed.len(), 1);
+    assert_eq!(report.quarantine_failed[0].0, d1);
+    assert_eq!(report.quarantined, vec![d2]);
+}

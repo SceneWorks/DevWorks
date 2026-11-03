@@ -27,7 +27,11 @@ pub enum BlobState {
     /// No live version names it any more; physical removal waits for readers and backup pins.
     UnlinkPending,
     /// The collector claimed it and is removing the file (crash recovery finishes the removal).
+    /// A generation that was ever claimed is permanently dead: it is never reused or kept.
     Unlinking,
+    /// A claimed generation whose removal failed: dead (never reused or kept), still named so
+    /// a later collection or recovery removes its file.
+    Retired,
     /// The file was removed; the row keeps tombstoned versions' digest provenance.
     Unlinked,
 }
@@ -37,6 +41,7 @@ impl BlobState {
             Self::Present => "Present",
             Self::UnlinkPending => "UnlinkPending",
             Self::Unlinking => "Unlinking",
+            Self::Retired => "Retired",
             Self::Unlinked => "Unlinked",
         }
     }
@@ -45,6 +50,7 @@ impl BlobState {
             Self::Present,
             Self::UnlinkPending,
             Self::Unlinking,
+            Self::Retired,
             Self::Unlinked,
         ]
         .into_iter()
@@ -317,9 +323,9 @@ pub trait ArtifactRepository: ArtifactRead {
     fn pin(&mut self, holder: &Id, digest: &str) -> Result<(), StorageError>;
     /// Releases every pin `holder` holds; returns how many were released.
     fn release_pins(&mut self, holder: &Id) -> Result<i64, StorageError>;
-    /// Claims `generation` of an `UnlinkPending` blob for removal: compare-and-set on
-    /// (state `UnlinkPending`, `generation`) to `Unlinking` held by `owner`. `false` when the row
-    /// is in any other state or names another generation.
+    /// Claims `generation` of an `UnlinkPending` (or already `Retired`) blob for removal:
+    /// compare-and-set on (that state, `generation`) to `Unlinking` held by `owner`. `false`
+    /// when the row is in any other state or names another generation.
     fn claim_blob(
         &mut self,
         digest: &str,
@@ -336,8 +342,8 @@ pub trait ArtifactRepository: ArtifactRead {
         to_owner: &str,
     ) -> Result<bool, StorageError>;
     /// Finishes a held claim: compare-and-set on (`Unlinking`, `generation`, `owner`) to
-    /// `Unlinked`, or with `error` back to `UnlinkPending` with the visible error. `false` when
-    /// the holder no longer owns it (it was adopted).
+    /// `Unlinked`, or with `error` to `Retired` with the visible error (the generation stays
+    /// dead; never back to a reusable state). `false` when the holder no longer owns it.
     fn finish_claim(
         &mut self,
         digest: &str,

@@ -38,6 +38,10 @@
 //!   the file of that generation is removed, and the outcome is recorded under the same owner;
 //!   a claim another holder left (a crash, or an outcome that could not be written) is adopted by
 //!   compare-and-set on (generation, owner) by the next collection or recovery;
+//! * **retire on claim:** a generation ever claimed for removal is permanently dead. A failed
+//!   removal leaves it `Retired` (still named, retried by the next collection or recovery),
+//!   never back to a reusable state; staging never offers it for reuse and a save never keeps
+//!   it, so a late or concurrent removal of a claimed generation can only remove dead bytes;
 //! * a staging operation's own generation is removed only once the operation is resolved and the
 //!   row does not name it — from then on nothing can ever bind it (an operation binds its
 //!   generation only in the transaction that resolves it);
@@ -593,6 +597,8 @@ pub struct ArtifactService {
     /// Staging resolutions that could not be written when they arose; retried by the next
     /// recovery or collection in this boot.
     pub(crate) pending: std::sync::Mutex<Vec<(StagingRef, Value)>>,
+    /// Generations this service is removing right now (best-effort coordination only).
+    pub(crate) removing: std::sync::Mutex<std::collections::HashSet<(String, String)>>,
 }
 
 impl ArtifactService {
@@ -612,6 +618,7 @@ impl ArtifactService {
             streams: Streams::default(),
             readers: Readers::default(),
             pending: std::sync::Mutex::new(Vec::new()),
+            removing: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -652,6 +659,7 @@ impl ArtifactService {
         let new_bytes = row.is_none();
         // An existing Present (or pending-removal) generation is reused after verification; any
         // other state publishes a new generation.
+        // A retired or removed generation is never offered for reuse.
         let reuse = row
             .filter(|b| matches!(b.state, BlobState::Present | BlobState::UnlinkPending))
             .map(|b| b.generation);
@@ -889,11 +897,13 @@ fn put_staged_blob(
         None if staged.reused => Err(StorageError::Busy),
         None => bind(tx, ours),
         Some(b) if b.state == BlobState::Unlinking => Err(StorageError::Busy),
+        // Only a never-claimed generation is ever bound again; a claimed (retired or removed)
+        // one is permanently dead.
         Some(b) if &b.generation == ours => match b.state {
             BlobState::Present | BlobState::UnlinkPending => bind(tx, ours),
             _ => Err(StorageError::Busy),
         },
-        Some(b) if b.state == BlobState::Unlinked => {
+        Some(b) if matches!(b.state, BlobState::Unlinked | BlobState::Retired) => {
             if staged.reused {
                 Err(StorageError::Busy)
             } else {
@@ -901,17 +911,28 @@ fn put_staged_blob(
             }
         }
         Some(b) => {
-            // The row names another generation (a concurrent save published its own).
-            let theirs = files
+            // The row names another live generation (a concurrent save published its own).
+            if files
                 .present(digest, &b.generation, n as u64)
-                .map_err(file_failure)?;
-            match (theirs, staged.reused) {
+                .map_err(file_failure)?
+            {
                 // Keep theirs (reviving a pending removal); our own generation is an orphan
                 // removed once this operation is resolved.
-                (true, _) => bind(tx, &b.generation),
-                // Theirs is gone: heal the row with our verified generation.
-                (false, false) => bind(tx, ours),
-                (false, true) => Err(StorageError::Busy),
+                return bind(tx, &b.generation);
+            }
+            // Theirs is missing or has the wrong length: tell the two apart before healing,
+            // so corrupt bytes are kept as evidence instead of being swept away later.
+            match files.inspect(digest, &b.generation) {
+                Ok(Some(_)) => bind(tx, &b.generation),
+                Ok(None) if !staged.reused => bind(tx, ours),
+                Err(FileFault::Corrupt(_)) if !staged.reused => {
+                    files
+                        .quarantine(digest, &b.generation)
+                        .map_err(file_failure)?;
+                    bind(tx, ours)
+                }
+                Ok(None) | Err(FileFault::Corrupt(_)) => Err(StorageError::Busy),
+                Err(f) => Err(file_failure(f)),
             }
         }
     }
