@@ -8,7 +8,9 @@
 //! unavailable: the coordinator agent and inference (DW-16), router tiers, named models and
 //! effort (DW-17), Current's app-wide work status (DW-12, DW-14) and conversation dates for
 //! history grouping (the session record carries none yet).
-use crate::memory::{DraftMemory, SidebarTab, StoredAttachment};
+use crate::memory::{
+    DraftMemory, PendingUpload, SidebarTab, StoredAttachment, UnconfirmedAttachment,
+};
 use crate::ops::Failure;
 use crate::theme;
 use crate::virtual_list::{self, Blocks, Scrolls};
@@ -20,6 +22,15 @@ use devworks_core::protocol::records::SessionRecord;
 use eframe::egui::{self, Align, Key, Layout, Modifiers, RichText, TextureHandle, Ui};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+
+/// A removed attachment whose save may have committed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Removed {
+    /// The materialized paste, removed once the outcome is known.
+    pub path: Option<PathBuf>,
+    /// The unconfirmed save's frame; `None` while its save (or confirmation) is running.
+    pub frame: Option<Vec<u8>>,
+}
 
 /// Draft key of the conversation not started yet.
 pub const NEW_DRAFT: &str = "new";
@@ -134,6 +145,31 @@ impl Draft {
                     _ => None,
                 })
                 .collect(),
+            unconfirmed: self
+                .attachments
+                .iter()
+                .filter_map(|a| match &a.state {
+                    AttachState::Unconfirmed(frame) => Some(UnconfirmedAttachment {
+                        name: a.name.clone(),
+                        media_type: a.media_type.clone(),
+                        path: a.path.clone(),
+                        frame: frame.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            uploads: self
+                .attachments
+                .iter()
+                .filter_map(|a| match (&a.state, &a.path) {
+                    (AttachState::WaitingForConversation, Some(path)) => Some(PendingUpload {
+                        name: a.name.clone(),
+                        media_type: a.media_type.clone(),
+                        path: path.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect(),
         }
     }
 }
@@ -164,7 +200,7 @@ impl Transcript {
 }
 
 /// Why a session is being started.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StartReason {
     NewChat,
     /// Started so a pending send or attachment has a conversation.
@@ -190,9 +226,10 @@ pub struct Chat {
     /// Submitted attachments the user removed while the append was in flight: deleted only if
     /// the append did not commit (a committed message references them).
     pub removed_while_sending: Vec<ArtifactRef>,
-    /// Removed attachments whose save outcome is not confirmed yet: (frame, materialized file).
-    /// They are confirmed, then deleted, by "Confirm outcomes".
-    pub removed_unconfirmed: Vec<(Vec<u8>, Option<PathBuf>)>,
+    /// Attachments removed while their save was running or its outcome was unknown, by local
+    /// ID: confirmed (by "Confirm outcomes"), then deleted, so a save that committed never
+    /// leaves an artifact behind.
+    pub removed: BTreeMap<u64, Removed>,
     /// The bounded composer height each surface measured last frame (Home, sidebar).
     pub composer_heights: [f32; 2],
     /// The composer's height besides its scrolling draft and attachment areas (controls,
@@ -224,7 +261,7 @@ impl Chat {
             sending: None,
             submitted: None,
             removed_while_sending: Vec::new(),
-            removed_unconfirmed: Vec::new(),
+            removed: BTreeMap::new(),
             composer_heights: [150.0, 170.0],
             composer_overheads: [110.0, 110.0],
             conversation_heights: [0.0, 0.0],
@@ -288,11 +325,28 @@ impl Chat {
     pub fn adopt_new_draft(&mut self, session: &str) {
         if let Some(d) = self.drafts.remove(NEW_DRAFT) {
             let target = self.drafts.entry(session.to_owned()).or_default();
-            if target.text.is_empty() {
+            // Both texts are kept: neither the session's draft nor the new one is dropped.
+            if target.text.trim().is_empty() {
                 target.text = d.text;
+            } else if !d.text.trim().is_empty() {
+                target.text = format!("{}\n\n{}", target.text, d.text);
             }
             target.attachments.extend(d.attachments);
         }
+    }
+    /// The key of the draft holding the attachment with this local ID.
+    pub fn owner(&self, local: u64) -> Option<String> {
+        self.drafts
+            .iter()
+            .find(|(_, d)| d.attachments.iter().any(|a| a.local == local))
+            .map(|(k, _)| k.clone())
+    }
+    /// Takes the attachment with this local ID out of whichever draft holds it.
+    pub fn take_attachment(&mut self, local: u64) -> Option<Attachment> {
+        self.drafts.values_mut().find_map(|d| {
+            let i = d.attachments.iter().position(|a| a.local == local)?;
+            Some(d.attachments.remove(i))
+        })
     }
     pub fn upsert(&mut self, record: SessionRecord) {
         match self.sessions.iter_mut().find(|s| s.id == record.id) {

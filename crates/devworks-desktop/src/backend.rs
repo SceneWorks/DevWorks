@@ -48,7 +48,7 @@ pub trait Backend: Send + Sync {
 }
 
 /// Who is waiting for a reply. Equal slots supersede each other.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Slot {
     SettingsRead,
     SettingsValidate,
@@ -124,6 +124,14 @@ struct Pending {
     command: Option<(&'static str, Vec<u8>)>,
 }
 
+/// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
+pub const COMMANDS: [&str; 4] = [
+    "sessions.start",
+    "sessions.append_message",
+    "settings.save_revision",
+    "artifacts.delete",
+];
+
 /// A command whose outcome is still not known after its resubmissions.
 #[derive(Clone, Debug)]
 pub struct Unresolved {
@@ -131,6 +139,24 @@ pub struct Unresolved {
     pub label: String,
     operation: &'static str,
     frame: Vec<u8>,
+}
+impl Unresolved {
+    pub fn operation(&self) -> &'static str {
+        self.operation
+    }
+    pub fn frame(&self) -> &[u8] {
+        &self.frame
+    }
+    /// One kept across a restart; `None` for an operation the shell does not admit.
+    pub fn restored(slot: Slot, label: String, operation: &str, frame: Vec<u8>) -> Option<Self> {
+        let operation = COMMANDS.into_iter().find(|c| *c == operation)?;
+        Some(Self {
+            slot,
+            label,
+            operation,
+            frame,
+        })
+    }
 }
 
 struct Shared {
@@ -330,13 +356,27 @@ impl Client {
     /// frame is kept as [`Unresolved`] until [`Self::resubmit`] confirms it.
     pub fn command(&mut self, slot: Slot, label: &str, operation: &'static str, frame: Vec<u8>) {
         let kept = frame.clone();
-        self.unresolved.retain(|u| u.slot != slot);
-        self.submit(
-            slot,
-            label,
-            Box::new(move |b| Reply::Command(resolve_command(b, operation, &frame))),
-            Some((operation, kept)),
-        );
+        let job: Job = Box::new(move |b| Reply::Command(resolve_command(b, operation, &frame)));
+        if self
+            .submit(slot.clone(), label, job, Some((operation, kept.clone())))
+            .is_some()
+        {
+            self.unresolved.retain(|u| u.slot != slot);
+        } else if !self.unresolved.iter().any(|u| u.slot == slot) {
+            // Closed: nothing ran, so an unknown outcome stays unresolved (never dropped).
+            self.unresolved.push(Unresolved {
+                slot,
+                label: label.to_owned(),
+                operation,
+                frame: kept,
+            });
+        }
+    }
+
+    /// Keeps an unresolved command restored from a previous run.
+    pub fn keep_unresolved(&mut self, u: Unresolved) {
+        self.unresolved.retain(|k| k.slot != u.slot);
+        self.unresolved.push(u);
     }
 
     /// Commands whose outcome is still not known.
@@ -357,8 +397,9 @@ impl Client {
         slot: Slot,
         label: &str,
         task: impl FnOnce(&dyn Backend) -> Result<TaskOutput, String> + Send + 'static,
-    ) {
-        self.submit(slot, label, Box::new(move |b| Reply::Task(task(b))), None);
+    ) -> bool {
+        self.submit(slot, label, Box::new(move |b| Reply::Task(task(b))), None)
+            .is_some()
     }
 
     /// Replies that arrived since the last call, for the slots still waiting for them.
@@ -369,8 +410,10 @@ impl Client {
                 continue;
             };
             let p = self.pending.remove(at);
-            if let (Some((operation, frame)), Reply::Command(outcome)) = (&p.command, &reply)
-                && is_unknown(outcome)
+            // Unknown, or no definite outcome at all (no worker ran it): kept unresolved.
+            let decided = matches!(&reply, Reply::Command(outcome) if !is_unknown(outcome));
+            if let Some((operation, frame)) = &p.command
+                && !decided
             {
                 self.unresolved.push(Unresolved {
                     slot: p.slot.clone(),

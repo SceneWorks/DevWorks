@@ -2,7 +2,7 @@
 //! app-level sidebar, Settings, the completion overlay, status and the close lifecycle. It holds
 //! view state only; every record comes through [`Client`] from the runtime's gateway.
 use crate::attachments;
-use crate::backend::{Backend, Client, Reply, Slot, TaskOutput, is_unknown};
+use crate::backend::{Backend, Client, Reply, Slot, TaskOutput, Unresolved, is_unknown};
 use crate::chat::{self, AttachState, Attachment, Chat, ChatAction, StartReason, Surface};
 use crate::memory::{Memory, RouteMemory};
 use crate::notifications::{CardAction, Completions};
@@ -199,13 +199,39 @@ impl Shell {
                     preview_note: None,
                 });
             }
+            // Attachments that never started storing: stored once their conversation is known.
+            for a in &d.uploads {
+                let local = chat.next_local();
+                draft.attachments.push(Attachment {
+                    local,
+                    name: a.name.clone(),
+                    media_type: a.media_type.clone(),
+                    path: Some(a.path.clone()),
+                    state: AttachState::WaitingForConversation,
+                    preview: None,
+                    preview_note: None,
+                });
+            }
+            // Saves whose outcome was unknown at close: confirmed with their exact frames.
+            for a in &d.unconfirmed {
+                let local = chat.next_local();
+                draft.attachments.push(Attachment {
+                    local,
+                    name: a.name.clone(),
+                    media_type: a.media_type.clone(),
+                    path: a.path.clone(),
+                    state: AttachState::Unconfirmed(a.frame.clone()),
+                    preview: None,
+                    preview_note: None,
+                });
+            }
             chat.drafts.insert(key.clone(), draft);
         }
         chat.scrolls = Scrolls::restoring(&memory.scroll);
         let mut settings = SettingsScreen::default();
         settings.restore(&memory.settings);
         settings.scrolls = Scrolls::restoring(&memory.scroll);
-        Self {
+        let mut shell = Self {
             client,
             offline,
             dialogs: init.dialogs,
@@ -241,7 +267,9 @@ impl Shell {
             shutdown_summary: None,
             applied_scale: 0.0,
             control: init.control,
-        }
+        };
+        shell.restore_pending(memory.pending);
+        shell
     }
 
     // -----------------------------------------------------------------------------------------
@@ -504,11 +532,8 @@ impl Shell {
                 name,
                 media_type: media.clone(),
                 path: Some(path.clone()),
-                state: if waiting {
-                    AttachState::WaitingForConversation
-                } else {
-                    AttachState::Storing
-                },
+                // Storing once its save is submitted (below, or when its conversation starts).
+                state: AttachState::WaitingForConversation,
                 preview: None,
                 preview_note: note,
             });
@@ -544,29 +569,59 @@ impl Shell {
     /// Removes a pending attachment from its draft. One already stored is deleted through
     /// `artifacts.delete`; one still being stored is deleted when its save completes.
     fn remove_attachment(&mut self, local: u64) {
-        let removed = {
-            let d = self.chat.draft_mut();
-            let i = d.attachments.iter().position(|a| a.local == local);
-            i.map(|i| d.attachments.remove(i))
+        let Some(a) = self.chat.take_attachment(local) else {
+            return;
         };
-        if let Some(Attachment {
-            state: AttachState::Stored(r),
-            local,
-            ..
-        }) = removed
-        {
-            let in_flight = self
-                .chat
-                .submitted
-                .as_ref()
-                .is_some_and(|s| s.locals.contains(&local));
-            if in_flight {
-                // The message being saved references it: decide once the append settles.
-                self.chat.removed_while_sending.push(r);
-            } else {
-                self.delete_removed(r);
+        let materialized = self.materialized(a.path.as_deref());
+        match a.state {
+            // Nothing was saved: only a materialized paste is left to remove.
+            AttachState::WaitingForConversation | AttachState::Failed(_) => {
+                if let Some(p) = materialized {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+            // Its save is running: the reply decides (a stored copy is deleted, an unknown
+            // outcome is kept with this file to confirm).
+            AttachState::Storing => {
+                self.chat.removed.insert(
+                    local,
+                    chat::Removed {
+                        path: materialized,
+                        frame: None,
+                    },
+                );
+            }
+            // It may have committed: confirmed by "Confirm outcomes", then deleted.
+            AttachState::Unconfirmed(frame) => {
+                self.chat.removed.insert(
+                    local,
+                    chat::Removed {
+                        path: materialized,
+                        frame: Some(frame),
+                    },
+                );
+            }
+            AttachState::Stored(r) => {
+                let in_flight = self
+                    .chat
+                    .submitted
+                    .as_ref()
+                    .is_some_and(|s| s.locals.contains(&local));
+                if in_flight {
+                    // The message being saved references it: decide once the append settles.
+                    self.chat.removed_while_sending.push(r);
+                } else {
+                    self.delete_removed(r);
+                }
             }
         }
+    }
+
+    /// `path` when it is a file the shell materialized (a paste), never a user's own file.
+    fn materialized(&self, path: Option<&std::path::Path>) -> Option<PathBuf> {
+        let scratch = self.backend()?.scratch_dir();
+        path.filter(|p| p.starts_with(&scratch))
+            .map(std::path::Path::to_path_buf)
     }
 
     fn delete_removed(&mut self, artifact: ArtifactRef) {
@@ -610,45 +665,48 @@ impl Shell {
 
     /// Starts storing every attachment of the selected conversation's draft that waits.
     fn store_pending(&mut self) {
-        let Some(session) = self.chat.selected.clone() else {
+        if let Some(session) = self.chat.selected.clone() {
+            self.store_waiting(&session);
+        }
+    }
+
+    /// Starts storing every attachment of `session`'s draft that waits. One becomes Storing
+    /// only once its save is submitted (closing refuses it: it stays waiting, and is kept).
+    fn store_waiting(&mut self, session: &str) {
+        let Some(scratch) = self.backend().map(|b| b.scratch_dir()) else {
             return;
         };
-        let jobs: Vec<(u64, PathBuf, String, String)> = {
-            let draft = self.chat.draft_mut();
-            draft
-                .attachments
-                .iter_mut()
-                .filter(|a| {
-                    matches!(
-                        a.state,
-                        AttachState::Storing | AttachState::WaitingForConversation
-                    )
-                })
-                .filter_map(|a| {
-                    a.state = AttachState::Storing;
-                    Some((
-                        a.local,
-                        a.path.clone()?,
-                        a.name.clone(),
-                        a.media_type.clone(),
-                    ))
-                })
-                .collect()
-        };
-        let Some(b) = self.backend() else { return };
-        let scratch = b.scratch_dir();
+        let jobs: Vec<(u64, PathBuf, String, String)> = self
+            .chat
+            .drafts
+            .get(session)
+            .map(|d| {
+                d.attachments
+                    .iter()
+                    .filter(|a| matches!(a.state, AttachState::WaitingForConversation))
+                    .filter_map(|a| {
+                        Some((
+                            a.local,
+                            a.path.clone()?,
+                            a.name.clone(),
+                            a.media_type.clone(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         for (local, path, name, media) in jobs {
-            if self.pending(&Slot::Attach(session.clone(), local)) {
-                continue;
-            }
-            let sid = session.clone();
+            let sid = session.to_owned();
             let materialized = path.starts_with(&scratch);
-            if let Some(c) = &mut self.client {
+            let submitted = self.client.as_mut().is_some_and(|c| {
                 c.task(
-                    Slot::Attach(session.clone(), local),
+                    Slot::Attach(session.to_owned(), local),
                     &format!("Storing {name}"),
                     move |b| attachments::store(b, &path, &name, &media, &sid, materialized),
-                );
+                )
+            });
+            if submitted && let Some(a) = self.chat.attachment_mut(local) {
+                a.state = AttachState::Storing;
             }
         }
     }
@@ -825,12 +883,27 @@ impl Shell {
                     }
                     // Removed while it was being stored: nothing the user removed survives.
                     None => match state {
-                        AttachState::Stored(r) => self.delete_removed(r),
-                        // Confirmed (then deleted) by "Confirm outcomes".
-                        AttachState::Unconfirmed(frame) => {
-                            self.chat.removed_unconfirmed.push((frame, None))
+                        AttachState::Stored(r) => {
+                            self.chat.removed.remove(&local);
+                            self.delete_removed(r);
                         }
-                        _ => {}
+                        // Kept, with its file, until "Confirm outcomes" resolves it.
+                        AttachState::Unconfirmed(frame) => {
+                            self.chat
+                                .removed
+                                .entry(local)
+                                .or_insert(chat::Removed {
+                                    path: None,
+                                    frame: None,
+                                })
+                                .frame = Some(frame);
+                        }
+                        // Not saved (the save removed a materialized file itself).
+                        AttachState::Failed(_)
+                        | AttachState::Storing
+                        | AttachState::WaitingForConversation => {
+                            self.chat.removed.remove(&local);
+                        }
                     },
                 }
             }
@@ -1014,6 +1087,11 @@ impl Shell {
     /// Restores the selected conversation once sessions are listed: the restored one when it
     /// still exists, otherwise the most recent open one. A missing selection is dropped.
     fn reconcile_selection(&mut self) {
+        if self.chat.starting.is_some() {
+            // A start is pending: the new draft (and anything waiting in it) belongs to that
+            // conversation, which its reply selects. A list reply never re-homes it.
+            return;
+        }
         let wanted = self
             .chat
             .selected
@@ -1324,7 +1402,12 @@ impl Shell {
                 .drafts
                 .iter()
                 .map(|(k, d)| (k.clone(), d.memory()))
-                .filter(|(_, d)| !d.text.is_empty() || !d.attachments.is_empty())
+                .filter(|(_, d)| {
+                    !d.text.is_empty()
+                        || !d.attachments.is_empty()
+                        || !d.unconfirmed.is_empty()
+                        || !d.uploads.is_empty()
+                })
                 .collect(),
             routes: self.routes.clone(),
             settings: self.settings.memory(),
@@ -1332,6 +1415,146 @@ impl Shell {
                 .into_iter()
                 .flat_map(|s| s.offsets().iter().map(|(k, v)| (k.clone(), *v)))
                 .collect(),
+            pending: self.pending_memory(),
+        }
+    }
+
+    /// Requests whose outcome is not known yet, with what their replies settle, so the next
+    /// launch confirms them with their exact frames. (A save still running when the bounded
+    /// quiesce gives up is the one case not kept: its frame exists only in that request.)
+    fn pending_memory(&self) -> crate::memory::PendingMemory {
+        use crate::memory::{PendingCommand, PendingMemory, RemovedMemory, SubmittedMemory};
+        let commands: Vec<PendingCommand> = self
+            .client
+            .as_ref()
+            .map(|c| {
+                c.unresolved()
+                    .iter()
+                    .map(|u| PendingCommand {
+                        slot: u.slot.clone(),
+                        label: u.label.clone(),
+                        operation: u.operation().to_owned(),
+                        frame: u.frame().to_vec(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let has = |f: &dyn Fn(&Slot) -> bool| commands.iter().any(|c| f(&c.slot));
+        let submitted = match (&self.chat.submitted, &self.chat.sending) {
+            (Some(sent), Some(id)) if has(&|s| *s == Slot::Append(id.clone())) => {
+                let artifacts = self
+                    .chat
+                    .drafts
+                    .get(id)
+                    .map(|d| {
+                        d.attachments
+                            .iter()
+                            .filter(|a| sent.locals.contains(&a.local))
+                            .filter_map(|a| match &a.state {
+                                AttachState::Stored(r) => Some(r.artifact_id.as_str().to_owned()),
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(SubmittedMemory {
+                    text: sent.text.clone(),
+                    artifacts,
+                })
+            }
+            _ => None,
+        };
+        PendingMemory {
+            starting: self
+                .chat
+                .starting
+                .filter(|_| has(&|s| *s == Slot::SessionStart)),
+            submitted,
+            removed_while_sending: if self.chat.sending.is_some()
+                && has(&|s| matches!(s, Slot::Append(_)))
+            {
+                self.chat
+                    .removed_while_sending
+                    .iter()
+                    .filter_map(|r| serde_json::to_value(r).ok())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            removed: self
+                .chat
+                .removed
+                .values()
+                .filter_map(|r| {
+                    Some(RemovedMemory {
+                        path: r.path.clone(),
+                        frame: r.frame.clone()?,
+                    })
+                })
+                .collect(),
+            commands,
+        }
+    }
+
+    /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
+    fn restore_pending(&mut self, pending: crate::memory::PendingMemory) {
+        for c in pending.commands {
+            let slot = c.slot.clone();
+            let Some(u) = Unresolved::restored(c.slot, c.label, &c.operation, c.frame) else {
+                continue;
+            };
+            match &slot {
+                Slot::SessionStart => {
+                    self.chat.starting = Some(pending.starting.unwrap_or(StartReason::ForDraft));
+                }
+                Slot::Append(id) => {
+                    self.chat.sending = Some(id.clone());
+                    if let Some(sent) = &pending.submitted {
+                        let locals = self
+                            .chat
+                            .drafts
+                            .get(id)
+                            .map(|d| {
+                                d.attachments
+                                    .iter()
+                                    .filter(|a| {
+                                        matches!(&a.state, AttachState::Stored(r)
+                                            if sent.artifacts.iter().any(|x| x == r.artifact_id.as_str()))
+                                    })
+                                    .map(|a| a.local)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        self.chat.submitted = Some(chat::Submitted {
+                            text: sent.text.clone(),
+                            locals,
+                        });
+                        self.chat.removed_while_sending = pending
+                            .removed_while_sending
+                            .iter()
+                            .filter_map(|r| serde_json::from_value(r.clone()).ok())
+                            .collect();
+                    }
+                }
+                Slot::SettingsSave => {
+                    self.settings.saving = true;
+                    self.settings.unconfirmed = true;
+                }
+                _ => {}
+            }
+            if let Some(client) = &mut self.client {
+                client.keep_unresolved(u);
+            }
+        }
+        for r in pending.removed {
+            let local = self.chat.next_local();
+            self.chat.removed.insert(
+                local,
+                chat::Removed {
+                    path: r.path,
+                    frame: Some(r.frame),
+                },
+            );
         }
     }
 
@@ -1370,6 +1593,29 @@ impl Shell {
             self.load_sessions();
             self.load_route();
             self.restore_previews();
+            // Outcomes left unknown at the last close: confirmed with their exact frames.
+            if self.unconfirmed_count() > 0 {
+                self.confirm_outcomes();
+            }
+            // Attachments that never started storing: their conversation's, or a new one's.
+            let waiting: Vec<String> = self
+                .chat
+                .drafts
+                .iter()
+                .filter(|(_, d)| {
+                    d.attachments
+                        .iter()
+                        .any(|a| matches!(a.state, AttachState::WaitingForConversation))
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in waiting {
+                if key == chat::NEW_DRAFT {
+                    self.start_session(StartReason::ForDraft);
+                } else {
+                    self.store_waiting(&key);
+                }
+            }
         }
         self.apply_text_scale(&ctx);
         self.advance_lifecycle(&ctx);
@@ -1617,7 +1863,12 @@ impl Shell {
             .count();
         self.client.as_ref().map_or(0, |c| c.unresolved().len())
             + attachments
-            + self.chat.removed_unconfirmed.len()
+            + self
+                .chat
+                .removed
+                .values()
+                .filter(|r| r.frame.is_some())
+                .count()
     }
 
     /// Resubmits every unconfirmed request with its identical frame (same request key).
@@ -1638,18 +1889,24 @@ impl Shell {
         for local in locals {
             self.confirm_attachment(local);
         }
-        for (n, (frame, path)) in std::mem::take(&mut self.chat.removed_unconfirmed)
-            .into_iter()
-            .enumerate()
-        {
-            // A removed attachment: confirmed under a slot no draft holds, then deleted.
-            let local = u64::MAX - n as u64;
-            if let Some(c) = &mut self.client {
+        let removed: Vec<(u64, Vec<u8>, Option<PathBuf>)> = self
+            .chat
+            .removed
+            .iter()
+            .filter_map(|(l, r)| Some((*l, r.frame.clone()?, r.path.clone())))
+            .collect();
+        for (local, frame, path) in removed {
+            // A removed attachment, under its own local ID (which no draft holds any more):
+            // confirmed, then deleted by its reply.
+            let submitted = self.client.as_mut().is_some_and(|c| {
                 c.task(
                     Slot::Attach(String::new(), local),
                     "Confirming a removed attachment",
                     move |b| attachments::confirm(b, frame, path.as_deref()),
-                );
+                )
+            });
+            if submitted && let Some(r) = self.chat.removed.get_mut(&local) {
+                r.frame = None;
             }
         }
     }
@@ -1663,16 +1920,19 @@ impl Shell {
         };
         let frame = frame.clone();
         let path = a.path.clone();
-        a.state = AttachState::Storing;
-        let scratch = self.backend().map(|b| b.scratch_dir());
-        let materialized = path.filter(|p| scratch.as_ref().is_some_and(|s| p.starts_with(s)));
-        let key = self.chat.draft_key();
-        if let Some(c) = &mut self.client {
+        let materialized = self.materialized(path.as_deref());
+        // Its own draft's slot, wherever the user is now.
+        let key = self.chat.owner(local).unwrap_or_default();
+        let submitted = self.client.as_mut().is_some_and(|c| {
             c.task(
                 Slot::Attach(key, local),
                 "Confirming an attachment",
                 move |b| attachments::confirm(b, frame, materialized.as_deref()),
-            );
+            )
+        });
+        // Not submitted (closing): it stays unconfirmed, its frame kept.
+        if submitted && let Some(a) = self.chat.attachment_mut(local) {
+            a.state = AttachState::Storing;
         }
     }
 

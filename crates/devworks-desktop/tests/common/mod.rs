@@ -322,6 +322,8 @@ impl Backend for Gated {
 pub struct LoseAcks {
     inner: Arc<dyn Backend>,
     operation: &'static str,
+    /// Lose the request itself (it never runs), not only its acknowledgment.
+    requests: bool,
     losses: std::sync::atomic::AtomicUsize,
     pub frames: Mutex<Vec<Vec<u8>>>,
 }
@@ -330,6 +332,21 @@ impl LoseAcks {
         Arc::new(Self {
             inner,
             operation,
+            requests: false,
+            losses: std::sync::atomic::AtomicUsize::new(losses),
+            frames: Mutex::new(Vec::new()),
+        })
+    }
+    /// Loses the first `losses` requests before they reach the runtime (nothing commits).
+    pub fn losing_requests(
+        inner: Arc<dyn Backend>,
+        operation: &'static str,
+        losses: usize,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            operation,
+            requests: true,
             losses: std::sync::atomic::AtomicUsize::new(losses),
             frames: Mutex::new(Vec::new()),
         })
@@ -354,17 +371,19 @@ impl Backend for LoseAcks {
         self.inner.query(operation, frame)
     }
     fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
-        let out = self.inner.command(operation, frame);
         if operation != self.operation {
-            return out;
+            return self.inner.command(operation, frame);
         }
         self.frames.lock().unwrap().push(frame.to_vec());
         let lose = self
             .losses
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok();
-        if !lose {
-            return out;
+        if !lose || !self.requests {
+            let out = self.inner.command(operation, frame);
+            if !lose {
+                return out;
+            }
         }
         Ok(
             serde_json::from_value(serde_json::json!({"kind": "CommandStatusUnknown",

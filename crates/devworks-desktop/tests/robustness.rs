@@ -8,7 +8,7 @@ mod common;
 use common::*;
 use devworks_core::protocol::provider::TranscriptBody;
 use devworks_desktop::backend::Backend;
-use devworks_desktop::chat::{ATTACH_LABEL, AttachState, COMPOSER_LABEL, SEND_LABEL};
+use devworks_desktop::chat::{self, ATTACH_LABEL, AttachState, COMPOSER_LABEL, SEND_LABEL};
 use devworks_desktop::ops;
 use devworks_desktop::route::Route;
 use devworks_desktop::theme;
@@ -422,6 +422,560 @@ fn a_source_explanation_read_before_a_save_is_explained_again_at_the_new_revisio
         !has_text(&h, "Workspace (revision 2): "),
         "the stale chain is never shown"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Attachment and draft lifecycle
+
+fn workspace_artifacts(backend: &dyn Backend) -> Vec<String> {
+    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend)))
+        .unwrap()
+        .0
+        .into_iter()
+        .map(|a| a.name.0)
+        .collect()
+}
+
+fn scratch_files(backend: &dyn Backend) -> usize {
+    std::fs::read_dir(backend.scratch_dir())
+        .map(|d| d.count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn removing_an_unconfirmed_attachment_confirms_it_then_deletes_it_and_its_paste() {
+    let root = Root::new("remove-unconfirmed");
+    let engine = start(&root);
+    let real = engine.backend();
+    let lossy = LoseAcks::over(real.clone(), "artifacts.save", 4);
+    let mut h = harness(
+        shell_over(lossy.clone(), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    let pasted = egui::ColorImage::new([3, 3], vec![egui::Color32::GREEN; 9]);
+    h.event(egui::Event::PasteImage(Arc::new(pasted)));
+    settle(&mut h);
+    let a = &h.state().chat.draft().unwrap().attachments[0];
+    assert!(
+        matches!(a.state, AttachState::Unconfirmed(_)),
+        "{:?}",
+        a.state
+    );
+    let name = a.name.clone();
+    assert_eq!(
+        workspace_artifacts(&*real).len(),
+        1,
+        "the lost acknowledgment's save committed"
+    );
+    assert_eq!(
+        scratch_files(&*real),
+        1,
+        "the paste is kept until the outcome is known"
+    );
+    click(&mut h, Role::Button, &format!("Remove attachment {name}"));
+    assert!(h.state().chat.draft().unwrap().attachments.is_empty());
+    assert!(
+        has_text(&h, "1 outcome not confirmed"),
+        "the removed save is still tracked"
+    );
+    click(&mut h, Role::Button, "Confirm outcomes");
+    assert!(
+        workspace_artifacts(&*real).is_empty(),
+        "confirmed, then deleted"
+    );
+    assert_eq!(
+        scratch_files(&*real),
+        0,
+        "its materialized paste is removed"
+    );
+    assert!(!has_text(&h, "not confirmed"));
+    assert!(all_same(&lossy.request_keys()));
+}
+
+#[test]
+fn a_session_list_reply_never_rehomes_the_draft_of_a_pending_start() {
+    let root = Root::new("pending-start-draft");
+    let engine = start(&root);
+    let real = engine.backend();
+    let older = ops::started(real.command("sessions.start", &ops::session_start(&*real, "Older")))
+        .unwrap()
+        .id
+        .as_str()
+        .to_owned();
+    let list = Gate::new("sessions.list");
+    let begin = Gate::new("sessions.start");
+    list.close();
+    begin.close();
+    let script = Script::default();
+    script
+        .files
+        .lock()
+        .unwrap()
+        .push(vec![root.file("early.txt", b"early")]);
+    let backend = list.over(begin.over(real.clone()));
+    let mut h = harness(shell_over(backend, &root, script), 1440.0, 900.0);
+    h.step();
+    h.step();
+    // Attached before any conversation is listed: a start begins for the new draft.
+    h.get_by_role_and_label(Role::Button, ATTACH_LABEL).click();
+    step_until(&mut h, "a start is pending", |s| s.chat.starting.is_some());
+    // The list arrives first.
+    list.open();
+    step_until(&mut h, "the list arrived", |s| s.chat.sessions_loaded);
+    h.step();
+    assert!(
+        h.state().chat.selected.is_none(),
+        "nothing chosen while the start is pending"
+    );
+    begin.open();
+    settle(&mut h);
+    let selected = h.state().chat.selected.clone().unwrap();
+    assert_ne!(selected, older, "the started conversation is selected");
+    let draft = &h.state().chat.drafts[&selected];
+    assert_eq!(draft.attachments.len(), 1);
+    assert!(matches!(draft.attachments[0].state, AttachState::Stored(_)));
+    assert!(
+        h.state()
+            .chat
+            .drafts
+            .get(&older)
+            .is_none_or(|d| d.attachments.is_empty()),
+        "the older conversation never received it"
+    );
+    let tag = ops::conversation_tag(&selected).unwrap();
+    let listed = ops::artifacts(real.query("artifacts.list", &ops::workspace_artifacts(&*real)))
+        .unwrap()
+        .0;
+    assert!(listed[0].tags.as_ref().is_some_and(|t| t.0.contains(&tag)));
+}
+
+#[test]
+fn a_new_draft_joining_a_conversation_keeps_both_texts() {
+    let root = Root::new("adopt-texts");
+    let engine = start(&root);
+    let real = engine.backend();
+    {
+        let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+        settle(&mut h);
+        click(&mut h, Role::Button, "New Chat");
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .focus();
+        h.step();
+        h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+            .type_text("earlier words");
+        settle(&mut h);
+        h.state_mut().on_exit();
+    }
+    let list = Gate::new("sessions.list");
+    list.close();
+    let mut h = harness(
+        shell_over(list.over(real.clone()), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    h.step();
+    h.step();
+    // Typed into the new draft before the restored conversation is listed and selected.
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .type_text("new words");
+    h.step();
+    list.open();
+    settle(&mut h);
+    let text = &h.state().chat.draft().unwrap().text;
+    assert!(
+        text.contains("earlier words") && text.contains("new words"),
+        "{text:?}"
+    );
+}
+
+#[test]
+fn confirming_after_close_keeps_the_unresolved_frames() {
+    let root = Root::new("confirm-closed");
+    let engine = start(&root);
+    let lossy = LoseAcks::over(engine.backend(), "sessions.start", 4);
+    let mut h = harness(shell_over(lossy, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    assert_eq!(h.state().unconfirmed_count(), 1);
+    h.state_mut().request_close();
+    h.state_mut().confirm_outcomes();
+    assert_eq!(
+        h.state().unconfirmed_count(),
+        1,
+        "nothing ran, so nothing was dropped"
+    );
+    assert_eq!(h.state().memory().pending.commands.len(), 1);
+}
+
+/// Closes the first shell (persisting its state) and opens a second over `backend`.
+fn relaunch(
+    h: egui_kittest::Harness<'static, devworks_desktop::shell::Shell>,
+    backend: Arc<dyn Backend>,
+    root: &Root,
+    script: Script,
+) -> egui_kittest::Harness<'static, devworks_desktop::shell::Shell> {
+    let mut h = h;
+    h.state_mut().on_exit();
+    drop(h);
+    let mut h = harness(shell_over(backend, root, script), 1440.0, 900.0);
+    settle(&mut h);
+    h
+}
+
+#[test]
+fn an_unknown_attachment_save_survives_close_and_is_confirmed_at_the_next_launch() {
+    let root = Root::new("restart-attach");
+    let engine = start(&root);
+    let real = engine.backend();
+    let lossy = LoseAcks::over(real.clone(), "artifacts.save", 4);
+    let script = Script::default();
+    script
+        .files
+        .lock()
+        .unwrap()
+        .push(vec![root.file("later.txt", b"later")]);
+    let mut h = harness(shell_over(lossy.clone(), &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    click(&mut h, Role::Button, ATTACH_LABEL);
+    let session = h.state().chat.selected.clone().unwrap();
+    let again = LoseAcks::over(real.clone(), "artifacts.save", 0);
+    let h = relaunch(h, again.clone(), &root, Script::default());
+    let draft = &h.state().chat.drafts[&session];
+    assert_eq!(draft.attachments.len(), 1);
+    assert!(
+        matches!(draft.attachments[0].state, AttachState::Stored(_)),
+        "{:?}",
+        draft.attachments[0].state
+    );
+    assert_eq!(workspace_artifacts(&*real), ["later.txt"], "stored once");
+    let mut keys = lossy.request_keys();
+    keys.extend(again.request_keys());
+    assert!(
+        keys.len() > 4 && all_same(&keys),
+        "the same request key: {keys:?}"
+    );
+}
+
+#[test]
+fn a_removed_unconfirmed_attachment_survives_close_and_is_deleted_at_the_next_launch() {
+    let root = Root::new("restart-removed");
+    let engine = start(&root);
+    let real = engine.backend();
+    let lossy = LoseAcks::over(real.clone(), "artifacts.save", 4);
+    let script = Script::default();
+    script
+        .files
+        .lock()
+        .unwrap()
+        .push(vec![root.file("dropped.txt", b"dropped")]);
+    let mut h = harness(shell_over(lossy, &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    click(&mut h, Role::Button, ATTACH_LABEL);
+    click(&mut h, Role::Button, "Remove attachment dropped.txt");
+    assert_eq!(workspace_artifacts(&*real), ["dropped.txt"]);
+    let h = relaunch(h, real.clone(), &root, Script::default());
+    assert!(
+        workspace_artifacts(&*real).is_empty(),
+        "confirmed, then deleted"
+    );
+    assert_eq!(h.state().unconfirmed_count(), 0);
+}
+
+#[test]
+fn an_unknown_message_survives_close_and_is_saved_once_at_the_next_launch() {
+    let root = Root::new("restart-append");
+    let engine = start(&root);
+    let real = engine.backend();
+    let lossy = LoseAcks::over(real.clone(), "sessions.append_message", 4);
+    let mut h = harness(
+        shell_over(lossy.clone(), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().unwrap();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .type_text("said once");
+    settle(&mut h);
+    click(&mut h, Role::Button, SEND_LABEL);
+    assert!(has_text(
+        &h,
+        "Not yet confirmed whether your message was saved"
+    ));
+    let again = LoseAcks::over(real.clone(), "sessions.append_message", 0);
+    let h = relaunch(h, again.clone(), &root, Script::default());
+    let page = ops::transcript_page(real.query(
+        "sessions.transcript",
+        &ops::transcript(&*real, &session, None),
+    ))
+    .unwrap();
+    assert_eq!(page.entries.len(), 1, "saved once");
+    assert_eq!(h.state().chat.selected.as_deref(), Some(session.as_str()));
+    assert!(
+        h.state()
+            .chat
+            .drafts
+            .get(&session)
+            .is_none_or(|d| d.text.is_empty()),
+        "the confirmed message left the draft"
+    );
+    assert!(h.state().chat.sending.is_none());
+    let mut keys = lossy.request_keys();
+    keys.extend(again.request_keys());
+    assert!(all_same(&keys), "{keys:?}");
+}
+
+#[test]
+fn an_unknown_conversation_start_survives_close_and_is_resolved_at_the_next_launch() {
+    let root = Root::new("restart-start");
+    let engine = start(&root);
+    let real = engine.backend();
+    let lossy = LoseAcks::over(real.clone(), "sessions.start", 4);
+    let mut h = harness(
+        shell_over(lossy.clone(), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    assert!(h.state().chat.selected.is_none());
+    let again = LoseAcks::over(real.clone(), "sessions.start", 0);
+    let h = relaunch(h, again.clone(), &root, Script::default());
+    let sessions = listed_sessions(&*real);
+    assert_eq!(sessions.len(), 1, "never started twice");
+    assert_eq!(
+        h.state().chat.selected.as_deref(),
+        Some(sessions[0].as_str())
+    );
+    assert!(h.state().chat.starting.is_none());
+    let mut keys = lossy.request_keys();
+    keys.extend(again.request_keys());
+    assert!(all_same(&keys), "{keys:?}");
+}
+
+#[test]
+fn an_unknown_settings_save_survives_close_and_is_confirmed_at_the_next_launch() {
+    let root = Root::new("restart-settings");
+    let engine = start(&root);
+    let real = engine.backend();
+    let lossy = LoseAcks::over(real.clone(), "settings.save_revision", 4);
+    let script = Script::default();
+    script.folders.lock().unwrap().push(root.dir("repos"));
+    let mut h = harness(shell_over(lossy.clone(), &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(
+        &mut h,
+        Role::Button,
+        "Choose directory for Repository base directory",
+    );
+    click(&mut h, Role::Button, "Save changes");
+    assert!(has_text(
+        &h,
+        "Not yet confirmed whether the settings were saved"
+    ));
+    let again = LoseAcks::over(real.clone(), "settings.save_revision", 0);
+    let h = relaunch(h, again.clone(), &root, Script::default());
+    assert!(
+        has_text(&h, "Revision 2"),
+        "saved once, not refused as a conflict"
+    );
+    assert!(!has_text(&h, "unsaved change"));
+    assert!(!h.state().settings.saving);
+    let mut keys = lossy.request_keys();
+    keys.extend(again.request_keys());
+    assert!(all_same(&keys), "{keys:?}");
+}
+
+#[test]
+fn an_attachment_waiting_for_a_lost_start_survives_close_and_joins_its_own_conversation() {
+    let root = Root::new("restart-waiting");
+    let engine = start(&root);
+    let real = engine.backend();
+    let lossy = LoseAcks::losing_requests(real.clone(), "sessions.start", 4);
+    let script = Script::default();
+    script
+        .files
+        .lock()
+        .unwrap()
+        .push(vec![root.file("waiting.txt", b"waiting")]);
+    let mut h = harness(shell_over(lossy, &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    // No conversation yet: attaching starts one, whose request is lost (nothing committed).
+    click(&mut h, Role::Button, ATTACH_LABEL);
+    assert!(matches!(
+        h.state().chat.draft().unwrap().attachments[0].state,
+        AttachState::WaitingForConversation
+    ));
+    h.state_mut().on_exit();
+    drop(h);
+    // Another surface starts a conversation meanwhile; the next launch lists it first.
+    let older = ops::started(real.command("sessions.start", &ops::session_start(&*real, "Older")))
+        .unwrap()
+        .id
+        .as_str()
+        .to_owned();
+    let begin = Gate::new("sessions.start");
+    begin.close();
+    let mut h = harness(
+        shell_over(begin.over(real.clone()), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    step_until(&mut h, "the list arrived", |s| s.chat.sessions_loaded);
+    h.step();
+    begin.open();
+    settle(&mut h);
+    let selected = h.state().chat.selected.clone().unwrap();
+    assert_ne!(selected, older, "the restored start's own conversation");
+    let draft = &h.state().chat.drafts[&selected];
+    assert_eq!(draft.attachments.len(), 1);
+    assert!(
+        matches!(draft.attachments[0].state, AttachState::Stored(_)),
+        "{:?}",
+        draft.attachments[0].state
+    );
+    assert!(
+        h.state()
+            .chat
+            .drafts
+            .get(&older)
+            .is_none_or(|d| d.attachments.is_empty())
+    );
+    assert_eq!(
+        listed_sessions(&*real).len(),
+        2,
+        "one restored start, one other"
+    );
+    assert_eq!(workspace_artifacts(&*real), ["waiting.txt"]);
+}
+
+#[test]
+fn an_attachment_removed_during_an_unconfirmed_send_is_deleted_when_the_send_did_not_commit() {
+    let root = Root::new("restart-removed-sending");
+    let engine = start(&root);
+    let real = engine.backend();
+    let lossy = LoseAcks::losing_requests(real.clone(), "sessions.append_message", 4);
+    let script = Script::default();
+    script
+        .files
+        .lock()
+        .unwrap()
+        .push(vec![root.file("sent.txt", b"sent")]);
+    let mut h = harness(shell_over(lossy, &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().unwrap();
+    click(&mut h, Role::Button, ATTACH_LABEL);
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .type_text("with a file");
+    settle(&mut h);
+    click(&mut h, Role::Button, SEND_LABEL);
+    assert!(has_text(
+        &h,
+        "Not yet confirmed whether your message was saved"
+    ));
+    click(&mut h, Role::Button, "Remove attachment sent.txt");
+    assert_eq!(
+        workspace_artifacts(&*real),
+        ["sent.txt"],
+        "kept while the send is unknown"
+    );
+    h.state_mut().on_exit();
+    drop(h);
+    // The conversation moved on elsewhere, so the restored send is refused (never committed).
+    let (sessions, _) =
+        ops::sessions(real.query("sessions.list", &ops::sessions_list(&*real))).unwrap();
+    let revision = sessions[0].revision.get();
+    ops::appended(real.command(
+        "sessions.append_message",
+        &ops::append_message(&*real, &session, revision, "elsewhere", &[]),
+    ))
+    .unwrap();
+    let mut h = harness(
+        shell_over(real.clone(), &root, Script::default()),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    assert!(
+        workspace_artifacts(&*real).is_empty(),
+        "the removed attachment of the uncommitted send is deleted"
+    );
+    assert!(
+        h.state().chat.drafts[&session].text.contains("with a file"),
+        "the draft is kept"
+    );
+    assert!(h.state().chat.sending.is_none());
+}
+
+#[test]
+fn restored_uploads_without_a_pending_start_are_stored_at_the_next_launch() {
+    // What a close leaves when its bounded quiesce ended before a start or save replied: the
+    // uploads are kept, and nothing else is pending for them.
+    use devworks_desktop::memory::{DraftMemory, Memory, PendingUpload};
+    let root = Root::new("restart-uploads");
+    let engine = start(&root);
+    let real = engine.backend();
+    let older = ops::started(real.command("sessions.start", &ops::session_start(&*real, "Older")))
+        .unwrap()
+        .id
+        .as_str()
+        .to_owned();
+    let upload = |name: &str| PendingUpload {
+        name: name.into(),
+        media_type: "text/plain".into(),
+        path: root.file(name, name.as_bytes()),
+    };
+    let mut memory = Memory::default();
+    for (key, name) in [
+        (older.as_str(), "for-older.txt"),
+        (chat::NEW_DRAFT, "for-new.txt"),
+    ] {
+        memory.drafts.insert(
+            key.into(),
+            DraftMemory {
+                uploads: vec![upload(name)],
+                ..DraftMemory::default()
+            },
+        );
+    }
+    memory.save(&root.memory()).unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    let chat = &h.state().chat;
+    let stored = |key: &str| {
+        chat.drafts[key]
+            .attachments
+            .iter()
+            .all(|a| matches!(a.state, AttachState::Stored(_)))
+    };
+    assert!(stored(&older), "stored with its conversation");
+    let started = chat.selected.clone().unwrap();
+    assert_ne!(started, older, "the new draft got its own conversation");
+    assert_eq!(chat.drafts[&started].attachments.len(), 1);
+    assert!(stored(&started));
+    let mut names = workspace_artifacts(&*real);
+    names.sort();
+    assert_eq!(names, ["for-new.txt", "for-older.txt"]);
 }
 
 // ---------------------------------------------------------------------------------------------
