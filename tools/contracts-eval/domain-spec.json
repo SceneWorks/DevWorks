@@ -81,6 +81,59 @@
         "Error"
       ]
     },
+    "DiagnosticOutcome": {
+      "kind": "enum",
+      "values": [
+        "Running",
+        "Succeeded",
+        "Partial",
+        "Stale",
+        "Cancelled",
+        "Retryable",
+        "Failed"
+      ]
+    },
+    "DiagnosticErrorClass": {
+      "kind": "enum",
+      "values": [
+        "Transient",
+        "Timeout",
+        "Cancelled",
+        "Configuration",
+        "Authentication",
+        "Permission",
+        "NotFound",
+        "InvalidInput",
+        "ResourceExhausted",
+        "Dependency",
+        "Corruption",
+        "Internal",
+        "Unknown"
+      ]
+    },
+    "HealthState": {
+      "kind": "enum",
+      "values": [
+        "Healthy",
+        "Degraded",
+        "Failed",
+        "Unavailable"
+      ]
+    },
+    "DiagnosticOrigin": {
+      "kind": "enum",
+      "values": [
+        "Host",
+        "Reported"
+      ]
+    },
+    "MetricAvailability": {
+      "kind": "enum",
+      "values": [
+        "Available",
+        "Unavailable"
+      ]
+    },
     "TierName": {
       "kind": "enum",
       "values": [
@@ -1790,6 +1843,25 @@
         "related_capability_ids": "Items<Id>"
       }
     },
+    "DiagnosticMetric": {
+      "kind": "record",
+      "fields": {
+        "name": "Label",
+        "availability": "MetricAvailability",
+        "value": "?Counter",
+        "unit": "?Label",
+        "reason": "?Text"
+      }
+    },
+    "RecoveryAction": {
+      "kind": "record",
+      "fields": {
+        "operation": "Label",
+        "label": "Text",
+        "target_kind": "?Label",
+        "target_id": "?Id"
+      }
+    },
     "Diagnostic": {
       "kind": "record",
       "fields": {
@@ -1801,6 +1873,82 @@
         "correlation_id": "?CorrelationId",
         "evidence": "?ArtifactRef"
       }
+    },
+    "DiagnosticEntry": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "severity": "Severity",
+        "component": "Label",
+        "code": "Label",
+        "message": "Content",
+        "correlation_id": "?CorrelationId",
+        "evidence": "?ArtifactRef",
+        "sequence": "?Counter",
+        "recorded_at_ms": "?Counter",
+        "actor_id": "?ActorId",
+        "origin": "?DiagnosticOrigin",
+        "project_id": "?ProjectId",
+        "operation": "?Label",
+        "operation_id": "?OperationId",
+        "target_kind": "?Label",
+        "target_id": "?Id",
+        "stage": "?Label",
+        "source_revision": "?Label",
+        "attempt": "?Counter",
+        "started_at_ms": "?Counter",
+        "finished_at_ms": "?Counter",
+        "progress_completed": "?Counter",
+        "progress_total": "?Counter",
+        "outcome": "?DiagnosticOutcome",
+        "error_class": "?DiagnosticErrorClass",
+        "health": "?HealthState",
+        "output": "?Content",
+        "output_omitted_bytes": "?Counter",
+        "redactions": "?Counter",
+        "metrics": "?Items<DiagnosticMetric>",
+        "recovery": "?Items<RecoveryAction>"
+      },
+      "since": {
+        "sequence": 2,
+        "recorded_at_ms": 2,
+        "actor_id": 2,
+        "origin": 2,
+        "project_id": 2,
+        "operation": 2,
+        "operation_id": 2,
+        "target_kind": 2,
+        "target_id": 2,
+        "stage": 2,
+        "source_revision": 2,
+        "attempt": 2,
+        "started_at_ms": 2,
+        "finished_at_ms": 2,
+        "progress_completed": 2,
+        "progress_total": 2,
+        "outcome": 2,
+        "error_class": 2,
+        "health": 2,
+        "output": 2,
+        "output_omitted_bytes": 2,
+        "redactions": 2,
+        "metrics": 2,
+        "recovery": 2
+      },
+      "earlierName": "Diagnostic"
+    },
+    "DiagnosticPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<DiagnosticEntry>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "latest_sequence": "?Counter"
+      },
+      "since": {
+        "latest_sequence": 2
+      },
+      "earlierName": "Page"
     },
     "BackupRecord": {
       "kind": "record",
@@ -5964,10 +6112,10 @@
         "page": "PageRequest",
         "component": "?Label"
       },
-      "result": "Page<Diagnostic>",
+      "result": "DiagnosticPage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Current local application health, distinct from repository health and model history: one host check per component (readiness, storage migrations/WAL/disk/integrity/schema objects, queue consumers, owned processes, boot recovery, artifact collection, indexing, providers, diagnostics retention, local identity and access). Schema revision 2: each check carries its health state, metrics whose unavailable values are marked Unavailable with a reason (never reported as zero) and safe recovery links."
     },
     "workspace.logs": {
       "operation": "workspace.logs",
@@ -5975,12 +6123,38 @@
       "fields": {
         "page": "PageRequest",
         "component": "?Label",
-        "after_sequence": "Counter"
+        "after_sequence": "Counter",
+        "severity": "?Severity",
+        "outcome": "?DiagnosticOutcome",
+        "operation": "?Label",
+        "operation_id": "?OperationId",
+        "correlation_id": "?CorrelationId",
+        "target_id": "?Id",
+        "stage": "?Label",
+        "project_id": "?ProjectId",
+        "search": "?Label",
+        "since_ms": "?Counter",
+        "until_ms": "?Counter",
+        "order": "?SortDirection"
       },
-      "result": "Page<Diagnostic>",
+      "result": "DiagnosticPage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Retained redacted log records (never model history), ordered by their record sequence strictly after afterSequence. Schema revision 2: filters by minimum severity, outcome, operation, operation ID, correlation ID, target, stage and project, a case-insensitive search of at most 256 characters over code, message, stage, operation and output, and a recorded-time window (sinceMs at most untilMs); order Descending lists newest first. Records carry attribution, operation/target/stage/source revision, attempt, lifecycle times, progress, outcome, error class, bounded helper output with its omitted byte count, the redaction count, metrics and safe recovery links. A project-confined principal sees its project's records and workspace records only.",
+      "since": {
+        "severity": 2,
+        "outcome": 2,
+        "operation": 2,
+        "operation_id": 2,
+        "correlation_id": 2,
+        "target_id": 2,
+        "stage": 2,
+        "project_id": 2,
+        "search": 2,
+        "since_ms": 2,
+        "until_ms": 2,
+        "order": 2
+      }
     },
     "workspace.record_diagnostic": {
       "operation": "workspace.record_diagnostic",
@@ -5990,12 +6164,42 @@
         "code": "Label",
         "severity": "Severity",
         "message": "Content",
-        "evidence": "?ArtifactRef"
+        "evidence": "?ArtifactRef",
+        "operation": "?Label",
+        "operation_id": "?OperationId",
+        "target_kind": "?Label",
+        "target_id": "?Id",
+        "stage": "?Label",
+        "source_revision": "?Label",
+        "attempt": "?Counter",
+        "started_at_ms": "?Counter",
+        "finished_at_ms": "?Counter",
+        "progress_completed": "?Counter",
+        "progress_total": "?Counter",
+        "outcome": "?DiagnosticOutcome",
+        "error_class": "?DiagnosticErrorClass",
+        "output": "?Content"
       },
-      "result": "Diagnostic",
+      "result": "DiagnosticEntry",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Host attributes actor/correlation and redacts secrets/source rows before persistence; package cannot impersonate host health."
+      "rules": "Host attributes actor/correlation and redacts secrets/source rows before persistence; package cannot impersonate host health. Schema revision 2: the record also carries operation/target/stage/source revision, attempt, lifecycle times (start at most finish), progress (completed at most total), outcome, error class and helper output, which the host bounds (16 KiB kept, the rest counted) and redacts. A component is dot-separated lowercase segments of a-z, 0-9, _ and - (anything else is InvalidArgument) and is matched exactly and case-sensitively. Host-reserved components (host, health, storage, queue, process, boot, access, diagnostics, artifacts, indexing, provider and beneath them) are refused for any principal but the host; a reported record is origin Reported. Evidence must be a live artifact version the caller can see.",
+      "since": {
+        "operation": 2,
+        "operation_id": 2,
+        "target_kind": 2,
+        "target_id": 2,
+        "stage": 2,
+        "source_revision": 2,
+        "attempt": 2,
+        "started_at_ms": 2,
+        "finished_at_ms": 2,
+        "progress_completed": 2,
+        "progress_total": 2,
+        "outcome": 2,
+        "error_class": 2,
+        "output": 2
+      }
     },
     "workspace.backup": {
       "operation": "workspace.backup",
@@ -6574,6 +6778,18 @@
       2
     ],
     "sessions.end": [
+      1,
+      2
+    ],
+    "workspace.diagnostics": [
+      1,
+      2
+    ],
+    "workspace.logs": [
+      1,
+      2
+    ],
+    "workspace.record_diagnostic": [
       1,
       2
     ]

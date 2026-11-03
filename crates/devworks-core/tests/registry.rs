@@ -270,6 +270,9 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "sessions.get",
             "sessions.list",
             "sessions.start",
+            "workspace.diagnostics",
+            "workspace.logs",
+            "workspace.record_diagnostic",
         ])
     );
     // Revision 1 of the history pages is exactly the recorded Page; revision 2 adds the tail

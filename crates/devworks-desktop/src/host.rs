@@ -10,6 +10,7 @@
 //! [`InvocationContext`], exactly as an agent tool reaches the same use cases (ARCH-02).
 use crate::backend::{Backend, Waker};
 use crate::platform::{HostIds, StoreAuthority, SystemClock, user_display_name};
+use devworks_adapters::diagnostics::DiagnosticExports;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_adapters::fs::sources::{HostArtifactSources, IssueRefusal};
@@ -20,11 +21,13 @@ use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
 use devworks_core::authority::HostRoles;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::ports::diagnostics::StorageHealthProbe;
 use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions, run_write};
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::resources::ResourceService;
@@ -125,10 +128,11 @@ impl Host {
 /// timers; the tasks boot starts run there.
 async fn compose(
     config: &DesktopConfig,
-    store: Arc<dyn ApplicationStore>,
+    sqlite: Arc<SqliteStore>,
     clock: Arc<dyn Clock>,
     ids: Arc<HostIds>,
 ) -> Result<Host, StartError> {
+    let store: Arc<dyn ApplicationStore> = sqlite.clone();
     let id_source: Arc<dyn IdSource> = ids.clone();
     let sources = Arc::new(HostArtifactSources::new(clock.clone(), id_source.clone()));
     let artifacts = Arc::new(ArtifactService::new(
@@ -162,6 +166,17 @@ async fn compose(
         store: store.clone(),
         clock: clock.clone(),
     });
+    // Diagnostics read the store's own health probes; exports are staged as the user's uploads.
+    let diagnostics = Arc::new(DiagnosticService::new(
+        store.clone(),
+        id_source.clone(),
+        clock.clone(),
+        Some(sqlite as Arc<dyn StorageHealthProbe>),
+    ));
+    diagnostics.set_export_staging(Arc::new(DiagnosticExports::new(
+        config.data_root.join("diagnostics").join("exports"),
+        sources.clone(),
+    )));
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
     // The run-control quiesce (live work held for Continue) gets this cooperative period; it
@@ -181,6 +196,7 @@ async fn compose(
         // until the agent supervisor exists): accepted work is held at shutdown and boot.
         runs: RunComposition::new(Arc::new(ControlService::new(id_source.clone()))),
         power: Arc::new(NativePower),
+        diagnostics,
         use_cases,
         consumers: Vec::new(),
         config: runtime_config,
@@ -278,7 +294,7 @@ impl Engine {
                         .await
                         .map_err(|e| StartError::Thread(e.to_string()))
                         .and_then(|r| r.map_err(StartError::Store));
-                    let store: Arc<dyn ApplicationStore> = match opened {
+                    let store = match opened {
                         Ok(s) => Arc::new(s),
                         Err(e) => {
                             let _ = booted_tx.send(Err(e));

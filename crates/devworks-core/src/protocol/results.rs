@@ -662,7 +662,7 @@ pub enum OperationResult {
     #[serde(rename = "help.generate_capability_docs")]
     HelpGenerateCapabilityDocs { value: OperationRef },
     #[serde(rename = "workspace.diagnostics")]
-    WorkspaceDiagnostics { value: Page<Diagnostic> },
+    WorkspaceDiagnostics { value: DiagnosticPage },
     #[serde(rename = "workspace.backup")]
     WorkspaceBackup { value: BackupRecord },
     #[serde(rename = "workspace.restore")]
@@ -674,9 +674,9 @@ pub enum OperationResult {
     #[serde(rename = "workspace.approve_install")]
     WorkspaceApproveInstall { value: UpdateRecord },
     #[serde(rename = "workspace.logs")]
-    WorkspaceLogs { value: Page<Diagnostic> },
+    WorkspaceLogs { value: DiagnosticPage },
     #[serde(rename = "workspace.record_diagnostic")]
-    WorkspaceRecordDiagnostic { value: Diagnostic },
+    WorkspaceRecordDiagnostic { value: DiagnosticEntry },
     #[serde(rename = "repositories.list")]
     RepositoriesList { value: Page<RepositoryRecord> },
     #[serde(rename = "repositories.get")]
@@ -1480,6 +1480,9 @@ impl Revisioned for OperationResult {
             Self::ResourcesRelease { value } => value.retain_revision(revision),
             Self::ResourcesHolders { value } => value.retain_revision(revision),
             Self::ResourcesWaiters { value } => value.retain_revision(revision),
+            Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
+            Self::WorkspaceLogs { value } => value.retain_revision(revision),
+            Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             _ => {}
         }
     }

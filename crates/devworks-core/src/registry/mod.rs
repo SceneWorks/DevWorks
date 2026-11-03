@@ -333,6 +333,28 @@ fn revision_document(canonical: &Value, revision: u32) -> Value {
             }
         }
     }
+    // A generic family name (`Page`, which schemars numbers `Page2`, `Page3`, ... by first
+    // use) is the member this definition equals once the other renames apply.
+    if let Some(Value::Object(defs)) = v.get("$defs") {
+        let primary = renames.clone();
+        for (from, to) in renames.iter_mut() {
+            let mut def = defs[from.as_str()].clone();
+            for (f, t) in &primary {
+                retarget(&mut def, &format!("#/$defs/{f}"), &format!("#/$defs/{t}"));
+            }
+            if defs.get(to.as_str()).is_some_and(|e| *e == def) {
+                continue;
+            }
+            let member = defs.iter().find(|(name, existing)| {
+                name.strip_prefix(to.as_str())
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                    && **existing == def
+            });
+            if let Some((name, _)) = member {
+                *to = name.clone();
+            }
+        }
+    }
     for (from, to) in &renames {
         retarget(&mut v, &format!("#/$defs/{from}"), &format!("#/$defs/{to}"));
     }

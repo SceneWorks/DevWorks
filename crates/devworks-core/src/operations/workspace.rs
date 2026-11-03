@@ -13,7 +13,7 @@ use crate::protocol::provider::{ArtifactRef, Digest};
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Counter, Id, Revision, StoreId};
+use crate::protocol::{CorrelationId, Counter, Id, OperationId, ProjectId, Revision, StoreId};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -141,17 +141,150 @@ pub struct LogsInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<Label>,
     pub after_sequence: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Severity", extend("x-since" = 2))]
+    pub severity: Option<Severity>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DiagnosticOutcome", extend("x-since" = 2))]
+    pub outcome: Option<DiagnosticOutcome>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub operation: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OperationId", extend("x-since" = 2))]
+    pub operation_id: Option<OperationId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CorrelationId", extend("x-since" = 2))]
+    pub correlation_id: Option<CorrelationId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub target_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub stage: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 2))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub search: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub since_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub until_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SortDirection", extend("x-since" = 2))]
+    pub order: Option<SortDirection>,
 }
 impl Check for LogsInput {
     fn check(&self) -> Result<(), String> {
         self.page.check()?;
         self.component.check()?;
         self.after_sequence.check()?;
+        self.severity.check()?;
+        self.outcome.check()?;
+        self.operation.check()?;
+        self.operation_id.check()?;
+        self.correlation_id.check()?;
+        self.target_id.check()?;
+        self.stage.check()?;
+        self.project_id.check()?;
+        self.search.check()?;
+        self.since_ms.check()?;
+        self.until_ms.check()?;
+        self.order.check()?;
         Ok(())
     }
 }
 impl Revisioned for LogsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.severity = None;
+        }
+        if revision < 2 {
+            self.outcome = None;
+        }
+        if revision < 2 {
+            self.operation = None;
+        }
+        if revision < 2 {
+            self.operation_id = None;
+        }
+        if revision < 2 {
+            self.correlation_id = None;
+        }
+        if revision < 2 {
+            self.target_id = None;
+        }
+        if revision < 2 {
+            self.stage = None;
+        }
+        if revision < 2 {
+            self.project_id = None;
+        }
+        if revision < 2 {
+            self.search = None;
+        }
+        if revision < 2 {
+            self.since_ms = None;
+        }
+        if revision < 2 {
+            self.until_ms = None;
+        }
+        if revision < 2 {
+            self.order = None;
+        }
+    }
 }
 
 /// `workspace.record_diagnostic` Command input.
@@ -164,6 +297,104 @@ pub struct RecordDiagnosticInput {
     pub message: Content,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub operation: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OperationId", extend("x-since" = 2))]
+    pub operation_id: Option<OperationId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub target_kind: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub target_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub stage: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub source_revision: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub attempt: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub started_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub finished_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub progress_completed: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub progress_total: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DiagnosticOutcome", extend("x-since" = 2))]
+    pub outcome: Option<DiagnosticOutcome>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DiagnosticErrorClass", extend("x-since" = 2))]
+    pub error_class: Option<DiagnosticErrorClass>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 2))]
+    pub output: Option<Content>,
 }
 impl Check for RecordDiagnosticInput {
     fn check(&self) -> Result<(), String> {
@@ -172,11 +403,68 @@ impl Check for RecordDiagnosticInput {
         self.severity.check()?;
         self.message.check()?;
         self.evidence.check()?;
+        self.operation.check()?;
+        self.operation_id.check()?;
+        self.target_kind.check()?;
+        self.target_id.check()?;
+        self.stage.check()?;
+        self.source_revision.check()?;
+        self.attempt.check()?;
+        self.started_at_ms.check()?;
+        self.finished_at_ms.check()?;
+        self.progress_completed.check()?;
+        self.progress_total.check()?;
+        self.outcome.check()?;
+        self.error_class.check()?;
+        self.output.check()?;
         Ok(())
     }
 }
 impl Revisioned for RecordDiagnosticInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.operation = None;
+        }
+        if revision < 2 {
+            self.operation_id = None;
+        }
+        if revision < 2 {
+            self.target_kind = None;
+        }
+        if revision < 2 {
+            self.target_id = None;
+        }
+        if revision < 2 {
+            self.stage = None;
+        }
+        if revision < 2 {
+            self.source_revision = None;
+        }
+        if revision < 2 {
+            self.attempt = None;
+        }
+        if revision < 2 {
+            self.started_at_ms = None;
+        }
+        if revision < 2 {
+            self.finished_at_ms = None;
+        }
+        if revision < 2 {
+            self.progress_completed = None;
+        }
+        if revision < 2 {
+            self.progress_total = None;
+        }
+        if revision < 2 {
+            self.outcome = None;
+        }
+        if revision < 2 {
+            self.error_class = None;
+        }
+        if revision < 2 {
+            self.output = None;
+        }
+    }
 }
 
 /// An admitted input of the `workspace` family, built only for the selected operation and mode.

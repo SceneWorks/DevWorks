@@ -166,6 +166,14 @@ fn composition(
             devworks_core::services::runs::ControlService::new(h.ids.clone()),
         )),
         power,
+        diagnostics: Arc::new(
+            devworks_core::services::diagnostics::DiagnosticService::new(
+                store.clone(),
+                h.ids.clone(),
+                h.clock(),
+                None,
+            ),
+        ),
         use_cases: UseCases::new().with_settings(Arc::new(SettingsService {
             roles: Arc::new(HostRoles { store }),
             paths: Arc::new(FsPathProbe),

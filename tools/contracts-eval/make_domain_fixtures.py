@@ -425,5 +425,36 @@ for name in ['sessions.get','sessions.start','sessions.end','sessions.append_mes
 case('r2-result-sessions.list','operation-result.r2',{'kind':'sessions.list','value':{'items':[session_r2,sample('SessionRecord')],'hasMore':False}})
 case('reject-r1-result-session-times','operation-result',{'kind':'sessions.get','value':session_r2},False,False)
 case('reject-r2-result-session-negative-time','operation-result.r2',{'kind':'sessions.get','value':{**session_r2,'createdAtMs':'-1'}},False,False)
+# Schema revision 2 (workspace diagnostics): log filters, attributed run detail on reported
+# diagnostics, and health state, metrics (an unavailable value is marked, never zero) and safe
+# recovery links on the records.
+logs=dict(severity='Warning',outcome='Failed',operation='indexing.repository',operationId='operation-a',correlationId='correlation-a',targetId='repo-a',stage='parse',projectId='project-a',search='timeout',sinceMs='1',untilMs='2',order='Descending')
+case('r2-input-workspace.logs','domain-request.r2',domain('workspace.logs',**logs))
+case('r2-input-workspace.logs-plain','domain-request.r2',domain('workspace.logs'))
+case('r2-input-workspace.diagnostics','domain-request.r2',domain('workspace.diagnostics'))
+case('reject-r1-logs-severity','domain-request',domain('workspace.logs',None,severity='Error'),False,False)
+case('reject-r2-logs-unknown-order','domain-request.r2',domain('workspace.logs',order='Sideways'),False,False)
+case('reject-r2-logs-empty-search','domain-request.r2',domain('workspace.logs',search=''),False,False)
+run=dict(operation='indexing.repository',operationId='operation-a',targetKind='repository',targetId='repo-a',stage='parse',sourceRevision='0123abc',attempt='2',startedAtMs='1',finishedAtMs='2',progressCompleted='3',progressTotal='5',outcome='Retryable',errorClass='Timeout',output='helper stderr tail')
+case('r2-input-workspace.record_diagnostic','domain-request.r2',command_at('workspace.record_diagnostic',**run))
+case('r2-input-workspace.record_diagnostic-plain','domain-request.r2',command_at('workspace.record_diagnostic'))
+case('reject-r1-record-diagnostic-stage','domain-request',command_at('workspace.record_diagnostic',None,stage='parse'),False,False)
+case('reject-r2-record-diagnostic-unknown-outcome','domain-request.r2',command_at('workspace.record_diagnostic',outcome='Exploded'),False,False)
+case('reject-r2-record-diagnostic-unknown-class','domain-request.r2',command_at('workspace.record_diagnostic',errorClass='Gremlins'),False,False)
+metric_ok={'name':'walBytes','availability':'Available','value':'4096','unit':'bytes'}
+metric_na={'name':'freeBytes','availability':'Unavailable','unit':'bytes','reason':'the volume did not report free space'}
+diag_r2={**sample('Diagnostic'),'sequence':'7','recordedAtMs':'1793570000000','actorId':'actor-a','origin':'Host','projectId':'project-a',**{k:v for k,v in run.items() if k!='operationId'},'operationId':'operation-a','health':'Degraded','outputOmittedBytes':'1024','redactions':'1','metrics':[metric_ok,metric_na],'recovery':[{'operation':'queue.retry','label':'Retry the failed delivery','targetKind':'queue_delivery','targetId':'delivery-a'}]}
+case('r2-result-workspace.logs','operation-result.r2',{'kind':'workspace.logs','value':{'items':[diag_r2],'hasMore':False}})
+case('r2-result-workspace.diagnostics','operation-result.r2',{'kind':'workspace.diagnostics','value':{'items':[{**sample('Diagnostic'),'health':'Unavailable','metrics':[metric_na]}],'hasMore':False}})
+case('r2-result-workspace.record_diagnostic','operation-result.r2',{'kind':'workspace.record_diagnostic','value':{**diag_r2,'origin':'Reported'}})
+case('reject-r1-result-diagnostic-health','operation-result',{'kind':'workspace.diagnostics','value':{'items':[{**sample('Diagnostic'),'health':'Healthy'}],'hasMore':False}},False,False)
+case('reject-r2-result-diagnostic-unknown-health','operation-result.r2',{'kind':'workspace.diagnostics','value':{'items':[{**sample('Diagnostic'),'health':'Fine'}],'hasMore':False}},False,False)
+case('r2-result-workspace.logs-tail','operation-result.r2',{'kind':'workspace.logs','value':{'items':[],'hasMore':False,'latestSequence':'7'}})
+case('reject-r1-result-logs-tail','operation-result',{'kind':'workspace.logs','value':{'items':[],'hasMore':False,'latestSequence':'7'}},False,False)
+case('reject-r2-result-unavailable-metric-zero','operation-result.r2',{'kind':'workspace.diagnostics','value':{'items':[{**sample('Diagnostic'),'metrics':[{**metric_na,'value':'0'}]}],'hasMore':False}},False,True)
+case('reject-r2-result-available-metric-without-value','operation-result.r2',{'kind':'workspace.diagnostics','value':{'items':[{**sample('Diagnostic'),'metrics':[{k:v for k,v in metric_ok.items() if k!='value'}]}],'hasMore':False}},False,True)
+case('reject-r2-result-progress-over-total','operation-result.r2',{'kind':'workspace.record_diagnostic','value':{**diag_r2,'progressCompleted':'6'}},False,True)
+case('reject-r2-result-diagnostic-page-continuation','operation-result.r2',{'kind':'workspace.logs','value':{'items':[],'hasMore':True}},False,True)
+case('reject-r2-result-metric-unknown-availability','operation-result.r2',{'kind':'workspace.logs','value':{'items':[{**sample('Diagnostic'),'metrics':[{**metric_ok,'availability':'Maybe'}]}],'hasMore':False}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

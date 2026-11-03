@@ -122,6 +122,35 @@ fn the_window_close_runs_the_runtime_shutdown_and_releases_the_data_root() {
 }
 
 #[test]
+fn the_composition_root_reports_storage_health_through_workspace_diagnostics() {
+    let root = Root::new("diagnostics");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut frame: serde_json::Value = serde_json::from_slice(&ops::query_frame(
+        &*backend,
+        "workspace.diagnostics",
+        json!({"page": {"limit": 200}}),
+    ))
+    .unwrap();
+    frame["schemaRevision"] = json!(2);
+    let (result, _) =
+        ops::query_result(backend.query("workspace.diagnostics", frame.to_string().as_bytes()))
+            .expect("workspace.diagnostics is served");
+    let value = serde_json::to_value(&result).unwrap();
+    let items = value["value"]["items"]
+        .as_array()
+        .expect("a diagnostics page");
+    let disk = items
+        .iter()
+        .find(|c| c["component"] == "storage.disk")
+        .unwrap_or_else(|| panic!("no storage.disk in {items:#?}"));
+    assert_ne!(
+        disk["health"], "Unavailable",
+        "the store's probe is attached: {disk:#}"
+    );
+}
+
+#[test]
 fn without_a_runtime_every_route_shows_a_designed_offline_state() {
     let root = Root::new("offline");
     let shell = shell_with(

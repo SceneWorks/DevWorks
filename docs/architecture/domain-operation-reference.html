@@ -2067,8 +2067,8 @@
 </thead>
 <tbody><tr>
 <td><code>workspace.diagnostics</code></td>
-<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><code>component</code>: <code>?Label</code></td>
-<td><code>Page&lt;Diagnostic&gt;</code></td>
+<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><code>component</code>: <code>?Label</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><code>DiagnosticPage</code></td>
 </tr>
 <tr>
 <td><code>workspace.backup</code></td>
@@ -2097,13 +2097,13 @@
 </tr>
 <tr>
 <td><code>workspace.logs</code></td>
-<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><code>component</code>: <code>?Label</code><br><code>afterSequence</code>: <code>Counter</code></td>
-<td><code>Page&lt;Diagnostic&gt;</code></td>
+<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><code>component</code>: <code>?Label</code><br><code>afterSequence</code>: <code>Counter</code><br><code>severity</code>: <code>?Severity</code><br><code>outcome</code>: <code>?DiagnosticOutcome</code><br><code>operation</code>: <code>?Label</code><br><code>operationId</code>: <code>?OperationId</code><br><code>correlationId</code>: <code>?CorrelationId</code><br><code>targetId</code>: <code>?Id</code><br><code>stage</code>: <code>?Label</code><br><code>projectId</code>: <code>?ProjectId</code><br><code>search</code>: <code>?Label</code><br><code>sinceMs</code>: <code>?Counter</code><br><code>untilMs</code>: <code>?Counter</code><br><code>order</code>: <code>?SortDirection</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><code>DiagnosticPage</code></td>
 </tr>
 <tr>
 <td><code>workspace.record_diagnostic</code></td>
-<td><strong>Command</strong><br><code>component</code>: <code>Label</code><br><code>code</code>: <code>Label</code><br><code>severity</code>: <code>Severity</code><br><code>message</code>: <code>Content</code><br><code>evidence</code>: <code>?ArtifactRef</code></td>
-<td><code>Diagnostic</code></td>
+<td><strong>Command</strong><br><code>component</code>: <code>Label</code><br><code>code</code>: <code>Label</code><br><code>severity</code>: <code>Severity</code><br><code>message</code>: <code>Content</code><br><code>evidence</code>: <code>?ArtifactRef</code><br><code>operation</code>: <code>?Label</code><br><code>operationId</code>: <code>?OperationId</code><br><code>targetKind</code>: <code>?Label</code><br><code>targetId</code>: <code>?Id</code><br><code>stage</code>: <code>?Label</code><br><code>sourceRevision</code>: <code>?Label</code><br><code>attempt</code>: <code>?Counter</code><br><code>startedAtMs</code>: <code>?Counter</code><br><code>finishedAtMs</code>: <code>?Counter</code><br><code>progressCompleted</code>: <code>?Counter</code><br><code>progressTotal</code>: <code>?Counter</code><br><code>outcome</code>: <code>?DiagnosticOutcome</code><br><code>errorClass</code>: <code>?DiagnosticErrorClass</code><br><code>output</code>: <code>?Content</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><code>DiagnosticEntry</code></td>
 </tr>
 </tbody></table>
 <h3 id="repositories">Repositories</h3>
@@ -2322,6 +2322,16 @@
 <p><code>Reported</code>, <code>Estimated</code>, <code>Free</code>, <code>Untracked</code>.</p>
 <h3 id="severity">Severity</h3>
 <p><code>Info</code>, <code>Warning</code>, <code>Error</code>.</p>
+<h3 id="diagnosticoutcome">DiagnosticOutcome</h3>
+<p><code>Running</code>, <code>Succeeded</code>, <code>Partial</code>, <code>Stale</code>, <code>Cancelled</code>, <code>Retryable</code>, <code>Failed</code>.</p>
+<h3 id="diagnosticerrorclass">DiagnosticErrorClass</h3>
+<p><code>Transient</code>, <code>Timeout</code>, <code>Cancelled</code>, <code>Configuration</code>, <code>Authentication</code>, <code>Permission</code>, <code>NotFound</code>, <code>InvalidInput</code>, <code>ResourceExhausted</code>, <code>Dependency</code>, <code>Corruption</code>, <code>Internal</code>, <code>Unknown</code>.</p>
+<h3 id="healthstate">HealthState</h3>
+<p><code>Healthy</code>, <code>Degraded</code>, <code>Failed</code>, <code>Unavailable</code>.</p>
+<h3 id="diagnosticorigin">DiagnosticOrigin</h3>
+<p><code>Host</code>, <code>Reported</code>.</p>
+<h3 id="metricavailability">MetricAvailability</h3>
+<p><code>Available</code>, <code>Unavailable</code>.</p>
 <h3 id="tiername">TierName</h3>
 <p><code>Max</code>, <code>High</code>, <code>Mid</code>, <code>Low</code>.</p>
 <h3 id="effortname">EffortName</h3>
@@ -6342,6 +6352,60 @@
 <td><code>Items&lt;Id&gt;</code></td>
 </tr>
 </tbody></table>
+<h3 id="diagnosticmetric">DiagnosticMetric</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>name</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>availability</code></td>
+<td><code>MetricAvailability</code></td>
+</tr>
+<tr>
+<td><code>value</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>unit</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Text</code></td>
+</tr>
+</tbody></table>
+<h3 id="recoveryaction">RecoveryAction</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>operation</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>label</code></td>
+<td><code>Text</code></td>
+</tr>
+<tr>
+<td><code>targetKind</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>targetId</code></td>
+<td><code>?Id</code></td>
+</tr>
+</tbody></table>
 <h3 id="diagnostic">Diagnostic</h3>
 <table>
 <thead>
@@ -6377,6 +6441,164 @@
 <tr>
 <td><code>evidence</code></td>
 <td><code>?ArtifactRef</code></td>
+</tr>
+</tbody></table>
+<h3 id="diagnosticentry">DiagnosticEntry</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>severity</code></td>
+<td><code>Severity</code></td>
+</tr>
+<tr>
+<td><code>component</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>code</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>message</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>correlationId</code></td>
+<td><code>?CorrelationId</code></td>
+</tr>
+<tr>
+<td><code>evidence</code></td>
+<td><code>?ArtifactRef</code></td>
+</tr>
+<tr>
+<td><code>sequence</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>recordedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>actorId</code></td>
+<td><code>?ActorId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>origin</code></td>
+<td><code>?DiagnosticOrigin</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>projectId</code></td>
+<td><code>?ProjectId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>operation</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>operationId</code></td>
+<td><code>?OperationId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>targetKind</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>targetId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>stage</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>sourceRevision</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>attempt</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>startedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>finishedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>progressCompleted</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>progressTotal</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>outcome</code></td>
+<td><code>?DiagnosticOutcome</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>errorClass</code></td>
+<td><code>?DiagnosticErrorClass</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>health</code></td>
+<td><code>?HealthState</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>output</code></td>
+<td><code>?Content</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>outputOmittedBytes</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>redactions</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>metrics</code></td>
+<td><code>?Items&lt;DiagnosticMetric&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>recovery</code></td>
+<td><code>?Items&lt;RecoveryAction&gt;</code> · <em>revision 2+</em></td>
+</tr>
+</tbody></table>
+<h3 id="diagnosticpage">DiagnosticPage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>items</code></td>
+<td><code>Rows&lt;DiagnosticEntry&gt;</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>latestSequence</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="backuprecord">BackupRecord</h3>

@@ -372,6 +372,9 @@ impl ReadSnapshot for MemSnapshot {
     fn runs(&self) -> &dyn RunRead {
         &self.unsupported
     }
+    fn diagnostics(&self) -> &dyn DiagnosticRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -440,6 +443,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn runs(&mut self) -> &mut dyn RunRepository {
+        &mut self.unsupported
+    }
+    fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
         &mut self.unsupported
     }
 }
@@ -1383,6 +1389,55 @@ impl ResourceRead for Unsupported {
         _: Option<&Id>,
         _: u16,
     ) -> Result<Vec<StoredProcess>, StorageError> {
+        nope()
+    }
+}
+impl DiagnosticRead for Unsupported {
+    fn diagnostic(&self, _: &Id) -> Result<Option<StoredDiagnostic>, StorageError> {
+        nope()
+    }
+    fn diagnostics(
+        &self,
+        _: &DiagnosticFilter,
+        _: u16,
+    ) -> Result<Vec<StoredDiagnostic>, StorageError> {
+        nope()
+    }
+    fn count_diagnostics(&self, _: &DiagnosticFilter) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn diagnostic_stats(&self) -> Result<DiagnosticStats, StorageError> {
+        nope()
+    }
+    fn export_intent(
+        &self,
+        _: &ActorId,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<ExportIntent>, StorageError> {
+        nope()
+    }
+}
+impl DiagnosticRepository for Unsupported {
+    fn append_diagnostic(
+        &mut self,
+        _: &StoredDiagnostic,
+    ) -> Result<StoredDiagnostic, StorageError> {
+        nope()
+    }
+    fn prune_diagnostics(&mut self, _: i64, _: i64) -> Result<PrunedDiagnostics, StorageError> {
+        nope()
+    }
+    fn claim_export_intent(&mut self, _: &ExportIntent) -> Result<ExportIntent, StorageError> {
+        nope()
+    }
+    fn complete_export_intent(&mut self, _: &ExportIntent, _: &str) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn take_over_export_intent(&mut self, _: &ExportIntent, _: &str) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn release_export_intent(&mut self, _: &ExportIntent) -> Result<bool, StorageError> {
         nope()
     }
 }
