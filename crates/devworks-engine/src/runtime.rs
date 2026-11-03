@@ -1,13 +1,16 @@
 //! The engine's one boot entry point: [`boot`] recovers durable state in a fixed order (queue,
-//! artifacts, owned processes and resource leases), applies keep-awake, starts every required
-//! consumer, artifact collection and resource housekeeping, and only then returns the
-//! [`Runtime`] through which commands and queries are admitted. See the crate documentation ("Boot
+//! artifacts, owned processes and resource leases), applies keep-awake, records what recovery
+//! established as a diagnostic, starts every required consumer, artifact collection, resource
+//! housekeeping and the diagnostics monitor, and only then returns the [`Runtime`] through
+//! which commands and queries are admitted. See the crate documentation ("Boot
 //! sequence") for the order and why each step sits where it does.
+use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
+use devworks_core::ports::diagnostics::ExportStaging;
 use devworks_core::ports::files::FileFault;
 use devworks_core::ports::process::{PowerPort, ProcessHost};
 use devworks_core::ports::storage::{ApplicationStore, StorageError, Unavailable, WriteOptions};
@@ -20,6 +23,7 @@ use devworks_core::services::artifacts::lifecycle::{
     CollectReport, RecoveryReport as ArtifactRecoveryReport,
 };
 use devworks_core::services::artifacts::replies::ReceiptReplies;
+use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
 use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
 use devworks_core::services::resources::{MachineResource, ResourceService, desktop};
@@ -34,6 +38,8 @@ use tokio::task::JoinHandle;
 const RELEASES_BLOBS: &str = "artifacts.delete";
 /// The operation through which the `power.keepAwake` setting changes.
 const SAVES_SETTINGS: &str = "settings.save_revision";
+/// The operation that records a reported diagnostic (its commit raises the live-log hint).
+const RECORDS_DIAGNOSTIC: &str = "workspace.record_diagnostic";
 
 /// Everything the runtime is composed from. Every part is a core port or core service; the one
 /// `store` backs the gateway, the dispatcher, the reply publisher and artifact recovery and
@@ -55,6 +61,11 @@ pub struct Composition {
     pub process_host: Arc<dyn ProcessHost>,
     /// The OS power facility the keep-awake setting is applied with.
     pub power: Arc<dyn PowerPort>,
+    /// The one diagnostics service: [`boot`] registers the `workspace.diagnostics`, `.logs` and
+    /// `.record_diagnostic` use cases with it (replacing any the caller registered), records
+    /// boot recovery through it, feeds it the boot report, collection passes and consumers, and
+    /// runs its retention and monitor passes.
+    pub diagnostics: Arc<DiagnosticService>,
     /// The other use cases (queue, sessions, history, settings, ...).
     pub use_cases: UseCases,
     /// Consumers besides the required ones [`boot`] registers itself (package handlers, ...).
@@ -80,6 +91,10 @@ pub struct RuntimeConfig {
     pub shutdown_grace: Duration,
     /// The one bound shared by every owned tree's stop at shutdown (AD20 default 30 s).
     pub shutdown_bound: Duration,
+    /// Time between diagnostics passes (retention, integrity check, write-owner probe); one
+    /// runs at boot regardless. Hourly by default: retention is counted in days, and a full
+    /// integrity check reads the whole store.
+    pub diagnostics_interval: Duration,
 }
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
@@ -91,6 +106,7 @@ impl RuntimeConfig {
             housekeeping_interval: Duration::from_secs(30),
             shutdown_grace: Duration::from_secs(5),
             shutdown_bound: Duration::from_secs(30),
+            diagnostics_interval: Duration::from_secs(60 * 60),
         }
     }
 }
@@ -160,6 +176,8 @@ pub struct Runtime {
     resources: Arc<ResourceService>,
     housekeeper: Arc<Housekeeper>,
     keep_awake: Arc<KeepAwake>,
+    diagnostics: Arc<DiagnosticService>,
+    monitor: Arc<Monitor>,
     shutdown_grace: Duration,
     shutdown_bound: Duration,
     report: BootReport,
@@ -176,10 +194,16 @@ pub struct Runtime {
 /// 4. registers the machine resources and recovers owned processes and resource leases of
 ///    earlier boots ([`Housekeeper::boot`]);
 /// 5. applies the keep-awake setting;
-/// 6. starts delivery ([`Dispatcher::run`]);
-/// 7. starts artifact collection (a pass now, then periodically and after every applied
-///    `artifacts.delete`) and resource housekeeping ticks;
-/// 8. returns the handle through which commands are admitted.
+/// 6. records what recovery established as a `boot` diagnostic;
+/// 7. starts delivery ([`Dispatcher::run`]);
+/// 8. starts artifact collection (a pass now, then periodically and after every applied
+///    `artifacts.delete`), resource housekeeping ticks and the diagnostics monitor (retention,
+///    integrity check and write-owner probe now, then every
+///    [`RuntimeConfig::diagnostics_interval`]), and registers the boot report, collection passes
+///    and dispatcher as diagnostics health sources;
+/// 9. returns the handle through which commands are admitted.
+///
+/// A boot that stops records why as a failed `boot` diagnostic when the store still accepts it.
 ///
 /// Must be awaited on a Tokio runtime with timers; the tasks it starts run there.
 pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
@@ -192,33 +216,47 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         resources,
         process_host,
         power,
+        diagnostics,
         use_cases,
         mut consumers,
         config,
     } = composition;
     let use_cases = use_cases
         .with_artifacts(artifacts.clone())
-        .with_resources(resources.clone());
+        .with_resources(resources.clone())
+        .with_diagnostics(diagnostics.clone());
+    let failed = |e: BootError| {
+        diag::record_boot_failure(&diagnostics, &e);
+        e
+    };
     let mut replies = reply_consumer(
         Arc::new(ReceiptReplies::new(artifacts.clone())),
         store.clone(),
     );
     replies.max_in_flight = config.reply_max_in_flight;
     consumers.insert(0, replies);
+    diagnostics.set_consumers(consumers.iter().map(|c| c.name.clone()).collect());
     let dispatcher = Dispatcher::new(store.clone(), clock.clone(), consumers, config.dispatcher)
-        .map_err(BootError::Composition)?;
+        .map_err(BootError::Composition)
+        .map_err(failed)?;
 
-    let queue = dispatcher.recover().await.map_err(BootError::Queue)?;
+    let queue = dispatcher
+        .recover()
+        .await
+        .map_err(BootError::Queue)
+        .map_err(failed)?;
     let (svc, st) = (artifacts.clone(), store.clone());
     let recovered = tokio::task::spawn_blocking(move || svc.recover(&*st))
         .await
         .unwrap_or_else(|_| Err(panicked("artifact recovery")))
-        .map_err(BootError::Artifacts)?;
+        .map_err(BootError::Artifacts)
+        .map_err(failed)?;
     let supervisor = Arc::new(ProcessSupervisor::new(
         store.clone(),
         process_host,
         resources.clone(),
     ));
+    let booted_at_ms = clock.now_ms().get();
     let housekeeper = Arc::new(Housekeeper::new(
         store.clone(),
         clock,
@@ -228,7 +266,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let recovered_resources = housekeeper
         .boot(config.machine_resources.clone())
         .await
-        .map_err(BootError::Resources)?;
+        .map_err(BootError::Resources)
+        .map_err(failed)?;
     // Applying may start an OS helper (and wait briefly to see it hold), so off the async thread.
     let keep_awake = Arc::new(KeepAwake::new(power));
     let (ka, st) = (keep_awake.clone(), store.clone());
@@ -239,7 +278,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     })
     .await
     .unwrap_or_else(|_| Err(panicked("keep-awake")))
-    .map_err(BootError::Settings)?;
+    .map_err(BootError::Settings)
+    .map_err(failed)?;
+    let report = BootReport {
+        queue,
+        artifacts: recovered,
+        resources: recovered_resources,
+        keep_awake: applied,
+    };
+    let (svc, recovered) = (diagnostics.clone(), report.clone());
+    let _ = tokio::task::spawn_blocking(move || diag::record_boot(&svc, &recovered)).await;
 
     let run = dispatcher.clone();
     let delivery = tokio::spawn(async move { run.run().await });
@@ -257,6 +305,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     ));
     let (keeper, every) = (housekeeper.clone(), config.housekeeping_interval);
     let housekeeping = tokio::spawn(async move { keeper.run(every).await });
+    diag::sources(
+        &diagnostics,
+        report.clone(),
+        booted_at_ms,
+        collector.status.subscribe(),
+        dispatcher.clone(),
+    );
+    let monitor = Arc::new(Monitor::default());
+    let (watcher, svc, every) = (
+        monitor.clone(),
+        diagnostics.clone(),
+        config.diagnostics_interval,
+    );
+    let monitoring = tokio::spawn(async move { watcher.run(svc, every).await });
     Ok(Runtime {
         store,
         ids,
@@ -268,15 +330,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         resources,
         housekeeper,
         keep_awake,
+        diagnostics,
+        monitor,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
-        report: BootReport {
-            queue,
-            artifacts: recovered,
-            resources: recovered_resources,
-            keep_awake: applied,
-        },
-        tasks: Mutex::new(vec![delivery, collection, housekeeping]),
+        report,
+        tasks: Mutex::new(vec![delivery, collection, housekeeping, monitoring]),
     })
 }
 
@@ -330,6 +389,27 @@ impl Runtime {
     /// The resource service the `resources.*` use cases and dispatch-time checks share.
     pub fn resources(&self) -> &Arc<ResourceService> {
         &self.resources
+    }
+    /// The diagnostics service the `workspace.diagnostics`/`.logs`/`.record_diagnostic` use
+    /// cases, host log channels (indexing, providers) and the live-log watch share.
+    pub fn diagnostics(&self) -> &Arc<DiagnosticService> {
+        &self.diagnostics
+    }
+    /// Exports the selected diagnostics (and the current health checks) as an artifact of the
+    /// invocation's project: rendered bounded and redacted, staged by `staging` (a person's
+    /// upload ticket in production) and saved by an `artifacts.save` admitted through this
+    /// runtime under `request_key`.
+    pub fn export_diagnostics(
+        &self,
+        ctx: &InvocationContext,
+        query: &LogQuery,
+        staging: &dyn ExportStaging,
+        request_key: &str,
+    ) -> Result<CommandOutcome, ExportFailure> {
+        self.diagnostics
+            .export(ctx, query, staging, request_key, |raw| {
+                self.command(ctx, "artifacts.save", raw)
+            })
     }
     /// The process supervisor every owned tree is launched through (process tools, package and
     /// helper hosts).
@@ -413,6 +493,9 @@ impl Runtime {
         if released && operation == RELEASES_BLOBS {
             self.collector.trigger.notify_one();
         }
+        if committed && operation == RECORDS_DIAGNOSTIC {
+            self.diagnostics.committed();
+        }
         if released && operation == SAVES_SETTINGS {
             // A read failure leaves the previous request in place; the next save or explicit
             // refresh applies the setting again.
@@ -421,8 +504,9 @@ impl Runtime {
         outcome
     }
 
-    /// Stops admission of new deliveries, collection and housekeeping, waits for the delivery
-    /// loop, the collector, the housekeeper and every in-flight delivery to finish (an
+    /// Stops admission of new deliveries, collection, housekeeping and the diagnostics monitor,
+    /// waits for the delivery loop, the collector, the housekeeper, the monitor and every
+    /// in-flight delivery to finish (an
     /// asynchronous handler gets its consumer's stop grace), then stops every owned process tree
     /// within [`RuntimeConfig::shutdown_bound`] (recording the `Shutdown` reconciliation of
     /// resources) and releases the keep-awake request. Every tree is stopped natively even when
@@ -446,6 +530,7 @@ impl Runtime {
         self.dispatcher.stop();
         self.collector.stop();
         self.housekeeper.stop();
+        self.monitor.stop();
     }
 }
 

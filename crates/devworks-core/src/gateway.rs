@@ -1619,6 +1619,9 @@ impl WriteTransaction for HandlerTx<'_> {
     fn resources(&mut self) -> &mut dyn crate::ports::storage::ResourceRepository {
         self.inner.get_mut().resources()
     }
+    fn diagnostics(&mut self) -> &mut dyn crate::ports::storage::DiagnosticRepository {
+        self.inner.get_mut().diagnostics()
+    }
 }
 
 /// Records one visible `ReceiptIncompatible` history entry per receipt identity. The stored

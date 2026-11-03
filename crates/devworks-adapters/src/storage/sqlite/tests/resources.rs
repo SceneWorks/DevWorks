@@ -1137,7 +1137,7 @@ fn migration_10_adds_reservations_and_processes_to_a_version_9_store() {
     c.execute_batch("INSERT INTO projects VALUES('project-a','A','Active',1,1,1);")
         .unwrap();
     drop(c);
-    let s = h.store();
+    let s = SqliteStore::open_with(h.config(), &through(10)).unwrap();
     let report = s.compatibility().unwrap();
     assert_eq!(
         (

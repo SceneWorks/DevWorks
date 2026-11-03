@@ -42,6 +42,10 @@
 //!   supervisor's recovery and the resource boot reconciliation at startup, periodic sweeps with
 //!   the same sleep/wake detection as the dispatcher, and the bounded shutdown of owned trees.
 //!   [`runtime::boot`] drives it (see "Boot sequence").
+//! * **Diagnostics.** [`diagnostics`] records boot recovery (and a boot that stopped) in the core
+//!   diagnostic log, registers the boot report, artifact collection and dispatcher as health
+//!   sources of `workspace.diagnostics`, and runs the retention and monitor passes
+//!   ([`diagnostics::Monitor`]).
 //!
 //! # Boot sequence
 //!
@@ -74,19 +78,30 @@
 //!    transferred).
 //! 5. **Applies keep-awake** from the effective `power.keepAwake` setting through the
 //!    composition's `PowerPort`.
-//! 6. **Starts delivery** ([`Dispatcher::run`]).
-//! 7. **Starts artifact collection**: one pass at once, then every
+//! 6. **Records boot recovery** as one `boot` diagnostic (what steps 2–5 established and what
+//!    needs attention: held deliveries, missing files, unverifiable trees, unavailable
+//!    keep-awake), through the composition's one diagnostics service. A boot that stops at any
+//!    step records why (stage and error class) when the store still accepts it, so a failed
+//!    recovery stays visible after the next start.
+//! 7. **Starts delivery** ([`Dispatcher::run`]).
+//! 8. **Starts artifact collection**: one pass at once, then every
 //!    [`runtime::RuntimeConfig::collect_interval`] and after every applied `artifacts.delete`
 //!    admitted through the runtime. A pass removes pending blob generations no reader or pin
 //!    holds (`ArtifactService::collect`) and clears derived previews (`collect_derived`). Resource
 //!    housekeeping ticks start too (every [`runtime::RuntimeConfig::housekeeping_interval`]:
-//!    expiry, transfer, promotion, and a `Wake` reconciliation after a sleep/wake jump).
-//! 8. **Returns the [`runtime::Runtime`]**, the only handle through which commands and queries
+//!    expiry, transfer, promotion, and a `Wake` reconciliation after a sleep/wake jump). The
+//!    diagnostics monitor starts too: the retention pass (`diagnostics.logRetentionDays`,
+//!    `diagnostics.logMaxRecords`), the full integrity check and the write-owner probe, at once
+//!    and then every [`runtime::RuntimeConfig::diagnostics_interval`]. The boot report, the
+//!    collection passes and the dispatcher become health sources, and the consumers' names are
+//!    the queue health `workspace.diagnostics` reports.
+//! 9. **Returns the [`runtime::Runtime`]**, the only handle through which commands and queries
 //!    are admitted: a committed command wakes delivery for the reply intent its receipt
-//!    committed, and a committed `settings.save_revision` re-applies keep-awake.
+//!    committed, a committed `settings.save_revision` re-applies keep-awake, and a committed
+//!    `workspace.record_diagnostic` raises the live-log hint.
 //!
-//! [`runtime::Runtime::shutdown`] stops delivery, collection and housekeeping, waits for
-//! in-flight deliveries, then stops every owned process tree within one bound
+//! [`runtime::Runtime::shutdown`] stops delivery, collection, housekeeping and the diagnostics
+//! monitor, waits for in-flight deliveries, then stops every owned process tree within one bound
 //! ([`runtime::RuntimeConfig::shutdown_bound`]), records the `Shutdown` reconciliation and
 //! releases keep-awake.
 //!
@@ -104,7 +119,7 @@
 //! Step 4 commutes with steps 2 and 3 as well: it writes only owned-process records, resource
 //! definitions and leases and their history, and reads no queue row, journal state or artifact
 //! record, while queue and artifact recovery never read or write those tables. It must however
-//! precede steps 6–8: until it finishes, a tree of the earlier boot may still be running and
+//! precede steps 7–9: until it finishes, a tree of the earlier boot may still be running and
 //! holding a physical resource (the desktop, a device, a port), so neither a recovered delivery
 //! nor an admitted command may launch a process or be granted that resource. Recovery kills such
 //! trees and transfers their leases only once they are verified gone, so the first new work of
@@ -112,8 +127,15 @@
 //! by step 2 stays held for reconciliation even when step 4 killed the tree that ran it: killing
 //! a process is not evidence of what it did. Keep-awake (step 5) only reads settings.
 //!
+//! Step 6 only appends a diagnostic record and reads nothing the earlier steps write, so it
+//! sits after them to report their outcome, and before step 7 so that the record of what a
+//! boot recovered precedes every record of what it then did. The diagnostics monitor of step 8
+//! writes only diagnostic records and reads settings and store files; the retention pass
+//! never touches history, receipts, artifacts or evidence a record names.
+//!
 //! Nothing here establishes product acceptance: tests run the real SQLite adapter with injected
 //! clocks and scripted handlers, without inference, network or containers.
+pub mod diagnostics;
 pub mod dispatch;
 pub mod package;
 pub mod replies;

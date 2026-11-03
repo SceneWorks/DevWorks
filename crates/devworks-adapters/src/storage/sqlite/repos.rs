@@ -1043,6 +1043,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn resources(&self) -> &dyn ResourceRead {
         self
     }
+    fn diagnostics(&self) -> &dyn DiagnosticRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1245,6 +1248,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn resources(&mut self) -> &mut dyn ResourceRepository {
+        self
+    }
+    fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
         self
     }
 }

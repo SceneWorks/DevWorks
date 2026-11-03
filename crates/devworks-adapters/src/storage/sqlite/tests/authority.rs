@@ -2239,6 +2239,9 @@ impl WriteTransaction for Lying<'_> {
     fn resources(&mut self) -> &mut dyn ResourceRepository {
         self.inner.resources()
     }
+    fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
+        self.inner.diagnostics()
+    }
 }
 
 fn seams_run(

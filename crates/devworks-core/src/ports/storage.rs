@@ -50,8 +50,8 @@
 //! state and processing receipts, grants and actor/store identity, plus the scoped configuration
 //! repository ([`ConfigurationRepository`]), the host authority ledger ([`AuthorityLedger`]), the
 //! artifact store records ([`ArtifactRepository`]), the session, transcript and lineage
-//! records ([`SessionRepository`]) and the resource reservation and owned-process records
-//! ([`ResourceRepository`]).
+//! records ([`SessionRepository`]), the resource reservation and owned-process records
+//! ([`ResourceRepository`]) and the retained diagnostic log ([`DiagnosticRepository`]).
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -70,11 +70,13 @@ use std::sync::mpsc;
 mod artifacts;
 mod authority;
 mod configuration;
+mod diagnostics;
 mod resources;
 mod sessions;
 pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
+pub use diagnostics::*;
 pub use resources::*;
 pub use sessions::*;
 
@@ -465,6 +467,7 @@ pub trait WriteTransaction {
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository;
     fn sessions(&mut self) -> &mut dyn SessionRepository;
     fn resources(&mut self) -> &mut dyn ResourceRepository;
+    fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -503,6 +506,7 @@ pub trait ReadSnapshot {
     fn artifacts(&self) -> &dyn ArtifactRead;
     fn sessions(&self) -> &dyn SessionRead;
     fn resources(&self) -> &dyn ResourceRead;
+    fn diagnostics(&self) -> &dyn DiagnosticRead;
 }
 
 // ---------------------------------------------------------------------------------------------

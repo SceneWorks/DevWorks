@@ -13,6 +13,14 @@ fn unique(v: &Value, k: &str) -> bool {
 fn require(ok: bool, msg: &str) -> Result<(), String> {
     if ok { Ok(()) } else { Err(msg.into()) }
 }
+/// `a <= b` for two decimal-string counters, when both are present.
+fn ordered(v: &Value, a: &str, b: &str) -> bool {
+    let n = |k: &str| v.get(k).and_then(Value::as_str).and_then(|s| s.parse::<u128>().ok());
+    match (n(a), n(b)) {
+        (Some(x), Some(y)) => x <= y,
+        _ => true,
+    }
+}
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
     match name {
         "ClaimDraft" => require(
@@ -81,6 +89,31 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
                 recorded || !present(v, "replyArtifact"),
                 "unrecorded receipt cannot claim reply",
             )?
+        }
+        "DiagnosticPage" => require(
+            v["hasMore"] == present(v, "nextCursor"),
+            "page continuation mismatch",
+        )?,
+        "DiagnosticMetric" => {
+            let available = v["availability"] == "Available";
+            require(
+                present(v, "value") == available,
+                "a metric value is present exactly when the metric is available",
+            )?;
+            require(
+                available || present(v, "reason"),
+                "an unavailable metric says why",
+            )?;
+        }
+        "DiagnosticEntry" => {
+            require(
+                ordered(v, "startedAtMs", "finishedAtMs"),
+                "a diagnostic cannot finish before it started",
+            )?;
+            require(
+                ordered(v, "progressCompleted", "progressTotal"),
+                "completed progress cannot exceed its total",
+            )?;
         }
         "UsagePage" => {
             require(

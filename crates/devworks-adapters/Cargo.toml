@@ -25,13 +25,15 @@ devworks-core = { path = "../devworks-core", features = ["contract-suite"] }
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.191"
 
-# Owned process trees (Job Objects, toolhelp thread resume, process times) and the keep-awake
-# execution state on Windows. windows-sys is Microsoft's generated raw binding crate, so the
-# struct layouts and signatures come from the Windows metadata instead of hand-written FFI.
+# Owned process trees (Job Objects, toolhelp thread resume, process times), the keep-awake
+# execution state and the data-root volume's free space (diagnostics) on Windows. windows-sys is
+# Microsoft's generated raw binding crate, so the struct layouts and signatures come from the
+# Windows metadata instead of hand-written FFI.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_JobObjects",

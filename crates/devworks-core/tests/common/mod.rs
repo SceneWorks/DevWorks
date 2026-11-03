@@ -369,6 +369,9 @@ impl ReadSnapshot for MemSnapshot {
     fn resources(&self) -> &dyn ResourceRead {
         &self.unsupported
     }
+    fn diagnostics(&self) -> &dyn DiagnosticRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -434,6 +437,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn resources(&mut self) -> &mut dyn ResourceRepository {
+        &mut self.unsupported
+    }
+    fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
         &mut self.unsupported
     }
 }
@@ -1355,6 +1361,35 @@ impl ResourceRead for Unsupported {
         _: Option<&Id>,
         _: u16,
     ) -> Result<Vec<StoredProcess>, StorageError> {
+        nope()
+    }
+}
+impl DiagnosticRead for Unsupported {
+    fn diagnostic(&self, _: &Id) -> Result<Option<StoredDiagnostic>, StorageError> {
+        nope()
+    }
+    fn diagnostics(
+        &self,
+        _: &DiagnosticFilter,
+        _: u16,
+    ) -> Result<Vec<StoredDiagnostic>, StorageError> {
+        nope()
+    }
+    fn count_diagnostics(&self, _: &DiagnosticFilter) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn diagnostic_stats(&self) -> Result<DiagnosticStats, StorageError> {
+        nope()
+    }
+}
+impl DiagnosticRepository for Unsupported {
+    fn append_diagnostic(
+        &mut self,
+        _: &StoredDiagnostic,
+    ) -> Result<StoredDiagnostic, StorageError> {
+        nope()
+    }
+    fn prune_diagnostics(&mut self, _: i64, _: i64) -> Result<PrunedDiagnostics, StorageError> {
         nope()
     }
 }

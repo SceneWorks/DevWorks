@@ -1703,6 +1703,263 @@
       ],
       "type": "object"
     },
+    "DiagnosticEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "attempt": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "code": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "component": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "correlationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errorClass": {
+          "$ref": "#/$defs/DiagnosticErrorClass",
+          "x-since": 2
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "health": {
+          "$ref": "#/$defs/HealthState",
+          "x-since": 2
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "message": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "metrics": {
+          "$ref": "#/$defs/List_DiagnosticMetric_0_128",
+          "x-since": 2
+        },
+        "operation": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "operationId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "origin": {
+          "$ref": "#/$defs/DiagnosticOrigin",
+          "x-since": 2
+        },
+        "outcome": {
+          "$ref": "#/$defs/DiagnosticOutcome",
+          "x-since": 2
+        },
+        "output": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 2
+        },
+        "outputOmittedBytes": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "progressCompleted": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "progressTotal": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "projectId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "recordedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "recovery": {
+          "$ref": "#/$defs/List_RecoveryAction_0_128",
+          "x-since": 2
+        },
+        "redactions": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "sequence": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "stage": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "startedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "targetId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "targetKind": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        }
+      },
+      "required": [
+        "id",
+        "severity",
+        "component",
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "DiagnosticErrorClass": {
+      "enum": [
+        "Transient",
+        "Timeout",
+        "Cancelled",
+        "Configuration",
+        "Authentication",
+        "Permission",
+        "NotFound",
+        "InvalidInput",
+        "ResourceExhausted",
+        "Dependency",
+        "Corruption",
+        "Internal",
+        "Unknown"
+      ],
+      "type": "string"
+    },
+    "DiagnosticMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/MetricAvailability"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "availability"
+      ],
+      "type": "object"
+    },
+    "DiagnosticOrigin": {
+      "enum": [
+        "Host",
+        "Reported"
+      ],
+      "type": "string"
+    },
+    "DiagnosticOutcome": {
+      "enum": [
+        "Running",
+        "Succeeded",
+        "Partial",
+        "Stale",
+        "Cancelled",
+        "Retryable",
+        "Failed"
+      ],
+      "type": "string"
+    },
+    "DiagnosticPage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_DiagnosticEntry_0_500"
+        },
+        "latestSequence": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
+    },
     "Digest": {
       "pattern": "^[a-f0-9]{64}$",
       "type": "string"
@@ -2977,6 +3234,15 @@
       ],
       "type": "object"
     },
+    "HealthState": {
+      "enum": [
+        "Healthy",
+        "Degraded",
+        "Failed",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
     "HelpTopic": {
       "additionalProperties": false,
       "properties": {
@@ -3950,6 +4216,22 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_DiagnosticEntry_0_500": {
+      "items": {
+        "$ref": "#/$defs/DiagnosticEntry"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_DiagnosticMetric_0_128": {
+      "items": {
+        "$ref": "#/$defs/DiagnosticMetric"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_Diagnostic_0_128": {
       "items": {
         "$ref": "#/$defs/Diagnostic"
@@ -4235,6 +4517,14 @@
         "$ref": "#/$defs/QueueDelivery"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_RecoveryAction_0_128": {
+      "items": {
+        "$ref": "#/$defs/RecoveryAction"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },
@@ -4938,6 +5228,13 @@
       "enum": [
         "L2",
         "Cosine"
+      ],
+      "type": "string"
+    },
+    "MetricAvailability": {
+      "enum": [
+        "Available",
+        "Unavailable"
       ],
       "type": "string"
     },
@@ -9619,7 +9916,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page19"
+              "$ref": "#/$defs/DiagnosticPage"
             }
           },
           "required": [
@@ -9636,7 +9933,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page19"
+              "$ref": "#/$defs/DiagnosticPage"
             }
           },
           "required": [
@@ -9653,7 +9950,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Diagnostic"
+              "$ref": "#/$defs/DiagnosticEntry"
             }
           },
           "required": [
@@ -13286,6 +13583,42 @@
       "required": [
         "requestKey",
         "state"
+      ],
+      "type": "object"
+    },
+    "RecoveryAction": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "operation": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "targetId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetKind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation",
+        "label"
       ],
       "type": "object"
     },

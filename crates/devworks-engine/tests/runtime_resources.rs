@@ -163,6 +163,14 @@ fn composition(
         resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(NativeProcessHost),
         power,
+        diagnostics: Arc::new(
+            devworks_core::services::diagnostics::DiagnosticService::new(
+                store.clone(),
+                h.ids.clone(),
+                h.clock(),
+                None,
+            ),
+        ),
         use_cases: UseCases::new().with_settings(Arc::new(SettingsService {
             roles: Arc::new(HostRoles { store }),
             paths: Arc::new(FsPathProbe),

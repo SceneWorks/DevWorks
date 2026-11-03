@@ -619,14 +619,14 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `workspace.diagnostics` | **Query**<br>`page`: `PageRequest`<br>`component`: `?Label` | `Page<Diagnostic>` |
+| `workspace.diagnostics` | **Query**<br>`page`: `PageRequest`<br>`component`: `?Label`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `DiagnosticPage` |
 | `workspace.backup` | **Command**<br>`destinationGrantId`: `Id`<br>`expectedStoreSequence`: `Counter` | `BackupRecord` |
 | `workspace.restore` | **Command**<br>`backup`: `ArtifactRef`<br>`expectedStoreId`: `StoreId`<br>`expectedRestoreEpoch`: `Counter`<br>`proposalId`: `Id` | `BackupRecord` |
 | `workspace.migrate` | **Command**<br>`migrationManifest`: `ArtifactRef`<br>`expectedSchemaRevision`: `Revision`<br>`proposalId`: `?Id` | `MutationSummary` |
 | `workspace.update_status` | **Query**<br>No caller fields | `Page<UpdateRecord>` |
 | `workspace.approve_install` | **Command**<br>`updateId`: `Id`<br>`expectedRevision`: `Revision`<br>`binaryDigest`: `Digest`<br>`proposalId`: `Id` | `UpdateRecord` |
-| `workspace.logs` | **Query**<br>`page`: `PageRequest`<br>`component`: `?Label`<br>`afterSequence`: `Counter` | `Page<Diagnostic>` |
-| `workspace.record_diagnostic` | **Command**<br>`component`: `Label`<br>`code`: `Label`<br>`severity`: `Severity`<br>`message`: `Content`<br>`evidence`: `?ArtifactRef` | `Diagnostic` |
+| `workspace.logs` | **Query**<br>`page`: `PageRequest`<br>`component`: `?Label`<br>`afterSequence`: `Counter`<br>`severity`: `?Severity`<br>`outcome`: `?DiagnosticOutcome`<br>`operation`: `?Label`<br>`operationId`: `?OperationId`<br>`correlationId`: `?CorrelationId`<br>`targetId`: `?Id`<br>`stage`: `?Label`<br>`projectId`: `?ProjectId`<br>`search`: `?Label`<br>`sinceMs`: `?Counter`<br>`untilMs`: `?Counter`<br>`order`: `?SortDirection`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `DiagnosticPage` |
+| `workspace.record_diagnostic` | **Command**<br>`component`: `Label`<br>`code`: `Label`<br>`severity`: `Severity`<br>`message`: `Content`<br>`evidence`: `?ArtifactRef`<br>`operation`: `?Label`<br>`operationId`: `?OperationId`<br>`targetKind`: `?Label`<br>`targetId`: `?Id`<br>`stage`: `?Label`<br>`sourceRevision`: `?Label`<br>`attempt`: `?Counter`<br>`startedAtMs`: `?Counter`<br>`finishedAtMs`: `?Counter`<br>`progressCompleted`: `?Counter`<br>`progressTotal`: `?Counter`<br>`outcome`: `?DiagnosticOutcome`<br>`errorClass`: `?DiagnosticErrorClass`<br>`output`: `?Content`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `DiagnosticEntry` |
 
 ### Repositories
 
@@ -735,6 +735,26 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 ### Severity
 
 `Info`, `Warning`, `Error`.
+
+### DiagnosticOutcome
+
+`Running`, `Succeeded`, `Partial`, `Stale`, `Cancelled`, `Retryable`, `Failed`.
+
+### DiagnosticErrorClass
+
+`Transient`, `Timeout`, `Cancelled`, `Configuration`, `Authentication`, `Permission`, `NotFound`, `InvalidInput`, `ResourceExhausted`, `Dependency`, `Corruption`, `Internal`, `Unknown`.
+
+### HealthState
+
+`Healthy`, `Degraded`, `Failed`, `Unavailable`.
+
+### DiagnosticOrigin
+
+`Host`, `Reported`.
+
+### MetricAvailability
+
+`Available`, `Unavailable`.
 
 ### TierName
 
@@ -2165,6 +2185,25 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `content` | `ArtifactRef` |
 | `relatedCapabilityIds` | `Items<Id>` |
 
+### DiagnosticMetric
+
+| Field | Type |
+| --- | --- |
+| `name` | `Label` |
+| `availability` | `MetricAvailability` |
+| `value` | `?Counter` |
+| `unit` | `?Label` |
+| `reason` | `?Text` |
+
+### RecoveryAction
+
+| Field | Type |
+| --- | --- |
+| `operation` | `Label` |
+| `label` | `Text` |
+| `targetKind` | `?Label` |
+| `targetId` | `?Id` |
+
 ### Diagnostic
 
 | Field | Type |
@@ -2176,6 +2215,51 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `message` | `Content` |
 | `correlationId` | `?CorrelationId` |
 | `evidence` | `?ArtifactRef` |
+
+### DiagnosticEntry
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `severity` | `Severity` |
+| `component` | `Label` |
+| `code` | `Label` |
+| `message` | `Content` |
+| `correlationId` | `?CorrelationId` |
+| `evidence` | `?ArtifactRef` |
+| `sequence` | `?Counter` · *revision 2+* |
+| `recordedAtMs` | `?Counter` · *revision 2+* |
+| `actorId` | `?ActorId` · *revision 2+* |
+| `origin` | `?DiagnosticOrigin` · *revision 2+* |
+| `projectId` | `?ProjectId` · *revision 2+* |
+| `operation` | `?Label` · *revision 2+* |
+| `operationId` | `?OperationId` · *revision 2+* |
+| `targetKind` | `?Label` · *revision 2+* |
+| `targetId` | `?Id` · *revision 2+* |
+| `stage` | `?Label` · *revision 2+* |
+| `sourceRevision` | `?Label` · *revision 2+* |
+| `attempt` | `?Counter` · *revision 2+* |
+| `startedAtMs` | `?Counter` · *revision 2+* |
+| `finishedAtMs` | `?Counter` · *revision 2+* |
+| `progressCompleted` | `?Counter` · *revision 2+* |
+| `progressTotal` | `?Counter` · *revision 2+* |
+| `outcome` | `?DiagnosticOutcome` · *revision 2+* |
+| `errorClass` | `?DiagnosticErrorClass` · *revision 2+* |
+| `health` | `?HealthState` · *revision 2+* |
+| `output` | `?Content` · *revision 2+* |
+| `outputOmittedBytes` | `?Counter` · *revision 2+* |
+| `redactions` | `?Counter` · *revision 2+* |
+| `metrics` | `?Items<DiagnosticMetric>` · *revision 2+* |
+| `recovery` | `?Items<RecoveryAction>` · *revision 2+* |
+
+### DiagnosticPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<DiagnosticEntry>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `latestSequence` | `?Counter` · *revision 2+* |
 
 ### BackupRecord
 

@@ -130,6 +130,79 @@ impl Check for Severity {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DiagnosticOutcome {
+    Running,
+    Succeeded,
+    Partial,
+    Stale,
+    Cancelled,
+    Retryable,
+    Failed,
+}
+impl Check for DiagnosticOutcome {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DiagnosticErrorClass {
+    Transient,
+    Timeout,
+    Cancelled,
+    Configuration,
+    Authentication,
+    Permission,
+    NotFound,
+    InvalidInput,
+    ResourceExhausted,
+    Dependency,
+    Corruption,
+    Internal,
+    Unknown,
+}
+impl Check for DiagnosticErrorClass {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum HealthState {
+    Healthy,
+    Degraded,
+    Failed,
+    Unavailable,
+}
+impl Check for HealthState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DiagnosticOrigin {
+    Host,
+    Reported,
+}
+impl Check for DiagnosticOrigin {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum MetricAvailability {
+    Available,
+    Unavailable,
+}
+impl Check for MetricAvailability {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum TierName {
     Max,
     High,
@@ -4191,6 +4264,57 @@ impl Check for HelpTopic {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiagnosticMetric {
+    pub name: Label,
+    pub availability: MetricAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Text>,
+}
+impl Check for DiagnosticMetric {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.availability.check()?;
+        self.value.check()?;
+        self.unit.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "DiagnosticMetric",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryAction {
+    pub operation: Label,
+    pub label: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<Id>,
+}
+impl Check for RecoveryAction {
+    fn check(&self) -> Result<(), String> {
+        self.operation.check()?;
+        self.label.check()?;
+        self.target_kind.check()?;
+        self.target_id.check()?;
+        super::domain_rules::record(
+            "RecoveryAction",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Diagnostic {
     pub id: Id,
     pub severity: Severity,
@@ -4216,6 +4340,345 @@ impl Check for Diagnostic {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "Diagnostic", "before": 2}))]
+pub struct DiagnosticEntry {
+    pub id: Id,
+    pub severity: Severity,
+    pub component: Label,
+    pub code: Label,
+    pub message: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<CorrelationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub sequence: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub recorded_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub actor_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DiagnosticOrigin", extend("x-since" = 2))]
+    pub origin: Option<DiagnosticOrigin>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 2))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub operation: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OperationId", extend("x-since" = 2))]
+    pub operation_id: Option<OperationId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub target_kind: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub target_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub stage: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub source_revision: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub attempt: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub started_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub finished_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub progress_completed: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub progress_total: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DiagnosticOutcome", extend("x-since" = 2))]
+    pub outcome: Option<DiagnosticOutcome>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DiagnosticErrorClass", extend("x-since" = 2))]
+    pub error_class: Option<DiagnosticErrorClass>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "HealthState", extend("x-since" = 2))]
+    pub health: Option<HealthState>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 2))]
+    pub output: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub output_omitted_bytes: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub redactions: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<DiagnosticMetric>", extend("x-since" = 2))]
+    pub metrics: Option<Items<DiagnosticMetric>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<RecoveryAction>", extend("x-since" = 2))]
+    pub recovery: Option<Items<RecoveryAction>>,
+}
+impl Check for DiagnosticEntry {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.severity.check()?;
+        self.component.check()?;
+        self.code.check()?;
+        self.message.check()?;
+        self.correlation_id.check()?;
+        self.evidence.check()?;
+        self.sequence.check()?;
+        self.recorded_at_ms.check()?;
+        self.actor_id.check()?;
+        self.origin.check()?;
+        self.project_id.check()?;
+        self.operation.check()?;
+        self.operation_id.check()?;
+        self.target_kind.check()?;
+        self.target_id.check()?;
+        self.stage.check()?;
+        self.source_revision.check()?;
+        self.attempt.check()?;
+        self.started_at_ms.check()?;
+        self.finished_at_ms.check()?;
+        self.progress_completed.check()?;
+        self.progress_total.check()?;
+        self.outcome.check()?;
+        self.error_class.check()?;
+        self.health.check()?;
+        self.output.check()?;
+        self.output_omitted_bytes.check()?;
+        self.redactions.check()?;
+        self.metrics.check()?;
+        self.recovery.check()?;
+        super::domain_rules::record(
+            "DiagnosticEntry",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DiagnosticEntry {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.sequence = None;
+        }
+        if revision < 2 {
+            self.recorded_at_ms = None;
+        }
+        if revision < 2 {
+            self.actor_id = None;
+        }
+        if revision < 2 {
+            self.origin = None;
+        }
+        if revision < 2 {
+            self.project_id = None;
+        }
+        if revision < 2 {
+            self.operation = None;
+        }
+        if revision < 2 {
+            self.operation_id = None;
+        }
+        if revision < 2 {
+            self.target_kind = None;
+        }
+        if revision < 2 {
+            self.target_id = None;
+        }
+        if revision < 2 {
+            self.stage = None;
+        }
+        if revision < 2 {
+            self.source_revision = None;
+        }
+        if revision < 2 {
+            self.attempt = None;
+        }
+        if revision < 2 {
+            self.started_at_ms = None;
+        }
+        if revision < 2 {
+            self.finished_at_ms = None;
+        }
+        if revision < 2 {
+            self.progress_completed = None;
+        }
+        if revision < 2 {
+            self.progress_total = None;
+        }
+        if revision < 2 {
+            self.outcome = None;
+        }
+        if revision < 2 {
+            self.error_class = None;
+        }
+        if revision < 2 {
+            self.health = None;
+        }
+        if revision < 2 {
+            self.output = None;
+        }
+        if revision < 2 {
+            self.output_omitted_bytes = None;
+        }
+        if revision < 2 {
+            self.redactions = None;
+        }
+        if revision < 2 {
+            self.metrics = None;
+        }
+        if revision < 2 {
+            self.recovery = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 2}))]
+pub struct DiagnosticPage {
+    pub items: Rows<DiagnosticEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub latest_sequence: Option<Counter>,
+}
+impl Check for DiagnosticPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.latest_sequence.check()?;
+        super::domain_rules::record(
+            "DiagnosticPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DiagnosticPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+        if revision < 2 {
+            self.latest_sequence = None;
+        }
     }
 }
 
@@ -6584,6 +7047,90 @@ pub enum DomainQuery {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         component: Option<Label>,
         after_sequence: Counter,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Severity", extend("x-since" = 2))]
+        severity: Option<Severity>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DiagnosticOutcome", extend("x-since" = 2))]
+        outcome: Option<DiagnosticOutcome>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 2))]
+        operation: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "OperationId", extend("x-since" = 2))]
+        operation_id: Option<OperationId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "CorrelationId", extend("x-since" = 2))]
+        correlation_id: Option<CorrelationId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 2))]
+        target_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 2))]
+        stage: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ProjectId", extend("x-since" = 2))]
+        project_id: Option<ProjectId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 2))]
+        search: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 2))]
+        since_ms: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 2))]
+        until_ms: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "SortDirection", extend("x-since" = 2))]
+        order: Option<SortDirection>,
     },
     #[serde(rename = "workspace.update_status")]
     WorkspaceUpdateStatus {},
@@ -7674,10 +8221,34 @@ impl Check for DomainQuery {
                 page,
                 component,
                 after_sequence,
+                severity,
+                outcome,
+                operation,
+                operation_id,
+                correlation_id,
+                target_id,
+                stage,
+                project_id,
+                search,
+                since_ms,
+                until_ms,
+                order,
             } => {
                 page.check()?;
                 component.check()?;
                 after_sequence.check()?;
+                severity.check()?;
+                outcome.check()?;
+                operation.check()?;
+                operation_id.check()?;
+                correlation_id.check()?;
+                target_id.check()?;
+                stage.check()?;
+                project_id.check()?;
+                search.check()?;
+                since_ms.check()?;
+                until_ms.check()?;
+                order.check()?;
             }
             Self::WorkspaceUpdateStatus {} => {}
             Self::RepositoriesList { scope, page, text } => {
@@ -7785,6 +8356,58 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *workspace = None;
+                }
+            }
+            Self::WorkspaceLogs {
+                severity,
+                outcome,
+                operation,
+                operation_id,
+                correlation_id,
+                target_id,
+                stage,
+                project_id,
+                search,
+                since_ms,
+                until_ms,
+                order,
+                ..
+            } => {
+                if revision < 2 {
+                    *severity = None;
+                }
+                if revision < 2 {
+                    *outcome = None;
+                }
+                if revision < 2 {
+                    *operation = None;
+                }
+                if revision < 2 {
+                    *operation_id = None;
+                }
+                if revision < 2 {
+                    *correlation_id = None;
+                }
+                if revision < 2 {
+                    *target_id = None;
+                }
+                if revision < 2 {
+                    *stage = None;
+                }
+                if revision < 2 {
+                    *project_id = None;
+                }
+                if revision < 2 {
+                    *search = None;
+                }
+                if revision < 2 {
+                    *since_ms = None;
+                }
+                if revision < 2 {
+                    *until_ms = None;
+                }
+                if revision < 2 {
+                    *order = None;
                 }
             }
             _ => {}
@@ -8810,6 +9433,104 @@ pub enum DomainCommand {
         message: Content,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         evidence: Option<ArtifactRef>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 2))]
+        operation: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "OperationId", extend("x-since" = 2))]
+        operation_id: Option<OperationId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 2))]
+        target_kind: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 2))]
+        target_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 2))]
+        stage: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 2))]
+        source_revision: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 2))]
+        attempt: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 2))]
+        started_at_ms: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 2))]
+        finished_at_ms: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 2))]
+        progress_completed: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 2))]
+        progress_total: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DiagnosticOutcome", extend("x-since" = 2))]
+        outcome: Option<DiagnosticOutcome>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DiagnosticErrorClass", extend("x-since" = 2))]
+        error_class: Option<DiagnosticErrorClass>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Content", extend("x-since" = 2))]
+        output: Option<Content>,
     },
     #[serde(rename = "workspace.backup")]
     WorkspaceBackup {
@@ -10587,12 +11308,40 @@ impl Check for DomainCommand {
                 severity,
                 message,
                 evidence,
+                operation,
+                operation_id,
+                target_kind,
+                target_id,
+                stage,
+                source_revision,
+                attempt,
+                started_at_ms,
+                finished_at_ms,
+                progress_completed,
+                progress_total,
+                outcome,
+                error_class,
+                output,
             } => {
                 component.check()?;
                 code.check()?;
                 severity.check()?;
                 message.check()?;
                 evidence.check()?;
+                operation.check()?;
+                operation_id.check()?;
+                target_kind.check()?;
+                target_id.check()?;
+                stage.check()?;
+                source_revision.check()?;
+                attempt.check()?;
+                started_at_ms.check()?;
+                finished_at_ms.check()?;
+                progress_completed.check()?;
+                progress_total.check()?;
+                outcome.check()?;
+                error_class.check()?;
+                output.check()?;
             }
             Self::WorkspaceBackup {
                 destination_grant_id,
@@ -10840,6 +11589,66 @@ impl Revisioned for DomainCommand {
                 }
                 if revision < 2 {
                     *labels = None;
+                }
+            }
+            Self::WorkspaceRecordDiagnostic {
+                operation,
+                operation_id,
+                target_kind,
+                target_id,
+                stage,
+                source_revision,
+                attempt,
+                started_at_ms,
+                finished_at_ms,
+                progress_completed,
+                progress_total,
+                outcome,
+                error_class,
+                output,
+                ..
+            } => {
+                if revision < 2 {
+                    *operation = None;
+                }
+                if revision < 2 {
+                    *operation_id = None;
+                }
+                if revision < 2 {
+                    *target_kind = None;
+                }
+                if revision < 2 {
+                    *target_id = None;
+                }
+                if revision < 2 {
+                    *stage = None;
+                }
+                if revision < 2 {
+                    *source_revision = None;
+                }
+                if revision < 2 {
+                    *attempt = None;
+                }
+                if revision < 2 {
+                    *started_at_ms = None;
+                }
+                if revision < 2 {
+                    *finished_at_ms = None;
+                }
+                if revision < 2 {
+                    *progress_completed = None;
+                }
+                if revision < 2 {
+                    *progress_total = None;
+                }
+                if revision < 2 {
+                    *outcome = None;
+                }
+                if revision < 2 {
+                    *error_class = None;
+                }
+                if revision < 2 {
+                    *output = None;
                 }
             }
             _ => {}
@@ -11408,11 +12217,11 @@ pub enum OperationResult {
     #[serde(rename = "help.generate_capability_docs")]
     HelpGenerateCapabilityDocs { value: OperationRef },
     #[serde(rename = "workspace.diagnostics")]
-    WorkspaceDiagnostics { value: Page<Diagnostic> },
+    WorkspaceDiagnostics { value: DiagnosticPage },
     #[serde(rename = "workspace.logs")]
-    WorkspaceLogs { value: Page<Diagnostic> },
+    WorkspaceLogs { value: DiagnosticPage },
     #[serde(rename = "workspace.record_diagnostic")]
-    WorkspaceRecordDiagnostic { value: Diagnostic },
+    WorkspaceRecordDiagnostic { value: DiagnosticEntry },
     #[serde(rename = "workspace.backup")]
     WorkspaceBackup { value: BackupRecord },
     #[serde(rename = "workspace.restore")]
@@ -12340,6 +13149,9 @@ impl Revisioned for OperationResult {
             Self::ResourcesRelease { value } => value.retain_revision(revision),
             Self::ResourcesHolders { value } => value.retain_revision(revision),
             Self::ResourcesWaiters { value } => value.retain_revision(revision),
+            Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
+            Self::WorkspaceLogs { value } => value.retain_revision(revision),
+            Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),

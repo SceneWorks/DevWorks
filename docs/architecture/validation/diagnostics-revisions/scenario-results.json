@@ -1,0 +1,197 @@
+{
+  "allPassed": true,
+  "scenarios": [
+    {
+      "id": "parallel-calls-ready-only-at-terminal",
+      "steps": [
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        },
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        },
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": true
+        }
+      ]
+    },
+    {
+      "id": "eof-with-call-is-not-ready",
+      "steps": [
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        }
+      ]
+    },
+    {
+      "id": "incomplete-turn-retains-unready-call",
+      "steps": [
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        },
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        }
+      ]
+    },
+    {
+      "id": "duplicate-call-does-not-advance-stream",
+      "steps": [
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        },
+        {
+          "accepted": false,
+          "passed": true,
+          "ready": false
+        }
+      ]
+    },
+    {
+      "id": "text-completion",
+      "steps": [
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        },
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        }
+      ]
+    },
+    {
+      "id": "event-after-terminal-rejected",
+      "steps": [
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        },
+        {
+          "accepted": false,
+          "passed": true,
+          "ready": false
+        }
+      ]
+    },
+    {
+      "id": "foreign-opaque-preserved-as-invalid",
+      "steps": [
+        {
+          "accepted": false,
+          "passed": true,
+          "ready": false
+        }
+      ]
+    },
+    {
+      "id": "attempt-change-fenced",
+      "steps": [
+        {
+          "accepted": true,
+          "passed": true,
+          "ready": false
+        },
+        {
+          "accepted": false,
+          "passed": true,
+          "ready": false
+        }
+      ]
+    },
+    {
+      "id": "parallel-wait-replay-and-later-operation-event",
+      "steps": [
+        {
+          "next": 5,
+          "passed": true,
+          "result": "Accepted"
+        },
+        {
+          "next": 5,
+          "passed": true,
+          "result": "Replayed"
+        },
+        {
+          "next": 5,
+          "passed": true,
+          "result": "Rejected"
+        },
+        {
+          "next": 6,
+          "passed": true,
+          "result": "Accepted"
+        }
+      ]
+    },
+    {
+      "id": "invalid-tail-does-not-persist-prefix",
+      "steps": [
+        {
+          "next": 1,
+          "passed": true,
+          "result": "Rejected"
+        },
+        {
+          "next": 2,
+          "passed": true,
+          "result": "Accepted"
+        }
+      ]
+    },
+    {
+      "id": "batch-key-payload-conflict",
+      "steps": [
+        {
+          "next": 2,
+          "passed": true,
+          "result": "Accepted"
+        },
+        {
+          "next": 2,
+          "passed": true,
+          "result": "Rejected"
+        }
+      ]
+    },
+    {
+      "id": "epoch-boundary-and-old-native-evidence",
+      "steps": [
+        {
+          "next": 2,
+          "passed": true,
+          "result": "Accepted"
+        },
+        {
+          "next": 2,
+          "passed": true,
+          "result": "Rejected"
+        },
+        {
+          "next": 3,
+          "passed": true,
+          "result": "Accepted"
+        }
+      ]
+    }
+  ],
+  "scope": "Native in-memory contract models only; no provider network, gateway, storage or effects"
+}
+

@@ -1134,6 +1134,36 @@
       ],
       "type": "string"
     },
+    "DiagnosticErrorClass": {
+      "enum": [
+        "Transient",
+        "Timeout",
+        "Cancelled",
+        "Configuration",
+        "Authentication",
+        "Permission",
+        "NotFound",
+        "InvalidInput",
+        "ResourceExhausted",
+        "Dependency",
+        "Corruption",
+        "Internal",
+        "Unknown"
+      ],
+      "type": "string"
+    },
+    "DiagnosticOutcome": {
+      "enum": [
+        "Running",
+        "Succeeded",
+        "Partial",
+        "Stale",
+        "Cancelled",
+        "Retryable",
+        "Failed"
+      ],
+      "type": "string"
+    },
     "Digest": {
       "pattern": "^[a-f0-9]{64}$",
       "type": "string"
@@ -5351,11 +5381,19 @@
         {
           "additionalProperties": false,
           "properties": {
+            "attempt": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 2
+            },
             "code": {
               "$ref": "#/$defs/Text1To256"
             },
             "component": {
               "$ref": "#/$defs/Text1To256"
+            },
+            "errorClass": {
+              "$ref": "#/$defs/DiagnosticErrorClass",
+              "x-since": 2
             },
             "evidence": {
               "anyOf": [
@@ -5367,6 +5405,10 @@
                 }
               ]
             },
+            "finishedAtMs": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 2
+            },
             "kind": {
               "const": "workspace.record_diagnostic",
               "type": "string"
@@ -5374,8 +5416,52 @@
             "message": {
               "$ref": "#/$defs/Text0To65536"
             },
+            "operation": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 2
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
+            },
+            "outcome": {
+              "$ref": "#/$defs/DiagnosticOutcome",
+              "x-since": 2
+            },
+            "output": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 2
+            },
+            "progressCompleted": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 2
+            },
+            "progressTotal": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 2
+            },
             "severity": {
               "$ref": "#/$defs/Severity"
+            },
+            "sourceRevision": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 2
+            },
+            "stage": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 2
+            },
+            "startedAtMs": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 2
+            },
+            "targetId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
+            },
+            "targetKind": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 2
             }
           },
           "required": [
@@ -9182,12 +9268,60 @@
                 }
               ]
             },
+            "correlationId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
+            },
             "kind": {
               "const": "workspace.logs",
               "type": "string"
             },
+            "operation": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 2
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
+            },
+            "order": {
+              "$ref": "#/$defs/SortDirection",
+              "x-since": 2
+            },
+            "outcome": {
+              "$ref": "#/$defs/DiagnosticOutcome",
+              "x-since": 2
+            },
             "page": {
               "$ref": "#/$defs/PageRequest"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
+            },
+            "search": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 2
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity",
+              "x-since": 2
+            },
+            "sinceMs": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 2
+            },
+            "stage": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 2
+            },
+            "targetId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
+            },
+            "untilMs": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 2
             }
           },
           "required": [
@@ -11803,6 +11937,13 @@
       "maxLength": 4096,
       "minLength": 1,
       "pattern": "^(0|-?[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "SortDirection": {
+      "enum": [
+        "Ascending",
+        "Descending"
+      ],
       "type": "string"
     },
     "SourceEvidence": {
