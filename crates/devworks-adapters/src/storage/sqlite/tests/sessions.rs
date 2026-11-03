@@ -1364,12 +1364,16 @@ fn operation_status_and_command_receipts_are_scoped() {
         "start-r",
         json!({"scope": {"kind": "Workspace"}, "title": "Home"}),
     );
-    // The receipt exists, but the contract's Recorded state needs a durable reply artifact,
-    // which receipts do not have: reported unavailable, never guessed.
+    // The receipt exists, but the contract's Recorded state needs its durable reply artifact,
+    // which is published after commit (no publisher runs here): reported pending, never guessed.
     let f = fault(receipt(&user, "start-r"));
     assert_eq!(
-        (f.code, kind_of(&f)),
-        (DomainErrorCode::ViewUnavailable, RECEIPT_REPLY_UNAVAILABLE)
+        (f.code, kind_of(&f), f.retry),
+        (
+            DomainErrorCode::ViewUnavailable,
+            RECEIPT_REPLY_UNAVAILABLE,
+            devworks_core::protocol::RetryAdvice::SameCommand
+        )
     );
     // Another principal's lookup of the same key is its own (absent) receipt.
     let other = fx.ctx("user-b", PrincipalKind::Human, None);

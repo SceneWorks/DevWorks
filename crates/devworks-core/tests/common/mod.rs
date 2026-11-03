@@ -1,8 +1,8 @@
 //! Deterministic port substitutes for gateway tests. They only store and count; every admission,
 //! replay and conflict decision under test is made by the production gateway. The in-memory
-//! store serializes writes under one lock (a sole write owner) and keeps receipts, history and
-//! actors; the journal, queue and grant repositories are exercised against real SQLite in
-//! `devworks-adapters`.
+//! store serializes writes under one lock (a sole write owner) and keeps receipts, history,
+//! actors and the queue intents units of work enqueue; the journal, queue delivery and grant
+//! repositories are exercised against real SQLite in `devworks-adapters`.
 #![allow(dead_code, clippy::result_large_err)]
 
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind, ReceiptIdentity};
@@ -100,7 +100,12 @@ struct MemState {
     actors: HashMap<String, PrincipalKind>,
     receipts: HashMap<ReceiptIdentity, LedgerEntry>,
     events: Vec<EventRecord>,
+    queue: MemQueue,
 }
+
+/// Enqueued intents only (delivery itself is exercised against real SQLite).
+#[derive(Clone, Default)]
+struct MemQueue(Vec<NewQueueEntry>);
 
 /// In-memory [`ApplicationStore`] substitute with failure injection.
 pub struct MemoryStore {
@@ -143,6 +148,17 @@ impl MemoryStore {
     }
     pub fn receipt_count(&self) -> usize {
         self.state.lock().unwrap().receipts.len()
+    }
+    /// Consumers of the committed queue intents, in commit order.
+    pub fn intents(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .queue
+            .0
+            .iter()
+            .map(|e| e.consumer.clone())
+            .collect()
     }
     pub fn event_kinds(&self) -> Vec<String> {
         self.state
@@ -291,6 +307,9 @@ macro_rules! mem_reads {
             fn lookup(&self, i: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError> {
                 Ok(self.state.receipts.get(i).cloned())
             }
+            fn reply(&self, _: &ReceiptIdentity) -> Result<Option<ReceiptReply>, StorageError> {
+                Ok(None)
+            }
         }
         impl HistoryRead for $t {
             fn event(&self, id: &EventId) -> Result<Option<EventRecord>, StorageError> {
@@ -391,7 +410,7 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn queue(&mut self) -> &mut dyn DurableQueue {
-        &mut self.unsupported
+        &mut self.state.queue
     }
     fn grants(&mut self) -> &mut dyn GrantLedger {
         &mut self.unsupported
@@ -443,6 +462,122 @@ impl CommandLedger for MemTx<'_> {
             .receipts
             .insert(i.clone(), LedgerEntry::Current(r.clone()));
         Ok(())
+    }
+    fn record_reply(&mut self, _: &ReceiptIdentity, _: &ReceiptReply) -> Result<(), StorageError> {
+        nope()
+    }
+}
+impl QueueRead for MemQueue {
+    fn entry(&self, _: &Id) -> Result<Option<QueueEntry>, StorageError> {
+        nope()
+    }
+    fn delivery(&self, _: &str, _: &EventId) -> Result<Option<QueueEntry>, StorageError> {
+        nope()
+    }
+    fn status(&self, _: &str) -> Result<QueueStatus, StorageError> {
+        nope()
+    }
+    fn deliveries(
+        &self,
+        _: &DeliveryFilter,
+        _: Option<&DeliveryKey>,
+        _: u16,
+    ) -> Result<DeliveryPage, StorageError> {
+        nope()
+    }
+    fn progress(&self, _: &str) -> Result<ConsumerProgress, StorageError> {
+        nope()
+    }
+    fn checkpoint(&self, _: &str, _: Option<&str>) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn next_due_ms(&self, _: i64) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
+    fn awaiting_eligibility(
+        &self,
+        _: &str,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<QueueEntry>, StorageError> {
+        nope()
+    }
+}
+impl DurableQueue for MemQueue {
+    fn enqueue(&mut self, e: NewQueueEntry) -> Result<QueueEntry, StorageError> {
+        self.0.push(e.clone());
+        Ok(QueueEntry {
+            id: e.id,
+            consumer: e.consumer,
+            event_id: e.event_id,
+            root_id: e.root_id,
+            operation_id: e.operation_id,
+            priority: e.priority,
+            ready_at_ms: e.ready_at_ms,
+            state: QueueState::Ready,
+            owner: None,
+            lease_until_ms: None,
+            generation: 0,
+            cancellation_epoch: 0,
+            attempt_count: 0,
+            payload: e.payload,
+            partition: e.partition,
+            event_sequence: 0,
+            revision: 1,
+            last_error: None,
+            claim_boot_id: None,
+            cancel_requested: false,
+            failed_at_ms: None,
+            awaiting_eligibility: false,
+        })
+    }
+    fn claim_ready(&mut self, _: &ClaimRequest) -> Result<Vec<QueueEntry>, StorageError> {
+        nope()
+    }
+    fn renew(&mut self, _: &Id, _: &QueueFence, _: i64) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn settle(
+        &mut self,
+        _: &Id,
+        _: &QueueFence,
+        _: Settlement,
+    ) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn fail(
+        &mut self,
+        _: &Id,
+        _: &QueueFence,
+        _: &str,
+        _: FailureDisposition,
+    ) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn cancel(&mut self, _: &Id) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn recover_claims(
+        &mut self,
+        _: ClaimRecovery,
+        _: u16,
+    ) -> Result<RecoveryOutcome, StorageError> {
+        nope()
+    }
+    fn requeue(&mut self, _: &Id, _: i64) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn compact(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn hold(&mut self, _: &Id, _: &QueueFence, _: &str) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn dismiss(&mut self, _: &Id, _: &str) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn reassert(&mut self, _: &Id, _: &QueueFence, _: i64) -> Result<QueueEntry, StorageError> {
+        nope()
     }
 }
 impl HistoryLog for MemTx<'_> {
@@ -522,6 +657,9 @@ impl OperationJournal for Unsupported {
 }
 impl QueueRead for Unsupported {
     fn entry(&self, _: &Id) -> Result<Option<QueueEntry>, StorageError> {
+        nope()
+    }
+    fn delivery(&self, _: &str, _: &EventId) -> Result<Option<QueueEntry>, StorageError> {
         nope()
     }
     fn status(&self, _: &str) -> Result<QueueStatus, StorageError> {
@@ -860,6 +998,12 @@ pub fn repo_file(path: &str) -> PathBuf {
 }
 
 impl ArtifactRead for Unsupported {
+    fn workspace_usage(&self) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn receipt_usage(&self, _: Option<&ProjectId>) -> Result<i64, StorageError> {
+        nope()
+    }
     fn project_exists(&self, _: &ProjectId) -> Result<bool, StorageError> {
         nope()
     }

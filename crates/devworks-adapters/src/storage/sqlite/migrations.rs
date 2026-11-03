@@ -19,6 +19,12 @@ pub struct Migration {
     /// Oldest build version that can still write a store at this version.
     pub minimum_writer: i64,
     pub sql: &'static str,
+    /// The migration rebuilds a table other tables reference (SQLite's documented table-rebuild
+    /// procedure: create, copy, drop, rename). Foreign-key enforcement is switched off for its
+    /// one transaction, because dropping a referenced table would otherwise fail, and the full
+    /// foreign-key check must still pass before it commits. Enforcement is restored afterwards
+    /// whatever the outcome.
+    pub rebuilds_tables: bool,
 }
 impl Migration {
     pub fn checksum(&self) -> String {
@@ -33,6 +39,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 1,
         minimum_writer: 1,
         sql: include_str!("migrations/0001_initial.sql"),
+        rebuilds_tables: false,
     },
     // Writers older than 2 would not bind claims to their boot epoch, so they may not write.
     Migration {
@@ -40,6 +47,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 1,
         minimum_writer: 2,
         sql: include_str!("migrations/0002_claim_boot.sql"),
+        rebuilds_tables: false,
     },
     // A version-2 build can still read deliveries, but writing them without partition/sequence
     // and revision bookkeeping would break ordered delivery, so writers must understand 3.
@@ -48,6 +56,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 1,
         minimum_writer: 3,
         sql: include_str!("migrations/0003_durable_delivery.sql"),
+        rebuilds_tables: false,
     },
     // Additive (a new table only). Applying a migration overwrites the store's writer floor, so
     // it keeps the floor of migration 3: it must never re-admit writers that cannot keep ordered
@@ -57,6 +66,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 1,
         minimum_writer: 3,
         sql: include_str!("migrations/0004_settings.sql"),
+        rebuilds_tables: false,
     },
     // Additive tables. Writers older than 5 would ignore principal revocation and authority
     // grants, so they may not write; the floor also stays at or above every earlier floor.
@@ -67,6 +77,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 5,
         minimum_writer: 5,
         sql: include_str!("migrations/0005_authority.sql"),
+        rebuilds_tables: false,
     },
     // Additive columns, tables and indexes. Applying a migration overwrites both store floors,
     // so it keeps the highest floors so far (5/5). Nothing here needs a higher reader floor:
@@ -79,6 +90,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 5,
         minimum_writer: 5,
         sql: include_str!("migrations/0006_artifacts.sql"),
+        rebuilds_tables: false,
     },
     // Additive columns (all defaulted or nullable), tables and indexes. It keeps the highest
     // floors so far (5/5), because applying a migration overwrites both store floors and a lower
@@ -91,8 +103,24 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 5,
         minimum_writer: 5,
         sql: include_str!("migrations/0007_sessions.sql"),
+        rebuilds_tables: false,
+    },
+    // Rebuilds `artifacts` (nullable project columns for the workspace scope) and adds the
+    // receipt reply records. Both floors rise to 8: a build 7 or older reads every artifact row
+    // as project-owned and would report a workspace artifact as corrupt, and as a writer it
+    // would delete receipt-retained artifacts and record receipts without their publication
+    // intent. 8 is at least every earlier floor (5/5).
+    Migration {
+        version: 8,
+        minimum_reader: 8,
+        minimum_writer: 8,
+        sql: include_str!("migrations/0008_receipt_replies.sql"),
+        rebuilds_tables: true,
     },
 ];
+/// Recorded checksum of migration 8; a test fails if the shipped text changes.
+pub const MIGRATION_0008_SHA256: &str =
+    "682af46e64f4ee7d6d854acdbec0862309a2e37262cf639124ccfb0c57a79cb9";
 /// Recorded checksum of migration 7; a test fails if the shipped text changes.
 pub const MIGRATION_0007_SHA256: &str =
     "2863f135528fc5a7c7499515872eb17a5acbddd1874fbd108d91ad2cd1253077";
@@ -190,6 +218,26 @@ fn verify_after(conn: &Connection) -> Result<(), StorageError> {
 
 /// Applies one migration in its own transaction; on any error nothing of it remains.
 fn apply(
+    conn: &Connection,
+    m: &Migration,
+    bootstrap_store_id: Option<&str>,
+    now_ms: i64,
+    app_build: &str,
+) -> Result<(), StorageError> {
+    if m.rebuilds_tables {
+        // A no-op inside a transaction, so it is switched before BEGIN.
+        db(conn.pragma_update(None, "foreign_keys", false))?;
+    }
+    let outcome = apply_in_transaction(conn, m, bootstrap_store_id, now_ms, app_build);
+    if m.rebuilds_tables {
+        let restored = db(conn.pragma_update(None, "foreign_keys", true));
+        outcome?;
+        return restored;
+    }
+    outcome
+}
+
+fn apply_in_transaction(
     conn: &Connection,
     m: &Migration,
     bootstrap_store_id: Option<&str>,

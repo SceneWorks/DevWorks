@@ -218,6 +218,16 @@ impl ReceiptIdentity {
             request_key,
         }
     }
+    /// The identity of a receipt the gateway recorded, from its stored parts (the receipt reply
+    /// publisher reads them from the intent the gateway committed with the receipt). Never from
+    /// a request.
+    pub(crate) fn recorded(actor_id: ActorId, scope_key: String, request_key: RequestKey) -> Self {
+        Self {
+            actor_id,
+            scope_key: ScopeKey(scope_key),
+            request_key,
+        }
+    }
     pub fn actor_id(&self) -> &ActorId {
         &self.actor_id
     }

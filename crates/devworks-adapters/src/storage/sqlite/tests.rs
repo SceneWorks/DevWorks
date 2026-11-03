@@ -107,6 +107,7 @@ impl StoreHarness for Harness {
 
 mod artifacts;
 mod authority;
+mod replies;
 mod sessions;
 mod settings;
 
@@ -580,12 +581,14 @@ const EXTRA: Migration = Migration {
     minimum_reader: 1,
     minimum_writer: 3,
     sql: "CREATE TABLE fixture_extra(id TEXT PRIMARY KEY) STRICT;",
+    rebuilds_tables: false,
 };
 const BROKEN: Migration = Migration {
     version: 4,
     minimum_reader: 1,
     minimum_writer: 4,
     sql: "CREATE TABLE fixture_partial(id TEXT PRIMARY KEY) STRICT; INSERT INTO no_such_table VALUES(1);",
+    rebuilds_tables: false,
 };
 /// Leaves a (deferred) foreign-key violation behind: the in-transaction check must refuse it.
 const DANGLING: Migration = Migration {
@@ -593,6 +596,7 @@ const DANGLING: Migration = Migration {
     minimum_reader: 1,
     minimum_writer: 4,
     sql: "CREATE TABLE fixture_dangling(id TEXT PRIMARY KEY) STRICT; PRAGMA defer_foreign_keys=ON; INSERT INTO command_receipts VALUES('nobody','s','k','x','d',NULL,'{}',1);",
+    rebuilds_tables: false,
 };
 
 fn version_and_ledger(h: &Harness, table: &str) -> (i64, i64, i64) {
