@@ -14,6 +14,7 @@ use crate::ports::{CommandHandler, QueryHandler};
 use crate::protocol::support::BoundedList;
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, RetryAdvice};
 use crate::registry::{self, Mode};
+use crate::settings;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -77,6 +78,14 @@ impl UseCases {
     pub fn with_queue(mut self) -> Self {
         let service = Arc::new(queue::QueueService);
         for op in queue::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the settings family (`ConfigurationService`).
+    pub fn with_settings(mut self, service: Arc<settings::service::SettingsService>) -> Self {
+        for op in settings::service::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

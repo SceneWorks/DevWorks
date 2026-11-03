@@ -8,9 +8,10 @@
 //! the transaction-scoped functions here, so proposals have one store and one set of rules.
 //!
 //! Every surface reaches the four operations through the gateway with [`SettingsService`] as the
-//! registered handler; the proposal and rollback functions are transaction-scoped so the owning
-//! decision operations (`approvals.record_human_decision`, `roles.rollback`) run them inside
-//! their own gateway unit of work. There is no second implementation of any rule.
+//! handler registered in [`crate::services::UseCases::with_settings`]; the proposal and rollback
+//! functions are transaction-scoped so the owning decision operations
+//! (`approvals.record_human_decision`, `roles.rollback`) run them inside their own gateway unit
+//! of work. There is no second implementation of any rule.
 //!
 //! Principal invariants enforced here, on top of the gateway's authority port:
 //! * a principal whose host-resolved role is read-only (code reviewers) can never write or

@@ -15,6 +15,7 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, ProjectId, Rejection,
     RetryAdvice, Revision, RevisionDimension,
 };
+use devworks_core::services::UseCases;
 use devworks_core::settings::catalog::{AgentRole, descriptor};
 use devworks_core::settings::model::AdoptedRevisions;
 use devworks_core::settings::service::{self as svc, PathHealth, PathProbe, PrincipalRoles};
@@ -62,7 +63,7 @@ impl PathProbe for Paths {
 struct Fixture {
     h: Harness,
     store: SqliteStore,
-    service: Arc<svc::SettingsService>,
+    cases: UseCases,
     roles: Arc<Roles>,
     n: std::sync::atomic::AtomicU64,
 }
@@ -93,15 +94,15 @@ impl Fixture {
             .lock()
             .unwrap()
             .insert("agent-a".into(), AgentRole::Worker);
-        let service = Arc::new(svc::SettingsService {
+        let cases = UseCases::new().with_settings(Arc::new(svc::SettingsService {
             roles: roles.clone(),
             paths: Arc::new(Paths),
             ids: h.ids.clone(),
-        });
+        }));
         Self {
             h,
             store,
-            service,
+            cases,
             roles,
             n: Default::default(),
         }
@@ -161,12 +162,12 @@ impl Fixture {
     }
     fn save_raw(&self, actor: &str, request_key: &str, body: Value) -> DomainCommandReply {
         let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": request_key, "body": body});
-        self.gateway()
+        self.cases
             .command(
+                &self.gateway(),
                 &self.ctx(actor),
                 "settings.save_revision",
                 frame.to_string().as_bytes(),
-                self.service.clone(),
             )
             .expect("addressable")
     }
@@ -188,12 +189,12 @@ impl Fixture {
         body["kind"] = json!(operation);
         let frame =
             json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-1", "body": body});
-        self.gateway()
+        self.cases
             .query(
+                &self.gateway(),
                 &self.ctx(actor),
                 operation,
                 frame.to_string().as_bytes(),
-                &*self.service,
             )
             .expect("addressable")
     }
@@ -1103,4 +1104,30 @@ fn the_proposal_seam_stages_once_bound_to_the_revision_it_read() {
         Err(svc::Failure::Storage(StorageError::RevisionConflict(_)))
     ));
     assert_eq!(pending_ids(&f).len(), 1);
+}
+
+/// Settings register through the same use-case registry as every other family, in exactly the
+/// modes the catalog declares, and compose with the queue family in one registry.
+#[test]
+fn settings_register_through_the_shared_use_case_registry() {
+    let f = Fixture::new();
+    let cases = UseCases::new()
+        .with_queue()
+        .with_settings(Arc::new(svc::SettingsService {
+            roles: f.roles.clone(),
+            paths: Arc::new(Paths),
+            ids: f.h.ids.clone(),
+        }));
+    for op in svc::OPERATIONS {
+        let command = op == "settings.save_revision";
+        for registry in [&f.cases, &cases] {
+            assert_eq!(
+                (registry.has_query(op), registry.has_command(op)),
+                (!command, command),
+                "{op}"
+            );
+        }
+    }
+    assert!(cases.has_query("queue.inspect") && cases.has_command("queue.retry"));
+    assert!(!f.cases.has_query("queue.inspect"));
 }
