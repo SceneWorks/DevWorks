@@ -43,7 +43,10 @@
 //!
 //! **Root eligibility.** Root-scoped work recovered from an earlier boot is held, not continued
 //! automatically; a consumer's [`RootEligibility`] (filled by the root-control layer) confirms
-//! which of it may resume. Without one it waits for an operator retry.
+//! which of it may resume. Without one it waits for an operator retry. The same port gates every
+//! claimed root-scoped delivery in its own fenced transaction before it is applied or
+//! dispatched ([`RootEligibility::may_dispatch`]): work of a paused, held or stopped root is held
+//! awaiting eligibility and resumes only after the root does.
 //!
 //! **Sleep/wake detection** compares the wall clock with Tokio's monotonic clock. On Linux
 //! (`CLOCK_MONOTONIC`) and macOS (`mach_absolute_time`) the monotonic clock stops during system
@@ -204,6 +207,18 @@ pub trait RootEligibility: Send + Sync {
         tx: &mut dyn WriteTransaction,
         entry: &QueueEntry,
     ) -> Result<bool, StorageError>;
+    /// The root gate checked in the delivery's own fenced transaction before its handler runs
+    /// or its effect is dispatched (`BeginDispatch` ordering): `false` holds the claimed
+    /// root-scoped delivery awaiting eligibility instead, so a pause, stop or restart hold
+    /// committed earlier is never bypassed by queued work. The resume scan requeues it once
+    /// [`Self::may_resume`] allows. The default admits everything.
+    fn may_dispatch(
+        &self,
+        _tx: &mut dyn WriteTransaction,
+        _entry: &QueueEntry,
+    ) -> Result<bool, StorageError> {
+        Ok(true)
+    }
 }
 
 /// A registered consumer. `name` is an opaque identifier (it is the wire `consumerId`).
@@ -922,11 +937,15 @@ impl Dispatcher {
     ) -> Result<Step, StorageError> {
         let handler = consumer.handler.clone();
         let policy = consumer.retry;
+        let gate = consumer.eligibility.clone();
         store::write(&self.inner.store, move |tx| {
             let Some(e) = current(tx, &claimed)? else {
                 return Ok(Step::Lost);
             };
             if let Some(step) = cancelled(tx, &claimed, &e)? {
+                return Ok(step);
+            }
+            if let Some(step) = root_gate(tx, gate.as_ref(), &e)? {
                 return Ok(step);
             }
             apply(tx, &*handler, &e, policy)
@@ -943,11 +962,15 @@ impl Dispatcher {
         claimed: QueueEntry,
     ) -> Result<Step, StorageError> {
         let c = claimed.clone();
+        let gate = consumer.eligibility.clone();
         let begin = store::write(&self.inner.store, move |tx| {
             let Some(e) = current(tx, &c)? else {
                 return Ok(Err(Step::Lost));
             };
             if let Some(step) = cancelled(tx, &c, &e)? {
+                return Ok(Err(step));
+            }
+            if let Some(step) = root_gate(tx, gate.as_ref(), &e)? {
                 return Ok(Err(step));
             }
             // An asynchronous handler commits through its own path: it cannot dispatch, record
@@ -1089,11 +1112,15 @@ impl Dispatcher {
         let policy = consumer.retry;
         let owner = self.inner.cfg.owner.clone();
         let c = claimed.clone();
+        let gate = consumer.eligibility.clone();
         let begin = store::write(&self.inner.store, move |tx| {
             let Some(e) = current(tx, &c)? else {
                 return Ok(Begin::Done(Step::Lost));
             };
             if let Some(step) = cancelled(tx, &c, &e)? {
+                return Ok(Begin::Done(step));
+            }
+            if let Some(step) = root_gate(tx, gate.as_ref(), &e)? {
                 return Ok(Begin::Done(step));
             }
             let fence = e.fence().ok_or_else(|| invalid("claimed entry without fence"))?;
@@ -1351,6 +1378,38 @@ fn cancelled(
         .fence()
         .ok_or_else(|| invalid("claimed entry without fence"))?;
     let after = tx.queue().settle(&e.id, &fence, Settlement::Cancelled)?;
+    Ok(Some(Step::Settled(after.state)))
+}
+
+/// The root gate of a claimed delivery (see [`RootEligibility::may_dispatch`]). Work whose
+/// operation may already have dispatched is left to reconciliation, never re-gated.
+fn root_gate(
+    tx: &mut dyn WriteTransaction,
+    port: Option<&Arc<dyn RootEligibility>>,
+    e: &QueueEntry,
+) -> Result<Option<Step>, StorageError> {
+    let (Some(port), Some(_)) = (port, &e.root_id) else {
+        return Ok(None);
+    };
+    if let Some(op) = &e.operation_id
+        && tx
+            .operations()
+            .operation(op)?
+            .is_some_and(|o| possibly_dispatched(o.state))
+    {
+        return Ok(None);
+    }
+    if port.may_dispatch(tx, e)? {
+        return Ok(None);
+    }
+    let fence = e
+        .fence()
+        .ok_or_else(|| invalid("claimed entry without fence"))?;
+    let after = tx.queue().hold_for_eligibility(
+        &e.id,
+        &fence,
+        "the root does not permit dispatch (paused, held or stopped)",
+    )?;
     Ok(Some(Step::Settled(after.state)))
 }
 

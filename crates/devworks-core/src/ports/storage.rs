@@ -50,8 +50,8 @@
 //! state and processing receipts, grants and actor/store identity, plus the scoped configuration
 //! repository ([`ConfigurationRepository`]), the host authority ledger ([`AuthorityLedger`]), the
 //! artifact store records ([`ArtifactRepository`]), the session, transcript and lineage
-//! records ([`SessionRepository`]) and the resource reservation and owned-process records
-//! ([`ResourceRepository`]).
+//! records ([`SessionRepository`]), the resource reservation and owned-process records
+//! ([`ResourceRepository`]) and the run root control records ([`RunRepository`]).
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -71,11 +71,13 @@ mod artifacts;
 mod authority;
 mod configuration;
 mod resources;
+mod runs;
 mod sessions;
 pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
 pub use resources::*;
+pub use runs::*;
 pub use sessions::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -465,6 +467,7 @@ pub trait WriteTransaction {
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository;
     fn sessions(&mut self) -> &mut dyn SessionRepository;
     fn resources(&mut self) -> &mut dyn ResourceRepository;
+    fn runs(&mut self) -> &mut dyn RunRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -503,6 +506,7 @@ pub trait ReadSnapshot {
     fn artifacts(&self) -> &dyn ArtifactRead;
     fn sessions(&self) -> &dyn SessionRead;
     fn resources(&self) -> &dyn ResourceRead;
+    fn runs(&self) -> &dyn RunRead;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1103,6 +1107,16 @@ pub trait DurableQueue: QueueRead {
         fence: &QueueFence,
         cause: &str,
     ) -> Result<QueueEntry, StorageError>;
+    /// The owner holds its claimed root-scoped entry in `Reconciling` with the awaiting-eligibility
+    /// marker because its root does not currently permit dispatch (paused, held or stopped): it
+    /// is requeued once the root-control layer confirms eligibility again, exactly as root work
+    /// recovered from an earlier boot. Only entries scoped to a root can be held this way.
+    fn hold_for_eligibility(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        cause: &str,
+    ) -> Result<QueueEntry, StorageError>;
     /// Acknowledges a `Failed` delivery as `Dismissed` (an operator decision with its reason).
     /// Refused while its operation is possibly dispatched.
     fn dismiss(&mut self, id: &Id, reason: &str) -> Result<QueueEntry, StorageError>;
@@ -1204,6 +1218,9 @@ pub trait GrantLedger: GrantRead {
     /// exhausted or foreign grants are [`StorageError::ScopeDenied`]; a changed revision is a
     /// [`StorageError::RevisionConflict`].
     fn consume(&mut self, grant: &GrantUse, actor: &ActorId) -> Result<GrantRecord, StorageError>;
+    /// Revokes an active grant at `expected_revision` (advancing it). A changed revision is a
+    /// [`StorageError::RevisionConflict`]; an unknown grant is [`StorageError::NotFound`].
+    fn revoke(&mut self, id: &Id, expected_revision: i64) -> Result<GrantRecord, StorageError>;
 }
 
 // ---------------------------------------------------------------------------------------------

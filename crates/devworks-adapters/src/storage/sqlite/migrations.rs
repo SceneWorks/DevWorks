@@ -141,7 +141,22 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0010_resources_processes.sql"),
         rebuilds_tables: false,
     },
+    // Additive columns (all defaulted or nullable), tables and indexes for run root controls. The
+    // reader floor stays at 8 and the writer floor at 9: no earlier build reads or writes root
+    // controls, activations, assignments, blockers, run instructions or session turns (the
+    // migration 1 tables were never written), and the defaulted columns leave every existing
+    // query unchanged. Both are at least every earlier floor.
+    Migration {
+        version: 11,
+        minimum_reader: 8,
+        minimum_writer: 9,
+        sql: include_str!("migrations/0011_run_controls.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 11; a test fails if the shipped text changes.
+pub const MIGRATION_0011_SHA256: &str =
+    "6fa9c09e67358d0d5a5536ee58a6a4f06662937e38029040ad48f0f71ee9e49d";
 /// Recorded checksum of migration 10; a test fails if the shipped text changes.
 pub const MIGRATION_0010_SHA256: &str =
     "7fab1dd563202155578de4ffe4e14bf89647e97815685f0e58a886a051c20f01";

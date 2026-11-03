@@ -6,9 +6,9 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::ports::storage::{
-    ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantState,
-    NewAuthorityGrant, NewEvent, NewPrincipalBinding, PrincipalBinding, ReadOptions, ReadSnapshot,
-    StorageError, WriteTransaction, read_snapshot,
+    ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
+    GrantState, NewAuthorityGrant, NewEvent, NewPrincipalBinding, PrincipalBinding, ReadOptions,
+    ReadSnapshot, StorageError, WriteTransaction, read_snapshot,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityFence, AuthorityPort, AuthorityRequest, Authorization, Clock,
@@ -245,8 +245,16 @@ fn decide_in(
     let verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
     let digest = policy.digest();
     let fences = fences_for(ctx, binding.as_ref(), &policy);
+    // CONTROL-12: an agent, schedule, package or MCP client clears a human or restart hold only
+    // with a user-minted resume grant linked to this invocation; the run control use case checks
+    // which holds it covers, and the unit of work spends it with the receipt.
+    let resume = resume_grants(s, ctx, request, now).map_err(unavailable)?;
     match verdict {
-        Verdict::Allow => Ok(Authorization::direct().fenced_by(fences)),
+        Verdict::Allow => Ok(Authorization::with_grants(resume).fenced_by(fences)),
+        Verdict::NeedsGrant {
+            reason: DenialReason::GrantRequired,
+            ..
+        } if !resume.is_empty() => Ok(Authorization::with_grants(resume).fenced_by(fences)),
         Verdict::Deny(reason) => Err(deny(reason)),
         Verdict::NeedsGrant {
             kind,
@@ -287,6 +295,65 @@ fn decide_in(
             Err(deny(reason))
         }
     }
+}
+
+/// The usable resume grants linked to a non-human `runs.continue` invocation for its root.
+fn resume_grants(
+    s: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    request: &AuthorityRequest<'_>,
+    now: i64,
+) -> Result<Vec<GrantUse>, StorageError> {
+    use crate::operations::{OperationInput, runs};
+    use crate::protocol::RootCommand;
+    if request.descriptor.name != "runs.continue"
+        || matches!(
+            ctx.principal_kind(),
+            PrincipalKind::Human | PrincipalKind::Host
+        )
+    {
+        return Ok(Vec::new());
+    }
+    let OperationInput::Runs(runs::Input::Continue(r)) = request.input else {
+        return Ok(Vec::new());
+    };
+    let RootCommand::Continue { root_id, .. } = &r.command else {
+        return Ok(Vec::new());
+    };
+    if ctx.authority_sources().is_empty() {
+        return Ok(Vec::new());
+    }
+    // Only a grant that covers a current manual-resume hold is attached (and so spent): a
+    // Continue with nothing to clear never uses one up.
+    let holds: Vec<_> = crate::services::runs::active_blockers(
+        s.runs(),
+        &crate::ports::storage::BlockerFilter::RootLevel(root_id.clone()),
+    )?
+    .into_iter()
+    .filter(|b| b.cause.manual_resume())
+    .collect();
+    let mut out = Vec::new();
+    for source in ctx.authority_sources() {
+        let Some(g) = s.grants().grant(source)? else {
+            continue;
+        };
+        let covers =
+            serde_json::from_value::<crate::services::runs::ResumeBinding>(g.binding.clone())
+                .is_ok_and(|b| holds.iter().any(|h| b.covers(h)));
+        let usable = &g.actor == ctx.principal()
+            && &g.root_id == root_id
+            && g.active
+            && g.expires_at_ms.is_none_or(|t| t > now)
+            && g.uses_remaining.is_none_or(|u| u > 0)
+            && covers;
+        if usable {
+            out.push(GrantUse {
+                grant_id: g.id,
+                expected_revision: g.revision,
+            });
+        }
+    }
+    Ok(out)
 }
 
 fn fences_for(
@@ -662,6 +729,116 @@ pub fn revoke_grant(
         grant.revision,
         "AuthorityGrantRevoked",
         json!({"kind": grant.kind.as_str()}),
+    )?;
+    Ok(grant)
+}
+
+/// Mints a resume grant from the user's trusted local action (CONTROL-12): the holder (an agent,
+/// schedule, package or MCP client) may then Continue `root` clearing exactly what `binding`
+/// covers. A pause-specific grant names current manual-resume holds of the root by ID and
+/// revision (the default delegation: the identified current pause only); a standing grant names
+/// causes and may cover only `HumanPause` — restart and budget holds keep their explicit
+/// manual-resume condition. Every grant has an explicit expiry within [`MAX_GRANT_LIFETIME_MS`]
+/// and 1..=[`MAX_GRANT_USES`] uses, and each use mints a Continue bound to the then-current hold.
+pub fn mint_resume_grant(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    holder: ActorId,
+    root: RootId,
+    binding: crate::services::runs::ResumeBinding,
+    bounds: GrantBounds,
+) -> Result<GrantRecord, AdminError> {
+    use crate::ports::storage::{BlockerFilter, NewGrant};
+    require_kind(tx, ctx, &[PrincipalKind::Human])?;
+    if tx.actors().actor_kind(&holder)?.is_none() {
+        return Err(AdminError::Invalid("the grant holder is not registered"));
+    }
+    match tx.sessions().work_root(&root)? {
+        Some(w) if crate::services::runs::is_run_root(&w) => {}
+        _ => return Err(AdminError::Invalid("a resume grant names a run root")),
+    }
+    if binding.holds.is_empty() == binding.causes.is_empty() {
+        return Err(AdminError::Invalid(
+            "a resume grant names either exact holds or standing causes",
+        ));
+    }
+    if binding.causes.iter().any(|c| c != "HumanPause") {
+        return Err(AdminError::Invalid(
+            "a standing resume grant covers human pauses only",
+        ));
+    }
+    let active =
+        crate::services::runs::active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.clone()))?;
+    for h in &binding.holds {
+        let current = active.iter().any(|b| {
+            b.id == h.hold_id.0 && b.revision == h.revision.get() && b.cause.manual_resume()
+        });
+        if !current {
+            return Err(AdminError::Invalid(
+                "a resume grant names current manual-resume holds of its root",
+            ));
+        }
+    }
+    let now = tx.now_ms();
+    if !(1..=MAX_GRANT_USES).contains(&bounds.uses)
+        || bounds.expires_at_ms <= now
+        || bounds.expires_at_ms > now.saturating_add(MAX_GRANT_LIFETIME_MS)
+    {
+        return Err(AdminError::Invalid(
+            "a grant needs an explicit, bounded expiry and use count",
+        ));
+    }
+    let value = serde_json::to_value(&binding).expect("resume binding");
+    let id = tx.new_id(IdKind::Grant);
+    let grant = tx
+        .grant_writes(&super::CAPABILITY, ctx.principal())?
+        .issue(NewGrant {
+            id: id.clone(),
+            actor: holder.clone(),
+            root_id: root.clone(),
+            authority_source: format!("user:{}", ctx.invocation_id().as_str()),
+            binding: value.clone(),
+            expires_at_ms: Some(bounds.expires_at_ms),
+            uses: Some(bounds.uses),
+        })?;
+    record(
+        tx,
+        ctx,
+        GRANT_AGGREGATE,
+        id.as_str(),
+        grant.revision,
+        "ResumeGrantIssued",
+        json!({
+            "holder": holder.0.as_str(),
+            "rootId": root.0.as_str(),
+            "binding": value,
+            "expiresAtMs": bounds.expires_at_ms,
+            "uses": bounds.uses,
+        }),
+    )?;
+    Ok(grant)
+}
+
+/// Revokes a resume grant at `expected_revision`: a Continue that resolved it earlier is denied
+/// at its commit (the spend's compare-and-set fails).
+pub fn revoke_resume_grant(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    id: &Id,
+    expected_revision: i64,
+) -> Result<GrantRecord, AdminError> {
+    require_kind(tx, ctx, &[PrincipalKind::Human, PrincipalKind::Host])?;
+    let grant = tx
+        .grant_writes(&super::CAPABILITY, ctx.principal())?
+        .revoke(id, expected_revision)?;
+    record(
+        tx,
+        ctx,
+        GRANT_AGGREGATE,
+        id.as_str(),
+        grant.revision,
+        "ResumeGrantRevoked",
+        json!({"rootId": grant.root_id.0.as_str()}),
     )?;
     Ok(grant)
 }

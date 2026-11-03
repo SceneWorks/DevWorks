@@ -1,11 +1,13 @@
 //! The engine's one boot entry point: [`boot`] recovers durable state in a fixed order (queue,
-//! artifacts, owned processes and resource leases), applies keep-awake, starts every required
-//! consumer, artifact collection and resource housekeeping, and only then returns the
+//! artifacts, owned processes and resource leases, run roots), applies keep-awake, starts every
+//! required consumer, artifact collection, resource housekeeping and run supervision, and only
+//! then returns the
 //! [`Runtime`] through which commands and queries are admitted. See the crate documentation ("Boot
 //! sequence") for the order and why each step sits where it does.
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
+use crate::runs::{ActivationLauncher, RunGate, RunSupervisor};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
 use devworks_core::ports::files::FileFault;
@@ -23,6 +25,8 @@ use devworks_core::services::artifacts::replies::ReceiptReplies;
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
 use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
 use devworks_core::services::resources::{MachineResource, ResourceService, desktop};
+use devworks_core::services::runs::ControlService;
+use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks, NoLifecycleHooks};
 use devworks_core::settings::view::Health;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -34,6 +38,25 @@ use tokio::task::JoinHandle;
 const RELEASES_BLOBS: &str = "artifacts.delete";
 /// The operation through which the `power.keepAwake` setting changes.
 const SAVES_SETTINGS: &str = "settings.save_revision";
+
+/// Run root control as composed: the one control service (its plan/readiness port inside), the
+/// coordinator launcher (none until the agent supervisor exists: accepted activations then stay
+/// pending and are held at the next boot) and the schedules/keep-working lifecycle hooks.
+#[derive(Clone)]
+pub struct RunComposition {
+    pub service: Arc<ControlService>,
+    pub launcher: Option<Arc<dyn ActivationLauncher>>,
+    pub hooks: Arc<dyn LifecycleHooks>,
+}
+impl RunComposition {
+    pub fn new(service: Arc<ControlService>) -> Self {
+        Self {
+            service,
+            launcher: None,
+            hooks: Arc::new(NoLifecycleHooks),
+        }
+    }
+}
 
 /// Everything the runtime is composed from. Every part is a core port or core service; the one
 /// `store` backs the gateway, the dispatcher, the reply publisher and artifact recovery and
@@ -53,6 +76,9 @@ pub struct Composition {
     pub resources: Arc<ResourceService>,
     /// The native process launcher every owned tree is spawned through.
     pub process_host: Arc<dyn ProcessHost>,
+    /// Run root control: [`boot`] registers the `runs.*` use cases with its service (replacing
+    /// any the caller registered) and gates every consumer's root-scoped deliveries with it.
+    pub runs: RunComposition,
     /// The OS power facility the keep-awake setting is applied with.
     pub power: Arc<dyn PowerPort>,
     /// The other use cases (queue, sessions, history, settings, ...).
@@ -105,6 +131,8 @@ pub struct BootReport {
     /// Machine resource registration and the recovery of owned processes and resource leases of
     /// earlier boots ([`Housekeeper::boot`]).
     pub resources: ResourceBootReport,
+    /// Run-root recovery: interrupted activations and the roots held for manual Continue.
+    pub runs: BootRecovery,
     /// The keep-awake setting as applied at boot.
     pub keep_awake: KeepAwakeStatus,
 }
@@ -120,6 +148,8 @@ pub enum BootError {
     Artifacts(StorageError),
     /// Machine resource registration or the owned-process and lease recovery failed.
     Resources(StorageError),
+    /// Run-root recovery failed.
+    Runs(StorageError),
     /// The keep-awake setting could not be read.
     Settings(StorageError),
 }
@@ -159,6 +189,9 @@ pub struct Runtime {
     collector: Arc<Collector>,
     resources: Arc<ResourceService>,
     housekeeper: Arc<Housekeeper>,
+    runs: Arc<RunSupervisor>,
+    /// Set when shutdown begins: ordinary admission is fenced in memory at once.
+    closing: AtomicBool,
     keep_awake: Arc<KeepAwake>,
     shutdown_grace: Duration,
     shutdown_bound: Duration,
@@ -175,11 +208,13 @@ pub struct Runtime {
 /// 3. recovers artifact staging and managed files ([`ArtifactService::recover`]);
 /// 4. registers the machine resources and recovers owned processes and resource leases of
 ///    earlier boots ([`Housekeeper::boot`]);
-/// 5. applies the keep-awake setting;
-/// 6. starts delivery ([`Dispatcher::run`]);
-/// 7. starts artifact collection (a pass now, then periodically and after every applied
-///    `artifacts.delete`) and resource housekeeping ticks;
-/// 8. returns the handle through which commands are admitted.
+/// 5. recovers run roots ([`RunSupervisor::boot`]): activations of earlier boots are recorded
+///    interrupted and their roots held for manual Continue;
+/// 6. applies the keep-awake setting;
+/// 7. starts delivery ([`Dispatcher::run`]);
+/// 8. starts artifact collection (a pass now, then periodically and after every applied
+///    `artifacts.delete`), resource housekeeping ticks and run supervision ticks;
+/// 9. returns the handle through which commands are admitted.
 ///
 /// Must be awaited on a Tokio runtime with timers; the tasks it starts run there.
 pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
@@ -191,6 +226,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         artifacts,
         resources,
         process_host,
+        runs,
         power,
         use_cases,
         mut consumers,
@@ -198,13 +234,23 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     } = composition;
     let use_cases = use_cases
         .with_artifacts(artifacts.clone())
-        .with_resources(resources.clone());
+        .with_resources(resources.clone())
+        .with_runs(runs.service.clone());
+    // No entry path bypasses root controls: every consumer's root-scoped work passes the
+    // run-control gate (and its own port, if it has one).
+    for c in &mut consumers {
+        c.eligibility = Some(Arc::new(RunGate::new(
+            runs.service.clone(),
+            c.eligibility.take(),
+        )));
+    }
     let mut replies = reply_consumer(
         Arc::new(ReceiptReplies::new(artifacts.clone())),
         store.clone(),
     );
     replies.max_in_flight = config.reply_max_in_flight;
     consumers.insert(0, replies);
+    let run_owner = config.dispatcher.owner.clone();
     let dispatcher = Dispatcher::new(store.clone(), clock.clone(), consumers, config.dispatcher)
         .map_err(BootError::Composition)?;
 
@@ -221,14 +267,24 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     ));
     let housekeeper = Arc::new(Housekeeper::new(
         store.clone(),
-        clock,
+        clock.clone(),
         resources.clone(),
-        supervisor,
+        supervisor.clone(),
     ));
     let recovered_resources = housekeeper
         .boot(config.machine_resources.clone())
         .await
         .map_err(BootError::Resources)?;
+    let run_supervisor = RunSupervisor::new(
+        store.clone(),
+        clock,
+        runs.service.clone(),
+        supervisor,
+        runs.launcher.clone(),
+        runs.hooks.clone(),
+        run_owner,
+    );
+    let recovered_runs = run_supervisor.boot().await.map_err(BootError::Runs)?;
     // Applying may start an OS helper (and wait briefly to see it hold), so off the async thread.
     let keep_awake = Arc::new(KeepAwake::new(power));
     let (ka, st) = (keep_awake.clone(), store.clone());
@@ -257,6 +313,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     ));
     let (keeper, every) = (housekeeper.clone(), config.housekeeping_interval);
     let housekeeping = tokio::spawn(async move { keeper.run(every).await });
+    let supervision = tokio::spawn(run_supervisor.clone().run(every));
     Ok(Runtime {
         store,
         ids,
@@ -267,6 +324,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         collector,
         resources,
         housekeeper,
+        runs: run_supervisor,
+        closing: AtomicBool::new(false),
         keep_awake,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
@@ -274,9 +333,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             queue,
             artifacts: recovered,
             resources: recovered_resources,
+            runs: recovered_runs,
             keep_awake: applied,
         },
-        tasks: Mutex::new(vec![delivery, collection, housekeeping]),
+        tasks: Mutex::new(vec![delivery, collection, housekeeping, supervision]),
     })
 }
 
@@ -335,6 +395,26 @@ impl Runtime {
     /// helper hosts).
     pub fn processes(&self) -> &Arc<ProcessSupervisor> {
         self.housekeeper.supervisor()
+    }
+    /// Run supervision (activation claims, stops, recovery) over the composed control service.
+    pub fn runs(&self) -> &Arc<RunSupervisor> {
+        &self.runs
+    }
+    /// The immediate stop of a confirmed project archival (WORK-16): every root of the project is
+    /// stopped under a new stop epoch and its owned trees are killed without cooperative grace.
+    pub async fn stop_project_now(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+    ) -> Result<
+        Vec<(
+            devworks_core::protocol::RootId,
+            devworks_core::protocol::OperationState,
+        )>,
+        StorageError,
+    > {
+        let stopped = self.runs.stop_project_now(project).await;
+        self.dispatcher.wakeup().wake();
+        stopped
     }
     /// The keep-awake request as last applied (re-checking a held request).
     pub fn keep_awake(&self) -> KeepAwakeStatus {
@@ -396,6 +476,12 @@ impl Runtime {
         raw: &[u8],
         options: WriteOptions,
     ) -> CommandOutcome {
+        if self.closing.load(Ordering::SeqCst) {
+            return closing_reply(
+                raw,
+                self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+            );
+        }
         let outcome = self
             .use_cases
             .command_with(&self.gateway(), ctx, operation, raw, options);
@@ -409,6 +495,10 @@ impl Runtime {
         };
         if committed {
             self.dispatcher.wakeup().wake();
+            if operation.starts_with("runs.") {
+                // A stop to execute, a stop to signal or a new activation to claim.
+                self.runs.notify();
+            }
         }
         if released && operation == RELEASES_BLOBS {
             self.collector.trigger.notify_one();
@@ -428,6 +518,12 @@ impl Runtime {
     /// resources) and releases the keep-awake request. Every tree is stopped natively even when
     /// the store refuses writes; the report carries each tree's outcome and any write failure.
     pub async fn shutdown(&self) -> ShutdownReport {
+        // AD20 step 1: fence admission in memory, then commit the run-control transition: live
+        // feature/issue work is held for manual Continue and asked to stop; launches get the
+        // cooperative grace. A storage failure here is not fatal: the next boot holds the same
+        // work from its boot epoch.
+        self.closing.store(true, Ordering::SeqCst);
+        let _ = self.runs.quiesce(self.shutdown_grace).await;
         self.stop();
         let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
         for task in tasks {
@@ -438,6 +534,8 @@ impl Runtime {
             .housekeeper
             .shutdown(self.shutdown_grace, self.shutdown_bound)
             .await;
+        // AD20 step 4: final known activation state.
+        let _ = self.runs.finish().await;
         self.keep_awake.apply(false);
         stopped
     }
@@ -446,6 +544,36 @@ impl Runtime {
         self.dispatcher.stop();
         self.collector.stop();
         self.housekeeper.stop();
+        self.runs.stop();
+    }
+}
+
+/// The reply to a command submitted after shutdown began: refused before admission (nothing is
+/// recorded), addressed to its request key when the frame names one.
+fn closing_reply(raw: &[u8], correlation: Id) -> CommandOutcome {
+    use devworks_core::protocol::{CorrelationId, Protocol, Rejection, RequestKey, RetryAdvice};
+    let key = serde_json::from_slice::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| {
+            v.get("requestKey")
+                .and_then(|k| k.as_str())
+                .map(str::to_owned)
+        })
+        .and_then(|k| Id::new(k).ok());
+    match key {
+        Some(k) => Ok(CommandReply::Rejected {
+            protocol: Protocol::Draft1,
+            request_key: RequestKey(k),
+            code: Rejection::StorageUnavailable,
+            retry: RetryAdvice::Never,
+            correlation_id: CorrelationId(correlation),
+        }),
+        None => Err(devworks_core::gateway::GatewayFailure::Unaddressable {
+            error: devworks_core::admission::AdmissionError::InvalidEnvelope(
+                "the application is shutting down".into(),
+            ),
+            correlation_id: CorrelationId(correlation),
+        }),
     }
 }
 

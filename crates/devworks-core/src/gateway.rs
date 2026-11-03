@@ -110,6 +110,7 @@ pub struct AdmittedCommand {
     prepared: Option<Prepared>,
     targets: Vec<Id>,
     project_targets: Vec<crate::protocol::ProjectId>,
+    resume_grants: Vec<GrantUse>,
 }
 impl AdmittedCommand {
     pub fn descriptor(&self) -> &'static OperationDescriptor {
@@ -137,6 +138,13 @@ impl AdmittedCommand {
     }
     pub fn action(&self) -> Option<&'static str> {
         self.action
+    }
+    /// The user-minted resume grants current authority resolved for this command. The unit of
+    /// work spends each one together with a non-refused decision; a use case reads them (never
+    /// writes them) to learn which manual-resume conditions the invocation was authorized to
+    /// clear.
+    pub fn resume_grants(&self) -> &[GrantUse] {
+        &self.resume_grants
     }
     /// What the use case's [`CommandHandler::prepare`] staged for this command, if anything.
     pub fn prepared<T: std::any::Any>(&self) -> Option<&T> {
@@ -428,6 +436,7 @@ impl Gateway<'_> {
             prepared: None,
             targets: decoded.targets,
             project_targets: decoded.project_targets,
+            resume_grants: authorization.grants().to_vec(),
         };
         // Preparation runs only for an admitted, currently authorized command and before its unit
         // of work; it never records a receipt, so a failure here is retryable with the same key.
@@ -1055,6 +1064,9 @@ impl GrantLedger for HandlerTx<'_> {
     fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
         Err(authority_owned())
     }
+    fn revoke(&mut self, _: &Id, _: i64) -> Result<GrantRecord, StorageError> {
+        Err(authority_owned())
+    }
 }
 impl AuthorityRead for HandlerTx<'_> {
     fn principal(&self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
@@ -1512,6 +1524,17 @@ impl DurableQueue for HandlerTx<'_> {
     ) -> Result<QueueEntry, StorageError> {
         self.inner.get_mut().queue().hold(id, fence, cause)
     }
+    fn hold_for_eligibility(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        cause: &str,
+    ) -> Result<QueueEntry, StorageError> {
+        self.inner
+            .get_mut()
+            .queue()
+            .hold_for_eligibility(id, fence, cause)
+    }
     fn dismiss(&mut self, id: &Id, reason: &str) -> Result<QueueEntry, StorageError> {
         self.inner.get_mut().queue().dismiss(id, reason)
     }
@@ -1618,6 +1641,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn resources(&mut self) -> &mut dyn crate::ports::storage::ResourceRepository {
         self.inner.get_mut().resources()
+    }
+    fn runs(&mut self) -> &mut dyn crate::ports::storage::RunRepository {
+        self.inner.get_mut().runs()
     }
 }
 
