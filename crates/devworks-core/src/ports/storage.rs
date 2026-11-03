@@ -1203,6 +1203,8 @@ pub struct GrantRecord {
     pub root_id: RootId,
     pub revision: i64,
     pub active: bool,
+    /// Revoked by the user or host (an inactive grant that was not merely spent or expired).
+    pub revoked: bool,
     pub authority_source: String,
     pub binding: Value,
     pub expires_at_ms: Option<i64>,

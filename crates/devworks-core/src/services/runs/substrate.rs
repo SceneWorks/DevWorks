@@ -957,13 +957,16 @@ impl ControlService {
             InstructionStage::Acknowledged => {}
         }
         let actor = host(tx);
+        // Every referenced assignment is validated before anything changes: a refusal writes
+        // nothing (the caller's transaction may still commit its other work).
+        let mut named = Vec::with_capacity(disposition.superseded.len());
         for id in &disposition.superseded {
-            let Some(a) = tx.runs().assignment(id)? else {
-                return Ok(Err(Fenced::NotFound("assignment")));
-            };
-            if a.root_id != root.id {
-                return Ok(Err(Fenced::NotFound("assignment")));
+            match tx.runs().assignment(id)? {
+                Some(a) if a.root_id == root.id => named.push(a),
+                _ => return Ok(Err(Fenced::NotFound("assignment"))),
             }
+        }
+        for a in named {
             if a.state.is_live() {
                 let mut after = a.clone();
                 after.state = AssignmentState::Superseded;
@@ -1088,14 +1091,24 @@ impl ControlService {
             return Ok(ResultAcceptance::Stale("unknown assignment".into()));
         };
         let activation = tx.runs().activation(&claim.execution_id)?;
+        let current_boot = boot(tx)?;
+        // The submitting owner must still own the activation now: an activation interrupted by
+        // a restart, or requeued after its lease expired, has no current owner even though its
+        // record keeps the old claim epoch.
+        let owner_current = activation.as_ref().is_some_and(|x| {
+            x.owner_epoch == claim.owner_epoch
+                && x.owner.is_some()
+                && x.boot_id == current_boot
+                && matches!(
+                    x.phase,
+                    ActivationPhase::Claimed | ActivationPhase::Running | ActivationPhase::Stopping
+                )
+        });
         let verdict = if !a.state.is_live() {
             ResultAcceptance::Stale(format!("the assignment is {}", a.state.as_str()))
         } else if a.execution_id.as_ref() != Some(&claim.execution_id) {
             ResultAcceptance::Stale("the result comes from an earlier activation".into())
-        } else if activation
-            .as_ref()
-            .is_none_or(|x| x.owner_epoch != claim.owner_epoch)
-        {
+        } else if !owner_current {
             ResultAcceptance::Stale("the result comes from a superseded owner".into())
         } else if claim.plan_revision.is_some() && claim.plan_revision < a.plan_revision {
             ResultAcceptance::Stale("the result was produced under an older plan".into())

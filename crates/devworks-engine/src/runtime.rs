@@ -582,6 +582,8 @@ fn closing_reply(raw: &[u8], correlation: Id) -> CommandOutcome {
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop();
+        // Launched coordinators are signalled and aborted: nothing renews or writes after drop.
+        self.runs.abort_launches();
         self.keep_awake.apply(false);
     }
 }

@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
@@ -128,10 +128,16 @@ pub struct RunTick {
     pub launched: Vec<Id>,
 }
 
+/// One launch, keyed by its activation and claim epoch: a relaunch of the same activation after
+/// its lease expired is a different entry, so the old launch's cleanup never removes it.
 struct Running {
+    activation: Id,
     root: RootId,
     stop: watch::Sender<bool>,
     task: JoinHandle<()>,
+}
+fn launch_key(activation: &Id, epoch: i64) -> String {
+    format!("{}#{epoch}", activation.as_str())
 }
 
 pub struct RunSupervisor {
@@ -193,9 +199,30 @@ impl RunSupervisor {
     /// IDs of the activations this supervisor has launched and not yet seen end.
     pub fn launched(&self) -> Vec<Id> {
         let map = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        let mut ids: Vec<Id> = map.keys().filter_map(|k| Id::new(k.clone()).ok()).collect();
+        let mut ids: Vec<Id> = map.values().map(|r| r.activation.clone()).collect();
         ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        ids.dedup();
         ids
+    }
+
+    /// How many launch tasks this supervisor still tracks (one per launched claim).
+    pub fn launches(&self) -> usize {
+        self.running.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
+    /// Signals every launch to stop and aborts its task at once, without recording anything
+    /// (the drop path: the next boot interrupts and holds whatever was live). Nothing renews a
+    /// lease or writes after this.
+    pub fn abort_launches(&self) {
+        self.stop();
+        let tasks: Vec<Running> = {
+            let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            map.drain().map(|(_, r)| r).collect()
+        };
+        for r in tasks {
+            let _ = r.stop.send(true);
+            r.task.abort();
+        }
     }
 
     /// Boot recovery of run roots (before any delivery, claim or command).
@@ -356,7 +383,9 @@ impl RunSupervisor {
             return;
         };
         let (stop_tx, stop_rx) = watch::channel(false);
-        let me = self.clone();
+        // The task holds the supervisor weakly: dropping the runtime drops the supervisor (and
+        // the process owner it holds), which is never kept alive by a launch.
+        let weak: Weak<Self> = Arc::downgrade(self);
         let id = activation.id.clone();
         let root = activation.root_id.clone();
         let epoch = activation.owner_epoch;
@@ -371,14 +400,24 @@ impl RunSupervisor {
         // Held across the spawn: the task removes its entry under this lock when it ends, so it
         // can never remove it before it is inserted.
         let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        let key = launch_key(&id, epoch);
+        let task_key = key.clone();
         let task = tokio::spawn(async move {
             let id = id_for_task;
             let mut future = future;
             let mut owned = true;
             let end = loop {
                 match first(&mut future, tokio::time::sleep(every)).await {
-                    Either::Left(end) => break end,
+                    Either::Left(end) => break Some(end),
                     Either::Right(()) => {
+                        let Some(me) = weak.upgrade() else {
+                            break None;
+                        };
+                        if me.stopping.load(Ordering::SeqCst) {
+                            // Shutting down or dropped: no renewal; the launch was asked to stop.
+                            let _ = signal.send(true);
+                            continue;
+                        }
                         if !owned {
                             continue;
                         }
@@ -402,6 +441,9 @@ impl RunSupervisor {
                     }
                 }
             };
+            let (Some(end), Some(me)) = (end, weak.upgrade()) else {
+                return;
+            };
             if owned {
                 let (service, x) = (me.service.clone(), id.clone());
                 let _ = store::write(&me.store, move |tx| {
@@ -421,16 +463,17 @@ impl RunSupervisor {
                 })
                 .await;
             }
+            // Only this claim's entry: a relaunch of the activation has its own key.
             me.running
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .remove(id.as_str());
+                .remove(&task_key);
             me.wake.notify_one();
         });
-        let key = id.as_str().to_owned();
         map.insert(
             key,
             Running {
+                activation: id,
                 root,
                 stop: stop_tx,
                 task,
@@ -454,7 +497,20 @@ impl RunSupervisor {
         self.stopping.store(true, Ordering::SeqCst);
         self.wake.notify_one();
     }
+}
 
+/// A supervisor dropped without shutdown (or after it) aborts any launch it still tracks.
+impl Drop for RunSupervisor {
+    fn drop(&mut self) {
+        let map = self.running.get_mut().unwrap_or_else(|p| p.into_inner());
+        for (_, r) in map.drain() {
+            let _ = r.stop.send(true);
+            r.task.abort();
+        }
+    }
+}
+
+impl RunSupervisor {
     /// Shutdown step 1: hold live roots for manual Continue, ask their activations to stop,
     /// freeze schedules (hooks), signal every launch and wait at most `grace` for them.
     pub async fn quiesce(&self, grace: Duration) -> Result<Vec<RootId>, StorageError> {

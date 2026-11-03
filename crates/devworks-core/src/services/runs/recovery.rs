@@ -413,10 +413,25 @@ impl ControlService {
         op: &OperationId,
         uncertain: &[(Id, String)],
     ) -> Result<OperationState, StorageError> {
-        let state = complete_stop_operation(tx, op, uncertain, "owned process trees stopped")?;
         let Some(root) = tx.sessions().work_root(root_id)? else {
-            return Ok(state);
+            return complete_stop_operation(tx, op, uncertain, "the root no longer exists");
         };
+        if let Some(a) = tx.runs().live_activation(root_id)?
+            && a.phase == ActivationPhase::Stopping
+            && a.owner.is_none()
+        {
+            self.stop_activation(tx, &root, &a, ActivationOutcome::Cancelled, Some("stopped"))?;
+        }
+        // An empty process list is not proof that the root stopped: an owned activation still
+        // stopping, or root-scoped work still claimed, keeps the stop pending (it is executed and
+        // settled again once they have quiesced).
+        if !root_quiesced(tx, root_id)? {
+            return Ok(tx
+                .operations()
+                .operation(op)?
+                .map_or(OperationState::Dispatching, |o| o.state));
+        }
+        let state = complete_stop_operation(tx, op, uncertain, "owned process trees stopped")?;
         let actor = tx.store().host_actor.clone();
         if state == OperationState::OutcomeUnknown {
             let names: Vec<&str> = uncertain.iter().map(|(p, _)| p.as_str()).collect();
@@ -437,12 +452,6 @@ impl ControlService {
                 ),
                 json!({"operationId": op.0.as_str(), "processes": names}),
             )?;
-        }
-        if let Some(a) = tx.runs().live_activation(root_id)?
-            && a.phase == ActivationPhase::Stopping
-            && a.owner.is_none()
-        {
-            self.stop_activation(tx, &root, &a, ActivationOutcome::Cancelled, Some("stopped"))?;
         }
         record(
             tx,
@@ -537,6 +546,35 @@ impl ControlService {
             n += 1;
         }
         Ok(n)
+    }
+}
+
+/// Whether nothing admitted for the root is still running: no live activation with an owner and
+/// no root-scoped delivery still claimed.
+pub fn root_quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
+    if tx
+        .runs()
+        .live_activation(root)?
+        .is_some_and(|a| a.owner.is_some())
+    {
+        return Ok(false);
+    }
+    let mut after: Option<Id> = None;
+    loop {
+        let page = tx.runs().root_deliveries(root, after.as_ref(), PAGE)?;
+        for id in &page {
+            if tx
+                .queue()
+                .entry(id)?
+                .is_some_and(|e| e.state == crate::ports::storage::QueueState::Claimed)
+            {
+                return Ok(false);
+            }
+        }
+        if page.len() < usize::from(PAGE) {
+            return Ok(true);
+        }
+        after = page.last().cloned();
     }
 }
 

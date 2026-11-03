@@ -1763,7 +1763,7 @@ fn archival_stops_every_root_of_the_project_immediately() {
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     applied(&fx.start(&fx.user, "root-b", 1, 1));
-    fx.launch("supervisor-1");
+    let owned = fx.launch("supervisor-1");
     let host = Arc::new(FakeHost::default());
     let (sup, processes) = supervisor(&fx, host, None);
     spawn_tree(&fx, &processes, "root-f", "project-a");
@@ -1773,10 +1773,22 @@ fn archival_stops_every_root_of_the_project_immediately() {
         .block_on(sup.stop_project_now(&ProjectId(id("project-a"))))
         .unwrap();
     assert_eq!(stopped.len(), 3, "root-f, root-g and root-i");
-    assert!(
-        stopped
-            .iter()
-            .all(|(_, s)| *s == OperationState::ObservedComplete)
+    // The owned (launched) activation has not stopped yet: its root's stop stays pending.
+    for (r, state) in &stopped {
+        let want = if r == &owned.root_id {
+            OperationState::Dispatching
+        } else {
+            OperationState::ObservedComplete
+        };
+        assert_eq!(*state, want, "{r:?}");
+    }
+    let (x, e) = (owned.id.clone(), owned.owner_epoch);
+    fx.tx(move |svc, tx| svc.finish_activation(tx, &x, e, ActivationOutcome::Cancelled, None))
+        .unwrap();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(owned.root_id.clone(), OperationState::ObservedComplete)]
     );
     for r in ["root-f", "root-g", "root-i"] {
         assert_eq!(fx.control(r).desired, DesiredExecution::Paused);
@@ -1972,6 +1984,59 @@ fn root_scoped_deliveries_of_a_paused_root_wait_until_continue() {
 #[derive(Default)]
 struct Scripted {
     launched: Mutex<Vec<StoredActivation>>,
+    /// Launch futures dropped (their task ended or was aborted).
+    dropped: Arc<AtomicUsize>,
+}
+/// A coordinator that keeps working after a stop request until the test releases it (its
+/// admitted work has not quiesced yet). Each launch has its own release gate and keeps the stop
+/// signal it was given, so the test can see whether a stop reached it.
+#[derive(Default)]
+struct Gated {
+    releases: Mutex<Vec<tokio::sync::watch::Sender<bool>>>,
+    stops: Mutex<Vec<tokio::sync::watch::Receiver<bool>>>,
+    dropped: Arc<AtomicUsize>,
+}
+impl Gated {
+    fn release(&self, launch: usize) {
+        self.releases.lock().unwrap()[launch].send_replace(true);
+    }
+    fn release_all(&self) {
+        for r in self.releases.lock().unwrap().iter() {
+            r.send_replace(true);
+        }
+    }
+    fn stop_seen(&self, launch: usize) -> bool {
+        *self.stops.lock().unwrap()[launch].borrow()
+    }
+    fn launches(&self) -> usize {
+        self.releases.lock().unwrap().len()
+    }
+}
+impl ActivationLauncher for Gated {
+    fn launch(&self, launch: Launch) -> LaunchFuture {
+        let (tx, mut release) = tokio::sync::watch::channel(false);
+        self.releases.lock().unwrap().push(tx);
+        self.stops.lock().unwrap().push(launch.stop);
+        let guard = DropCount(self.dropped.clone());
+        Box::pin(async move {
+            let _guard = guard;
+            while !*release.borrow() {
+                if release.changed().await.is_err() {
+                    break;
+                }
+            }
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Cancelled,
+                detail: None,
+            }
+        })
+    }
+}
+struct DropCount(Arc<AtomicUsize>);
+impl Drop for DropCount {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 impl ActivationLauncher for Scripted {
     fn launch(&self, launch: Launch) -> LaunchFuture {
@@ -1980,7 +2045,9 @@ impl ActivationLauncher for Scripted {
             .unwrap()
             .push(launch.activation.clone());
         let mut stop = launch.stop;
+        let guard = DropCount(self.dropped.clone());
         Box::pin(async move {
+            let _guard = guard;
             while !*stop.borrow() {
                 if stop.changed().await.is_err() {
                     break;
@@ -2208,4 +2275,302 @@ fn closing_the_app_pauses_persists_and_requires_continue_on_reopen() {
         "ContinueRequired"
     );
     rt.block_on(app.shutdown());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes: relaunch bookkeeping, stop quiescence, atomic dispositions, stale owners, drop,
+// resume replay
+
+#[test]
+fn a_relaunch_after_lease_expiry_keeps_its_own_launch_entry() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
+    // The test clock jumps; no jump is a sleep/wake here.
+    let mut sup = Arc::try_unwrap(sup).ok().expect("the only handle");
+    sup.wake_jump_ms = i64::MAX;
+    let sup = Arc::new(sup);
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    let first = rt.block_on(sup.tick()).unwrap().launched;
+    assert_eq!(first.len(), 1);
+    let activation = first[0].clone();
+    // The first launch is still alive but its lease expired: recovered, then claimed again.
+    fx.h.advance(fx.service.config().lease_ms * 3);
+    assert_eq!(rt.block_on(sup.tick()).unwrap().expired, 1);
+    fx.h.advance(fx.service.config().backoff_ms(1));
+    let second = rt.block_on(sup.tick()).unwrap().launched;
+    assert_eq!(second, vec![activation.clone()]);
+    assert_eq!(fx.activation(&activation).owner_epoch, 2);
+    assert_eq!(launcher.launches(), 2);
+    assert_eq!(sup.launches(), 2, "both claims are tracked while both run");
+    // The old launch ends after the relaunch began and cleans up only its own entry.
+    launcher.release(0);
+    // (Its future is dropped as it returns; the task's own cleanup follows.)
+    rt.block_on(within("the superseded launch ends and cleans up", async {
+        while launcher.dropped.load(Ordering::SeqCst) < 1 || sup.launches() == 2 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    assert_eq!(sup.launches(), 1, "the relaunch is still tracked");
+    assert_eq!(sup.launched(), vec![activation.clone()]);
+    // So a pause reaches the relaunched coordinator.
+    applied(&fx.pause(&fx.user, "root-i"));
+    rt.block_on(sup.tick()).unwrap();
+    assert!(launcher.stop_seen(1), "the relaunch was asked to stop");
+    launcher.release(1);
+    rt.block_on(within(
+        "the relaunch stops and records its outcome",
+        async {
+            while launcher.dropped.load(Ordering::SeqCst) < 2 || sup.launches() > 0 {
+                tokio::task::yield_now().await;
+            }
+        },
+    ));
+    let a = fx.activation(&activation);
+    assert_eq!(
+        (a.phase, a.outcome, a.owner_epoch),
+        (
+            ActivationPhase::Stopped,
+            Some(ActivationOutcome::Cancelled),
+            2
+        )
+    );
+}
+
+#[test]
+fn a_stop_stays_pending_until_the_launched_activation_quiesces() {
+    let fx = Fx::new();
+    // A coordinator still finishing admitted work: it ends only when the test releases it.
+    let launcher = Arc::new(Gated::default());
+    let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    let launched = rt.block_on(sup.tick()).unwrap().launched;
+    let op = match decision(&fx.stop(&fx.user, "root-i")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("stop not accepted: {other:?}"),
+    };
+    // No owned trees, but the coordinator is still stopping: not observed complete.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::Dispatching)]
+    );
+    assert_eq!(fx.activation(&launched[0]).phase, ActivationPhase::Stopping);
+    let pending = read(&*fx.store, |s| s.runs().pending_stops(None, 10));
+    assert_eq!(pending.len(), 1);
+    // Once it has stopped, the stop is observed.
+    // Still pending on a later pass while the coordinator works.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::Dispatching)]
+    );
+    launcher.release_all();
+    rt.block_on(within("the launch stops and records its outcome", async {
+        while launcher.dropped.load(Ordering::SeqCst) < 1 || sup.launches() > 0 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::ObservedComplete)]
+    );
+    let state = read(&*fx.store, |s| s.operations().operation(&op))
+        .unwrap()
+        .state;
+    assert_eq!(state, OperationState::ObservedComplete);
+}
+
+#[test]
+fn a_refused_disposition_supersedes_nothing() {
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    let coord = fx.assign("root-f", "root-f", None, None);
+    let w1 = fx.assign("root-f", "task-f1", Some(&coord.id), None);
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let foreign = fx.assign("root-i", "root-i", None, None);
+    // Claim until the feature's activation is the one owned.
+    let owner = id("supervisor-1");
+    let a = fx.tx(move |svc, tx| {
+        loop {
+            let x = svc.claim_activation(tx, &owner)?.expect("claimable");
+            let started = svc
+                .start_activation(tx, &x.id, x.owner_epoch)?
+                .expect("started");
+            if started.root_id == RootId(Id::new("root-f").unwrap()) {
+                return Ok(started);
+            }
+        }
+    });
+    let summary = applied(&fx.redirect(&fx.user, "root-f", "drop task 1"));
+    let instruction = id(summary["id"].as_str().unwrap());
+    let (x, e) = (a.id.clone(), a.owner_epoch);
+    fx.tx(move |svc, tx| svc.acknowledge_instructions(tx, &x, e, 1))
+        .unwrap();
+    for bad in [AssignmentId(id("missing")), foreign.id.clone()] {
+        let (x, i, w) = (a.id.clone(), instruction.clone(), w1.id.clone());
+        let r = fx.tx(move |svc, tx| {
+            svc.incorporate_instruction(
+                tx,
+                &x,
+                e,
+                &i,
+                Disposition {
+                    summary: "partial".into(),
+                    superseded: vec![w, bad],
+                    pending_plan_revision: None,
+                },
+            )
+        });
+        assert!(matches!(r, Err(Fenced::NotFound(_))), "{r:?}");
+        let w = read(&*fx.store, |s| s.runs().assignment(&w1.id)).unwrap();
+        assert_eq!(w.state, AssignmentState::Ready, "nothing was superseded");
+        let f = read(&*fx.store, |s| s.runs().assignment(&foreign.id)).unwrap();
+        assert_eq!(f.state, AssignmentState::Ready);
+        let i = read(&*fx.store, |s| s.runs().instruction(&instruction)).unwrap();
+        assert_eq!(i.stage, InstructionStage::Acknowledged);
+    }
+}
+
+#[test]
+fn results_of_an_interrupted_or_expired_owner_are_not_current() {
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let coord = fx.assign("root-i", "root-i", None, None);
+    let a = fx.launch("supervisor-1");
+    let claim = ResultClaim {
+        assignment: coord.id.clone(),
+        execution_id: a.id.clone(),
+        owner_epoch: a.owner_epoch,
+        plan_revision: None,
+    };
+    let accept = |fx: &Fx, c: ResultClaim| {
+        fx.tx(move |svc, tx| {
+            let host = tx.store().host_actor.clone();
+            svc.accept_result(tx, &host, &c)
+        })
+    };
+    assert_eq!(accept(&fx, claim.clone()), ResultAcceptance::Current);
+    // Lease expiry: requeued, not yet claimed again; the old owner's result is stale.
+    fx.h.advance(fx.service.config().lease_ms * 3);
+    assert_eq!(fx.tx(|svc, tx| svc.recover_expired(tx)), 1);
+    assert!(matches!(
+        accept(&fx, claim.clone()),
+        ResultAcceptance::Stale(_)
+    ));
+    // Restart: the interrupted activation's result is stale even with its old epoch.
+    fx.h.advance(fx.service.config().backoff_ms(1));
+    let b = fx.launch("supervisor-1");
+    let claim = ResultClaim {
+        owner_epoch: b.owner_epoch,
+        ..claim
+    };
+    assert_eq!(accept(&fx, claim.clone()), ResultAcceptance::Current);
+    let (h, store) = fx.into_parts();
+    drop(store);
+    let store = h.open();
+    let fx = Fx::over(h, store);
+    let report = fx.tx(|svc, tx| svc.recover_boot(tx, &NoLifecycleHooks));
+    assert_eq!(report.interrupted, vec![b.id.clone()]);
+    let waiting = read(&*fx.store, |s| s.runs().assignment(&coord.id)).unwrap();
+    assert_eq!(waiting.execution_id.as_ref(), Some(&b.id));
+    assert!(matches!(accept(&fx, claim), ResultAcceptance::Stale(_)));
+    let retained = fx
+        .events("root-i")
+        .iter()
+        .filter(|k| *k == "LateResultRetained")
+        .count();
+    assert!(retained >= 2, "{retained}");
+}
+
+#[test]
+fn dropping_the_runtime_aborts_launches_and_releases_the_supervisor() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Scripted::default());
+    let rt = runtime();
+    let app = rt
+        .block_on(boot(composition(
+            &fx,
+            Some(launcher.clone()),
+            Arc::new(FakePower::default()),
+        )))
+        .unwrap_or_else(|e| panic!("boot: {e:?}"));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    app.runs().notify();
+    rt.block_on(within("the coordinator launches", async {
+        while launcher.launched.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    }));
+    let weak = Arc::downgrade(app.runs());
+    drop(app);
+    rt.block_on(within("the supervisor is released", async {
+        while weak.upgrade().is_some() || launcher.dropped.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    // Nothing was recorded for the aborted launch: the next boot interrupts and holds it.
+    let a = launcher.launched.lock().unwrap()[0].clone();
+    assert_eq!(fx.activation(&a.id).phase, ActivationPhase::Running);
+}
+
+#[test]
+fn a_lost_acknowledgment_of_a_granted_continue_replays_for_agents_and_schedules() {
+    let fx = Fx::new();
+    for (who, ctx) in [("agent-a", fx.agent.clone()), ("sched-a", fx.sched.clone())] {
+        applied(&fx.pause(&fx.user, "root-i"));
+        let hold = fx.holds("root-i").pop().unwrap();
+        let (u, holder, now) = (fx.user.clone(), ActorId(id(who)), fx.h.now());
+        let binding = ResumeBinding {
+            holds: vec![HoldRef {
+                hold_id: devworks_core::protocol::HoldId(hold.id.clone()),
+                revision: Revision::new(hold.revision).unwrap(),
+            }],
+            causes: vec![],
+        };
+        let grant = write(&*fx.store, move |tx| {
+            devworks_core::authority::mint_resume_grant(
+                tx,
+                &u,
+                holder,
+                RootId(Id::new("root-i").unwrap()),
+                binding,
+                GrantBounds {
+                    expires_at_ms: now + 60_000,
+                    uses: 1,
+                },
+            )
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        })
+        .unwrap();
+        let ctx = ctx.with_authority_source(grant.id.clone());
+        let key = fx.key();
+        let rev = fx.control("root-i").revision;
+        let first = fx.resume_key(&ctx, &key, "root-i", rev, &[(&hold.id, hold.revision)]);
+        assert!(
+            matches!(decision(&first), DomainDecision::Applied { .. }),
+            "{who}: {first:?}"
+        );
+        // The acknowledgment was lost: the same request replays its receipt.
+        let again = fx.resume_key(&ctx, &key, "root-i", rev, &[(&hold.id, hold.revision)]);
+        assert!(replayed(&again), "{who}: {again:?}");
+        assert_eq!(
+            serde_json::to_value(decision(&again)).unwrap(),
+            serde_json::to_value(decision(&first)).unwrap()
+        );
+        // It cleared nothing else and spent no other use; a new request is not authorized.
+        let spent = read(&*fx.store, |s| s.grants().grant(&grant.id)).unwrap();
+        assert_eq!(spent.uses_remaining, Some(0));
+        applied(&fx.pause(&fx.user, "root-i"));
+        let fresh = fx.resume(&ctx, "root-i");
+        assert!(!matches!(
+            decision_or_rejected(&fresh),
+            Some(DomainDecision::Applied { .. })
+        ));
+        assert_eq!(fx.control("root-i").desired, DesiredExecution::Paused);
+        applied(&fx.resume(&fx.user, "root-i"));
+    }
 }

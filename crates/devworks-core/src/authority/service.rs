@@ -250,18 +250,23 @@ fn decide_in(
     // which holds it covers, and the unit of work spends it with the receipt.
     let resume = resume_grants(s, ctx, request, now).map_err(unavailable)?;
     match verdict {
-        Verdict::Allow => Ok(Authorization::with_grants(resume).fenced_by(fences)),
+        Verdict::Allow => Ok(Authorization::with_grants(resume.uses).fenced_by(fences)),
         Verdict::NeedsGrant {
             reason: DenialReason::GrantRequired,
             ..
-        } if !resume.is_empty() => Ok(Authorization::with_grants(resume).fenced_by(fences)),
+        } if !resume.uses.is_empty() => {
+            Ok(Authorization::with_grants(resume.uses).fenced_by(fences))
+        }
         Verdict::Deny(reason) => Err(deny(reason)),
         Verdict::NeedsGrant {
             kind,
             exact,
             reason,
         } => {
-            let mut replayable = false;
+            // A resume grant that authorized this request before (now spent, or its hold
+            // cleared) still lets its holder resolve that request's receipt after a lost
+            // acknowledgment; a revoked one does not.
+            let mut replayable = resume.replayable;
             for source in ctx.authority_sources() {
                 let Some(grant) = s.authority().authority_grant(source).map_err(unavailable)?
                 else {
@@ -297,13 +302,23 @@ fn decide_in(
     }
 }
 
-/// The usable resume grants linked to a non-human `runs.continue` invocation for its root.
+/// The resume grants linked to a non-human `runs.continue` invocation for its root.
+#[derive(Default)]
+struct ResumeGrants {
+    /// Usable grants covering a current manual-resume hold (spent with a new decision).
+    uses: Vec<GrantUse>,
+    /// A linked, unrevoked grant of this holder for this root exists: enough to replay the
+    /// receipt of a request it authorized earlier, never to decide a new one.
+    replayable: bool,
+}
+
+/// Resolves [`ResumeGrants`] for the request.
 fn resume_grants(
     s: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     request: &AuthorityRequest<'_>,
     now: i64,
-) -> Result<Vec<GrantUse>, StorageError> {
+) -> Result<ResumeGrants, StorageError> {
     use crate::operations::{OperationInput, runs};
     use crate::protocol::RootCommand;
     if request.descriptor.name != "runs.continue"
@@ -312,16 +327,16 @@ fn resume_grants(
             PrincipalKind::Human | PrincipalKind::Host
         )
     {
-        return Ok(Vec::new());
+        return Ok(ResumeGrants::default());
     }
     let OperationInput::Runs(runs::Input::Continue(r)) = request.input else {
-        return Ok(Vec::new());
+        return Ok(ResumeGrants::default());
     };
     let RootCommand::Continue { root_id, .. } = &r.command else {
-        return Ok(Vec::new());
+        return Ok(ResumeGrants::default());
     };
     if ctx.authority_sources().is_empty() {
-        return Ok(Vec::new());
+        return Ok(ResumeGrants::default());
     }
     // Only a grant that covers a current manual-resume hold is attached (and so spent): a
     // Continue with nothing to clear never uses one up.
@@ -332,11 +347,12 @@ fn resume_grants(
     .into_iter()
     .filter(|b| b.cause.manual_resume())
     .collect();
-    let mut out = Vec::new();
+    let mut out = ResumeGrants::default();
     for source in ctx.authority_sources() {
         let Some(g) = s.grants().grant(source)? else {
             continue;
         };
+        out.replayable |= &g.actor == ctx.principal() && &g.root_id == root_id && !g.revoked;
         let covers =
             serde_json::from_value::<crate::services::runs::ResumeBinding>(g.binding.clone())
                 .is_ok_and(|b| holds.iter().any(|h| b.covers(h)));
@@ -347,7 +363,7 @@ fn resume_grants(
             && g.uses_remaining.is_none_or(|u| u > 0)
             && covers;
         if usable {
-            out.push(GrantUse {
+            out.uses.push(GrantUse {
                 grant_id: g.id,
                 expected_revision: g.revision,
             });

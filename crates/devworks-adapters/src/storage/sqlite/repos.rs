@@ -877,6 +877,7 @@ fn grant(conn: &Connection, id: &Id) -> Result<Option<GrantRecord>, StorageError
                 root_id: RootId(id_of(root)?),
                 revision,
                 active: state == "Active",
+                revoked: state == "Revoked",
                 authority_source: source,
                 binding: json_of(&binding)?,
                 expires_at_ms: expires,
