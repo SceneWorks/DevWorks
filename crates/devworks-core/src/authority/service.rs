@@ -435,7 +435,9 @@ pub fn bind_principal(
     }
     binding.bound_by = ctx.principal().clone();
     let actor = binding.actor.clone();
-    let binding = tx.authority().bind_principal(binding, expected_revision)?;
+    let binding = tx
+        .authority_writes(&super::CAPABILITY)
+        .bind_principal(binding, expected_revision)?;
     record(
         tx,
         ctx,
@@ -461,7 +463,9 @@ pub fn revoke_principal(
     expected_revision: i64,
 ) -> Result<PrincipalBinding, AdminError> {
     require_kind(tx, ctx, &[PrincipalKind::Human, PrincipalKind::Host])?;
-    let binding = tx.authority().revoke_principal(actor, expected_revision)?;
+    let binding = tx
+        .authority_writes(&super::CAPABILITY)
+        .revoke_principal(actor, expected_revision)?;
     record(
         tx,
         ctx,
@@ -531,15 +535,17 @@ pub(crate) fn issue(
         ));
     }
     let id = tx.new_id(IdKind::Grant);
-    let grant = tx.authority().issue_grant(NewAuthorityGrant {
-        id: id.clone(),
-        actor: holder.clone(),
-        kind,
-        issued_by: ctx.principal().clone(),
-        binding: binding.clone(),
-        expires_at_ms,
-        uses,
-    })?;
+    let grant = tx
+        .authority_writes(&super::CAPABILITY)
+        .issue_grant(NewAuthorityGrant {
+            id: id.clone(),
+            actor: holder.clone(),
+            kind,
+            issued_by: ctx.principal().clone(),
+            binding: binding.clone(),
+            expires_at_ms,
+            uses,
+        })?;
     record(
         tx,
         ctx,
@@ -567,9 +573,11 @@ pub fn revoke_grant(
     expected_revision: i64,
 ) -> Result<AuthorityGrant, AdminError> {
     require_kind(tx, ctx, &[PrincipalKind::Human, PrincipalKind::Host])?;
-    let grant = tx
-        .authority()
-        .revoke_grant(id, expected_revision, ctx.principal())?;
+    let grant = tx.authority_writes(&super::CAPABILITY).revoke_grant(
+        id,
+        expected_revision,
+        ctx.principal(),
+    )?;
     record(
         tx,
         ctx,

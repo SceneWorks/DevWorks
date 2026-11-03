@@ -19,26 +19,29 @@
 //! work or a receipt record. Because lookup and decision run in one serialized transaction, a
 //! duplicate that loses a race finds the winner's receipt and its handler never runs.
 use crate::admission::{self, AdmissionError, CallerKey, Refusal, Selection};
+use crate::authority::AuthorityCapability;
 use crate::context::{InvocationContext, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
-    ActorRegistry, AuthorityLedger, CommandLedger, CommandLedgerRead, ConfigurationRepository,
-    DurableQueue, EventFilter, EventPage, EventRecord, GrantLedger, HistoryLog, HistoryRead,
-    LedgerEntry, NewEvent, OperationJournal, PackageHandlerLedger, ReadOptions, RevisionConflict,
-    Savepoint, StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ActorRegistry, AuthorityGrant, AuthorityLedger, AuthorityRead, CommandLedger,
+    CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter, EventPage, EventRecord,
+    GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead, LedgerEntry, NewAuthorityGrant,
+    NewEvent, NewGrant, NewPrincipalBinding, OperationJournal, PackageHandlerLedger,
+    PrincipalBinding, ReadOptions, RegisteredRepository, RevisionConflict, Savepoint, StorageError,
+    StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
-    HandlerFailure, IdKind, IdSource, QueryHandler, StoredReceipt,
+    GrantUse, HandlerFailure, IdKind, IdSource, QueryHandler, StoredReceipt,
 };
 use crate::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, validate_command_reply,
 };
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
-    CONTRACT, Check, CommandId, CommandReply, CorrelationId, DomainErrorCode, DomainFault, EventId,
-    Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
+    ActorId, CONTRACT, Check, CommandId, CommandReply, CorrelationId, DomainErrorCode, DomainFault,
+    EventId, Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
 };
 use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor};
 use serde_json::json;
@@ -706,6 +709,64 @@ impl<'a> HandlerTx<'a> {
 fn ledger_owned() -> StorageError {
     StorageError::InvalidRecord("command receipts are recorded only by the gateway".into())
 }
+fn authority_owned() -> StorageError {
+    StorageError::InvalidRecord(
+        "authority records are written only through the authority seams".into(),
+    )
+}
+impl GrantRead for HandlerTx<'_> {
+    fn grant(&self, id: &Id) -> Result<Option<GrantRecord>, StorageError> {
+        self.inner.borrow_mut().grants().grant(id)
+    }
+}
+impl GrantLedger for HandlerTx<'_> {
+    fn issue(&mut self, _: NewGrant) -> Result<GrantRecord, StorageError> {
+        Err(authority_owned())
+    }
+    fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
+        Err(authority_owned())
+    }
+}
+impl AuthorityRead for HandlerTx<'_> {
+    fn principal(&self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
+        self.inner.borrow_mut().authority().principal(actor)
+    }
+    fn authority_grant(&self, id: &Id) -> Result<Option<AuthorityGrant>, StorageError> {
+        self.inner.borrow_mut().authority().authority_grant(id)
+    }
+    fn registered_repositories(&self) -> Result<Vec<RegisteredRepository>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .authority()
+            .registered_repositories()
+    }
+}
+impl AuthorityLedger for HandlerTx<'_> {
+    fn bind_principal(
+        &mut self,
+        _: NewPrincipalBinding,
+        _: Option<i64>,
+    ) -> Result<PrincipalBinding, StorageError> {
+        Err(authority_owned())
+    }
+    fn revoke_principal(&mut self, _: &ActorId, _: i64) -> Result<PrincipalBinding, StorageError> {
+        Err(authority_owned())
+    }
+    fn issue_grant(&mut self, _: NewAuthorityGrant) -> Result<AuthorityGrant, StorageError> {
+        Err(authority_owned())
+    }
+    fn revoke_grant(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &ActorId,
+    ) -> Result<AuthorityGrant, StorageError> {
+        Err(authority_owned())
+    }
+    fn consume_grant(&mut self, _: &GrantUse, _: &ActorId) -> Result<AuthorityGrant, StorageError> {
+        Err(authority_owned())
+    }
+}
 impl CommandLedgerRead for HandlerTx<'_> {
     fn lookup(&self, _: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError> {
         Err(ledger_owned())
@@ -776,8 +837,14 @@ impl WriteTransaction for HandlerTx<'_> {
     fn queue(&mut self) -> &mut dyn DurableQueue {
         self.inner.get_mut().queue()
     }
+    // Grant and authority reads pass through; their writes are refused here and reach the
+    // store only through the authority seams (which hold the capability) or the gateway's own
+    // consumption step, which runs on the unwrapped transaction.
     fn grants(&mut self) -> &mut dyn GrantLedger {
-        self.inner.get_mut().grants()
+        self
+    }
+    fn grant_writes(&mut self, capability: &AuthorityCapability) -> &mut dyn GrantLedger {
+        self.inner.get_mut().grant_writes(capability)
     }
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
         self.inner.get_mut().packages()
@@ -786,7 +853,10 @@ impl WriteTransaction for HandlerTx<'_> {
         self.inner.get_mut().configuration()
     }
     fn authority(&mut self) -> &mut dyn AuthorityLedger {
-        self.inner.get_mut().authority()
+        self
+    }
+    fn authority_writes(&mut self, capability: &AuthorityCapability) -> &mut dyn AuthorityLedger {
+        self.inner.get_mut().authority_writes(capability)
     }
 }
 

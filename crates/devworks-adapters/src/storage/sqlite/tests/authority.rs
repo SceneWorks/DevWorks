@@ -1656,3 +1656,353 @@ fn host_roles_resolve_only_active_agent_bindings_and_settings_fail_closed_otherw
     }
     assert!(stage("agent-a").is_ok());
 }
+
+// --- the handler view of the authority and grant ledgers ---------------------------------------
+
+use devworks_core::gateway::AdmittedCommand;
+use devworks_core::ports::{CommandHandler, Decided, GrantUse, HandlerFailure, IdKind};
+use devworks_core::protocol::results::DomainDecision;
+use devworks_core::protocol::{OperationId, RootId};
+
+/// Records an operation intent and accepts, so the use case's other writes commit with it.
+fn accept_in(tx: &mut dyn WriteTransaction) -> Result<Decided, HandlerFailure> {
+    let op = OperationId(tx.new_id(IdKind::Operation));
+    tx.operations().record_intent(NewOperation {
+        id: op.clone(),
+        root_id: Some(RootId(id("root-a"))),
+        assignment_id: None,
+        capability: "runs.start".into(),
+        schema_version: 1,
+        args_digest: "d".into(),
+        payload: json!({}),
+    })?;
+    Ok(Decided {
+        decision: DomainDecision::Accepted {
+            operation_id: op.clone(),
+        },
+        operation_id: Some(op),
+    })
+}
+
+fn refused<T: std::fmt::Debug>(r: Result<T, StorageError>) -> bool {
+    matches!(r, Err(StorageError::InvalidRecord(m)) if m.contains("authority seams"))
+}
+
+/// A use case that tries every raw authority and grant write, and the reads it may use.
+#[derive(Default)]
+struct RawWriter {
+    outcomes: Mutex<Vec<(&'static str, bool)>>,
+}
+impl CommandHandler for RawWriter {
+    fn decide(
+        &self,
+        _: &InvocationContext,
+        _: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let mut out = self.outcomes.lock().unwrap();
+        let grant = tx.authority().authority_grant(&id("grant-pkg"))?.unwrap();
+        out.push((
+            "read principal",
+            tx.authority().principal(&actor("agent-a"))?.is_some(),
+        ));
+        out.push(("read grant", grant.state == GrantState::Active));
+        out.push((
+            "read resume grant",
+            tx.grants().grant(&id("resume-1"))?.is_some(),
+        ));
+        out.push((
+            "bind",
+            refused(tx.authority().bind_principal(
+                NewPrincipalBinding {
+                    actor: actor("agent-x"),
+                    kind: PrincipalKind::Agent,
+                    role: Some(AgentRole::Worker),
+                    project_id: None,
+                    tool_families: None,
+                    bound_by: actor("user-a"),
+                },
+                None,
+            )),
+        ));
+        out.push((
+            "revoke principal",
+            refused(tx.authority().revoke_principal(&actor("agent-a"), 1)),
+        ));
+        out.push((
+            "issue",
+            refused(tx.authority().issue_grant(NewAuthorityGrant {
+                id: id("grant-self"),
+                actor: actor("pkg-a"),
+                kind: GrantKind::Operation,
+                issued_by: actor("user-a"),
+                binding: json!({"operation": "runs.start"}),
+                expires_at_ms: None,
+                uses: None,
+            })),
+        ));
+        out.push((
+            "revoke grant",
+            refused(
+                tx.authority()
+                    .revoke_grant(&grant.id, grant.revision, &actor("user-a")),
+            ),
+        ));
+        let spend = GrantUse {
+            grant_id: grant.id.clone(),
+            expected_revision: grant.revision,
+        };
+        out.push((
+            "consume",
+            refused(tx.authority().consume_grant(&spend, &actor("pkg-a"))),
+        ));
+        out.push((
+            "issue resume",
+            refused(tx.grants().issue(NewGrant {
+                id: id("resume-2"),
+                actor: actor("pkg-a"),
+                root_id: RootId(id("root-a")),
+                authority_source: "handler".into(),
+                binding: json!({}),
+                expires_at_ms: None,
+                uses: None,
+            })),
+        ));
+        let resume = GrantUse {
+            grant_id: id("resume-1"),
+            expected_revision: 1,
+        };
+        out.push((
+            "consume resume",
+            refused(tx.grants().consume(&resume, &actor("user-a"))),
+        ));
+        drop(out);
+        accept_in(tx)
+    }
+}
+
+#[test]
+fn a_use_case_cannot_write_authority_or_grant_records_directly() {
+    let fx = Fx::new();
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let grant = fx
+        .mint(
+            &user,
+            "pkg-a",
+            GrantKind::Operation,
+            GrantBinding {
+                operation: "runs.start".into(),
+                action: None,
+                request_digest: None,
+                project_id: None,
+                root_id: None,
+            },
+            Some(2),
+        )
+        .unwrap();
+    // Re-key the minted grant under a fixed ID the handler can address.
+    let gid = grant.id.clone();
+    fx.store
+        .with_writer_connection(move |c| {
+            super::super::conn::db(c.execute(
+                "UPDATE authority_grants SET id='grant-pkg' WHERE id=?1",
+                [gid.as_str()],
+            ))
+            .map(|_| ())
+        })
+        .unwrap();
+    fx.write(|tx| {
+        tx.grants().issue(NewGrant {
+            id: id("resume-1"),
+            actor: actor("user-a"),
+            root_id: RootId(id("root-a")),
+            authority_source: "explicit-user-instruction".into(),
+            binding: json!({"rootId": "root-a"}),
+            expires_at_ms: None,
+            uses: Some(1),
+        })
+    });
+    let before = (fx.principal("agent-a"), fx.events().len());
+    let handler = Arc::new(RawWriter::default());
+    let authority = fx.authority();
+    let ctx = fx
+        .ctx("pkg-a", PrincipalKind::Package)
+        .with_authority_source(id("grant-pkg"));
+    let reply = fx
+        .gateway(&authority)
+        .command(
+            &ctx,
+            "runs.start",
+            start("raw-1").as_bytes(),
+            handler.clone(),
+        )
+        .unwrap();
+    assert!(matches!(reply, CommandReply::Recorded { .. }), "{reply:?}");
+    let outcomes = handler.outcomes.lock().unwrap().clone();
+    assert_eq!(outcomes.len(), 10);
+    for (what, ok) in outcomes {
+        assert!(
+            ok,
+            "{what}: reads are served and every raw write is refused"
+        );
+    }
+    // Nothing the handler attempted was written; the gateway still spent exactly one use.
+    let after = fx.grant(&id("grant-pkg"));
+    assert_eq!(
+        (after.state, after.uses_remaining, after.revision),
+        (GrantState::Active, Some(1), 2)
+    );
+    assert_eq!(fx.principal("agent-a"), before.0);
+    let read = |gid: &str| {
+        let gid = id(gid);
+        read_snapshot(&*fx.store, &ReadOptions::default(), |s| {
+            Ok((
+                s.authority().authority_grant(&gid)?,
+                s.grants().grant(&gid)?,
+                s.authority().principal(&actor("agent-x"))?,
+            ))
+        })
+        .unwrap()
+    };
+    let (self_issued, resume_two, bound) = read("grant-self");
+    assert!(self_issued.is_none() && bound.is_none());
+    assert!(read("resume-2").1.is_none() && resume_two.is_none());
+    let resume = read("resume-1").1.unwrap();
+    assert_eq!((resume.revision, resume.uses_remaining), (1, Some(1)));
+    // Only the gateway's own history was added.
+    let added: Vec<String> = fx.events()[before.1..]
+        .iter()
+        .map(|e| e.kind.clone())
+        .collect();
+    assert_eq!(added, ["CommandDecided"]);
+}
+
+/// A user-attributed use case that creates and revokes authority through the seams.
+struct Seams {
+    preview: Option<deletion::DeletionPreview>,
+    outcomes: Mutex<Vec<(&'static str, bool)>>,
+}
+impl CommandHandler for Seams {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        _: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let mut out = self.outcomes.lock().unwrap();
+        let binding = GrantBinding {
+            operation: "runs.start".into(),
+            action: None,
+            request_digest: None,
+            project_id: None,
+            root_id: None,
+        };
+        let minted = auth::mint_grant(
+            tx,
+            ctx,
+            actor("pkg-a"),
+            GrantKind::Operation,
+            binding,
+            Some(T0 + 60_000),
+            Some(1),
+        );
+        out.push(("mint", minted.is_ok()));
+        if let Ok(g) = minted {
+            out.push((
+                "revoke grant",
+                auth::revoke_grant(tx, ctx, &g.id, g.revision).is_ok(),
+            ));
+        }
+        let bound = auth::bind_principal(
+            tx,
+            ctx,
+            NewPrincipalBinding {
+                actor: actor("agent-x"),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: None,
+                tool_families: None,
+                bound_by: actor("user-a"),
+            },
+            None,
+        );
+        out.push(("bind", bound.is_ok()));
+        out.push((
+            "revoke principal",
+            auth::revoke_principal(tx, ctx, &actor("agent-x"), 1).is_ok(),
+        ));
+        if let Some(preview) = &self.preview {
+            let confirmation = deletion::confirm(tx, ctx, preview, T0 + 60_000);
+            out.push(("confirm deletion", confirmation.is_ok()));
+            if let Ok(c) = confirmation {
+                out.push((
+                    "authorize deletion",
+                    deletion::authorize(tx, ctx, &c.id, preview).is_ok(),
+                ));
+            }
+        }
+        drop(out);
+        accept_in(tx)
+    }
+}
+
+#[test]
+fn the_authority_seams_write_inside_an_owning_unit_of_work() {
+    let fx = Fx::new();
+    let scratch = Scratch::new("seams");
+    let repo = scratch.path("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    register_repository(&fx, "repo-a", &repo);
+    // Primary deletion previews need stable directory identities (Unix in this adapter).
+    let preview = deletion::prepare(
+        &NativeFilesystem::new(),
+        &roots(&fx),
+        &id("repo-a"),
+        RepositoryDependencies::default(),
+    )
+    .ok();
+    assert_eq!(preview.is_some(), cfg!(unix));
+    let handler = Arc::new(Seams {
+        preview,
+        outcomes: Mutex::new(Vec::new()),
+    });
+    let authority = fx.authority();
+    let reply = fx
+        .gateway(&authority)
+        .command(
+            &fx.ctx("user-a", PrincipalKind::Human),
+            "runs.start",
+            start("seams-1").as_bytes(),
+            handler.clone(),
+        )
+        .unwrap();
+    assert!(matches!(reply, CommandReply::Recorded { .. }), "{reply:?}");
+    let outcomes = handler.outcomes.lock().unwrap().clone();
+    assert_eq!(outcomes.len(), if cfg!(unix) { 6 } else { 4 });
+    for (what, ok) in outcomes {
+        assert!(ok, "{what} through its seam");
+    }
+    // Committed with the command and attributed to the user.
+    let binding = fx.principal("agent-x");
+    assert_eq!(
+        (binding.active, binding.revision, binding.bound_by),
+        (false, 2, actor("user-a"))
+    );
+    for kind in [
+        "AuthorityGrantIssued",
+        "AuthorityGrantRevoked",
+        "PrincipalAuthorityBound",
+        "PrincipalAuthorityRevoked",
+    ] {
+        assert!(fx.count(kind) >= 1, "{kind}");
+    }
+    if cfg!(unix) {
+        assert_eq!(fx.count("RepositoryDeletionConfirmed"), 1);
+        assert_eq!(fx.count("RepositoryDeletionAuthorized"), 1);
+    }
+    assert!(
+        fx.events()
+            .iter()
+            .all(|e| e.kind == "CommandDecided" || e.actor == actor("user-a"))
+    );
+}

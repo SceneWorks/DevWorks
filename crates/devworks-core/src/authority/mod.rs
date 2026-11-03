@@ -12,6 +12,11 @@
 //!   Text claiming to be the user, an actor ID in JSON, a package declaring Full access or a
 //!   copied grant ID cannot mint authority: request bodies are never read for authority, and a
 //!   grant is usable only by its recorded holder within its recorded binding.
+//! * **Authority records are written only by their seams.** A use case sees the authority and
+//!   resume-grant ledgers through the gateway's handler view: reads are served, every direct
+//!   write is refused. Binding, minting, revoking and the deletion confirmation write through
+//!   [`service`] and [`deletion`], which alone hold the [`AuthorityCapability`]; grant
+//!   consumption is the gateway's own step on the unwrapped transaction.
 //! * **Mandatory restrictions hold under Full access.** Code reviewers are read-only and limited
 //!   to verified reads; main is never force-pushed; explicit approvals stay required; the
 //!   destructive guard always runs; primary repository deletion is only the user's dedicated
@@ -30,6 +35,21 @@
 //! write, not isolation. Harness checks inspect known destructive intent on supported paths
 //! (typed filesystem, worktree cleanup, recognized shell syntax, declared MCP/package effects);
 //! they do not intercept arbitrary native code, and no platform confinement is claimed.
+/// Proof that a ledger write comes from an authority seam ([`service`], [`deletion`]). Its field
+/// is private to this module, so no use case, adapter or package can construct one; a use case
+/// reaching the authority or grant ledger through the gateway's handler view can read but every
+/// write it attempts directly is refused.
+///
+/// ```compile_fail
+/// // Nothing outside `devworks_core::authority` can mint the capability.
+/// let _ = devworks_core::authority::AuthorityCapability { _sealed: () };
+/// ```
+#[derive(Debug)]
+pub struct AuthorityCapability {
+    _sealed: (),
+}
+const CAPABILITY: AuthorityCapability = AuthorityCapability { _sealed: () };
+
 pub mod deletion;
 pub mod destructive;
 pub mod disclosure;

@@ -49,6 +49,7 @@
 //! the durable queue/outbox (with ordered partitions and consumer progress), package event-handler
 //! state and processing receipts, grants and actor/store identity, plus the scoped configuration
 //! repository ([`ConfigurationRepository`]) and the host authority ledger ([`AuthorityLedger`]).
+use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
 use crate::ports::{GrantUse, IdKind, StoredReceipt};
@@ -411,7 +412,19 @@ pub trait WriteTransaction {
     fn grants(&mut self) -> &mut dyn GrantLedger;
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger;
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository;
+    /// The authority ledger. Inside a use case (the gateway's handler view) only its reads are
+    /// served; its writes are refused there and happen through [`Self::authority_writes`].
     fn authority(&mut self) -> &mut dyn AuthorityLedger;
+    /// Authority-ledger writes for the `crate::authority` seams, which alone can present the
+    /// capability. The handler view forwards these to the store; elsewhere it is the ledger.
+    fn authority_writes(&mut self, _: &AuthorityCapability) -> &mut dyn AuthorityLedger {
+        self.authority()
+    }
+    /// Resume-grant ledger writes for the `crate::authority` seams (see
+    /// [`Self::authority_writes`]); the handler view of [`Self::grants`] refuses writes.
+    fn grant_writes(&mut self, _: &AuthorityCapability) -> &mut dyn GrantLedger {
+        self.grants()
+    }
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.

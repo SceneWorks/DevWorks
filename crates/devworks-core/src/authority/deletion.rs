@@ -257,7 +257,7 @@ pub fn authorize(
     if !current.blockers.is_empty() {
         return Err(DeletionRefusal::Blocked(current.blockers.clone()));
     }
-    tx.authority()
+    tx.authority_writes(&super::CAPABILITY)
         .consume_grant(
             &GrantUse {
                 grant_id: grant.id.clone(),
