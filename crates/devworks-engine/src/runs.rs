@@ -26,7 +26,7 @@ use devworks_core::protocol::{Id, OperationId, OperationState, ProjectId, RootId
 use devworks_core::services::process::{ProcessSupervisor, StopOutcome, StopScope};
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::runs::recovery::{
-    BootRecovery, LifecycleHooks, dispatch_stop_operation,
+    BootRecovery, LifecycleHooks, dispatch_stop_operation, stop_superseded,
 };
 use devworks_core::services::runs::substrate::ActivationFailure;
 use std::collections::HashMap;
@@ -132,6 +132,9 @@ pub struct RunTick {
 /// its lease expired is a different entry, so the old launch's cleanup never removes it.
 struct Running {
     activation: Id,
+    /// The activation's generation and the claim epoch this launch runs under.
+    generation: i64,
+    epoch: i64,
     root: RootId,
     stop: watch::Sender<bool>,
     task: JoinHandle<()>,
@@ -262,6 +265,11 @@ impl RunSupervisor {
         report.stops = self.execute_stops().await?;
         if self.launcher.is_some() && !self.stopping.load(Ordering::SeqCst) {
             loop {
+                // Shutdown (or drop) may begin while this tick runs: no further claim, and a
+                // claim committed meanwhile is not launched (shutdown records it interrupted).
+                if self.stopping.load(Ordering::SeqCst) {
+                    break;
+                }
                 let (service, owner) = (self.service.clone(), self.owner.clone());
                 let claimed = store::write(&self.store, move |tx| {
                     let Some(a) = service.claim_activation(tx, &owner)? else {
@@ -275,6 +283,9 @@ impl RunSupervisor {
                 let Some(running) = claimed else {
                     break;
                 };
+                if self.stopping.load(Ordering::SeqCst) {
+                    break;
+                }
                 report.launched.push(running.id.clone());
                 self.spawn_launch(running);
             }
@@ -283,7 +294,7 @@ impl RunSupervisor {
     }
 
     /// Executes every journaled stop still to be observed: the stop is marked dispatching, the
-    /// root's owned trees are stopped (bounded), and the outcome is recorded.
+    /// launches and owned trees it covers are stopped (bounded), and the outcome is recorded.
     async fn execute_stops(&self) -> Result<Vec<(RootId, OperationState)>, StorageError> {
         let pending = store::read(&self.store, |s| s.runs().pending_stops(None, 500)).await?;
         let mut out = Vec::new();
@@ -295,7 +306,7 @@ impl RunSupervisor {
                 .stop_root_now(
                     &c.root_id,
                     &op,
-                    StopScope::Root(c.root_id.clone()),
+                    Some(StopScope::Root(c.root_id.clone())),
                     self.stop_grace,
                 )
                 .await?;
@@ -304,76 +315,87 @@ impl RunSupervisor {
         Ok(out)
     }
 
+    /// One execution pass of a root's stop, fenced to the generation it covers: only launches
+    /// of covered generations are signalled, and owned trees are stopped (`kill`) only while the
+    /// root still carries the stop. After a Continue (or once a newer generation exists) the pass
+    /// only observes what the stop covered; it never stops the newer generation's work.
     async fn stop_root_now(
         &self,
         root: &RootId,
         op: &OperationId,
-        scope: StopScope,
+        kill: Option<StopScope>,
         grace: Duration,
     ) -> Result<OperationState, StorageError> {
-        let o = op.clone();
-        store::write(&self.store, move |tx| dispatch_stop_operation(tx, &o)).await?;
-        // A launched activation of the root is asked to stop as well.
-        self.signal_root(root);
-        let (processes, bound) = (self.processes.clone(), self.stop_bound);
-        let results = tokio::task::spawn_blocking(move || processes.stop(&scope, grace, bound))
-            .await
-            .unwrap_or_default();
-        let uncertain: Vec<(Id, String)> = results
-            .into_iter()
-            .filter_map(|(id, r)| match r {
-                Ok(StopOutcome::Reaped { .. }) => None,
-                Ok(StopOutcome::Uncertain(why)) => Some((id, why)),
-                Err(f) => match f.outcome {
-                    StopOutcome::Reaped { .. } => None,
-                    StopOutcome::Uncertain(why) => Some((id, why)),
-                },
-            })
-            .collect();
-        let (service, root, op) = (self.service.clone(), root.clone(), op.clone());
-        store::write(&self.store, move |tx| {
-            let mut uncertain = uncertain;
-            // Trees recorded but not owned here (an earlier boot's, or never confirmed) are not
-            // verified stopped either.
-            for p in devworks_core::services::runs::recovery::unsettled_processes(tx, &root)? {
-                if !uncertain.iter().any(|(id, _)| id == &p.0) {
-                    uncertain.push(p);
-                }
+        let (o, r) = (op.clone(), root.clone());
+        let control = store::write(&self.store, move |tx| {
+            dispatch_stop_operation(tx, &o)?;
+            devworks_core::services::runs::control_of(tx.runs(), &r)
+        })
+        .await?;
+        let superseded = stop_superseded(&control);
+        self.signal_covered(root, control.stop_generation);
+        let uncertain: Vec<(Id, String)> = match kill.filter(|_| !superseded) {
+            None => Vec::new(),
+            Some(scope) => {
+                let (processes, bound) = (self.processes.clone(), self.stop_bound);
+                let results =
+                    tokio::task::spawn_blocking(move || processes.stop(&scope, grace, bound))
+                        .await
+                        .unwrap_or_default();
+                unverified(results)
             }
+        };
+        let (service, root, op) = (self.service.clone(), root.clone(), op.clone());
+        // Settlement adds the trees it covers that are still unsettled.
+        store::write(&self.store, move |tx| {
             service.settle_stop(tx, &root, &op, &uncertain)
         })
         .await
     }
 
-    fn signal_root(&self, root: &RootId) {
+    /// Signals the launches of `root` whose activation generation is at most `generation`.
+    fn signal_covered(&self, root: &RootId, generation: i64) {
         let map = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        for r in map.values().filter(|r| &r.root == root) {
+        for r in map
+            .values()
+            .filter(|r| &r.root == root && r.generation <= generation)
+        {
             let _ = r.stop.send(true);
         }
     }
 
-    /// Signals every launch whose activation was asked to stop (a pause, stop or archival
-    /// committed since its last renewal).
+    /// Signals every launch whose own claim was asked to stop or lost: its activation is no
+    /// longer running or claimed, or it was claimed again under a newer epoch. A relaunch of the
+    /// same activation, or a newer generation of the root, is not signalled.
     async fn signal_stopping(&self) -> Result<(), StorageError> {
-        let ids = self.launched();
-        if ids.is_empty() {
+        let claims: Vec<(String, Id, i64)> = {
+            let map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            map.iter()
+                .map(|(k, r)| (k.clone(), r.activation.clone(), r.epoch))
+                .collect()
+        };
+        if claims.is_empty() {
             return Ok(());
         }
-        let stopping: Vec<RootId> = store::read(&self.store, move |s| {
+        let stopping: Vec<String> = store::read(&self.store, move |s| {
             let mut out = Vec::new();
-            for id in &ids {
-                if let Some(a) = s.runs().activation(id)?
-                    && a.phase != ActivationPhase::Running
-                    && a.phase != ActivationPhase::Claimed
-                {
-                    out.push(a.root_id);
+            for (key, id, epoch) in &claims {
+                let current = s.runs().activation(id)?.is_some_and(|a| {
+                    a.owner_epoch == *epoch
+                        && matches!(a.phase, ActivationPhase::Running | ActivationPhase::Claimed)
+                });
+                if !current {
+                    out.push(key.clone());
                 }
             }
             Ok(out)
         })
         .await?;
-        for root in stopping {
-            self.signal_root(&root);
+        let map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        for key in stopping {
+            if let Some(r) = map.get(&key) {
+                let _ = r.stop.send(true);
+            }
         }
         Ok(())
     }
@@ -388,6 +410,7 @@ impl RunSupervisor {
         let weak: Weak<Self> = Arc::downgrade(self);
         let id = activation.id.clone();
         let root = activation.root_id.clone();
+        let generation = activation.generation;
         let epoch = activation.owner_epoch;
         let lease = self.service.config().lease_ms;
         let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
@@ -474,6 +497,8 @@ impl RunSupervisor {
             key,
             Running {
                 activation: id,
+                generation,
+                epoch,
                 root,
                 stop: stop_tx,
                 task,
@@ -497,6 +522,21 @@ impl RunSupervisor {
         self.stopping.store(true, Ordering::SeqCst);
         self.wake.notify_one();
     }
+}
+
+/// The trees a stop could not verify gone, with what is known of each.
+fn unverified(results: Vec<devworks_core::services::process::StopResult>) -> Vec<(Id, String)> {
+    results
+        .into_iter()
+        .filter_map(|(id, r)| match r {
+            Ok(StopOutcome::Reaped { .. }) => None,
+            Ok(StopOutcome::Uncertain(why)) => Some((id, why)),
+            Err(f) => match f.outcome {
+                StopOutcome::Reaped { .. } => None,
+                StopOutcome::Uncertain(why) => Some((id, why)),
+            },
+        })
+        .collect()
 }
 
 /// A supervisor dropped without shutdown (or after it) aborts any launch it still tracks.
@@ -556,21 +596,25 @@ impl RunSupervisor {
             service.stop_project(tx, &host, &p)
         })
         .await?;
+        // One immediate project-wide kill, whether or not the project has roots: trees the
+        // project owns without a root are stopped too.
+        let (processes, bound, scope) = (
+            self.processes.clone(),
+            self.stop_bound,
+            StopScope::Project(project.clone()),
+        );
+        // What each tree's stop verified is in its process record; each root's settlement
+        // reads its own unsettled trees from there.
+        let _ = tokio::task::spawn_blocking(move || processes.stop(&scope, Duration::ZERO, bound))
+            .await;
         let mut out = Vec::new();
-        let mut first_root = true;
         for (root, op) in stopped {
-            // One immediate project-wide kill covers every root's trees.
-            let scope = if first_root {
-                StopScope::Project(project.clone())
-            } else {
-                StopScope::Root(root.clone())
-            };
-            first_root = false;
-            let state = self
-                .stop_root_now(&root, &op, scope, Duration::ZERO)
-                .await?;
+            // The roots' trees were stopped above; each stop is signalled and observed.
+            let state = self.stop_root_now(&root, &op, None, Duration::ZERO).await?;
             out.push((root, state));
         }
+        // Rootless trees that could not be verified stopped stay visible in their process
+        // records (`Uncertain`); there is no root to hold for them.
         Ok(out)
     }
 }

@@ -75,7 +75,7 @@ fn bounded(field: &str, s: &str, max: usize) -> Result<(), StorageError> {
 // ---------------------------------------------------------------------------------------------
 // Root controls
 
-const CONTROL_COLUMNS: &str = "root_id,desired_state,revision,current_generation,restart_boot_id,instruction_revision,adopted_plan_revision,stop_epoch,stop_operation_id,reactivate,updated_at";
+const CONTROL_COLUMNS: &str = "root_id,desired_state,revision,current_generation,restart_boot_id,instruction_revision,adopted_plan_revision,stop_epoch,stop_operation_id,reactivate,updated_at,stop_generation";
 fn control_of(r: &Row<'_>) -> rusqlite::Result<ControlRaw> {
     Ok((
         r.get(0)?,
@@ -89,6 +89,7 @@ fn control_of(r: &Row<'_>) -> rusqlite::Result<ControlRaw> {
         r.get(8)?,
         r.get(9)?,
         r.get(10)?,
+        r.get(11)?,
     ))
 }
 type ControlRaw = (
@@ -103,9 +104,11 @@ type ControlRaw = (
     Option<String>,
     bool,
     i64,
+    i64,
 );
 fn control(raw: ControlRaw) -> Result<StoredRootControl, StorageError> {
-    let (root, desired, revision, generation, boot, instr, adopted, epoch, stop, react, at) = raw;
+    let (root, desired, revision, generation, boot, instr, adopted, epoch, stop, react, at, sgen) =
+        raw;
     Ok(StoredRootControl {
         root_id: RootId(id_of(root)?),
         desired: DesiredExecution::parse(&desired)
@@ -117,6 +120,7 @@ fn control(raw: ControlRaw) -> Result<StoredRootControl, StorageError> {
         adopted_plan_revision: adopted,
         stop_epoch: epoch,
         stop_operation_id: opt_id(stop)?.map(OperationId),
+        stop_generation: sgen,
         reactivate: react,
         updated_at_ms: at,
     })
@@ -848,7 +852,7 @@ impl RunRepository for Unit<'_> {
             return Err(duplicate("root_control", c.root_id.0.as_str()));
         }
         db(self.conn.execute(
-            &format!("INSERT INTO root_controls({CONTROL_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"),
+            &format!("INSERT INTO root_controls({CONTROL_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"),
             params![
                 c.root_id.0.as_str(),
                 c.desired.as_str(),
@@ -861,6 +865,7 @@ impl RunRepository for Unit<'_> {
                 c.stop_operation_id.as_ref().map(|o| o.0.as_str()),
                 c.reactivate,
                 c.updated_at_ms,
+                c.stop_generation,
             ],
         ))
         .map(|_| ())
@@ -892,7 +897,7 @@ impl RunRepository for Unit<'_> {
             ));
         }
         db(self.conn.execute(
-            "UPDATE root_controls SET desired_state=?2,revision=?3,current_generation=?4,restart_boot_id=?5,instruction_revision=?6,adopted_plan_revision=?7,stop_epoch=?8,stop_operation_id=?9,reactivate=?10,updated_at=?11 WHERE root_id=?1 AND revision=?12",
+            "UPDATE root_controls SET desired_state=?2,revision=?3,current_generation=?4,restart_boot_id=?5,instruction_revision=?6,adopted_plan_revision=?7,stop_epoch=?8,stop_operation_id=?9,reactivate=?10,updated_at=?11,stop_generation=?13 WHERE root_id=?1 AND revision=?12",
             params![
                 c.root_id.0.as_str(),
                 c.desired.as_str(),
@@ -906,6 +911,7 @@ impl RunRepository for Unit<'_> {
                 c.reactivate,
                 c.updated_at_ms,
                 expected,
+                c.stop_generation,
             ],
         ))
         .map(|_| ())

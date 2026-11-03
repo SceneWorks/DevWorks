@@ -1146,6 +1146,8 @@ impl ControlService {
         after.reactivate = false;
         if cause == StopCause::Stop || cause == StopCause::Archive {
             after.stop_epoch += 1;
+            // The stop covers the activations recorded so far, never a later generation.
+            after.stop_generation = after.generation;
         }
         save_control(tx, control, &mut after)?;
         let hold = raise_blocker(
@@ -1192,6 +1194,19 @@ impl ControlService {
         covered: &[HoldRef],
     ) -> Result<DomainDecision, Fail> {
         let root = run_root(tx.sessions(), ctx, root_id)?;
+        // An archived project allocates no work: Continue, like Start, is refused (its holds
+        // and the archival stop stay in place).
+        if tx
+            .runs()
+            .project_lifecycle(&root.project_id)?
+            .is_some_and(|l| l == ARCHIVED)
+        {
+            return Err(refuse(
+                DomainErrorCode::Conflict,
+                "archived_project",
+                Some(root.project_id.0.clone()),
+            ));
+        }
         let control = ensure_control(tx, &root.id)?;
         control_conflict(&control, expected)?;
         let manual: Vec<StoredBlocker> =

@@ -52,6 +52,9 @@ pub struct StoredRootControl {
     pub stop_epoch: i64,
     /// The journaled stop whose outcome is still to be observed, if any.
     pub stop_operation_id: Option<OperationId>,
+    /// The activation generation the latest stop covers: its signals, process stops and
+    /// quiescence check never reach a newer generation (one a later Continue created).
+    pub stop_generation: i64,
     /// Continue was accepted while the previous activation was still stopping: a new activation
     /// is created when it stops.
     pub reactivate: bool,
@@ -69,6 +72,7 @@ impl StoredRootControl {
             adopted_plan_revision: None,
             stop_epoch: 0,
             stop_operation_id: None,
+            stop_generation: 0,
             reactivate: false,
             updated_at_ms: 0,
         }

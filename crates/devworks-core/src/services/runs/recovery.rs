@@ -331,8 +331,8 @@ impl ControlService {
                 let Some(op) = &c.stop_operation_id else {
                     continue;
                 };
-                let uncertain = unsettled_processes(tx, &c.root_id)?;
-                let state = self.settle_stop(tx, &c.root_id, op, &uncertain)?;
+                // Settlement adds the root's unsettled trees (as process recovery verified them).
+                let state = self.settle_stop(tx, &c.root_id, op, &[])?;
                 report.stops.push((op.clone(), state));
             }
             if !more {
@@ -417,21 +417,60 @@ impl ControlService {
         let Some(root) = tx.sessions().work_root(root_id)? else {
             return complete_stop_operation(tx, op, uncertain, "the root no longer exists");
         };
+        // The stop covers the generations recorded when it was decided (or reapplied); after a
+        // Continue it never stops, waits for or holds a newer generation's work.
+        let control = super::control_of(tx.runs(), root_id)?;
+        let covered = control.stop_generation;
+        let superseded = stop_superseded(&control);
         if let Some(a) = tx.runs().live_activation(root_id)?
             && a.phase == ActivationPhase::Stopping
             && a.owner.is_none()
+            && a.generation <= covered
         {
             self.stop_activation(tx, &root, &a, ActivationOutcome::Cancelled, Some("stopped"))?;
         }
-        // An empty process list is not proof that the root stopped: an owned activation still
-        // stopping, or root-scoped work still claimed, keeps the stop pending (it is executed and
-        // settled again once they have quiesced).
-        if !root_quiesced(tx, root_id)? {
+        // An empty process list is not proof that the root stopped: an owned activation the stop
+        // covers still stopping, or (while the root still carries the stop) root-scoped work still
+        // claimed, keeps the stop pending (it is executed and settled again once quiesced).
+        let quiesced = if superseded {
+            !tx.runs()
+                .live_activation(root_id)?
+                .is_some_and(|a| a.owner.is_some() && a.generation <= covered)
+        } else {
+            root_quiesced(tx, root_id)?
+        };
+        if !quiesced {
             return Ok(tx
                 .operations()
                 .operation(op)?
                 .map_or(OperationState::Dispatching, |o| o.state));
         }
+        // Still uncertain: what the native stop could not verify, plus every unsettled tree of
+        // the root while it still carries the stop; after a Continue only the trees this stop
+        // already held for reconciliation (newer trees belong to the newer generation).
+        let mut all: Vec<(Id, String)> = uncertain.to_vec();
+        let named: Vec<String> =
+            active_blockers(tx.runs(), &BlockerFilter::RootLevel(root_id.clone()))?
+                .into_iter()
+                .filter(|b| b.cause == HoldCause::Reconciliation && b.origin_id == op.0.as_str())
+                .flat_map(|b| {
+                    b.clearance["processes"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(str::to_owned))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect();
+        for p in unsettled_processes(tx, root_id)? {
+            let counts = !superseded || named.iter().any(|n| n == p.0.as_str());
+            if counts && !all.iter().any(|(i, _)| i == &p.0) {
+                all.push(p);
+            }
+        }
+        let uncertain = &all[..];
         let state = complete_stop_operation(tx, op, uncertain, "owned process trees stopped")?;
         let actor = tx.store().host_actor.clone();
         if state == OperationState::ObservedComplete {
@@ -563,6 +602,12 @@ impl ControlService {
         }
         Ok(n)
     }
+}
+
+/// Whether a Continue (or a newer activation) has superseded the root's latest stop: it is no
+/// longer paused by it, or a generation newer than the one it covers exists.
+pub fn stop_superseded(control: &crate::ports::storage::StoredRootControl) -> bool {
+    control.desired == DesiredExecution::Enabled || control.generation > control.stop_generation
 }
 
 /// Whether nothing admitted for the root is still running: no live activation with an owner and

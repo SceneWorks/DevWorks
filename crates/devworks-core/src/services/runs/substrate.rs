@@ -1112,18 +1112,41 @@ impl ControlService {
                     ActivationPhase::Claimed | ActivationPhase::Running | ActivationPhase::Stopping
                 )
         });
+        // Checked against the active approved plan now, not the assignment's cached binding: a
+        // plan approved since the last safe boundary already governs what counts as current.
+        let root = work_root(tx, &a.root_id)?;
+        let plan = match &root {
+            Some(r) => Some(self.scope.plan(tx.runs(), r)?),
+            None => None,
+        };
+        let active_revision = plan.as_ref().and_then(|p| p.approved_revision());
+        let compatible = match &plan {
+            Some(p) if p.approved_revision().is_some() => {
+                p.unit(a.scope_key.as_deref()).is_some_and(|u| {
+                    a.scope_digest
+                        .as_deref()
+                        .is_none_or(|d| d == u.digest.as_str())
+                })
+            }
+            _ => true,
+        };
+        let current_revision = active_revision.max(a.plan_revision);
         let verdict = if !a.state.is_live() {
             ResultAcceptance::Stale(format!("the assignment is {}", a.state.as_str()))
         } else if a.execution_id.as_ref() != Some(&claim.execution_id) {
             ResultAcceptance::Stale("the result comes from an earlier activation".into())
         } else if !owner_current {
             ResultAcceptance::Stale("the result comes from a superseded owner".into())
-        } else if claim.plan_revision.is_some() && claim.plan_revision < a.plan_revision {
+        } else if !compatible {
+            ResultAcceptance::Stale(
+                "the approved scope of this work changed or left the active plan".into(),
+            )
+        } else if claim.plan_revision.is_some() && claim.plan_revision < current_revision {
             ResultAcceptance::Stale("the result was produced under an older plan".into())
         } else {
             ResultAcceptance::Current
         };
-        if let Some(root) = work_root(tx, &a.root_id)? {
+        if let Some(root) = root {
             let (kind, reason) = match &verdict {
                 ResultAcceptance::Current => ("ResultAccepted", None),
                 ResultAcceptance::Stale(r) => ("LateResultRetained", Some(r.clone())),

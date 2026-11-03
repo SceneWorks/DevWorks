@@ -2,8 +2,9 @@
 -- Additive. root_controls, executions, assignments and blockers (migration 1) were never written
 -- by an earlier build; they gain the columns run control needs, all defaulted or nullable:
 -- * root_controls: the redirect context revision, the adopted active plan revision, the stop
---   epoch and the journaled stop operation, a reactivation request made while the previous
---   activation is still stopping, and the update time.
+--   epoch, the journaled stop operation and the activation generation it covers (a stop never
+--   acts on a newer generation), a reactivation request made while the previous activation is
+--   still stopping, and the update time.
 -- * executions (activations): purpose, claim epoch (fence), bounded retry bookkeeping, the
 --   requested/acknowledged/stopped stop stages with their cause, the attributed outcome and the
 --   active plan revision the activation was accepted under.
@@ -18,6 +19,7 @@ ALTER TABLE root_controls ADD COLUMN instruction_revision INTEGER NOT NULL DEFAU
 ALTER TABLE root_controls ADD COLUMN adopted_plan_revision INTEGER;
 ALTER TABLE root_controls ADD COLUMN stop_epoch INTEGER NOT NULL DEFAULT 0 CHECK(stop_epoch>=0);
 ALTER TABLE root_controls ADD COLUMN stop_operation_id TEXT REFERENCES operations;
+ALTER TABLE root_controls ADD COLUMN stop_generation INTEGER NOT NULL DEFAULT 0 CHECK(stop_generation>=0);
 ALTER TABLE root_controls ADD COLUMN reactivate INTEGER NOT NULL DEFAULT 0 CHECK(reactivate IN (0,1));
 ALTER TABLE root_controls ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX root_control_stop ON root_controls(stop_operation_id) WHERE stop_operation_id IS NOT NULL;

@@ -190,8 +190,13 @@ pub struct Runtime {
     resources: Arc<ResourceService>,
     housekeeper: Arc<Housekeeper>,
     runs: Arc<RunSupervisor>,
-    /// Set when shutdown begins: ordinary admission is fenced in memory at once.
-    closing: AtomicBool,
+    /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
+    /// itself is `admission`.
+    stage: std::sync::atomic::AtomicU8,
+    /// The admission fence: every command holds it shared for its whole admission and unit of
+    /// work; shutdown takes it exclusively to close it, which waits for (drains) every command
+    /// already admitted. A command never commits after the run-control quiescence snapshot.
+    admission: Arc<std::sync::RwLock<bool>>,
     keep_awake: Arc<KeepAwake>,
     shutdown_grace: Duration,
     shutdown_bound: Duration,
@@ -325,7 +330,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         resources,
         housekeeper,
         runs: run_supervisor,
-        closing: AtomicBool::new(false),
+        stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
+        admission: Arc::new(std::sync::RwLock::new(false)),
         keep_awake,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
@@ -395,6 +401,13 @@ impl Runtime {
     /// helper hosts).
     pub fn processes(&self) -> &Arc<ProcessSupervisor> {
         self.housekeeper.supervisor()
+    }
+    /// How far shutdown has progressed (AD20: the progress surface stays responsive).
+    pub fn shutdown_stage(&self) -> ShutdownStage {
+        ShutdownStage::from_u8(self.stage.load(Ordering::SeqCst))
+    }
+    fn enter(&self, stage: ShutdownStage) {
+        self.stage.store(stage as u8, Ordering::SeqCst);
     }
     /// Run supervision (activation claims, stops, recovery) over the composed control service.
     pub fn runs(&self) -> &Arc<RunSupervisor> {
@@ -476,7 +489,10 @@ impl Runtime {
         raw: &[u8],
         options: WriteOptions,
     ) -> CommandOutcome {
-        if self.closing.load(Ordering::SeqCst) {
+        // Held until the command is decided and committed (or refused): shutdown's closing
+        // transition waits for it, and a command after it is refused before admission.
+        let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+        if *open {
             return closing_reply(
                 raw,
                 self.ids.next_id(devworks_core::ports::IdKind::Correlation),
@@ -485,6 +501,7 @@ impl Runtime {
         let outcome = self
             .use_cases
             .command_with(&self.gateway(), ctx, operation, raw, options);
+        drop(open);
         let (committed, released) = match &outcome {
             Ok(CommandReply::Recorded { receipt, .. }) => (
                 true,
@@ -522,8 +539,17 @@ impl Runtime {
         // feature/issue work is held for manual Continue and asked to stop; launches get the
         // cooperative grace. A storage failure here is not fatal: the next boot holds the same
         // work from its boot epoch.
-        self.closing.store(true, Ordering::SeqCst);
+        // Close admission: wait (off the async thread) for every admitted command to commit, so
+        // none commits after the quiescence snapshot.
+        self.enter(ShutdownStage::DrainingAdmission);
+        let admission = self.admission.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            *admission.write().unwrap_or_else(|p| p.into_inner()) = true;
+        })
+        .await;
+        self.enter(ShutdownStage::Quiescing);
         let _ = self.runs.quiesce(self.shutdown_grace).await;
+        self.enter(ShutdownStage::StoppingWork);
         self.stop();
         let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
         for task in tasks {
@@ -537,6 +563,7 @@ impl Runtime {
         // AD20 step 4: final known activation state.
         let _ = self.runs.finish().await;
         self.keep_awake.apply(false);
+        self.enter(ShutdownStage::Done);
         stopped
     }
 
@@ -545,6 +572,31 @@ impl Runtime {
         self.collector.stop();
         self.housekeeper.stop();
         self.runs.stop();
+    }
+}
+
+/// The stages of [`Runtime::shutdown`], in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum ShutdownStage {
+    Open = 0,
+    /// Admission is closing: commands already admitted are finishing; new ones are refused.
+    DrainingAdmission = 1,
+    /// Live feature/issue work is being held for manual Continue and asked to stop.
+    Quiescing = 2,
+    /// Delivery, collection, housekeeping and owned process trees are being stopped.
+    StoppingWork = 3,
+    Done = 4,
+}
+impl ShutdownStage {
+    fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Self::Open,
+            1 => Self::DrainingAdmission,
+            2 => Self::Quiescing,
+            3 => Self::StoppingWork,
+            _ => Self::Done,
+        }
     }
 }
 

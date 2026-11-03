@@ -105,8 +105,10 @@
 //!    are admitted: a committed command wakes delivery for the reply intent its receipt
 //!    committed, and a committed `settings.save_revision` re-applies keep-awake.
 //!
-//! [`runtime::Runtime::shutdown`] (AD20) first fences command admission in memory and commits
-//! the run-control transition (live feature/issue work held for manual Continue and asked to
+//! [`runtime::Runtime::shutdown`] (AD20) first closes command admission — every command holds
+//! the admission fence for its whole unit of work, so closing it drains the commands already
+//! admitted and refuses later ones, and none commits after the snapshot that follows — then
+//! commits the run-control transition (live feature/issue work held for manual Continue and asked to
 //! stop; launched coordinators get the cooperative grace), then stops delivery, collection,
 //! housekeeping and run supervision, waits for in-flight deliveries, stops every owned process
 //! tree within one bound ([`runtime::RuntimeConfig::shutdown_bound`]), records the `Shutdown`
@@ -164,5 +166,5 @@ pub use runs::{
 };
 pub use runtime::{
     BootError, BootReport, CollectionPass, Composition, RunComposition, Runtime, RuntimeConfig,
-    boot,
+    ShutdownStage, boot,
 };

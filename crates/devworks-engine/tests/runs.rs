@@ -40,7 +40,7 @@ use devworks_core::services::sessions::SessionService;
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::{
     ActivationLauncher, Composition, Launch, LaunchEnd, LaunchFuture, RunComposition, RunGate,
-    RunSupervisor, RuntimeConfig, boot,
+    RunSupervisor, RuntimeConfig, ShutdownStage, boot,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1611,10 +1611,13 @@ fn supervisor(
     (sup, processes)
 }
 fn spawn_tree(fx: &Fx, processes: &ProcessSupervisor, root: &str, project: &str) {
+    spawn_owned(fx, processes, Some(root), project);
+}
+fn spawn_owned(fx: &Fx, processes: &ProcessSupervisor, root: Option<&str>, project: &str) {
     let ctx = fx
         .agent
         .clone()
-        .with_lineage(Some(ProjectId(id(project))), Some(rid(root)), None);
+        .with_lineage(Some(ProjectId(id(project))), root.map(rid), None);
     let fs = NativeFilesystem::default();
     let roots = ProtectedRoots::new(vec![], vec![], None);
     let policy = LaunchPolicy {
@@ -2118,6 +2121,14 @@ fn composition(
     launcher: Option<Arc<dyn ActivationLauncher>>,
     power: Arc<FakePower>,
 ) -> Composition {
+    composition_with(fx, launcher, power, Arc::new(Authority))
+}
+fn composition_with(
+    fx: &Fx,
+    launcher: Option<Arc<dyn ActivationLauncher>>,
+    power: Arc<FakePower>,
+    authority: Arc<dyn devworks_core::ports::AuthorityPort>,
+) -> Composition {
     let h = &fx.h;
     let artifacts = Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
@@ -2139,7 +2150,7 @@ fn composition(
         store: fx.store.clone(),
         clock: h.clock(),
         ids: h.ids.clone(),
-        authority: Arc::new(Authority),
+        authority,
         artifacts,
         resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: Arc::new(FakeHost::default()),
@@ -2804,4 +2815,274 @@ fn the_feature_wide_scope_has_no_key_and_named_keys_are_validated() {
         svc.register_assignment(tx, &host, g_coord)
     });
     assert!(matches!(r, Err(Fenced::Invalid(_))), "{r:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes, round 3: generation-fenced stops, plan-checked results, admission drain,
+// rootless archival, archived Continue, no launch once shutdown begins
+
+#[test]
+fn a_pending_stop_never_stops_the_generation_a_continue_created() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host, Some(launcher.clone()));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    let first = rt.block_on(sup.tick()).unwrap().launched;
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    let op = match decision(&fx.stop(&fx.user, "root-i")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("stop not accepted: {other:?}"),
+    };
+    // The stop's first pass stops generation 1's tree; generation 1 is still stopping.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::Dispatching)]
+    );
+    assert!(processes.owned().is_empty());
+    // Continue while it stops; when it finishes, generation 2 replaces it and starts its work.
+    applied(&fx.resume(&fx.user, "root-i"));
+    launcher.release_all();
+    rt.block_on(within(
+        "generation 1 stops and records its outcome",
+        async {
+            while launcher.dropped.load(Ordering::SeqCst) < 1 || sup.launches() > 0 {
+                tokio::task::yield_now().await;
+            }
+        },
+    ));
+    assert_eq!(fx.activation(&first[0]).phase, ActivationPhase::Stopped);
+    let second = fx.launch("supervisor-2");
+    assert_eq!(second.generation, 2);
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    // The still-pending stop observes generation 1 only: generation 2 and its tree keep running.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::ObservedComplete)]
+    );
+    assert_eq!(
+        processes.owned().len(),
+        1,
+        "generation 2's tree is not stopped"
+    );
+    assert_eq!(fx.activation(&second.id).phase, ActivationPhase::Running);
+    let state = read(&*fx.store, |s| s.operations().operation(&op))
+        .unwrap()
+        .state;
+    assert_eq!(state, OperationState::ObservedComplete);
+}
+
+#[test]
+fn a_result_after_a_plan_change_is_checked_against_the_active_plan() {
+    let fx = Fx::new();
+    let f = rid("root-f");
+    fx.scope.approve(&f, 1, &[("x", "dx"), ("y", "dy")]);
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    let coord = fx.assign("root-f", "root-f", None, None);
+    let wx = fx.assign("root-f", "task-f1", Some(&coord.id), Some("x"));
+    let wy = fx.assign("root-f", "task-f2", Some(&coord.id), Some("y"));
+    let a = fx.launch("supervisor-1");
+    let accept = |w: &AssignmentId, plan: i64| {
+        let c = ResultClaim {
+            assignment: w.clone(),
+            execution_id: a.id.clone(),
+            owner_epoch: a.owner_epoch,
+            plan_revision: Some(plan),
+        };
+        fx.tx(move |svc, tx| {
+            let host = tx.store().host_actor.clone();
+            svc.accept_result(tx, &host, &c)
+        })
+    };
+    assert_eq!(accept(&wx.id, 1), ResultAcceptance::Current);
+    // A replacement is approved (x changed, y kept); no safe boundary has adopted it yet.
+    fx.scope.approve(&f, 2, &[("x", "dx2"), ("y", "dy")]);
+    assert!(matches!(accept(&wx.id, 1), ResultAcceptance::Stale(_)));
+    assert!(matches!(accept(&wy.id, 1), ResultAcceptance::Stale(_)));
+    assert_eq!(accept(&wy.id, 2), ResultAcceptance::Current);
+}
+
+/// Authority that holds a `runs.start` in authorization until the test releases it.
+struct HeldAuthority {
+    entered: Mutex<std::sync::mpsc::Sender<()>>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+impl devworks_core::ports::AuthorityPort for HeldAuthority {
+    fn authorize(
+        &self,
+        ctx: &InvocationContext,
+        request: &devworks_core::ports::AuthorityRequest<'_>,
+    ) -> Result<devworks_core::ports::Authorization, devworks_core::ports::AuthorityDenial> {
+        if request.descriptor.name == "runs.start" {
+            let _ = self.entered.lock().unwrap().send(());
+            let _ = self.release.lock().unwrap().recv();
+        }
+        Authority.authorize(ctx, request)
+    }
+}
+
+#[test]
+fn shutdown_drains_admitted_commands_before_the_quiescence_snapshot() {
+    let fx = Fx::new();
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let authority = Arc::new(HeldAuthority {
+        entered: Mutex::new(entered_tx),
+        release: Mutex::new(release_rx),
+    });
+    let rt = runtime();
+    let app = rt
+        .block_on(boot(composition_with(
+            &fx,
+            None,
+            Arc::new(FakePower::default()),
+            authority,
+        )))
+        .unwrap_or_else(|e| panic!("boot: {e:?}"));
+    let frame = json!({"protocol": PROTOCOL, "requestKey": fx.key(), "command": {
+        "kind": "runs.start", "rootId": "root-i", "expectedWorkRevision": "1",
+        "expectedControlRevision": "1"}});
+    let reply = std::thread::scope(|scope| {
+        let (app, user) = (&app, &fx.user);
+        let command = scope.spawn(move || {
+            app.command(user, "runs.start", frame.to_string().as_bytes())
+                .unwrap()
+        });
+        // The Start is admitted and waiting in authorization when shutdown begins.
+        entered.recv().unwrap();
+        // Released only once shutdown is waiting for it, or (without a drain) once the
+        // quiescence snapshot was already taken.
+        let releaser = scope.spawn(move || {
+            loop {
+                let stage = app.shutdown_stage();
+                if stage == ShutdownStage::DrainingAdmission || stage >= ShutdownStage::StoppingWork
+                {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            release.send(()).unwrap();
+        });
+        rt.block_on(app.shutdown());
+        releaser.join().unwrap();
+        command.join().unwrap()
+    });
+    // It committed before the run-control snapshot, which therefore held its root.
+    applied(&reply);
+    assert!(
+        fx.holds("root-i")
+            .iter()
+            .any(|b| b.cause == HoldCause::RestartContinue),
+        "{:?}",
+        fx.holds("root-i")
+    );
+    assert!(
+        fx.live("root-i").is_none(),
+        "nothing is left to run without a Continue"
+    );
+    assert_eq!(fx.control("root-i").desired, DesiredExecution::Paused);
+    // After shutdown, admission is closed.
+    let late = json!({"protocol": PROTOCOL, "requestKey": fx.key(), "command": {
+        "kind": "runs.pause", "rootId": "root-g", "expectedControlRevision": "1"}});
+    let refused = app
+        .command(&fx.user, "runs.pause", late.to_string().as_bytes())
+        .unwrap();
+    assert!(matches!(refused, CommandReply::Rejected { .. }));
+}
+
+#[test]
+fn archiving_a_project_without_roots_still_stops_its_processes() {
+    let fx = Fx::new();
+    let c = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute_batch(
+        "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-c','C','Active',1,1,0);",
+    )
+    .unwrap();
+    drop(c);
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host, None);
+    spawn_owned(&fx, &processes, None, "project-c");
+    spawn_tree(&fx, &processes, "root-b", "project-b");
+    let stopped = runtime()
+        .block_on(sup.stop_project_now(&ProjectId(id("project-c"))))
+        .unwrap();
+    assert!(stopped.is_empty(), "the project has no roots");
+    assert_eq!(
+        processes.owned().len(),
+        1,
+        "only the other project's tree runs"
+    );
+}
+
+#[test]
+fn continue_is_refused_while_the_project_is_archived() {
+    let fx = Fx::new();
+    applied(&fx.pause(&fx.user, "root-i"));
+    let c = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute_batch("UPDATE projects SET lifecycle='Archived' WHERE id='project-a';")
+        .unwrap();
+    drop(c);
+    let (code, _) = refused(&fx.resume(&fx.user, "root-i"));
+    assert_eq!(code, "Conflict");
+    assert_eq!(fx.control("root-i").desired, DesiredExecution::Paused);
+    assert!(fx.live("root-i").is_none());
+}
+
+/// A launcher whose first launch begins shutdown (the supervisor stops mid-tick).
+#[derive(Default)]
+struct StopsOnLaunch {
+    supervisor: Mutex<Option<std::sync::Weak<RunSupervisor>>>,
+    launched: AtomicUsize,
+}
+impl ActivationLauncher for StopsOnLaunch {
+    fn launch(&self, launch: Launch) -> LaunchFuture {
+        self.launched.fetch_add(1, Ordering::SeqCst);
+        if let Some(s) = self
+            .supervisor
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|w| w.upgrade())
+        {
+            s.stop();
+        }
+        let mut stop = launch.stop;
+        Box::pin(async move {
+            while !*stop.borrow() {
+                if stop.changed().await.is_err() {
+                    break;
+                }
+            }
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Cancelled,
+                detail: None,
+            }
+        })
+    }
+}
+
+#[test]
+fn no_further_activation_is_claimed_once_shutdown_begins_mid_tick() {
+    let fx = Fx::new();
+    let launcher = Arc::new(StopsOnLaunch::default());
+    let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
+    *launcher.supervisor.lock().unwrap() = Some(Arc::downgrade(&sup));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    applied(&fx.start(&fx.user, "root-b", 1, 1));
+    let tick = runtime().block_on(sup.tick()).unwrap();
+    assert_eq!(tick.launched.len(), 1);
+    assert_eq!(launcher.launched.load(Ordering::SeqCst), 1);
+    let pending = ["root-i", "root-b"]
+        .iter()
+        .filter(|r| {
+            fx.live(r)
+                .is_some_and(|a| a.phase == ActivationPhase::Pending)
+        })
+        .count();
+    assert_eq!(pending, 1, "the second activation was not claimed");
 }
