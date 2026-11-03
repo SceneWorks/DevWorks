@@ -18,15 +18,17 @@
 use crate::dispatch::{Either, RootEligibility, first};
 use crate::store;
 use devworks_core::ports::Clock;
+use devworks_core::ports::process::NativeIdentity;
 use devworks_core::ports::storage::{
     ActivationOutcome, ActivationPhase, ApplicationStore, QueueEntry, StorageError,
     StoredActivation, WriteTransaction,
 };
 use devworks_core::protocol::{Id, OperationId, OperationState, ProjectId, RootId};
-use devworks_core::services::process::{ProcessSupervisor, StopOutcome, StopScope};
+use devworks_core::services::process::{OwnedProcess, ProcessSupervisor, StopOutcome, StopScope};
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::runs::recovery::{
-    BootRecovery, LifecycleHooks, dispatch_stop_operation, stop_superseded,
+    BootRecovery, LifecycleHooks, dispatch_stop_operation, stop_reconciliation_targets,
+    stop_superseded,
 };
 use devworks_core::services::runs::substrate::ActivationFailure;
 use std::collections::HashMap;
@@ -327,24 +329,47 @@ impl RunSupervisor {
         grace: Duration,
     ) -> Result<OperationState, StorageError> {
         let (o, r) = (op.clone(), root.clone());
-        let control = store::write(&self.store, move |tx| {
+        let (control, targets) = store::write(&self.store, move |tx| {
             dispatch_stop_operation(tx, &o)?;
-            devworks_core::services::runs::control_of(tx.runs(), &r)
+            let control = devworks_core::services::runs::control_of(tx.runs(), &r)?;
+            let targets = stop_reconciliation_targets(tx.runs(), &r, &o)?;
+            Ok((control, targets))
         })
         .await?;
         let superseded = stop_superseded(&control);
         self.signal_covered(root, control.stop_generation);
-        let uncertain: Vec<(Id, String)> = match kill.filter(|_| !superseded) {
-            None => Vec::new(),
-            Some(scope) => {
-                let (processes, bound) = (self.processes.clone(), self.stop_bound);
-                let results =
-                    tokio::task::spawn_blocking(move || processes.stop(&scope, grace, bound))
-                        .await
-                        .unwrap_or_default();
-                unverified(results)
+        let (processes, bound) = (self.processes.clone(), self.stop_bound);
+        let results = match kill {
+            // While the root still carries the stop: every owned tree of its scope.
+            Some(scope) if !superseded => {
+                tokio::task::spawn_blocking(move || processes.stop(&scope, grace, bound))
+                    .await
+                    .unwrap_or_default()
             }
+            // After a Continue: exactly the trees this stop holds for reconciliation, by
+            // identity; the newer generation's trees are never touched.
+            Some(_) => tokio::task::spawn_blocking(move || {
+                targets
+                    .into_iter()
+                    .map(|id| {
+                        let tree = OwnedProcess {
+                            id: id.clone(),
+                            identity: NativeIdentity {
+                                pid: 0,
+                                birth: String::new(),
+                                group: None,
+                            },
+                            lease: None,
+                        };
+                        (id, processes.cancel(&tree, grace, bound))
+                    })
+                    .collect()
+            })
+            .await
+            .unwrap_or_default(),
+            None => Vec::new(),
         };
+        let uncertain = unverified(results);
         let (service, root, op) = (self.service.clone(), root.clone(), op.clone());
         // Settlement adds the trees it covers that are still unsettled.
         store::write(&self.store, move |tx| {

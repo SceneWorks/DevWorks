@@ -429,9 +429,23 @@ impl ControlService {
         {
             self.stop_activation(tx, &root, &a, ActivationOutcome::Cancelled, Some("stopped"))?;
         }
+        // Still uncertain: what the native stop could not verify, plus every unsettled tree of
+        // the root while it still carries the stop; after a Continue only the trees this stop
+        // already holds for reconciliation (newer trees belong to the newer generation).
+        let named = stop_reconciliation_targets(tx.runs(), root_id, op)?;
+        let mut all: Vec<(Id, String)> = uncertain.to_vec();
+        for p in unsettled_processes(tx, root_id)? {
+            let counts = !superseded || named.iter().any(|n| n == &p.0);
+            if counts && !all.iter().any(|(i, _)| i == &p.0) {
+                all.push(p);
+            }
+        }
+        let uncertain = &all[..];
         // An empty process list is not proof that the root stopped: an owned activation the stop
         // covers still stopping, or (while the root still carries the stop) root-scoped work still
-        // claimed, keeps the stop pending (it is executed and settled again once quiesced).
+        // claimed, keeps the stop pending (it is executed and settled again once quiesced). The
+        // trees it could not verify stopped are held for reconciliation now, so a later pass —
+        // also one superseded by a Continue — still requires them reconciled.
         let quiesced = if superseded {
             !tx.runs()
                 .live_activation(root_id)?
@@ -440,37 +454,14 @@ impl ControlService {
             root_quiesced(tx, root_id)?
         };
         if !quiesced {
+            if !uncertain.is_empty() {
+                self.hold_uncertain(tx, &root, op, uncertain)?;
+            }
             return Ok(tx
                 .operations()
                 .operation(op)?
                 .map_or(OperationState::Dispatching, |o| o.state));
         }
-        // Still uncertain: what the native stop could not verify, plus every unsettled tree of
-        // the root while it still carries the stop; after a Continue only the trees this stop
-        // already held for reconciliation (newer trees belong to the newer generation).
-        let mut all: Vec<(Id, String)> = uncertain.to_vec();
-        let named: Vec<String> =
-            active_blockers(tx.runs(), &BlockerFilter::RootLevel(root_id.clone()))?
-                .into_iter()
-                .filter(|b| b.cause == HoldCause::Reconciliation && b.origin_id == op.0.as_str())
-                .flat_map(|b| {
-                    b.clearance["processes"]
-                        .as_array()
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|v| v.as_str().map(str::to_owned))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default()
-                })
-                .collect();
-        for p in unsettled_processes(tx, root_id)? {
-            let counts = !superseded || named.iter().any(|n| n == p.0.as_str());
-            if counts && !all.iter().any(|(i, _)| i == &p.0) {
-                all.push(p);
-            }
-        }
-        let uncertain = &all[..];
         let state = complete_stop_operation(tx, op, uncertain, "owned process trees stopped")?;
         let actor = tx.store().host_actor.clone();
         if state == OperationState::ObservedComplete {
@@ -489,24 +480,7 @@ impl ControlService {
             }
         }
         if state == OperationState::OutcomeUnknown {
-            let names: Vec<&str> = uncertain.iter().map(|(p, _)| p.as_str()).collect();
-            raise_blocker(
-                tx,
-                &actor,
-                &root,
-                HoldSubject {
-                    assignment: None,
-                    operation: None,
-                },
-                HoldCause::Reconciliation,
-                op.0.as_str(),
-                1,
-                &format!(
-                    "Owned processes could not be verified stopped: {}",
-                    names.join(", ")
-                ),
-                json!({"operationId": op.0.as_str(), "processes": names}),
-            )?;
+            self.hold_uncertain(tx, &root, op, uncertain)?;
         }
         record(
             tx,
@@ -520,6 +494,75 @@ impl ControlService {
             json!({"state": format!("{state:?}"), "uncertain": uncertain.len(), "capability": STOP_CAPABILITY}),
         )?;
         Ok(state)
+    }
+
+    /// Records the trees a stop could not verify stopped in its own `Reconciliation` hold (one
+    /// per stop operation), adding identities to it when it already exists. Only this stop's
+    /// settlement clears it, once every named tree is verified gone.
+    fn hold_uncertain(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        root: &WorkRoot,
+        op: &OperationId,
+        uncertain: &[(Id, String)],
+    ) -> Result<(), StorageError> {
+        let actor = tx.store().host_actor.clone();
+        let reason = |names: &[String]| {
+            format!(
+                "Owned processes could not be verified stopped: {}",
+                names.join(", ")
+            )
+        };
+        let existing = active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?
+            .into_iter()
+            .find(|b| b.cause == HoldCause::Reconciliation && b.origin_id == op.0.as_str());
+        match existing {
+            None => {
+                let names: Vec<String> = uncertain
+                    .iter()
+                    .map(|(p, _)| p.as_str().to_owned())
+                    .collect();
+                raise_blocker(
+                    tx,
+                    &actor,
+                    root,
+                    HoldSubject::default(),
+                    HoldCause::Reconciliation,
+                    op.0.as_str(),
+                    1,
+                    &reason(&names),
+                    json!({"operationId": op.0.as_str(), "processes": names}),
+                )?;
+            }
+            Some(b) => {
+                let mut names = held_processes(&b);
+                let before = names.len();
+                for (p, _) in uncertain {
+                    if !names.iter().any(|n| n == p.as_str()) {
+                        names.push(p.as_str().to_owned());
+                    }
+                }
+                if names.len() > before {
+                    let mut after = b.clone();
+                    after.revision += 1;
+                    after.reason = reason(&names);
+                    after.clearance = json!({"operationId": op.0.as_str(), "processes": names});
+                    tx.runs().update_blocker(&after, b.revision)?;
+                    record(
+                        tx,
+                        &actor,
+                        root,
+                        Some(op),
+                        super::BLOCKER_AGGREGATE,
+                        after.id.as_str(),
+                        after.revision,
+                        "BlockerExtended",
+                        json!({"processes": names}),
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Same-process recovery of activation leases of this boot that expired: a claimed or
@@ -602,6 +645,36 @@ impl ControlService {
         }
         Ok(n)
     }
+}
+
+/// The process trees named in a blocker's clearance.
+fn held_processes(b: &crate::ports::storage::StoredBlocker) -> Vec<String> {
+    b.clearance["processes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The process trees the stop `op` holds for reconciliation (named in its own active
+/// `Reconciliation` hold). A pass superseded by a Continue still stops and verifies exactly these,
+/// by identity, and never any other tree of the root.
+pub fn stop_reconciliation_targets(
+    runs: &dyn crate::ports::storage::RunRead,
+    root: &RootId,
+    op: &OperationId,
+) -> Result<Vec<Id>, StorageError> {
+    Ok(
+        active_blockers(runs, &BlockerFilter::RootLevel(root.clone()))?
+            .into_iter()
+            .filter(|b| b.cause == HoldCause::Reconciliation && b.origin_id == op.0.as_str())
+            .flat_map(|b| held_processes(&b))
+            .filter_map(|n| Id::new(n).ok())
+            .collect(),
+    )
 }
 
 /// Whether a Continue (or a newer activation) has superseded the root's latest stop: it is no

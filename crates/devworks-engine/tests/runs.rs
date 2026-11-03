@@ -3086,3 +3086,108 @@ fn no_further_activation_is_claimed_once_shutdown_begins_mid_tick() {
         .count();
     assert_eq!(pending, 1, "the second activation was not claimed");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Review fix, round 4: uncertain stop targets survive a Continue
+
+#[test]
+fn trees_a_stop_could_not_verify_stay_held_after_a_continue() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host.clone(), Some(launcher.clone()));
+    let mut sup = Arc::try_unwrap(sup).ok().expect("the only handle");
+    sup.stop_grace = Duration::from_millis(20);
+    sup.stop_bound = Duration::from_millis(100);
+    let sup = Arc::new(sup);
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    let first = rt.block_on(sup.tick()).unwrap().launched;
+    // Generation 1 runs a tree that does not stop when asked.
+    host.stubborn.store(true, Ordering::SeqCst);
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    let old_tree = processes.owned()[0].clone();
+    let op = match decision(&fx.stop(&fx.user, "root-i")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("stop not accepted: {other:?}"),
+    };
+    // The stop cannot verify the tree while generation 1 is still stopping: it waits, and the
+    // unverified tree is held for reconciliation already.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::Dispatching)]
+    );
+    let hold = fx
+        .holds("root-i")
+        .into_iter()
+        .find(|b| b.cause == HoldCause::Reconciliation)
+        .expect("the unverified tree is held");
+    assert_eq!(hold.origin_id, op.0.as_str());
+    assert_eq!(hold.clearance["processes"], json!([old_tree.as_str()]));
+    // Continue; generation 1 finishes; the stop is now superseded.
+    applied(&fx.resume(&fx.user, "root-i"));
+    launcher.release_all();
+    rt.block_on(within(
+        "generation 1 stops and records its outcome",
+        async {
+            while launcher.dropped.load(Ordering::SeqCst) < 1 || sup.launches() > 0 {
+                tokio::task::yield_now().await;
+            }
+        },
+    ));
+    assert_eq!(fx.activation(&first[0]).phase, ActivationPhase::Stopped);
+    // Settlement alone (no native report, as boot recovery or a project stop settles) still
+    // requires the held tree reconciled.
+    let (r, o) = (rid("root-i"), op.clone());
+    let settled = fx.tx(move |svc, tx| svc.settle_stop(tx, &r, &o, &[]));
+    assert_eq!(settled, OperationState::OutcomeUnknown);
+    // The held tree is still unverified: the stop is not complete and resumed work does not run.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::OutcomeUnknown)]
+    );
+    assert!(
+        tick.launched.is_empty(),
+        "resumed work waits for reconciliation"
+    );
+    assert!(
+        fx.holds("root-i")
+            .iter()
+            .any(|b| b.cause == HoldCause::Reconciliation)
+    );
+    // Generation fencing still holds with the hold present: once the held tree can be stopped,
+    // a superseded pass stops exactly it, by identity, and no other tree of the root.
+    host.stubborn.store(false, Ordering::SeqCst);
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    let newer = processes
+        .owned()
+        .into_iter()
+        .find(|p| p != &old_tree)
+        .unwrap();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::ObservedComplete)]
+    );
+    assert_eq!(
+        processes.owned(),
+        vec![newer],
+        "only the held tree was stopped"
+    );
+    assert!(
+        !fx.holds("root-i")
+            .iter()
+            .any(|b| b.cause == HoldCause::Reconciliation)
+    );
+    assert_eq!(
+        tick.launched.len(),
+        1,
+        "the replacement runs once reconciled"
+    );
+    let state = read(&*fx.store, |s| s.operations().operation(&op))
+        .unwrap()
+        .state;
+    assert_eq!(state, OperationState::ObservedComplete);
+}
