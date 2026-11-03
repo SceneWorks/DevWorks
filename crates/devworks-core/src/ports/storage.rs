@@ -46,7 +46,8 @@
 //! Repositories owned by later items (work, knowledge, configuration, index/retrieval views and
 //! manual backup/restore) extend this module with their own aggregate traits; this module holds
 //! the operational subset every command already needs: receipts, history, the operation journal,
-//! the durable queue/outbox, grants and actor/store identity.
+//! the durable queue/outbox (with ordered partitions and consumer progress), package event-handler
+//! state and processing receipts, grants and actor/store identity.
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
 use crate::ports::{GrantUse, IdKind, StoredReceipt};
@@ -402,6 +403,7 @@ pub trait WriteTransaction {
     fn operations(&mut self) -> &mut dyn OperationJournal;
     fn queue(&mut self) -> &mut dyn DurableQueue;
     fn grants(&mut self) -> &mut dyn GrantLedger;
+    fn packages(&mut self) -> &mut dyn PackageHandlerLedger;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -434,6 +436,7 @@ pub trait ReadSnapshot {
     fn operations(&self) -> &dyn OperationRead;
     fn queue(&self) -> &dyn QueueRead;
     fn grants(&self) -> &dyn GrantRead;
+    fn packages(&self) -> &dyn PackageHandlerRead;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -700,6 +703,15 @@ pub enum QueueState {
     Cancelled,
     /// Held: the linked operation may have dispatched; it needs reconciliation before redelivery.
     Reconciling,
+    /// Terminal: an operator acknowledged a `Failed` (poison) delivery. Its cause stays visible in
+    /// history; the partition may advance past it because a person decided so.
+    Dismissed,
+}
+impl QueueState {
+    /// Settled states no longer block their ordered partition or the consumer watermark.
+    pub fn is_settled(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled | Self::Dismissed)
+    }
 }
 #[derive(Clone, Debug)]
 pub struct NewQueueEntry {
@@ -710,6 +722,10 @@ pub struct NewQueueEntry {
     pub event_id: EventId,
     pub root_id: Option<RootId>,
     pub operation_id: Option<OperationId>,
+    /// Ordered partition (for example an aggregate or root). Deliveries of one consumer in the
+    /// same partition are delivered strictly in event-sequence order and a held or failed head
+    /// blocks only that partition. `None` is unordered: independent of every other delivery.
+    pub partition: Option<String>,
     pub priority: i64,
     pub ready_at_ms: i64,
     pub payload: Value,
@@ -731,10 +747,32 @@ pub struct QueueEntry {
     pub cancellation_epoch: i64,
     pub attempt_count: i64,
     pub payload: Value,
+    pub partition: Option<String>,
+    /// Committed sequence of the delivered event (ordering key within a partition).
+    pub event_sequence: i64,
+    /// Positive revision, incremented on every state, lease, retry or resolution change.
+    pub revision: i64,
+    /// Most recent failure cause; it stays visible through retries until the delivery completes.
+    pub last_error: Option<String>,
     /// Boot epoch of the current claim; a claim is only current within the boot that made it.
     pub claim_boot_id: Option<Id>,
 }
 impl QueueEntry {
+    /// This entry's keyset position in the inspection order (`None` once settled).
+    pub fn inspection_key(&self) -> Option<DeliveryKey> {
+        let (rank, a, b) = match self.state {
+            QueueState::Claimed => (0, self.event_sequence, 0),
+            QueueState::Failed | QueueState::Reconciling => (1, self.event_sequence, 0),
+            QueueState::Ready => (2, self.priority, self.ready_at_ms),
+            _ => return None,
+        };
+        Some(DeliveryKey {
+            rank,
+            a,
+            b,
+            id: self.id.clone(),
+        })
+    }
     pub fn fence(&self) -> Option<QueueFence> {
         self.owner.clone().map(|owner| QueueFence {
             owner,
@@ -789,19 +827,73 @@ pub struct QueueStatus {
     pub failed: i64,
     pub completed: i64,
     pub cancelled: i64,
+    pub dismissed: i64,
     pub oldest_ready_at_ms: Option<i64>,
+}
+/// Which unsettled deliveries an inspection lists.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeliveryFilter {
+    pub consumer: Option<String>,
+    pub operation_id: Option<OperationId>,
+}
+/// Keyset position in the inspection order: `rank` 0 = claimed (oldest event first), 1 =
+/// failed or held (newest event first), 2 = ready in drain order (priority descending, ready
+/// time, id). `a`/`b` are the rank's sort keys.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeliveryKey {
+    pub rank: u8,
+    pub a: i64,
+    pub b: i64,
+    pub id: Id,
+}
+#[derive(Clone, Debug)]
+pub struct DeliveryPage {
+    pub entries: Vec<QueueEntry>,
+    /// Present when more unsettled deliveries follow.
+    pub next: Option<DeliveryKey>,
+}
+/// Durable delivery progress of one consumer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConsumerProgress {
+    /// Contiguous applied prefix: every delivery of this consumer whose event sequence is at or
+    /// below it is settled. It never passes an unsettled (ready, claimed, held, failed) delivery.
+    pub watermark: i64,
+    /// Highest settled event sequence (recorded at settlement; survives compaction).
+    pub highest_settled: i64,
+    /// Incremented on every settlement of this consumer (0 before the first).
+    pub revision: i64,
+    /// Earliest ready time of a scheduled retry (a ready delivery that already had an attempt).
+    pub next_retry_at_ms: Option<i64>,
 }
 
 pub trait QueueRead {
     fn entry(&self, id: &Id) -> Result<Option<QueueEntry>, StorageError>;
     fn status(&self, consumer: &str) -> Result<QueueStatus, StorageError>;
+    /// Unsettled deliveries (claimed, failed/held, ready) in inspection order after `after`, at
+    /// most `limit` (1..=500). Settled deliveries are history, not queue contents.
+    fn deliveries(
+        &self,
+        filter: &DeliveryFilter,
+        after: Option<&DeliveryKey>,
+        limit: u16,
+    ) -> Result<DeliveryPage, StorageError>;
+    fn progress(&self, consumer: &str) -> Result<ConsumerProgress, StorageError>;
+    /// Applied checkpoint of one ordered partition (0 before its first settlement), or the
+    /// consumer watermark for `None`.
+    fn checkpoint(&self, consumer: &str, partition: Option<&str>) -> Result<i64, StorageError>;
+    /// Earliest saved time after `now_ms` at which a delivery becomes ready or a claim's lease
+    /// expires: the durable timer a dispatcher sleeps until (bounded by its sweep interval).
+    fn next_due_ms(&self, now_ms: i64) -> Result<Option<i64>, StorageError>;
 }
 /// Durable at-least-once delivery primitives. Delivery deduplication is per `(consumer, event)`;
 /// it is not exactly-once execution of external effects.
 pub trait DurableQueue: QueueRead {
     fn enqueue(&mut self, entry: NewQueueEntry) -> Result<QueueEntry, StorageError>;
     /// Claims a bounded ready batch in priority / ready-time / stable-ID order with conditional
-    /// state+generation updates, recording a claim observation per entry.
+    /// state+generation updates, recording a claim observation per entry. Only the oldest
+    /// unsettled delivery of an ordered partition is eligible, and a delivery whose operation may
+    /// already have dispatched (`Dispatching`/`OutcomeUnknown`/`NeedsInput`) is not: an
+    /// uncertain operation pauses its dependents while unrelated deliveries continue.
     fn claim_ready(&mut self, request: &ClaimRequest) -> Result<Vec<QueueEntry>, StorageError>;
     fn renew(
         &mut self,
@@ -840,10 +932,81 @@ pub trait DurableQueue: QueueRead {
     /// retry budget restarts (`attempt_count` = 0; earlier failures stay in history); from
     /// `Reconciling` the attempt count is kept.
     fn requeue(&mut self, id: &Id, delay_ms: i64) -> Result<QueueEntry, StorageError>;
-    /// Compacts a `Completed`/`Cancelled` delivery: its bookkeeping (payload, lease) is dropped
+    /// Compacts a settled (`Completed`/`Cancelled`/`Dismissed`) delivery: its bookkeeping (payload, lease) is dropped
     /// and it is no longer readable, but a tombstone keeps its `(consumer, event)` dedupe identity
     /// so the same event can never be delivered to that consumer again. History is untouched.
+    /// The owner holds its claimed entry in `Reconciling` because its effect outcome is unknown
+    /// or its payload cannot be interpreted (unknown schema/upcaster failure), with the cause.
+    fn hold(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        cause: &str,
+    ) -> Result<QueueEntry, StorageError>;
+    /// Acknowledges a `Failed` delivery as `Dismissed` (an operator decision with its reason).
+    /// Refused while its operation is possibly dispatched.
+    fn dismiss(&mut self, id: &Id, reason: &str) -> Result<QueueEntry, StorageError>;
+    /// Sleep/wake repair: the still-running owner re-establishes its lease on a claim whose lease
+    /// time passed while the machine slept, provided nobody recovered it (same owner and
+    /// generation). It never transfers a claim.
+    fn reassert(
+        &mut self,
+        id: &Id,
+        fence: &QueueFence,
+        lease_ms: i64,
+    ) -> Result<QueueEntry, StorageError>;
     fn compact(&mut self, id: &Id) -> Result<(), StorageError>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Package event handler state and processing receipts
+
+/// A package's durable handler state under one activation generation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PackageState {
+    pub package_id: String,
+    pub generation: i64,
+    pub revision: i64,
+    pub state: Value,
+}
+/// The host processing receipt of one `(package, subscription, event)` commit: its payload
+/// digest and the exact accepted reply, so an identical replay returns the original identities.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProcessingRecord {
+    pub package_id: String,
+    pub subscription_id: Id,
+    pub event_id: EventId,
+    pub receipt_id: Id,
+    pub payload_digest: String,
+    pub state_generation: i64,
+    pub state_revision: i64,
+    pub checkpoint: i64,
+    /// `[{"actionKey", "operationId"}]` in submission order.
+    pub intents: Value,
+}
+pub trait PackageHandlerRead {
+    fn package_state(&self, package_id: &str) -> Result<Option<PackageState>, StorageError>;
+    fn processing(
+        &self,
+        package_id: &str,
+        subscription_id: &Id,
+        event_id: &EventId,
+    ) -> Result<Option<ProcessingRecord>, StorageError>;
+}
+pub trait PackageHandlerLedger: PackageHandlerRead {
+    /// Compare-and-set of the package state. `expected_revision` 0 creates it at revision 1. A
+    /// different stored generation is [`StorageError::LeaseLost`]; a different revision is a
+    /// [`StorageError::RevisionConflict`].
+    fn compare_and_set_state(
+        &mut self,
+        package_id: &str,
+        generation: i64,
+        expected_revision: i64,
+        state: Value,
+    ) -> Result<PackageState, StorageError>;
+    /// Inserts the processing receipt; the `(package, subscription, event)` identity and the
+    /// receipt ID are unique ([`StorageError::Duplicate`]).
+    fn record_processing(&mut self, record: &ProcessingRecord) -> Result<(), StorageError>;
 }
 
 // ---------------------------------------------------------------------------------------------

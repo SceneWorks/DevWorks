@@ -25,8 +25,8 @@ use crate::operations::OperationInput;
 use crate::ports::storage::{
     ActorRegistry, CommandLedger, CommandLedgerRead, DurableQueue, EventFilter, EventPage,
     EventRecord, GrantLedger, HistoryLog, HistoryRead, LedgerEntry, NewEvent, OperationJournal,
-    ReadOptions, RevisionConflict, Savepoint, StorageError, StoreInfo, WriteOptions,
-    WriteTransaction, read_snapshot, run_write,
+    PackageHandlerLedger, ReadOptions, RevisionConflict, Savepoint, StorageError, StoreInfo,
+    WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
@@ -122,12 +122,15 @@ pub enum GatewayFailure {
     /// A use case returned a result/decision/stamp that does not match the admitted operation's
     /// contract or the invocation; nothing was recorded or published.
     HandlerContract(String),
+    /// No use case is registered for the selected operation; nothing was admitted or recorded.
+    NoUseCase(String),
 }
 impl fmt::Display for GatewayFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unaddressable { error, .. } => write!(f, "unaddressable request: {error}"),
             Self::HandlerContract(e) => write!(f, "use case contract violation: {e}"),
+            Self::NoUseCase(op) => write!(f, "no use case is registered for {op}"),
         }
     }
 }
@@ -737,6 +740,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn grants(&mut self) -> &mut dyn GrantLedger {
         self.inner.get_mut().grants()
+    }
+    fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
+        self.inner.get_mut().packages()
     }
 }
 

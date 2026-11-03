@@ -80,6 +80,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "devworks-engine"
+version = "0.1.0"
+dependencies = [
+ "devworks-adapters",
+ "devworks-core",
+ "devworks-extension-protocol",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "devworks-extension-protocol"
 version = "0.1.0"
 dependencies = [

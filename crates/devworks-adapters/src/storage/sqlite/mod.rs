@@ -31,7 +31,9 @@ mod writer;
 mod tests;
 
 pub use conn::{EXPECTED_VEC_VERSION, EffectiveSettings, MIN_SQLITE_VERSION};
-pub use migrations::{MIGRATION_0001_SHA256, MIGRATION_0002_SHA256, MIGRATIONS, Migration};
+pub use migrations::{
+    MIGRATION_0001_SHA256, MIGRATION_0002_SHA256, MIGRATION_0003_SHA256, MIGRATIONS, Migration,
+};
 
 use conn::{Role, db};
 use devworks_core::context::PrincipalKind;

@@ -38,6 +38,8 @@ macro_rules! store_contract_tests {
             concurrent_duplicates_decide_once, cancellation_and_deadlines, history_paging,
             actor_registry, operation_lifecycle_and_fencing, interrupted_work_after_restart,
             queue_claims_and_fencing, queue_retry_terminal_and_cancel,
+            queue_partitions_progress_and_dependents, queue_holds_dismissal_and_reassert,
+            queue_inspection_order_and_paging, package_handler_ledger,
             refused_decisions_persist_only_receipt_and_history,
             nested_savepoint_conflict_is_a_durable_refusal);
     };
@@ -115,6 +117,7 @@ fn enqueue(
         consumer: consumer.into(),
         event_id,
         root_id: None,
+        partition: None,
         operation_id,
         priority,
         ready_at_ms,
@@ -426,6 +429,7 @@ impl CommandHandler for Start {
             consumer: "supervisor".into(),
             event_id,
             root_id: None,
+            partition: None,
             operation_id: Some(op.clone()),
             priority: 1,
             ready_at_ms: 0,
@@ -974,14 +978,7 @@ pub fn interrupted_work_after_restart(h: &mut dyn StoreHarness) {
     let s = h.open();
     let (pre, sent, held_entry, plain_entry) = write(&*s, |tx| {
         let pre = intent(tx)?;
-        tx.operations()
-            .begin_attempt(&pre.id, 1, AttemptBinding::default())?;
         let sent = intent(tx)?;
-        let a = tx
-            .operations()
-            .begin_attempt(&sent.id, 1, AttemptBinding::default())?;
-        tx.operations()
-            .transition(&sent.id, 2, Some(&a.fence()), Dispatching, None)?;
         let held = enqueue(tx, "restart", 1, 0, Some(sent.id.clone()))?.id;
         let plain = enqueue(tx, "restart", 1, 0, None)?.id;
         Ok((pre.id, sent.id, held, plain))
@@ -993,6 +990,18 @@ pub fn interrupted_work_after_restart(h: &mut dyn StoreHarness) {
             .len(),
         2
     );
+    // The old owner preflights one operation and dispatches the other, then the process dies.
+    let (p, d) = (pre.clone(), sent.clone());
+    write(&*s, move |tx| {
+        tx.operations()
+            .begin_attempt(&p, 1, AttemptBinding::default())?;
+        let a = tx
+            .operations()
+            .begin_attempt(&d, 1, AttemptBinding::default())?;
+        tx.operations()
+            .transition(&d, 2, Some(&a.fence()), Dispatching, None)
+    })
+    .unwrap();
     drop(s);
 
     let s = h.open();
@@ -1256,6 +1265,7 @@ pub fn queue_retry_terminal_and_cancel(h: &mut dyn StoreHarness) {
             event_id,
             root_id: None,
             operation_id: None,
+            partition: None,
             priority: 0,
             ready_at_ms: 0,
             payload: json!({}),
@@ -1278,22 +1288,23 @@ pub fn queue_retry_terminal_and_cancel(h: &mut dyn StoreHarness) {
 
     // A retryable failure of a delivery whose operation may have dispatched is held, not
     // returned to Ready: the retry hint never authorizes replaying a possible effect.
+    // (Claimed before its operation dispatches: a delivery whose operation is already possibly
+    // dispatched is not claimable.)
     let (d, op) = write(&*s, |tx| {
         let op = intent(tx)?;
-        let a = tx
-            .operations()
-            .begin_attempt(&op.id, 1, AttemptBinding::default())?;
-        tx.operations().transition(
-            &op.id,
-            2,
-            Some(&a.fence()),
-            OperationState::Dispatching,
-            None,
-        )?;
         Ok((enqueue(tx, "effects", 1, 0, Some(op.id.clone()))?, op.id))
     })
     .unwrap();
     let c = claim(&*s, "effects", "w", 1_000, 1).unwrap().remove(0);
+    let o = op.clone();
+    write(&*s, move |tx| {
+        let a = tx
+            .operations()
+            .begin_attempt(&o, 1, AttemptBinding::default())?;
+        tx.operations()
+            .transition(&o, 2, Some(&a.fence()), OperationState::Dispatching, None)
+    })
+    .unwrap();
     let (did, f) = (d.id.clone(), c.fence().unwrap());
     let held = write(&*s, move |tx| {
         tx.queue().fail(&did, &f, "connection reset", retry)
@@ -1330,6 +1341,7 @@ pub fn queue_retry_terminal_and_cancel(h: &mut dyn StoreHarness) {
                 event_id: ev,
                 root_id: None,
                 operation_id: None,
+                partition: None,
                 priority: 0,
                 ready_at_ms: 0,
                 payload: json!({}),
@@ -1348,6 +1360,405 @@ pub fn queue_retry_terminal_and_cancel(h: &mut dyn StoreHarness) {
         Ok(())
     })
     .unwrap();
+}
+
+fn enqueue_in(
+    tx: &mut dyn WriteTransaction,
+    consumer: &str,
+    partition: Option<&str>,
+    operation_id: Option<OperationId>,
+) -> Result<QueueEntry, StorageError> {
+    let (event_id, _) = event(tx, "queue-fixture", "Changed")?;
+    enqueue_event(tx, consumer, partition, operation_id, event_id)
+}
+fn enqueue_event(
+    tx: &mut dyn WriteTransaction,
+    consumer: &str,
+    partition: Option<&str>,
+    operation_id: Option<OperationId>,
+    event_id: EventId,
+) -> Result<QueueEntry, StorageError> {
+    let entry_id = tx.new_id(IdKind::QueueEntry);
+    tx.queue().enqueue(NewQueueEntry {
+        id: entry_id,
+        consumer: consumer.into(),
+        event_id,
+        root_id: None,
+        partition: partition.map(str::to_owned),
+        operation_id,
+        priority: 0,
+        ready_at_ms: 0,
+        payload: json!({}),
+    })
+}
+fn settle_all(s: &dyn ApplicationStore, entries: &[QueueEntry]) {
+    for e in entries {
+        let (eid, f) = (e.id.clone(), e.fence().expect("claimed"));
+        write(s, move |tx| {
+            tx.queue().settle(&eid, &f, Settlement::Completed)
+        })
+        .unwrap();
+    }
+}
+
+/// Ordered partitions deliver one head at a time in event order, independent partitions and
+/// unordered deliveries proceed, an uncertain operation pauses only its own dependents, and the
+/// consumer watermark never passes an unsettled delivery.
+pub fn queue_partitions_progress_and_dependents(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let (a1, a2, b1, free, uncertain, after_uncertain) = write(&*s, |tx| {
+        let a1 = enqueue_in(tx, "ord", Some("root-a"), None)?;
+        let a2 = enqueue_in(tx, "ord", Some("root-a"), None)?;
+        let b1 = enqueue_in(tx, "ord", Some("root-b"), None)?;
+        let free = enqueue_in(tx, "ord", None, None)?;
+        let op = intent(tx)?;
+        let uncertain = enqueue_in(tx, "ord", Some("root-c"), Some(op.id.clone()))?;
+        let after = enqueue_in(tx, "ord", Some("root-c"), None)?;
+        Ok((a1, a2, b1, free, uncertain, after))
+    })
+    .unwrap();
+    assert!(a1.event_sequence < a2.event_sequence);
+    let first = claim(&*s, "ord", "w", 1_000, 50).unwrap();
+    let ids: Vec<_> = first.iter().map(|e| e.id.clone()).collect();
+    assert!(ids.contains(&a1.id) && ids.contains(&b1.id) && ids.contains(&free.id));
+    assert!(ids.contains(&uncertain.id));
+    assert!(
+        !ids.contains(&a2.id),
+        "second in partition before its head settled"
+    );
+    assert!(!ids.contains(&after_uncertain.id));
+    // The uncertain operation dispatches and its outcome becomes unknown; its claim is held.
+    let unc = first.iter().find(|e| e.id == uncertain.id).unwrap().clone();
+    let op = unc.operation_id.clone().unwrap();
+    let (o, eid, f) = (op.clone(), unc.id.clone(), unc.fence().unwrap());
+    let held = write(&*s, move |tx| {
+        let a = tx
+            .operations()
+            .begin_attempt(&o, 1, AttemptBinding::default())?;
+        tx.operations()
+            .transition(&o, 2, Some(&a.fence()), OperationState::Dispatching, None)?;
+        tx.operations().transition(
+            &o,
+            3,
+            Some(&a.fence()),
+            OperationState::OutcomeUnknown,
+            None,
+        )?;
+        tx.queue().hold(&eid, &f, "effect outcome unknown")
+    })
+    .unwrap();
+    assert_eq!(held.state, QueueState::Reconciling);
+    assert_eq!(held.last_error.as_deref(), Some("effect outcome unknown"));
+    let others: Vec<_> = first.into_iter().filter(|e| e.id != uncertain.id).collect();
+    settle_all(&*s, &others);
+    // a2 is now the head; root-c stays paused behind its uncertain head.
+    let next = claim(&*s, "ord", "w", 1_000, 50).unwrap();
+    assert_eq!(
+        next.iter().map(|e| e.id.clone()).collect::<Vec<_>>(),
+        std::slice::from_ref(&a2.id)
+    );
+    settle_all(&*s, &next);
+    let (prog, a_cp, c_cp) = read(&*s, |r| {
+        Ok((
+            r.queue().progress("ord")?,
+            r.queue().checkpoint("ord", Some("root-a"))?,
+            r.queue().checkpoint("ord", Some("root-c"))?,
+        ))
+    });
+    assert_eq!(a_cp, a2.event_sequence);
+    assert_eq!(c_cp, 0);
+    assert_eq!(prog.revision, 4, "four settlements");
+    assert!(
+        prog.watermark < uncertain.event_sequence,
+        "watermark passed a held delivery"
+    );
+    assert_eq!(
+        prog.highest_settled,
+        a2.event_sequence.max(free.event_sequence)
+    );
+    // A consumer may start a partition at any event, but appends to it stay in event order.
+    let old_event = a1.event_id.clone();
+    let late = write(&*s, move |tx| {
+        enqueue_in(tx, "ord-late", Some("root-a"), None)?;
+        enqueue_event(tx, "ord-late", Some("root-a"), None, old_event)
+    });
+    assert!(matches!(late, Err(StorageError::InvalidRecord(_))));
+    let old_event = a1.event_id.clone();
+    assert!(
+        write(&*s, move |tx| enqueue_event(
+            tx,
+            "ord-new",
+            Some("root-a"),
+            None,
+            old_event
+        ))
+        .is_ok()
+    );
+    // Reconciliation establishes the outcome; the held head is requeued and its partition flows.
+    let o = op.clone();
+    let uid = uncertain.id.clone();
+    write(&*s, move |tx| {
+        let rec = tx.operations().operation(&o)?.unwrap();
+        tx.operations().transition(
+            &o,
+            rec.revision,
+            None,
+            OperationState::ObservedComplete,
+            Some(json!({"observed": true})),
+        )?;
+        tx.queue().requeue(&uid, 0)
+    })
+    .unwrap();
+    let head = claim(&*s, "ord", "w", 1_000, 50).unwrap();
+    assert_eq!(head.len(), 1);
+    assert_eq!(head[0].id, uncertain.id);
+    assert_eq!(
+        head[0].last_error.as_deref(),
+        Some("effect outcome unknown")
+    );
+    settle_all(&*s, &head);
+    let tail = claim(&*s, "ord", "w", 1_000, 50).unwrap();
+    assert_eq!(tail[0].id, after_uncertain.id);
+    settle_all(&*s, &tail);
+    let done = read(&*s, |r| r.queue().entry(&uncertain.id)).unwrap();
+    assert_eq!(
+        done.last_error, None,
+        "completion clears the visible failure"
+    );
+    let prog = read(&*s, |r| r.queue().progress("ord"));
+    assert_eq!(prog.watermark, after_uncertain.event_sequence);
+}
+
+/// Failed deliveries are dismissed only by explicit acknowledgment; an explicit requeue restarts
+/// the retry budget; the still-live owner can reassert an expired lease that nobody recovered.
+pub fn queue_holds_dismissal_and_reassert(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let e = write(&*s, |tx| enqueue_in(tx, "poison", Some("p"), None)).unwrap();
+    let behind = write(&*s, |tx| enqueue_in(tx, "poison", Some("p"), None)).unwrap();
+    let c = claim(&*s, "poison", "w", 1_000, 10).unwrap().remove(0);
+    let (eid, f) = (e.id.clone(), c.fence().unwrap());
+    let failed = write(&*s, move |tx| {
+        tx.queue().fail(
+            &eid,
+            &f,
+            "unsupported payload schema",
+            FailureDisposition::Terminal,
+        )
+    })
+    .unwrap();
+    assert_eq!(failed.state, QueueState::Failed);
+    assert!(failed.revision > c.revision);
+    assert!(
+        claim(&*s, "poison", "w", 1_000, 10).unwrap().is_empty(),
+        "a poison head blocks its partition"
+    );
+    // Requeue restarts the budget: one more transient failure is retried, not terminal.
+    let eid = e.id.clone();
+    let again = write(&*s, move |tx| tx.queue().requeue(&eid, 0)).unwrap();
+    assert_eq!(
+        again.attempt_count, 0,
+        "requeue from Failed restarts the retry budget"
+    );
+    assert_eq!(
+        again.last_error.as_deref(),
+        Some("unsupported payload schema")
+    );
+    let retry = FailureDisposition::Retry {
+        delay_ms: 0,
+        max_attempts: 2,
+    };
+    let c = claim(&*s, "poison", "w", 1_000, 10).unwrap().remove(0);
+    let (eid, f) = (e.id.clone(), c.fence().unwrap());
+    let after = write(&*s, move |tx| tx.queue().fail(&eid, &f, "busy", retry)).unwrap();
+    assert_eq!(after.state, QueueState::Ready);
+    let c = claim(&*s, "poison", "w", 1_000, 10).unwrap().remove(0);
+    let (eid, f) = (e.id.clone(), c.fence().unwrap());
+    let after = write(&*s, move |tx| tx.queue().fail(&eid, &f, "busy", retry)).unwrap();
+    assert_eq!(after.state, QueueState::Failed, "budget of two exhausted");
+    // Only a failed delivery is dismissable; dismissal unblocks the partition.
+    let bid = behind.id.clone();
+    assert!(matches!(
+        write(&*s, move |tx| tx.queue().dismiss(&bid, "not failed")),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    let eid = e.id.clone();
+    let dismissed = write(&*s, move |tx| {
+        tx.queue().dismiss(&eid, "operator: known bad")
+    })
+    .unwrap();
+    assert_eq!(dismissed.state, QueueState::Dismissed);
+    let next = claim(&*s, "poison", "w", 1_000, 10).unwrap();
+    assert_eq!(next[0].id, behind.id);
+    assert!(
+        kinds(
+            &*s,
+            EventFilter::Aggregate {
+                kind: "queue_entry".into(),
+                id: e.id.as_str().into(),
+            },
+        )
+        .contains(&"QueueDeliveryDismissed".to_owned())
+    );
+    let eid = e.id.clone();
+    write(&*s, move |tx| tx.queue().compact(&eid)).unwrap();
+
+    // Reassert: an expired but unrecovered claim stays with its live owner.
+    let live = next[0].clone();
+    h.set_now(h.now() + 60_000);
+    let (lid, f) = (live.id.clone(), live.fence().unwrap());
+    assert!(matches!(
+        write(&*s, move |tx| tx.queue().renew(&lid, &f, 1_000)),
+        Err(StorageError::LeaseLost { .. })
+    ));
+    let (lid, f) = (live.id.clone(), live.fence().unwrap());
+    let back = write(&*s, move |tx| tx.queue().reassert(&lid, &f, 1_000)).unwrap();
+    assert_eq!(back.lease_until_ms, Some(h.now() + 1_000));
+    assert_eq!(back.generation, live.generation);
+    let due = read(&*s, |r| r.queue().next_due_ms(h.now()));
+    assert_eq!(
+        due,
+        Some(h.now() + 1_000),
+        "the lease expiry is the next due time"
+    );
+    // Once recovered by someone else, the old owner cannot reassert.
+    h.set_now(h.now() + 5_000);
+    write(&*s, |tx| {
+        tx.queue().recover_claims(ClaimRecovery::Expired, 10)
+    })
+    .unwrap();
+    let (lid, f) = (live.id.clone(), live.fence().unwrap());
+    assert!(matches!(
+        write(&*s, move |tx| tx.queue().reassert(&lid, &f, 1_000)),
+        Err(StorageError::LeaseLost { .. })
+    ));
+}
+
+/// Inspection lists unsettled deliveries in attention order with stable keyset paging.
+pub fn queue_inspection_order_and_paging(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let now = h.now();
+    let ids = write(&*s, move |tx| {
+        let mut v = Vec::new();
+        for p in [1, 3, 3] {
+            v.push(enqueue(tx, "insp", p, 0, None)?);
+        }
+        v.push(enqueue(tx, "insp", 9, now + 60_000, None)?);
+        v.push(enqueue(tx, "insp", 0, 0, None)?);
+        v.push(enqueue(tx, "insp", 0, 0, None)?);
+        enqueue(tx, "other", 0, 0, None)?;
+        Ok(v)
+    })
+    .unwrap();
+    // Drain order claims the two priority-3 deliveries, then the priority-1 one, which fails.
+    let c = claim(&*s, "insp", "w", 1_000, 2).unwrap();
+    assert_eq!(c.len(), 2);
+    let failed_one = claim(&*s, "insp", "w", 1_000, 1).unwrap().remove(0);
+    assert_eq!(failed_one.id, ids[0].id);
+    let (fid, f) = (failed_one.id.clone(), failed_one.fence().unwrap());
+    write(&*s, move |tx| {
+        tx.queue()
+            .fail(&fid, &f, "boom", FailureDisposition::Terminal)
+    })
+    .unwrap();
+    let filter = DeliveryFilter {
+        consumer: Some("insp".into()),
+        operation_id: None,
+    };
+    let all = read(&*s, |r| r.queue().deliveries(&filter, None, 500));
+    let states: Vec<_> = all.entries.iter().map(|e| e.state).collect();
+    assert_eq!(
+        states,
+        [
+            QueueState::Claimed,
+            QueueState::Claimed,
+            QueueState::Failed,
+            QueueState::Ready,
+            QueueState::Ready,
+            QueueState::Ready
+        ]
+    );
+    assert!(all.next.is_none());
+    // Ready in drain order: priority 9 (delayed) first, then the two priority-0 ones.
+    assert_eq!(all.entries[3].id, ids[3].id);
+    // Paging with a page size of 2 visits the same sequence exactly once.
+    let mut seen = Vec::new();
+    let mut after: Option<DeliveryKey> = None;
+    loop {
+        let page = read(&*s, |r| r.queue().deliveries(&filter, after.as_ref(), 2));
+        seen.extend(page.entries.iter().map(|e| e.id.clone()));
+        match page.next {
+            Some(k) => after = Some(k),
+            None => break,
+        }
+    }
+    assert_eq!(
+        seen,
+        all.entries.iter().map(|e| e.id.clone()).collect::<Vec<_>>()
+    );
+    let everyone = read(&*s, |r| {
+        r.queue().deliveries(&DeliveryFilter::default(), None, 500)
+    });
+    assert_eq!(everyone.entries.len(), 7);
+}
+
+/// Package handler state compare-and-set and unique processing receipts.
+pub fn package_handler_ledger(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let (ev, _) = write(&*s, |tx| event(tx, "pkg", "Changed")).unwrap();
+    let created = write(&*s, |tx| {
+        tx.packages()
+            .compare_and_set_state("acme.pkg", 1, 0, json!({"count": 0}))
+    })
+    .unwrap();
+    assert_eq!((created.generation, created.revision), (1, 1));
+    assert!(matches!(
+        write(&*s, |tx| tx.packages().compare_and_set_state(
+            "acme.pkg",
+            1,
+            0,
+            json!({})
+        )),
+        Err(StorageError::RevisionConflict(_))
+    ));
+    assert!(matches!(
+        write(&*s, |tx| tx.packages().compare_and_set_state(
+            "acme.pkg",
+            2,
+            1,
+            json!({})
+        )),
+        Err(StorageError::LeaseLost { .. })
+    ));
+    let next = write(&*s, |tx| {
+        tx.packages()
+            .compare_and_set_state("acme.pkg", 1, 1, json!({"count": 1}))
+    })
+    .unwrap();
+    assert_eq!(next.revision, 2);
+    let record = ProcessingRecord {
+        package_id: "acme.pkg".into(),
+        subscription_id: id("sub-1"),
+        event_id: ev.clone(),
+        receipt_id: id("receipt-1"),
+        payload_digest: "d".repeat(64),
+        state_generation: 1,
+        state_revision: 2,
+        checkpoint: 7,
+        intents: json!([]),
+    };
+    let r = record.clone();
+    write(&*s, move |tx| tx.packages().record_processing(&r)).unwrap();
+    let r = record.clone();
+    assert!(matches!(
+        write(&*s, move |tx| tx.packages().record_processing(&r)),
+        Err(StorageError::Duplicate { .. })
+    ));
+    let found = read(&*s, |r| {
+        r.packages().processing("acme.pkg", &id("sub-1"), &ev)
+    });
+    assert_eq!(found, Some(record));
+    let state = read(&*s, |r| r.packages().package_state("acme.pkg")).unwrap();
+    assert_eq!(state.state, json!({"count": 1}));
 }
 
 fn gateway_for<'a>(s: &'a dyn ApplicationStore, ids: &'a Correlations) -> Gateway<'a> {

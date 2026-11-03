@@ -299,7 +299,11 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
             report.minimum_writer,
             report.migrations.len()
         ),
-        (2, 2, 2)
+        (
+            MIGRATIONS.len() as i64,
+            MIGRATIONS[MIGRATIONS.len() - 1].minimum_writer,
+            MIGRATIONS.len()
+        )
     );
     drop(s);
     let has_column: bool = h
@@ -311,6 +315,61 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
         )
         .unwrap();
     assert!(has_column);
+}
+
+/// A version-1 store with pending deliveries upgrades in place through migrations 2 and 3: their
+/// event sequences are backfilled, they stay unordered and claimable, and older writers are then
+/// refused write access.
+#[test]
+fn migration_three_upgrades_existing_deliveries() {
+    assert_eq!(
+        MIGRATIONS[2].checksum(),
+        MIGRATION_0003_SHA256,
+        "an applied migration was edited"
+    );
+    let h = Harness::new();
+    let s = SqliteStore::open_with(h.config(), &MIGRATIONS[..1]).unwrap();
+    drop(s);
+    // Seed a v1 delivery row directly (v1 has no partition/sequence columns).
+    let c = h.raw();
+    c.execute_batch(
+        "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('ev-old','host','fixture','a',1,'Old',0,'{}');
+         INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('ev-v1','host','fixture','a',1,'Changed',0,'{}');
+         INSERT INTO queue_entries(id,consumer,event_id,priority,ready_at,state,payload_json) VALUES('q-v1','work','ev-v1',0,0,'Ready','{}');",
+    )
+    .unwrap();
+    drop(c);
+    let s = h.store();
+    let e = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.queue().entry(&Id::new("q-v1").unwrap())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        (
+            e.event_sequence,
+            e.revision,
+            e.partition.clone(),
+            e.last_error.clone()
+        ),
+        (2, 1, None, None)
+    );
+    let claimed = write(&s, |tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: "work".into(),
+            owner: Id::new("w").unwrap(),
+            lease_ms: 1_000,
+            limit: 10,
+        })
+    })
+    .unwrap();
+    assert_eq!(claimed.len(), 1);
+    let report = s.compatibility().unwrap();
+    assert!(report.store_schema_version >= 3 && report.minimum_writer >= 3);
+    drop(s);
+    // An older build may still read the upgraded store but not write it.
+    let old = SqliteStore::open_with(h.config(), &MIGRATIONS[..2]).unwrap();
+    assert!(matches!(old.info().access, AccessMode::ReadOnly { .. }));
 }
 
 #[test]
