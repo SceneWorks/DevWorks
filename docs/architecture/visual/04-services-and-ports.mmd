@@ -1,0 +1,72 @@
+---
+title: Application services, their ports and native adapters (implemented)
+---
+classDiagram
+  direction LR
+  class ArtifactService {
+    files: Arc dyn ArtifactFiles
+    sources: Arc dyn ArtifactSources
+    readers / streams / pins
+    artifacts.save .list .read .preview .export .reference .delete .tag
+  }
+  class ReceiptReplies {
+    durable typed reply per receipt
+  }
+  class SessionService {
+    ids / audit store / coordinator: Option ActorId
+    sessions.list .get .transcript .briefing
+    sessions.append_message .context_sources .start .end
+    SessionRecord r2: createdAtMs, lastActivityMs
+  }
+  class SessionWriter {
+    host-attributed transcript batches
+  }
+  class HistoryService {
+    history.events .work_lineage .git_links
+    .evidence_links .operation_status .tool_usage .command_receipt
+  }
+  class SettingsService {
+    roles: Arc dyn PrincipalRoles
+    paths: Arc dyn PathProbe
+    settings.read_effective .validate .save_revision .explain_source
+  }
+  class SettingsView {
+    toolkit-independent view model
+    drafts, issues, health, conflict
+    +save_input() SaveRevisionInput
+  }
+  class QueueService {
+    queue.inspect .resolve .retry .consumer_status .reconcile
+  }
+  class ResourceService {
+    resources.list .acquire .renew .release .holders .waiters
+  }
+  class ArtifactFiles { <<trait>> }
+  class ArtifactSources { <<trait>> }
+  class PathProbe { <<trait>> }
+  class PrincipalRoles { <<trait>> }
+  class ProcessHost { <<trait>> }
+  class PowerPort { <<trait>> }
+  class NativeArtifactFiles { <<adapter>> }
+  class HostArtifactSources {
+    <<adapter>>
+    +mint_upload(ctx, file, ttl)
+    +mint_workspace_upload(ctx, file, ttl)
+  }
+  class FsPathProbe { <<adapter>> }
+  class HostRoles { <<core authority>> }
+  class NativeProcessHost { <<adapter>> }
+  class NativePower { <<adapter>> }
+  ArtifactService --> ArtifactFiles
+  ArtifactService --> ArtifactSources
+  ReceiptReplies o-- ArtifactService
+  SessionService ..> SessionWriter
+  SettingsService --> PathProbe
+  SettingsService --> PrincipalRoles
+  SettingsView ..> SettingsService : renders its results
+  NativeArtifactFiles ..|> ArtifactFiles
+  HostArtifactSources ..|> ArtifactSources
+  FsPathProbe ..|> PathProbe
+  HostRoles ..|> PrincipalRoles
+  NativeProcessHost ..|> ProcessHost
+  NativePower ..|> PowerPort

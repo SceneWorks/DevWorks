@@ -476,6 +476,16 @@ fn write_batch(
                 refuse!(BatchRefusal::UnknownReference(what))
             }
         }
+        // A committed entry's references are artifact references (same transaction).
+        for (_, reference) in references(&entry.body) {
+            crate::services::artifacts::reference_from_transcript(
+                tx,
+                ctx,
+                reference,
+                &session.id,
+                session.root_id.clone(),
+            )?;
+        }
         let sequence = entry.sequence.get();
         let body = serde_json::to_value(&entry.body)
             .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;

@@ -1,0 +1,19 @@
+---
+title: Main-window close states (shell::Lifecycle, implemented, AD 20)
+---
+stateDiagram-v2
+  direction LR
+  [*] --> Open
+  Open --> Quiescing : window close requested by the close button or --close-after-secs, then HostControl begin_quiesce
+  Quiescing --> Persisting : no request in flight and quiesced(), or 10 s bound
+  Persisting --> ShuttingDown : view state saved, Engine begin_shutdown
+  Persisting --> Exiting : no runtime (offline shell)
+  ShuttingDown --> Exiting : Runtime shutdown finished (summary shown)
+  Exiting --> Closed : ViewportCommand Close
+  Closed --> [*]
+  note right of ShuttingDown
+    The window stays responsive and shows progress.
+    Nothing keeps running in a tray or daemon.
+    Quiescing is the seam where run controls (planned, DW-9)
+    pause every active work root, in this build a no-op.
+  end note

@@ -1,0 +1,98 @@
+[
+  {
+    "id": "01-gateway-admission",
+    "title": "Gateway and admission (devworks-core, implemented)",
+    "kind": "classDiagram",
+    "source": "01-gateway-admission.mmd",
+    "rendered": "01-gateway-admission.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "02-storage-unit-of-work",
+    "title": "Storage ports and the single write owner (implemented)",
+    "kind": "classDiagram",
+    "source": "02-storage-unit-of-work.mmd",
+    "rendered": "02-storage-unit-of-work.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "03-runtime-composition",
+    "title": "Runtime composition and ownership (devworks-engine, implemented)",
+    "kind": "classDiagram",
+    "source": "03-runtime-composition.mmd",
+    "rendered": "03-runtime-composition.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "04-services-and-ports",
+    "title": "Application services, their ports and native adapters (implemented)",
+    "kind": "classDiagram",
+    "source": "04-services-and-ports.mmd",
+    "rendered": "04-services-and-ports.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "05-desktop-shell",
+    "title": "Desktop shell (devworks-desktop) \u2014 implemented types and planned seams",
+    "kind": "classDiagram",
+    "source": "05-desktop-shell.mmd",
+    "rendered": "05-desktop-shell.svg",
+    "status": "Implemented code; planned seams marked"
+  },
+  {
+    "id": "10-boot-order",
+    "title": "Desktop boot order, with failure paths (implemented)",
+    "kind": "sequenceDiagram",
+    "source": "10-boot-order.mmd",
+    "rendered": "10-boot-order.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "11-durable-recovery",
+    "title": "Durable delivery and operation journal recovery (implemented)",
+    "kind": "stateDiagram-v2",
+    "source": "11-durable-recovery.mmd",
+    "rendered": "11-durable-recovery.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "12-receipt-replies",
+    "title": "Command receipts and their durable replies, including crash paths (implemented)",
+    "kind": "sequenceDiagram",
+    "source": "12-receipt-replies.mmd",
+    "rendered": "12-receipt-replies.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "13-process-and-lease-states",
+    "title": "Owned process trees and physical lease handoff (implemented)",
+    "kind": "stateDiagram-v2",
+    "source": "13-process-and-lease-states.mmd",
+    "rendered": "13-process-and-lease-states.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "14-process-cancellation",
+    "title": "Bounded process cancellation and lease reconciliation (implemented)",
+    "kind": "sequenceDiagram",
+    "source": "14-process-cancellation.mmd",
+    "rendered": "14-process-cancellation.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "15-shell-request-and-close",
+    "title": "Shell request path and window-close lifecycle (implemented)",
+    "kind": "sequenceDiagram",
+    "source": "15-shell-request-and-close.mmd",
+    "rendered": "15-shell-request-and-close.svg",
+    "status": "Implemented code"
+  },
+  {
+    "id": "16-shell-close-states",
+    "title": "Main-window close states (shell::Lifecycle, implemented, AD 20)",
+    "kind": "stateDiagram-v2",
+    "source": "16-shell-close-states.mmd",
+    "rendered": "16-shell-close-states.svg",
+    "status": "Implemented code"
+  }
+]

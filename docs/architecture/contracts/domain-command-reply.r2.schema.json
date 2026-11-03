@@ -15093,8 +15093,16 @@
         "contextEpoch": {
           "$ref": "#/$defs/Counter"
         },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "id": {
           "$ref": "#/$defs/Id"
+        },
+        "lastActivityMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         },
         "revision": {
           "$ref": "#/$defs/Revision"

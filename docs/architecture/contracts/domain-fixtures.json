@@ -6321,6 +6321,90 @@
     "schemaValid": false
   },
   {
+    "id": "r2-input-sessions.list",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-sessions.get",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"sessions.get\",\"sessionId\":\"id-a\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-sessions.start",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"sessions.start\",\"scope\":{\"kind\":\"Workspace\"},\"title\":\"fixture\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-sessions.end",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"sessions.end\",\"sessionId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-sessions.append_message",
+    "entry": "session-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"sessionId\":\"session-a\",\"expectedSessionRevision\":\"1\",\"content\":[{\"kind\":\"Text\",\"text\":\"Hello\"}],\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-sessions.get",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"sessions.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"contextEpoch\":\"0\",\"closed\":false,\"createdAtMs\":\"1793570000000\",\"lastActivityMs\":\"1793570060000\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-sessions.start",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"sessions.start\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"contextEpoch\":\"0\",\"closed\":false,\"createdAtMs\":\"1793570000000\",\"lastActivityMs\":\"1793570060000\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-sessions.end",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"sessions.end\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"contextEpoch\":\"0\",\"closed\":false,\"createdAtMs\":\"1793570000000\",\"lastActivityMs\":\"1793570060000\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-sessions.append_message",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"sessions.append_message\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"contextEpoch\":\"0\",\"closed\":false,\"createdAtMs\":\"1793570000000\",\"lastActivityMs\":\"1793570060000\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-sessions.list",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"sessions.list\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"contextEpoch\":\"0\",\"closed\":false,\"createdAtMs\":\"1793570000000\",\"lastActivityMs\":\"1793570060000\"},{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"contextEpoch\":\"0\",\"closed\":false}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-session-times",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"sessions.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"contextEpoch\":\"0\",\"closed\":false,\"createdAtMs\":\"1793570000000\",\"lastActivityMs\":\"1793570060000\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-session-negative-time",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"sessions.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"contextEpoch\":\"0\",\"closed\":false,\"createdAtMs\":\"-1\",\"lastActivityMs\":\"1793570060000\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "r2-input-workspace.logs",
     "entry": "domain-request.r2",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"workspace.logs\",\"page\":{\"limit\":20},\"afterSequence\":\"0\",\"severity\":\"Warning\",\"outcome\":\"Failed\",\"operation\":\"indexing.repository\",\"operationId\":\"operation-a\",\"correlationId\":\"correlation-a\",\"targetId\":\"repo-a\",\"stage\":\"parse\",\"projectId\":\"project-a\",\"search\":\"timeout\",\"sinceMs\":\"1\",\"untilMs\":\"2\",\"order\":\"Descending\"},\"schemaRevision\":2}",

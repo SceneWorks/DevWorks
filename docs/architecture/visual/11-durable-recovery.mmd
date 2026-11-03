@@ -1,0 +1,58 @@
+---
+title: Durable delivery and operation journal recovery (implemented)
+---
+stateDiagram-v2
+  direction LR
+  state "Operation journal (OperationState)" as Journal {
+    state "IntentRecorded" as OpIntent
+    state "Preflighted" as OpPreflighted
+    state "Dispatching" as OpDispatching
+    state "ObservedComplete" as OpComplete
+    state "Failed" as OpFailed
+    state "OutcomeUnknown" as OpUnknown
+    state "RetryPending" as OpRetry
+    state "NeedsInput" as OpNeedsInput
+    state "CancelledBeforeDispatch" as OpCancelled
+    [*] --> OpIntent
+    OpIntent --> OpPreflighted
+    OpPreflighted --> OpDispatching : committed before the effect starts
+    OpDispatching --> OpComplete : result recorded
+    OpDispatching --> OpFailed : deterministic failure
+    OpDispatching --> OpUnknown : crash or lost result, classified at boot
+    OpPreflighted --> OpRetry : classified at boot
+    OpRetry --> OpDispatching : redelivered
+    OpUnknown --> OpComplete : observe established it
+    OpUnknown --> OpFailed : observed failed
+    OpIntent --> OpCancelled : CancelBeforeDispatch
+    OpRetry --> OpCancelled : CancelBeforeDispatch
+    OpDispatching --> OpNeedsInput : waits for a person
+  }
+  state "Queue entry (QueueState)" as Queue {
+    state "Ready" as QReady
+    state "Claimed" as QClaimed
+    state "Completed" as QCompleted
+    state "Failed" as QFailed
+    state "Reconciling" as QReconciling
+    state "Cancelled" as QCancelled
+    state "Dismissed" as QDismissed
+    [*] --> QReady
+    QReady --> QClaimed : fenced claim, free worker permit
+    QClaimed --> QCompleted : handler and checkpoint commit together
+    QClaimed --> QReady : retry with backoff, or prior-boot claim requeued
+    QClaimed --> QReconciling : linked operation may have dispatched
+    QClaimed --> QFailed : retries exhausted
+    QReconciling --> QReady : reconcile or retry once the outcome is known
+    QReconciling --> QCancelled : cancellation settled
+    QReady --> QCancelled : CancelBeforeDispatch, never for receipt replies
+    QFailed --> QReady : queue.retry
+    QFailed --> QDismissed : AcknowledgePoison by a person
+    QCompleted --> [*]
+    QCancelled --> [*]
+    QDismissed --> [*]
+  }
+  note right of Queue
+    Recovery runs before the first claim of a boot.
+    Root-scoped work of an earlier boot is held until
+    RootEligibility confirms it may resume.
+    Sleep/wake repairs this owner's leases first.
+  end note

@@ -1,0 +1,366 @@
+//! Typed frames for the operations the shell binds, and the decoding of their replies into
+//! results or a [`Failure`] the views can present honestly (UI-06). Frames are the same wire
+//! envelopes an agent tool submits; nothing here decides anything a use case decides.
+use crate::backend::Backend;
+use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
+use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
+use devworks_core::protocol::records::{
+    ArtifactRecord, ResourceRecord, SessionRecord, SettingEntry, ValidationReport,
+};
+use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
+use devworks_core::protocol::{CommandReply, DomainFault};
+use devworks_core::settings::view::SettingsView;
+use serde_json::{Value, json};
+
+pub const PROTOCOL: &str = "1.0-draft.1";
+/// Workspace artifacts (attachments without a project) need artifact schema revision 3.
+pub const WORKSPACE_ARTIFACT_REVISION: u64 = 3;
+/// Most rows one page request asks for.
+pub const PAGE_LIMIT: u16 = 200;
+/// Session records carry their start and last-activity times from session schema revision 2.
+pub const SESSION_REVISION: u64 = 2;
+
+/// Why a request produced no usable result. Never rendered as success or as zero values.
+#[derive(Clone, Debug)]
+pub enum Failure {
+    /// The use case refused (typed domain fault).
+    Refused(DomainFault),
+    /// The gateway rejected the frame before any use case ran.
+    Rejected(String),
+    /// The command's outcome is unknown (lost acknowledgment); its receipt resolves it.
+    Unknown,
+    /// No use case is registered for the operation (owned by a later item).
+    NoUseCase(String),
+    /// Anything else: a contract violation, a local I/O error, an unexpected result.
+    Other(String),
+}
+impl Failure {
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Refused(f) => {
+                let target = f
+                    .target_kind
+                    .as_ref()
+                    .map(|k| format!(" ({})", k.0))
+                    .unwrap_or_default();
+                format!(
+                    "Refused: {:?}{target}. Reference {}.",
+                    f.code,
+                    f.correlation_id.0.as_str()
+                )
+            }
+            Self::Rejected(r) => format!("The request was rejected: {r}."),
+            Self::Unknown => {
+                "The outcome is not known yet; it is resolved from the durable receipt.".into()
+            }
+            Self::NoUseCase(op) => format!("{op} is not available in this build."),
+            Self::Other(e) => e.clone(),
+        }
+    }
+}
+
+fn gateway(e: GatewayFailure) -> Failure {
+    match e {
+        GatewayFailure::NoUseCase(op) => Failure::NoUseCase(op),
+        other => Failure::Other(other.to_string()),
+    }
+}
+
+/// A query result with the stamp's scope revision.
+pub fn query_result(outcome: QueryOutcome) -> Result<(OperationResult, i64), Failure> {
+    match outcome.map_err(gateway)? {
+        DomainQueryReply::Result { result, stamp, .. } => Ok((result, stamp.scope_revision.get())),
+        DomainQueryReply::Rejected { fault, .. } => Err(Failure::Refused(fault)),
+    }
+}
+
+/// A command's applied (or unchanged) result.
+pub fn command_result(outcome: CommandOutcome) -> Result<OperationResult, Failure> {
+    match outcome.map_err(gateway)? {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied { result } | DomainDecision::NoChange { result } => Ok(result),
+            DomainDecision::Accepted { operation_id } => Err(Failure::Other(format!(
+                "accepted as operation {}",
+                operation_id.0.as_str()
+            ))),
+            DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
+        },
+        CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
+}
+
+fn unexpected(op: &str, r: &OperationResult) -> Failure {
+    Failure::Other(format!("{op} returned {}", r.operation()))
+}
+
+pub fn query_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> Vec<u8> {
+    body["kind"] = json!(operation);
+    json!({"mode": "Query", "protocol": PROTOCOL, "queryId": backend.token("q"), "body": body})
+        .to_string()
+        .into_bytes()
+}
+/// A frame negotiating schema `revision` (the envelope member `schemaRevision`).
+fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
+    let mut v: Value = serde_json::from_slice(&frame).expect("frames are JSON");
+    v["schemaRevision"] = json!(revision);
+    v.to_string().into_bytes()
+}
+pub fn command_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> Vec<u8> {
+    body["kind"] = json!(operation);
+    json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": backend.token("rk"),
+        "body": body})
+    .to_string()
+    .into_bytes()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Settings (SET-01/02/07/08)
+
+pub fn settings_read(backend: &dyn Backend) -> Vec<u8> {
+    query_frame(
+        backend,
+        "settings.read_effective",
+        json!({"scope": {"kind": "Workspace"}, "keys": [], "page": {"limit": 500}}),
+    )
+}
+pub fn settings_entries(outcome: QueryOutcome) -> Result<(i64, Vec<SettingEntry>), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::SettingsReadEffective { value }, revision) => {
+            Ok((revision, value.items.0))
+        }
+        (other, _) => Err(unexpected("settings.read_effective", &other)),
+    }
+}
+pub fn settings_explain(backend: &dyn Backend, key: &str) -> Vec<u8> {
+    query_frame(
+        backend,
+        "settings.explain_source",
+        json!({"scope": {"kind": "Workspace"}, "key": key}),
+    )
+}
+pub fn settings_chain(outcome: QueryOutcome) -> Result<Vec<SettingEntry>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::SettingsExplainSource { value }, _) => Ok(value.items.0),
+        (other, _) => Err(unexpected("settings.explain_source", &other)),
+    }
+}
+/// The view's drafts as `settings.validate` (when `validate`) or `settings.save_revision`.
+pub fn settings_submit(
+    backend: &dyn Backend,
+    view: &SettingsView,
+    validate: bool,
+) -> Option<Vec<u8>> {
+    let body = serde_json::to_value(view.save_input()?).ok()?;
+    Some(if validate {
+        query_frame(backend, "settings.validate", body)
+    } else {
+        command_frame(backend, "settings.save_revision", body)
+    })
+}
+/// `settings.validate` for explicit values (directory health checks without drafts).
+pub fn settings_validate_values(
+    backend: &dyn Backend,
+    revision: i64,
+    entries: &[(&str, Value)],
+) -> Vec<u8> {
+    let entries: Vec<Value> = entries
+        .iter()
+        .filter_map(|(k, v)| {
+            let d = devworks_core::settings::catalog::descriptor(k)?;
+            Some(json!({"key": k, "value": {"schema": d.schema_ref(), "value": v}}))
+        })
+        .collect();
+    query_frame(
+        backend,
+        "settings.validate",
+        json!({"scope": {"kind": "Workspace"}, "expectedRevision": revision.to_string(),
+            "entries": entries}),
+    )
+}
+pub fn settings_report(outcome: QueryOutcome) -> Result<ValidationReport, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::SettingsValidate { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("settings.validate", &other)),
+    }
+}
+pub fn settings_saved(outcome: CommandOutcome) -> Result<(), Failure> {
+    match command_result(outcome)? {
+        OperationResult::SettingsSaveRevision { .. } => Ok(()),
+        other => Err(unexpected("settings.save_revision", &other)),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sessions (UI-01..04, UI-11..13)
+
+pub fn sessions_list(backend: &dyn Backend) -> Vec<u8> {
+    at_revision(
+        query_frame(
+            backend,
+            "sessions.list",
+            json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
+        ),
+        SESSION_REVISION,
+    )
+}
+pub fn sessions(outcome: QueryOutcome) -> Result<(Vec<SessionRecord>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::SessionsList { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("sessions.list", &other)),
+    }
+}
+pub fn session_start(backend: &dyn Backend, title: &str) -> Vec<u8> {
+    at_revision(
+        command_frame(
+            backend,
+            "sessions.start",
+            json!({"scope": {"kind": "Workspace"}, "title": title}),
+        ),
+        SESSION_REVISION,
+    )
+}
+pub fn started(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
+    match command_result(outcome)? {
+        OperationResult::SessionsStart { value } => Ok(value),
+        other => Err(unexpected("sessions.start", &other)),
+    }
+}
+/// One transcript page after `after` (the projection's tail cursor).
+pub fn transcript(backend: &dyn Backend, session: &str, after: Option<&str>) -> Vec<u8> {
+    let mut frame = json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
+        "sessionId": session, "limit": 200});
+    if let Some(a) = after {
+        frame["after"] = json!(a);
+    }
+    frame.to_string().into_bytes()
+}
+pub fn transcript_page(outcome: QueryOutcome) -> Result<TranscriptPage, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::SessionsTranscript { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("sessions.transcript", &other)),
+    }
+}
+/// `sessions.append_message`: one user message with its text and stored attachments.
+pub fn append_message(
+    backend: &dyn Backend,
+    session: &str,
+    revision: i64,
+    text: &str,
+    attachments: &[ArtifactRef],
+) -> Vec<u8> {
+    let mut content = Vec::new();
+    if !text.trim().is_empty() {
+        content.push(json!({"kind": "Text", "text": text}));
+    }
+    for a in attachments {
+        content.push(json!({"kind": "Attachment", "artifact": a}));
+    }
+    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"), "sessionId": session,
+        "expectedSessionRevision": revision.to_string(), "content": content,
+        "schemaRevision": SESSION_REVISION})
+    .to_string()
+    .into_bytes()
+}
+pub fn appended(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
+    match command_result(outcome)? {
+        OperationResult::SessionsAppendMessage { value } => Ok(value),
+        other => Err(unexpected("sessions.append_message", &other)),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Artifacts (UI-09) and resources
+
+/// The tag that keeps a workspace attachment's conversation provenance (UI-09) until it is
+/// associated with work.
+pub fn conversation_tag(session: &str) -> Option<String> {
+    let tag = format!("conversation:{session}");
+    (tag.chars().count() <= devworks_core::protocol::data::MAX_ARTIFACT_TAG_CHARS).then_some(tag)
+}
+
+/// `artifacts.save` of an upload ticket into the workspace scope.
+pub fn save_workspace_artifact(
+    backend: &dyn Backend,
+    ticket: &str,
+    title: &str,
+    media_type: &str,
+    digest: &str,
+    bytes: u64,
+    tags: &[String],
+) -> Vec<u8> {
+    let mut command = json!({"kind": "Save", "workspace": true, "title": title,
+        "mediaType": media_type, "source": {"kind": "Upload", "ticketId": ticket},
+        "expectedDigest": digest, "expectedBytes": bytes.to_string()});
+    if !tags.is_empty() {
+        command["tags"] = json!(tags);
+    }
+    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
+        "schemaRevision": WORKSPACE_ARTIFACT_REVISION, "command": command})
+    .to_string()
+    .into_bytes()
+}
+pub fn saved_artifact(outcome: CommandOutcome) -> Result<ArtifactRecord, Failure> {
+    match command_result(outcome)? {
+        OperationResult::ArtifactsSave { value } => Ok(value),
+        other => Err(unexpected("artifacts.save", &other)),
+    }
+}
+/// `artifacts.read` of one version (binary content comes back as a stream handle).
+pub fn artifact_read(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
+        "query": {"kind": "Read", "artifactId": artifact.artifact_id,
+            "versionId": artifact.version_id}, "limit": 1})
+    .to_string()
+    .into_bytes()
+}
+pub fn read_content(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::ArtifactReadContent, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ArtifactsRead { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("artifacts.read", &other)),
+    }
+}
+/// `artifacts.delete` of the one version of an attachment saved for a draft and removed from it
+/// before it was ever sent (revision and reference revision 1: nothing referenced it).
+pub fn delete_unsent_attachment(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"), "deletion": {
+        "kind": "DeleteVersion", "artifactId": artifact.artifact_id,
+        "versionId": artifact.version_id, "expectedRevision": "1",
+        "expectedReferenceRevision": "1"}})
+    .to_string()
+    .into_bytes()
+}
+pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
+    match command_result(outcome)? {
+        OperationResult::ArtifactsDelete { .. } => Ok(()),
+        other => Err(unexpected("artifacts.delete", &other)),
+    }
+}
+pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
+        "schemaRevision": WORKSPACE_ARTIFACT_REVISION,
+        "query": {"kind": "List", "workspace": true}, "limit": PAGE_LIMIT})
+    .to_string()
+    .into_bytes()
+}
+pub fn artifacts(outcome: QueryOutcome) -> Result<(Vec<ArtifactRecord>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ArtifactsList { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("artifacts.list", &other)),
+    }
+}
+pub fn resources_list(backend: &dyn Backend) -> Vec<u8> {
+    query_frame(
+        backend,
+        "resources.list",
+        json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
+    )
+}
+pub fn resources(outcome: QueryOutcome) -> Result<(Vec<ResourceRecord>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ResourcesList { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("resources.list", &other)),
+    }
+}

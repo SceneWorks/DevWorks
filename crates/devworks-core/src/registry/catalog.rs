@@ -1334,7 +1334,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<SessionRecord>",
         result_schema: schema_of::<Page<SessionRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "sessions.get",
@@ -1356,7 +1356,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "sessions.transcript",
@@ -1420,7 +1420,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "sessions.context_sources",
@@ -1464,7 +1464,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "sessions.end",
@@ -1486,7 +1486,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "ui.current_screen",

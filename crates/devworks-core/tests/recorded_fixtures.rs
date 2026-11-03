@@ -308,7 +308,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 926), 926);
+    assert_eq!(run("domain-fixtures.json", 938), 938);
 }
 
 #[test]
@@ -375,10 +375,10 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     );
     // 359 operation/mode bindings at revision 1, plus revision 2 of artifacts.save and
     // artifacts.list, history.events, .work_lineage, .git_links, .evidence_links, .tool_usage
-    // and sessions.briefing, revision 2 of the six resources operations and of
-    // workspace.diagnostics, .logs and .record_diagnostic, and revision 3 of artifacts.save and
-    // artifacts.list.
-    assert_eq!(admitted.len(), 378);
+    // and sessions.briefing, revision 2 of the six resources operations, of sessions.list,
+    // .get, .append_message, .start and .end, and of workspace.diagnostics, .logs and
+    // .record_diagnostic, and revision 3 of artifacts.save and artifacts.list.
+    assert_eq!(admitted.len(), 383);
 }
 
 #[test]

@@ -1,0 +1,47 @@
+---
+title: Desktop boot order, with failure paths (implemented)
+---
+sequenceDiagram
+  autonumber
+  participant Main as main (devworks-desktop)
+  participant Eng as Engine thread (Tokio current-thread)
+  participant Store as SqliteStore
+  participant Boot as devworks_engine::boot
+  participant Disp as Dispatcher
+  participant Art as ArtifactService
+  participant HK as Housekeeper
+  participant Shell as Shell (egui)
+  Main->>Eng: Engine::start(DesktopConfig)
+  Eng->>Store: SqliteStore::open (data-root lock, schema gate, migrations, record boot)
+  alt another process owns the data root / incompatible schema / I/O
+    Store-->>Eng: StorageError (DataRootInUse, IncompatibleSchema, Io)
+    Eng-->>Main: StartError::Store
+    Main->>Shell: ShellInit { backend: Err(reason) }
+    Note over Shell: every route shows the designed Offline state, nothing is admitted
+  else opened
+    Eng->>Boot: boot(Composition) — one store, core ports, required consumers
+    Boot->>Disp: 1. compose with reply_consumer + caller consumers
+    alt duplicate or reserved consumer name, bad bounds
+      Boot-->>Eng: BootError::Composition
+    end
+    Boot->>Disp: 2. recover(): classify Preflighted→RetryPending, Dispatching→OutcomeUnknown, requeue / hold / cancel prior-boot claims
+    alt recovery fails
+      Boot-->>Eng: BootError::Queue
+    end
+    Boot->>Art: 3. recover(): finish or fail staging, remove staged and orphaned generations
+    alt
+      Boot-->>Eng: BootError::Artifacts
+    end
+    Boot->>HK: 4. boot(machine resources): reconcile owned trees by pid + birth token, then leases
+    alt
+      Boot-->>Eng: BootError::Resources
+    end
+    Boot->>Boot: 5. apply keep-awake from power.keepAwake (BootError::Settings when unreadable)
+    Boot->>Disp: 6. run() — delivery starts
+    Boot->>Art: 7. collection pass now, then periodic, housekeeping ticks
+    Boot-->>Eng: 8. Runtime (the only admission handle)
+    Eng->>Store: register local-user as Human principal (host bookkeeping, after recovery)
+    Eng-->>Main: Engine { Host { runtime, user context } }
+    Main->>Shell: ShellInit { backend: DesktopBackend, control: Engine }
+    Shell->>Shell: first frame: theme, waker, sessions.list, restored route
+  end

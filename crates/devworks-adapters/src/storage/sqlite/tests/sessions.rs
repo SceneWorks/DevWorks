@@ -649,6 +649,19 @@ fn append_message_saves_one_user_message_with_resolved_attachments() {
         panic!()
     };
     assert_eq!(value.revision.get(), 2);
+    // The committed message is a reference of the artifact (ART-02/05), in the same transaction:
+    // the version gains a session link and the reference revision advances, so a deletion
+    // decided at the earlier reference revision is refused.
+    let (artifact, links) = fx.read(|r| {
+        Ok((
+            r.artifacts().artifact(&id("artifact-a"))?.unwrap(),
+            r.artifacts().links(&id("artifact-a"))?,
+        ))
+    });
+    assert_eq!(artifact.reference_revision, 2);
+    assert!(links.iter().any(|l| l.subject == SubjectKey::session(&s.id)
+        && l.purpose == LinkPurpose::Reference
+        && l.version_id == id("version-a")));
     // A stale expected revision is a durable conflict; a reference with another digest, or one
     // the session's project cannot see, is NotFound and nothing is appended.
     let stale = refused(fx.raw_command(
@@ -2492,6 +2505,45 @@ fn git_links_name_repositories_of_the_works_project() {
         (r.code, r.target_kind),
         (DomainErrorCode::NotFound, "repository")
     );
+}
+
+#[test]
+fn revision_two_session_records_carry_their_start_and_last_activity() {
+    let fx = Fx::new();
+    let home = fx.ctx("user-a", PrincipalKind::Human, None);
+    let started = fx.start(&home, json!({"kind": "Workspace"}), None);
+    let t0 = fx.h.clock.0.load(Ordering::SeqCst);
+    fx.h.clock.0.fetch_add(90_000, Ordering::SeqCst);
+    let sid = started.id.as_str().to_owned();
+    applied(fx.raw_command(
+        &home,
+        "sessions.append_message",
+        json!({"protocol": "1.0-draft.1", "requestKey": "times-1", "sessionId": sid,
+            "expectedSessionRevision": "1", "content": [{"kind": "Text", "text": "later"}],
+            "schemaRevision": 2}),
+    ));
+    let listing = json!({"scope": {"kind": "Workspace"}, "page": {"limit": 10}});
+    let listed = |r: Option<u32>| match result(fx.at(&home, "sessions.list", listing.clone(), r)) {
+        OperationResult::SessionsList { value } => value.items.0,
+        other => panic!("{other:?}"),
+    };
+    let r2 = listed(Some(2));
+    let record = r2.iter().find(|s| s.id == started.id).unwrap();
+    assert_eq!(record.created_at_ms.as_ref().map(Counter::get), Some(t0));
+    assert_eq!(
+        record.last_activity_ms.as_ref().map(Counter::get),
+        Some(t0 + 90_000),
+        "the newest transcript entry is the last activity"
+    );
+    // Revision 1 readers keep their recorded shape: the times are projected away.
+    let r1 = listed(None);
+    let record = r1.iter().find(|s| s.id == started.id).unwrap();
+    assert!(record.created_at_ms.is_none() && record.last_activity_ms.is_none());
+    let got = match result(fx.at(&home, "sessions.get", json!({"sessionId": sid}), Some(2))) {
+        OperationResult::SessionsGet { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(got.last_activity_ms.map(|c| c.get()), Some(t0 + 90_000));
 }
 
 #[test]

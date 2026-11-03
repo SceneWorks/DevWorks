@@ -52,8 +52,8 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, sessions as ops};
 use crate::ports::storage::{
-    ApplicationStore, NewEvent, ReadSnapshot, SessionPosition, SessionScope, StorageError,
-    StoredLink, StoredSession, WorkRoot, WriteOptions, WriteTransaction, run_write,
+    ApplicationStore, NewEvent, ReadSnapshot, SessionPosition, SessionRead, SessionScope,
+    StorageError, StoredLink, StoredSession, WorkRoot, WriteOptions, WriteTransaction, run_write,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
@@ -256,7 +256,15 @@ fn visible_session(
 }
 
 /// The wire record of a session.
-pub fn session_record(s: &StoredSession) -> SessionRecord {
+/// The public record of a session. From schema revision 2 it carries its start time and its
+/// last activity: the latest of the start, the newest transcript entry (`last_entry_ms`, from
+/// [`SessionRead::last_entry_at_ms`]) and the end (UI-03 date grouping).
+pub fn session_record(s: &StoredSession, last_entry_ms: Option<i64>) -> SessionRecord {
+    let last = [Some(s.created_at_ms), last_entry_ms, s.closed_at_ms]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or(s.created_at_ms);
     SessionRecord {
         id: s.id.clone(),
         revision: rev(s.revision),
@@ -264,7 +272,14 @@ pub fn session_record(s: &StoredSession) -> SessionRecord {
         root_id: s.root_id.clone(),
         context_epoch: counter(s.context_epoch),
         closed: s.closed(),
+        created_at_ms: Some(counter(s.created_at_ms)),
+        last_activity_ms: Some(counter(last)),
     }
+}
+
+/// [`session_record`] with the last entry time read from `read`.
+fn record_from(read: &dyn SessionRead, s: &StoredSession) -> Result<SessionRecord, StorageError> {
+    Ok(session_record(s, read.last_entry_at_ms(&s.id)?))
 }
 
 fn session_event(
@@ -540,7 +555,7 @@ impl SessionService {
         )?;
         Ok(DomainDecision::Applied {
             result: OperationResult::SessionsStart {
-                value: session_record(&session),
+                value: session_record(&session, None),
             },
         })
     }
@@ -566,7 +581,7 @@ impl SessionService {
         if session.closed() {
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::SessionsEnd {
-                    value: session_record(&session),
+                    value: record_from(tx.sessions(), &session)?,
                 },
             });
         }
@@ -600,7 +615,7 @@ impl SessionService {
         )?;
         Ok(DomainDecision::Applied {
             result: OperationResult::SessionsEnd {
-                value: session_record(&session),
+                value: record_from(tx.sessions(), &session)?,
             },
         })
     }
@@ -660,7 +675,7 @@ impl SessionService {
             .ok_or_else(|| StorageError::InvalidRecord("session vanished".into()))?;
         Ok(DomainDecision::Applied {
             result: OperationResult::SessionsAppendMessage {
-                value: session_record(&session),
+                value: record_from(tx.sessions(), &session)?,
             },
         })
     }
@@ -736,7 +751,11 @@ impl SessionService {
         };
         Ok(OperationResult::SessionsList {
             value: Page {
-                items: BoundedList(rows.iter().map(session_record).collect()),
+                items: BoundedList(
+                    rows.iter()
+                        .map(|s| record_from(read, s))
+                        .collect::<Result<_, _>>()?,
+                ),
                 has_more: next_cursor.is_some(),
                 next_cursor,
             },
@@ -1106,13 +1125,12 @@ impl QueryHandler for SessionService {
         };
         let answered = match input {
             ops::Input::List(i) => self.list(snapshot, ctx, i),
-            ops::Input::Get(i) => {
-                visible_session(snapshot.sessions(), ctx, &i.session_id).map(|s| {
-                    OperationResult::SessionsGet {
-                        value: session_record(&s),
-                    }
-                })
-            }
+            ops::Input::Get(i) => visible_session(snapshot.sessions(), ctx, &i.session_id)
+                .and_then(|s| {
+                    Ok(OperationResult::SessionsGet {
+                        value: record_from(snapshot.sessions(), &s)?,
+                    })
+                }),
             ops::Input::Transcript(i) => self.transcript(snapshot, ctx, query, i),
             ops::Input::Briefing(i) => self.briefing(snapshot, ctx, i),
             ops::Input::ContextSources(i) => self.context_sources(snapshot, ctx, i),

@@ -7,7 +7,10 @@
 //! * **Upload ticket** — minted by [`HostArtifactSources::mint_upload`] at user ingress for a
 //!   file the user picked (the trusted local input path); bound to that user, the invocation's
 //!   project (required) and work root, and an expiry. Expired tickets are evicted. An agent, package, MCP client or schedule can never
-//!   mint one.
+//!   mint one. A **workspace upload ticket** ([`HostArtifactSources::mint_workspace_upload`]) is
+//!   the same for a workspace invocation (a Home conversation attachment before it belongs to
+//!   any project): bound to the user and the workspace, it resolves only for a workspace save,
+//!   never into a project.
 //! * **Attachment** — registered by the host for the imported attachment record that owns it
 //!   ([`HostArtifactSources::register_attachment`]), bound to that record's project. The
 //!   importer of existing CodeGraph work (imports) owns those records and calls this seam.
@@ -49,6 +52,8 @@ struct Handle {
     principal: Option<ActorId>,
     project: Option<ProjectId>,
     work_root: Option<RootId>,
+    /// Bound to the workspace scope: resolves only for a save that names no project.
+    workspace_only: bool,
     expires_at_ms: Option<i64>,
     origin: SourceOrigin,
 }
@@ -120,14 +125,45 @@ impl HostArtifactSources {
         file: &Path,
         lifetime_ms: i64,
     ) -> Result<Id, IssueRefusal> {
-        if ctx.principal_kind() != PrincipalKind::Human {
-            return Err(IssueRefusal::HumanOnly);
-        }
         let Some(project) = ctx.project_id().cloned() else {
+            if ctx.principal_kind() != PrincipalKind::Human {
+                return Err(IssueRefusal::HumanOnly);
+            }
             return Err(IssueRefusal::Invalid(
                 "an upload ticket is bound to a project",
             ));
         };
+        self.mint(ctx, file, lifetime_ms, Some(project))
+    }
+
+    /// Mints a workspace upload ticket for `file` the user picked, dropped or pasted into a
+    /// workspace (Home) composer. User ingress from a workspace invocation only (no project or
+    /// work lineage); bound to the user and the workspace scope, so it resolves only for a
+    /// workspace `artifacts.save` and never for a project.
+    pub fn mint_workspace_upload(
+        &self,
+        ctx: &InvocationContext,
+        file: &Path,
+        lifetime_ms: i64,
+    ) -> Result<Id, IssueRefusal> {
+        if ctx.project_id().is_some() || ctx.root_id().is_some() {
+            return Err(IssueRefusal::Invalid(
+                "a workspace upload ticket is minted from a workspace invocation",
+            ));
+        }
+        self.mint(ctx, file, lifetime_ms, None)
+    }
+
+    fn mint(
+        &self,
+        ctx: &InvocationContext,
+        file: &Path,
+        lifetime_ms: i64,
+        project: Option<ProjectId>,
+    ) -> Result<Id, IssueRefusal> {
+        if ctx.principal_kind() != PrincipalKind::Human {
+            return Err(IssueRefusal::HumanOnly);
+        }
         if !(1..=MAX_UPLOAD_LIFETIME_MS).contains(&lifetime_ms) {
             return Err(IssueRefusal::Invalid("ticket lifetime out of bounds"));
         }
@@ -147,7 +183,8 @@ impl HostArtifactSources {
                 root: root_of(dir)?,
                 relative: name.to_owned(),
                 principal: Some(ctx.principal().clone()),
-                project: Some(project),
+                workspace_only: project.is_none(),
+                project,
                 work_root: ctx.root_id().cloned(),
                 expires_at_ms: Some(self.clock.now_ms().get().saturating_add(lifetime_ms)),
                 origin: SourceOrigin {
@@ -182,6 +219,7 @@ impl HostArtifactSources {
                 principal: None,
                 project: Some(project.clone()),
                 work_root: None,
+                workspace_only: false,
                 expires_at_ms: None,
                 origin: SourceOrigin {
                     original_name,
@@ -218,6 +256,7 @@ impl HostArtifactSources {
                 principal: Some(producer.clone()),
                 project: Some(project.clone()),
                 work_root,
+                workspace_only: false,
                 expires_at_ms: None,
                 origin,
             },
@@ -268,6 +307,7 @@ impl ArtifactSources for HostArtifactSources {
         // A binding is satisfied only by exactly the bound project and work root: an invocation
         // without a root does not satisfy a root-bound handle.
         let foreign_project = handle.project.as_ref().is_some_and(|p| Some(p) != project)
+            || (handle.workspace_only && project.is_some())
             || ctx.project_id().is_some_and(|p| Some(p) != project);
         let foreign_root = handle
             .work_root

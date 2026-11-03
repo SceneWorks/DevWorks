@@ -1462,6 +1462,11 @@ impl Check for OperationResult {
 impl Revisioned for OperationResult {
     fn retain_revision(&mut self, revision: u32) {
         match self {
+            Self::SessionsList { value } => value.retain_revision(revision),
+            Self::SessionsGet { value } => value.retain_revision(revision),
+            Self::SessionsAppendMessage { value } => value.retain_revision(revision),
+            Self::SessionsStart { value } => value.retain_revision(revision),
+            Self::SessionsEnd { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::HistoryWorkLineage { value } => value.retain_revision(revision),
             Self::HistoryGitLinks { value } => value.retain_revision(revision),

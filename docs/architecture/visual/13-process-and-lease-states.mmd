@@ -1,0 +1,46 @@
+---
+title: Owned process trees and physical lease handoff (implemented)
+---
+stateDiagram-v2
+  direction LR
+  state "Owned process (ProcessPhase)" as Process {
+    state "Launching" as PLaunching
+    state "Running" as PRunning
+    state "Stopping" as PStopping
+    state "Reaped" as PReaped
+    state "Uncertain" as PUncertain
+    state "Failed" as PFailed
+    state "Lost" as PLost
+    [*] --> PLaunching : preflight, authorize_dispatch and launch intent in one unit of work
+    PLaunching --> PRunning : native identity recorded (pid, birth token, group or job)
+    PLaunching --> PFailed : spawn failed, nothing ran
+    PRunning --> PStopping : cancel or shutdown
+    PStopping --> PReaped : empty within grace, or killed and verified within the bound
+    PStopping --> PUncertain : not verifiable within the bound
+    PRunning --> PReaped : boot recovery, vanished or alive and killed
+    PRunning --> PUncertain : boot recovery could not establish it
+    PLaunching --> PLost : boot recovery, no identity was recorded
+    PUncertain --> PReaped : confirm_stopped, a person's recorded statement
+    PLost --> PReaped : confirm_stopped, a person's recorded statement
+  }
+  state "Lease (LeasePhase)" as Lease {
+    state "Waiting" as LWaiting
+    state "Held" as LHeld
+    state "Releasing" as LReleasing
+    state "Uncertain" as LUncertain
+    state "Released" as LReleased
+    [*] --> LWaiting : acquire, priority then FIFO
+    LWaiting --> LHeld : promoted with the next fencing token
+    LWaiting --> LReleased : waiter Cancelled or Expired
+    LHeld --> LReleased : released, or a logical lease Expired
+    LHeld --> LReleasing : a physical lease released while it may still be in use
+    LHeld --> LUncertain : a physical lease past expiry, owner unreachable, or of a prior boot
+    LReleasing --> LReleased : Reconciled once every serving tree settled
+    LUncertain --> LReleased : Reconciled once the owner is verified quiescent
+    LReleased --> [*]
+  }
+  note right of Lease
+    Capacity stays taken until reconciliation.
+    Only then is the next waiter granted (handoff).
+    Stale fences are refused at dispatch, renew and release.
+  end note

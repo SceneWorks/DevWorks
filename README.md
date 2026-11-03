@@ -8,13 +8,15 @@ Architecture baseline 1.1 is complete, following requirements, UI design and tar
 - `crates/devworks-adapters`: the SQLite store (single write owner, migrations, operational and domain repositories) and native file adapters (managed artifact files, verified source reads).
 - `crates/devworks-engine`: durable event delivery (fenced-claim dispatcher, sleep/wake recovery, the package event-handler commit path, the receipt reply consumer) run supervision and recovery of run roots (activations held for manual Continue after a restart, journaled stops, shutdown), and the one boot entry point that recovers, starts delivery and artifact collection, and admits commands.
 - `crates/devworks-extension-protocol`: the versioned package wire protocol.
+- `crates/devworks-desktop`: the native egui shell and the desktop binary. Its composition root opens the one store and boots only through the engine; the shell reaches the application only through the runtime's gateway (Home chat over sessions, Settings, workspace artifacts and resources) and shows designed unavailable states for screens later items fill. Run `cargo run -p devworks-desktop` (`--data-dir <path>` selects the data root).
 
-Not implemented yet: the egui shell and any host executable, the package process host, provider and model routing, code intelligence and indexing (sqlite-vec), Git and agent work execution (the coordinator launcher, delegation, plans and readiness assessments that plug into the run-control ports, and the other operation families without a registered use case), and MCP serving. The HTML prototype simulates agent and integration behavior with local sample data.
+Not implemented yet: the coordinator agent behind Home chat and the router selectors, the package process host, provider and model routing, code intelligence and indexing (sqlite-vec), Git and agent work execution (the coordinator launcher, delegation, plans and readiness assessments that plug into the run-control ports, and the other operation families without a registered use case), and MCP serving. The HTML prototype simulates agent and integration behavior with local sample data.
 
 - [Planning index](docs/planning/README.md)
 - [Architectural design baseline](docs/architecture/devworks-architecture.html)
 - [Storage evaluation](docs/architecture/devworks-storage-evaluation.html)
 - [Architecture sources, diagrams and validation](docs/architecture/README.md)
+- [Visual architecture of the implemented code](docs/architecture/visual/README.md)
 - [Requirements](docs/planning/devworks-requirements.html)
 - [Editable requirements](docs/planning/devworks-requirements.docx)
 - [Requirements interview decisions](docs/planning/requirements-interview.json)

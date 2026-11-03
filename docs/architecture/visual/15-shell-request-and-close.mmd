@@ -1,0 +1,29 @@
+---
+title: Shell request path and window-close lifecycle (implemented)
+---
+sequenceDiagram
+  autonumber
+  participant View as egui frame (Shell::ui)
+  participant Client as Client (worker threads)
+  participant BE as DesktopBackend
+  participant RT as Runtime
+  participant Eng as Engine thread
+  View->>Client: command(Slot::Append(session), sessions.append_message frame)
+  Client->>BE: on a worker: command(op, frame)
+  BE->>RT: Runtime::command(user context, op, frame)
+  RT-->>BE: CommandOutcome
+  BE-->>Client: Reply::Command
+  Client-->>View: waker → request_repaint
+  View->>Client: poll() — superseded replies for the same slot are dropped
+  View->>View: apply: update the draft, transcript projection, status (live region)
+  Eng-->>View: dispatcher hint (watch) → re-query what is visible (transcript after its tail cursor)
+  Note over View: window close button
+  View->>View: CancelClose, Lifecycle Open → Quiescing (Client closed to new requests)
+  View->>Eng: HostControl begin_quiesce — seam where DW-9 pauses active work roots (no-op in this build)
+  View->>Client: wait for in-flight requests (bounded 10 s)
+  View->>View: Persisting — ui-state.json written
+  View->>Eng: HostControl::begin_shutdown
+  Eng->>RT: Runtime::shutdown — stop delivery, collection, housekeeping, wait in-flight deliveries, stop owned trees within one bound, release keep-awake
+  Eng-->>View: poll_shutdown() → summary
+  View->>View: Exiting → ViewportCommand::Close → Closed
+  Note over View,Eng: dropping the Shell joins the request workers, then the engine thread, the store's last reference drops and the data-root lock is released

@@ -334,6 +334,9 @@ pub trait SessionRead {
         limit: u16,
     ) -> Result<Vec<StoredEntry>, StorageError>;
     fn entry_exists(&self, session: &Id, entry_id: &Id) -> Result<bool, StorageError>;
+    /// Commit time (store clock, UTC ms) of the session's latest transcript entry; `None` for
+    /// an empty transcript.
+    fn last_entry_at_ms(&self, session: &Id) -> Result<Option<i64>, StorageError>;
     /// The receipt of `batch_id` in `session` (batch identities are scoped per session).
     fn batch(&self, session: &Id, batch_id: &Id) -> Result<Option<StoredBatch>, StorageError>;
     fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError>;

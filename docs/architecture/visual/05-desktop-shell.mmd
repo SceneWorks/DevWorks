@@ -1,0 +1,103 @@
+---
+title: Desktop shell (devworks-desktop) — implemented types and planned seams
+---
+classDiagram
+  direction LR
+  class Engine {
+    host: Arc Host
+    engine thread + Tokio runtime
+    +start(DesktopConfig) Result~Engine, StartError~
+    +backend() Arc dyn Backend
+    +begin_shutdown() / poll_shutdown() / shutdown()
+  }
+  class Host {
+    runtime: Arc Runtime
+    ctx: InvocationContext (local-user, Human)
+    sources: Arc HostArtifactSources
+  }
+  class Backend {
+    <<trait>>
+    +query(op, frame) QueryOutcome
+    +command(op, frame) CommandOutcome
+    +mint_workspace_upload(file) Id
+    +keep_awake_health() Health
+    +hints() watch Receiver
+  }
+  class DesktopBackend
+  class Client {
+    3 worker threads, Slot-keyed replies
+    +query / command / task
+    +poll() replies by Slot
+    +wait_idle(bound) bool
+    +close()
+  }
+  class HostControl {
+    <<trait>>
+    +begin_quiesce() / quiesced() bool
+    +begin_shutdown()
+    +poll_shutdown() Option~String~
+  }
+  class Shell {
+    route: Route
+    coordinator_open: bool
+    lifecycle: Lifecycle
+    routes: BTreeMap~Route, RouteMemory~
+    +ui(&mut egui::Ui)
+    +navigate(Route) / request_close()
+  }
+  class Chat {
+    sessions / selected / tab
+    drafts: BTreeMap~key, Draft~
+    transcripts: HashMap~id, Transcript~
+  }
+  class SettingsScreen {
+    view: Option~SettingsView~
+    category / query / restored drafts
+  }
+  class Completions {
+    newest-first cards, dismissals queued
+  }
+  class Screen {
+    <<registry: SCREENS>>
+    id / title / help_topic / subviews
+    inner_sidebar / summary_strip / pending owner
+  }
+  class Memory {
+    ui-state.json: route, selection,
+    drafts, filters, tabs, scroll, settings drafts
+  }
+  class Dialogs {
+    <<trait>>
+    +pick_files() / pick_folder()
+  }
+  class NativeDialogs { <<rfd>> }
+  class Coordinator {
+    <<planned: DW-16>>
+    Home chat agent and replies
+  }
+  class RouterSelector {
+    <<planned: DW-17>>
+    tiers, models, effort, pins
+  }
+  class NotificationFeed {
+    <<planned: DW-14>>
+    durable cards, notifications.acknowledge
+  }
+  Engine *-- Host
+  Engine ..|> HostControl
+  Engine ..> DesktopBackend : creates
+  DesktopBackend ..|> Backend
+  DesktopBackend o-- Host
+  Client o-- Backend
+  Shell *-- Client
+  Shell *-- Chat
+  Shell *-- SettingsScreen
+  Shell *-- Completions
+  Shell o-- HostControl
+  Shell --> Dialogs
+  Shell ..> Screen
+  Shell ..> Memory : restores and saves
+  NativeDialogs ..|> Dialogs
+  NotificationFeed ..> Completions : will push cards
+  Coordinator ..> Chat : will answer
+  RouterSelector ..> Chat : will fill composer selectors

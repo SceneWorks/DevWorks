@@ -1,0 +1,97 @@
+---
+title: Runtime composition and ownership (devworks-engine, implemented)
+---
+classDiagram
+  direction TB
+  class Composition {
+    +store: Arc dyn ApplicationStore
+    +clock / ids / authority
+    +artifacts: Arc ArtifactService
+    +resources: Arc ResourceService
+    +process_host: Arc dyn ProcessHost
+    +power: Arc dyn PowerPort
+    +use_cases: UseCases
+    +consumers: Vec~Consumer~
+    +config: RuntimeConfig
+  }
+  class boot {
+    <<async fn>>
+    +boot(Composition) Result~Runtime, BootError~
+  }
+  class Runtime {
+    store / ids / authority / use_cases
+    dispatcher: Dispatcher
+    collector: Arc Collector
+    housekeeper: Arc Housekeeper
+    keep_awake: Arc KeepAwake
+    report: BootReport
+    +query(ctx, op, raw) QueryOutcome
+    +command(ctx, op, raw) CommandOutcome
+    +keep_awake_health() Health
+    +shutdown() ShutdownReport
+  }
+  class Dispatcher {
+    +recover() RecoveryReport
+    +run()
+    +wakeup() Wakeup
+    +subscribe() watch Receiver
+    +stop() / idle()
+  }
+  class Consumer {
+    +name: String
+    +handler: Arc dyn DeliveryHandler
+    +effect: Option Arc dyn EffectExecutor
+    +async_handler: Option Arc dyn AsyncDeliveryHandler
+  }
+  class DeliveryHandler {
+    <<trait>>
+    +apply(tx, delivery) Outcome
+  }
+  class AsyncDeliveryHandler {
+    <<trait>>
+    +start(delivery) AsyncFuture
+  }
+  class EffectExecutor {
+    <<trait>>
+    +execute(operation) EffectFuture
+    +observe(operation) EffectFuture
+  }
+  class reply_consumer {
+    <<required consumer>>
+    receipt replies via ReceiptReplies
+  }
+  class Housekeeper {
+    +boot(machine_resources) BootReport
+    +run(interval)
+    +shutdown(grace, bound) ShutdownReport
+  }
+  class ProcessSupervisor {
+    +launch / cancel / recover
+    +confirm_stopped (person only)
+  }
+  class ResourceService {
+    +authorize_dispatch(...) DispatchTicket
+    +reconcile(cause) ReconcileReport
+  }
+  class KeepAwake {
+    +refresh(configuration) KeepAwakeStatus
+    +apply(enabled) / health() Health
+  }
+  class ArtifactService {
+    +recover(store) / collect(store) / collect_derived()
+  }
+  boot ..> Composition : consumes
+  boot ..> Runtime : returns
+  Runtime *-- Dispatcher
+  Runtime *-- Housekeeper
+  Runtime *-- KeepAwake
+  Runtime o-- ArtifactService
+  Runtime o-- ResourceService
+  Dispatcher o-- Consumer
+  Consumer --> DeliveryHandler
+  Consumer --> EffectExecutor
+  Consumer --> AsyncDeliveryHandler
+  reply_consumer ..> Consumer : is a
+  Housekeeper o-- ProcessSupervisor
+  Housekeeper o-- ResourceService
+  ProcessSupervisor o-- ResourceService

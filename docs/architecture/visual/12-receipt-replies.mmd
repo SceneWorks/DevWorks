@@ -1,0 +1,39 @@
+---
+title: Command receipts and their durable replies, including crash paths (implemented)
+---
+sequenceDiagram
+  autonumber
+  participant UI as Shell / agent tool
+  participant RT as Runtime::command
+  participant GW as Gateway unit of work
+  participant Disp as Dispatcher
+  participant RC as reply_consumer (ReceiptReplies)
+  participant Files as NativeArtifactFiles
+  UI->>RT: framed command for the selected operation
+  RT->>GW: admission, authority, receipt lookup
+  alt same request key, same fingerprint
+    GW-->>RT: Recorded { replayed: true } — the original decision
+  else same key, different intent
+    GW-->>RT: Rejected IdempotencyConflict (nothing written)
+  else new command
+    GW->>GW: decide + history + outbox + receipt + reply intent (one transaction)
+    GW-->>RT: Recorded { receipt }
+    RT->>Disp: wakeup().wake() (best effort, after commit)
+  end
+  alt lost acknowledgment
+    GW-->>RT: CommandStatusUnknown — resolved by history.command_receipt
+  end
+  RT-->>UI: reply (the UI renders the decision, never a guess)
+  Disp->>RC: claim the reply delivery under a fence
+  RC->>Files: publish the reply file (staged, flushed, renamed)
+  RC->>GW: commit artifact metadata + ReceiptReplyPublished + checkpoint
+  Note over Disp,RC: crash after the receipt: next boot requeues the claim and publishes once
+  Note over RC,Files: crash after the file, before metadata: artifact recovery removes the orphan generation, the requeued delivery publishes again
+  UI->>RT: history.command_receipt(requestKey)
+  alt reply not yet published
+    RT-->>UI: ViewUnavailable receipt_reply_artifact (retry the same query)
+  else held or failed delivery
+    RT-->>UI: ViewUnavailable receipt_reply_held (operator resolves the delivery)
+  else published
+    RT-->>UI: the receipt with its durable typed reply
+  end

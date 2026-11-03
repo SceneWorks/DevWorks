@@ -1,0 +1,67 @@
+---
+title: Storage ports and the single write owner (implemented)
+---
+classDiagram
+  direction LR
+  class ApplicationStore {
+    <<trait, Send + Sync>>
+    +info() StoreInfo
+    +submit_write(options, job: Box dyn WriteJob) Result
+    +read(options, work: FnMut(&dyn ReadSnapshot)) Result
+  }
+  class WriteJob {
+    <<trait>>
+    +run(tx: &mut dyn WriteTransaction) Result
+    +finish(outcome)
+  }
+  class WriteTransaction {
+    <<trait>>
+    +now_ms() i64
+    +new_id(kind) Id
+    +actors() / receipts() / history() / operations()
+    +queue() / configuration() / authority()
+    +artifacts() / sessions() / resources()
+  }
+  class ReadSnapshot {
+    <<trait>>
+    +stamp() SnapshotStamp
+    +the same repositories, read only
+  }
+  class run_write {
+    <<fn, core>>
+    blocks the caller until commit or rollback
+  }
+  class read_snapshot {
+    <<fn, core>>
+    one consistent snapshot
+  }
+  class SqliteStore {
+    <<devworks-adapters>>
+    writer: Option~WriterHandle~
+    readers: ReadPool
+    _lock: File (workspace.lock)
+    +open(SqliteConfig) Result
+    +previous_shutdown() Option
+  }
+  class WriterHandle {
+    one thread owns the only write connection
+    bounded mailboxes per priority
+  }
+  class ReadPool {
+    query-only connections
+    bounded wait, cancellable
+  }
+  class migrations {
+    <<module>>
+    schema gate before any write
+    0001 .. 0010 checksum ledger
+  }
+  SqliteStore ..|> ApplicationStore
+  SqliteStore *-- WriterHandle
+  SqliteStore *-- ReadPool
+  SqliteStore ..> migrations : open checks
+  ApplicationStore ..> WriteJob : admits
+  WriteJob ..> WriteTransaction : runs in
+  ApplicationStore ..> ReadSnapshot : lends
+  run_write ..> ApplicationStore
+  read_snapshot ..> ApplicationStore
