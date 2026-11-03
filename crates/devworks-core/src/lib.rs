@@ -45,3 +45,4 @@ pub mod operations;
 pub mod ports;
 pub mod protocol;
 pub mod registry;
+pub mod settings;

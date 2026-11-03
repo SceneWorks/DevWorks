@@ -701,6 +701,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn grants(&self) -> &dyn GrantRead {
         self
     }
+    fn configuration(&self) -> &dyn ConfigurationRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -885,6 +888,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn grants(&mut self) -> &mut dyn GrantLedger {
+        self
+    }
+    fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self
     }
 }

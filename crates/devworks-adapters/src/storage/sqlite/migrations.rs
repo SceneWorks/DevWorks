@@ -41,7 +41,18 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_writer: 2,
         sql: include_str!("migrations/0002_claim_boot.sql"),
     },
+    // Additive (a new table only). It keeps the writer floor of migration 2: applying it must
+    // never re-admit writers that do not bind claims to their boot.
+    Migration {
+        version: 4,
+        minimum_reader: 1,
+        minimum_writer: 2,
+        sql: include_str!("migrations/0004_settings.sql"),
+    },
 ];
+/// Recorded checksum of migration 4; a test fails if the shipped text changes.
+pub const MIGRATION_0004_SHA256: &str =
+    "582d2ef7afd3b3e130927e8c3c917201f9252e013b83ec02cf792957e5661d2b";
 /// Recorded checksum of migration 2; a test fails if the shipped text changes.
 pub const MIGRATION_0002_SHA256: &str =
     "a400cacbe5ef06f2045e6fe839c35c3adbe46dcc52a4aa110608498d88da1d37";

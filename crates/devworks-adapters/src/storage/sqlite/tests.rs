@@ -105,6 +105,8 @@ impl StoreHarness for Harness {
     }
 }
 
+mod settings;
+
 mod contract {
     devworks_core::store_contract_tests!(super::Harness::new());
 }
@@ -291,7 +293,7 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
         "an applied migration was edited"
     );
     // Migration 2 upgrades a version-1 store in place: claims gain their boot binding.
-    let s = h.store();
+    let s = SqliteStore::open_with(h.config(), &through(2)).unwrap();
     let report = s.compatibility().unwrap();
     assert_eq!(
         (
@@ -408,6 +410,44 @@ fn every_shipped_table_is_strict_and_its_foreign_keys_resolve() {
         matches!(orphan, Err(StorageError::InvalidRecord(_))),
         "{orphan:?}"
     );
+}
+
+/// This build's migrations up to and including `version` (versions may have gaps).
+fn through(version: i64) -> Vec<Migration> {
+    MIGRATIONS
+        .iter()
+        .copied()
+        .filter(|m| m.version <= version)
+        .collect()
+}
+
+#[test]
+fn shipped_migrations_increase_and_settings_apply_on_top() {
+    assert!(MIGRATIONS.windows(2).all(|w| w[0].version < w[1].version));
+    let settings = MIGRATIONS
+        .iter()
+        .find(|m| m.version == 4)
+        .expect("settings migration");
+    assert_eq!(
+        settings.checksum(),
+        MIGRATION_0004_SHA256,
+        "an applied migration was edited"
+    );
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(2)).unwrap());
+    let s = h.store();
+    let report = s.compatibility().unwrap();
+    assert_eq!(
+        report.store_schema_version,
+        MIGRATIONS.last().unwrap().version
+    );
+    assert_eq!(
+        report.minimum_writer, 2,
+        "the claim-boot writer floor holds"
+    );
+    assert!(report.migrations.iter().any(|m| m.version == 4));
+    drop(s);
+    assert_eq!(version_and_ledger(&h, "configuration_proposals").0, 1);
 }
 
 const EXTRA: Migration = Migration {
@@ -556,7 +596,7 @@ fn incompatible_stores_are_refused_before_any_write() {
     let h = Harness::new();
     drop(h.store());
     h.raw()
-        .execute("UPDATE store_meta SET schema_version=4", [])
+        .execute("UPDATE store_meta SET schema_version=9", [])
         .unwrap();
     let s = h.store();
     assert_eq!(s.info().access, AccessMode::ReadWrite);
