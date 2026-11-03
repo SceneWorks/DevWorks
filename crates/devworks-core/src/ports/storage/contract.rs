@@ -41,7 +41,8 @@ macro_rules! store_contract_tests {
             queue_partitions_progress_and_dependents, queue_holds_dismissal_and_reassert,
             queue_inspection_order_and_paging, package_handler_ledger,
             refused_decisions_persist_only_receipt_and_history,
-            nested_savepoint_conflict_is_a_durable_refusal);
+            nested_savepoint_conflict_is_a_durable_refusal,
+            configuration_revisions_and_conflicts, configuration_proposal_lifecycle);
     };
     (@cases $harness:expr; $($case:ident),*) => {$(
         #[test]
@@ -1871,4 +1872,202 @@ pub fn nested_savepoint_conflict_is_a_durable_refusal(h: &mut dyn StoreHarness) 
         CommandReply::Recorded { replayed: true, .. }
     ));
     assert_eq!(nested.calls.load(Ordering::SeqCst), 1);
+}
+
+/// Complete configuration revisions: implicit revision 1, CAS append, retained history,
+/// conflicts naming the Configuration dimension, persistence across restart and unknown scopes.
+pub fn configuration_revisions_and_conflicts(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let ws = ConfigScope::Workspace;
+    read(&*s, |r| {
+        assert!(r.configuration().scope_exists(&ConfigScope::Workspace)?);
+        assert!(
+            r.configuration()
+                .current(&ConfigScope::Workspace, "ns")?
+                .is_none()
+        );
+        Ok(())
+    });
+    let first = write(&*s, |tx| {
+        tx.configuration()
+            .append_revision(&ConfigScope::Workspace, "ns", 1, 1, json!({"v": 1}))
+    })
+    .unwrap();
+    assert_eq!(first.revision, 2);
+    let stale = write(&*s, |tx| {
+        tx.configuration()
+            .append_revision(&ConfigScope::Workspace, "ns", 1, 1, json!({"v": 9}))
+    });
+    match stale {
+        Err(StorageError::RevisionConflict(c)) => {
+            assert!(matches!(c.dimension, RevisionDimension::Configuration));
+            assert_eq!((c.expected.get(), c.current.get()), (1, 2));
+        }
+        other => panic!("expected a configuration conflict, got {other:?}"),
+    }
+    write(&*s, |tx| {
+        tx.configuration()
+            .append_revision(&ConfigScope::Workspace, "ns", 2, 1, json!({"v": 2}))
+    })
+    .unwrap();
+    // A rolled-back append leaves nothing.
+    let _ = write(&*s, |tx| {
+        tx.configuration()
+            .append_revision(&ConfigScope::Workspace, "ns", 3, 1, json!({"v": 3}))?;
+        Err::<(), _>(StorageError::InvalidRecord("injected".into()))
+    });
+    drop(s);
+    let s = h.open();
+    read(&*s, |r| {
+        let c = r.configuration();
+        assert_eq!(c.current(&ws, "ns")?.unwrap().body, json!({"v": 2}));
+        assert_eq!(c.revision(&ws, "ns", 2)?.unwrap().body, json!({"v": 1}));
+        assert!(c.revision(&ws, "ns", 4)?.is_none());
+        let revs: Vec<i64> = c
+            .history(&ws, "ns", None, 10)?
+            .iter()
+            .map(|r| r.revision)
+            .collect();
+        assert_eq!(revs, [3, 2]);
+        let older: Vec<i64> = c
+            .history(&ws, "ns", Some(3), 10)?
+            .iter()
+            .map(|r| r.revision)
+            .collect();
+        assert_eq!(older, [2]);
+        assert!(
+            c.current(&ws, "other")?.is_none(),
+            "namespaces are independent"
+        );
+        let missing = ConfigScope::Project(ProjectId(id("no-such-project")));
+        assert!(!c.scope_exists(&missing)?);
+        Ok(())
+    });
+    let missing = ConfigScope::Project(ProjectId(id("no-such-project")));
+    assert!(matches!(
+        write(&*s, move |tx| tx.configuration().append_revision(
+            &missing,
+            "ns",
+            1,
+            1,
+            json!({})
+        )),
+        Err(StorageError::NotFound {
+            kind: "project",
+            ..
+        })
+    ));
+}
+
+/// Proposals: staged pending at revision 1, revision-guarded changes, terminal decisions and
+/// an approval bound to the revision it produced.
+pub fn configuration_proposal_lifecycle(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let author = ActorId(id("agent-cfg"));
+    let human = ActorId(id("human-cfg"));
+    let (a, hu) = (author.clone(), human.clone());
+    write(&*s, move |tx| {
+        tx.actors().register(&a, PrincipalKind::Agent, "Agent")?;
+        tx.actors().register(&hu, PrincipalKind::Human, "Human")
+    })
+    .unwrap();
+    let a = author.clone();
+    let staged = write(&*s, move |tx| {
+        tx.configuration().stage(NewProposal {
+            id: id("proposal-1"),
+            scope: ConfigScope::Workspace,
+            namespace: "ns".into(),
+            base_revision: 1,
+            author: a,
+            body: json!({"entries": []}),
+        })
+    })
+    .unwrap();
+    assert_eq!((staged.revision, staged.state), (1, ProposalState::Pending));
+    let a = author.clone();
+    assert!(matches!(
+        write(&*s, move |tx| tx.configuration().stage(NewProposal {
+            id: id("proposal-1"),
+            scope: ConfigScope::Workspace,
+            namespace: "ns".into(),
+            base_revision: 1,
+            author: a,
+            body: json!({}),
+        })),
+        Err(StorageError::Duplicate { .. })
+    ));
+    let reconciled = write(&*s, |tx| {
+        tx.configuration().update_proposal(
+            &id("proposal-1"),
+            1,
+            ProposalChange::Reconcile {
+                base_revision: 2,
+                body: json!({"entries": [1]}),
+            },
+        )
+    })
+    .unwrap();
+    assert_eq!((reconciled.revision, reconciled.base_revision), (2, 2));
+    let hu = human.clone();
+    let stale = write(&*s, move |tx| {
+        tx.configuration().update_proposal(
+            &id("proposal-1"),
+            1,
+            ProposalChange::Decide {
+                state: ProposalState::Rejected,
+                decided_by: hu,
+                applied_revision: None,
+            },
+        )
+    });
+    assert!(matches!(stale, Err(StorageError::RevisionConflict(_))));
+    let hu = human.clone();
+    let approved = write(&*s, move |tx| {
+        let applied =
+            tx.configuration()
+                .append_revision(&ConfigScope::Workspace, "ns", 1, 1, json!({}))?;
+        tx.configuration().update_proposal(
+            &id("proposal-1"),
+            2,
+            ProposalChange::Decide {
+                state: ProposalState::Approved,
+                decided_by: hu,
+                applied_revision: Some(applied.revision),
+            },
+        )
+    })
+    .unwrap();
+    assert_eq!(approved.state, ProposalState::Approved);
+    assert_eq!(approved.applied_revision, Some(2));
+    assert_eq!(approved.decided_by.as_ref(), Some(&human));
+    let hu = human.clone();
+    assert!(matches!(
+        write(&*s, move |tx| tx.configuration().update_proposal(
+            &id("proposal-1"),
+            3,
+            ProposalChange::Decide {
+                state: ProposalState::Rejected,
+                decided_by: hu,
+                applied_revision: None,
+            },
+        )),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    read(&*s, |r| {
+        let c = r.configuration();
+        let listed = c.proposals(&ConfigScope::Workspace, "ns", None, None, 10)?;
+        assert_eq!(listed.len(), 1);
+        assert!(
+            c.proposals(
+                &ConfigScope::Workspace,
+                "ns",
+                Some(ProposalState::Pending),
+                None,
+                10
+            )?
+            .is_empty()
+        );
+        assert_eq!(c.proposal(&id("proposal-1"))?.unwrap(), approved);
+        Ok(())
+    });
 }

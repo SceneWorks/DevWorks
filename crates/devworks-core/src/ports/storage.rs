@@ -43,11 +43,12 @@
 //!   snapshot on a query-only connection; the snapshot ends when the closure returns, so no live
 //!   snapshot survives think time. Each snapshot carries its [`SnapshotStamp`] freshness.
 //!
-//! Repositories owned by later items (work, knowledge, configuration, index/retrieval views and
-//! manual backup/restore) extend this module with their own aggregate traits; this module holds
-//! the operational subset every command already needs: receipts, history, the operation journal,
+//! Repositories owned by later items (work, knowledge, index/retrieval views and manual
+//! backup/restore) extend this module with their own aggregate traits; this module holds the
+//! operational subset every command already needs: receipts, history, the operation journal,
 //! the durable queue/outbox (with ordered partitions and consumer progress), package event-handler
-//! state and processing receipts, grants and actor/store identity.
+//! state and processing receipts, grants and actor/store identity, plus the scoped configuration
+//! repository ([`ConfigurationRepository`]).
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
 use crate::ports::{GrantUse, IdKind, StoredReceipt};
@@ -61,6 +62,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+
+mod configuration;
+pub use configuration::*;
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -404,6 +408,7 @@ pub trait WriteTransaction {
     fn queue(&mut self) -> &mut dyn DurableQueue;
     fn grants(&mut self) -> &mut dyn GrantLedger;
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger;
+    fn configuration(&mut self) -> &mut dyn ConfigurationRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -437,6 +442,7 @@ pub trait ReadSnapshot {
     fn queue(&self) -> &dyn QueueRead;
     fn grants(&self) -> &dyn GrantRead;
     fn packages(&self) -> &dyn PackageHandlerRead;
+    fn configuration(&self) -> &dyn ConfigurationRead;
 }
 
 // ---------------------------------------------------------------------------------------------

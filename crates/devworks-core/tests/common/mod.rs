@@ -336,6 +336,9 @@ impl ReadSnapshot for MemSnapshot {
     fn packages(&self) -> &dyn PackageHandlerRead {
         &self.unsupported
     }
+    fn configuration(&self) -> &dyn ConfigurationRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -386,6 +389,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
+        &mut self.unsupported
+    }
+    fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         &mut self.unsupported
     }
 }
@@ -611,6 +617,68 @@ impl GrantLedger for Unsupported {
         nope()
     }
     fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
+        nope()
+    }
+}
+
+impl ConfigurationRead for Unsupported {
+    fn scope_exists(&self, _: &ConfigScope) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn current(&self, _: &ConfigScope, _: &str) -> Result<Option<ConfigRevision>, StorageError> {
+        nope()
+    }
+    fn revision(
+        &self,
+        _: &ConfigScope,
+        _: &str,
+        _: i64,
+    ) -> Result<Option<ConfigRevision>, StorageError> {
+        nope()
+    }
+    fn history(
+        &self,
+        _: &ConfigScope,
+        _: &str,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<ConfigRevision>, StorageError> {
+        nope()
+    }
+    fn proposal(&self, _: &Id) -> Result<Option<ProposalRecord>, StorageError> {
+        nope()
+    }
+    fn proposals(
+        &self,
+        _: &ConfigScope,
+        _: &str,
+        _: Option<ProposalState>,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<ProposalRecord>, StorageError> {
+        nope()
+    }
+}
+impl ConfigurationRepository for Unsupported {
+    fn append_revision(
+        &mut self,
+        _: &ConfigScope,
+        _: &str,
+        _: i64,
+        _: i64,
+        _: serde_json::Value,
+    ) -> Result<ConfigRevision, StorageError> {
+        nope()
+    }
+    fn stage(&mut self, _: NewProposal) -> Result<ProposalRecord, StorageError> {
+        nope()
+    }
+    fn update_proposal(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: ProposalChange,
+    ) -> Result<ProposalRecord, StorageError> {
         nope()
     }
 }

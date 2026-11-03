@@ -23,10 +23,10 @@ use crate::context::{InvocationContext, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
-    ActorRegistry, CommandLedger, CommandLedgerRead, DurableQueue, EventFilter, EventPage,
-    EventRecord, GrantLedger, HistoryLog, HistoryRead, LedgerEntry, NewEvent, OperationJournal,
-    PackageHandlerLedger, ReadOptions, RevisionConflict, Savepoint, StorageError, StoreInfo,
-    WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ActorRegistry, CommandLedger, CommandLedgerRead, ConfigurationRepository, DurableQueue,
+    EventFilter, EventPage, EventRecord, GrantLedger, HistoryLog, HistoryRead, LedgerEntry,
+    NewEvent, OperationJournal, PackageHandlerLedger, ReadOptions, RevisionConflict, Savepoint,
+    StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
@@ -743,6 +743,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
         self.inner.get_mut().packages()
+    }
+    fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
+        self.inner.get_mut().configuration()
     }
 }
 

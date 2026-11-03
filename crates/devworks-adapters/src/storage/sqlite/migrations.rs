@@ -49,7 +49,19 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_writer: 3,
         sql: include_str!("migrations/0003_durable_delivery.sql"),
     },
+    // Additive (a new table only). Applying a migration overwrites the store's writer floor, so
+    // it keeps the floor of migration 3: it must never re-admit writers that cannot keep ordered
+    // delivery bookkeeping or bind claims to their boot.
+    Migration {
+        version: 4,
+        minimum_reader: 1,
+        minimum_writer: 3,
+        sql: include_str!("migrations/0004_settings.sql"),
+    },
 ];
+/// Recorded checksum of migration 4; a test fails if the shipped text changes.
+pub const MIGRATION_0004_SHA256: &str =
+    "15188a10f9c8f49ffde96563e636ccda2116024a7e6bda1e3e01096e25d7bad9";
 /// Recorded checksum of migration 2; a test fails if the shipped text changes.
 pub const MIGRATION_0002_SHA256: &str =
     "a400cacbe5ef06f2045e6fe839c35c3adbe46dcc52a4aa110608498d88da1d37";

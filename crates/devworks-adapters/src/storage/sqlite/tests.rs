@@ -105,6 +105,8 @@ impl StoreHarness for Harness {
     }
 }
 
+mod settings;
+
 mod contract {
     devworks_core::store_contract_tests!(super::Harness::new());
 }
@@ -291,7 +293,7 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
         "an applied migration was edited"
     );
     // Migration 2 upgrades a version-1 store in place: claims gain their boot binding.
-    let s = h.store();
+    let s = SqliteStore::open_with(h.config(), &through(2)).unwrap();
     let report = s.compatibility().unwrap();
     assert_eq!(
         (
@@ -299,11 +301,7 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
             report.minimum_writer,
             report.migrations.len()
         ),
-        (
-            MIGRATIONS.len() as i64,
-            MIGRATIONS[MIGRATIONS.len() - 1].minimum_writer,
-            MIGRATIONS.len()
-        )
+        (2, 2, 2)
     );
     drop(s);
     let has_column: bool = h
@@ -322,13 +320,17 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
 /// refused write access.
 #[test]
 fn migration_three_upgrades_existing_deliveries() {
+    let delivery = MIGRATIONS
+        .iter()
+        .find(|m| m.version == 3)
+        .expect("durable delivery migration");
     assert_eq!(
-        MIGRATIONS[2].checksum(),
+        delivery.checksum(),
         MIGRATION_0003_SHA256,
         "an applied migration was edited"
     );
     let h = Harness::new();
-    let s = SqliteStore::open_with(h.config(), &MIGRATIONS[..1]).unwrap();
+    let s = SqliteStore::open_with(h.config(), &through(1)).unwrap();
     drop(s);
     // Seed a v1 delivery row directly (v1 has no partition/sequence columns).
     let c = h.raw();
@@ -368,7 +370,7 @@ fn migration_three_upgrades_existing_deliveries() {
     assert!(report.store_schema_version >= 3 && report.minimum_writer >= 3);
     drop(s);
     // An older build may still read the upgraded store but not write it.
-    let old = SqliteStore::open_with(h.config(), &MIGRATIONS[..2]).unwrap();
+    let old = SqliteStore::open_with(h.config(), &through(2)).unwrap();
     assert!(matches!(old.info().access, AccessMode::ReadOnly { .. }));
 }
 
@@ -467,6 +469,77 @@ fn every_shipped_table_is_strict_and_its_foreign_keys_resolve() {
         matches!(orphan, Err(StorageError::InvalidRecord(_))),
         "{orphan:?}"
     );
+}
+
+/// This build's migrations up to and including `version` (versions may have gaps).
+fn through(version: i64) -> Vec<Migration> {
+    MIGRATIONS
+        .iter()
+        .copied()
+        .filter(|m| m.version <= version)
+        .collect()
+}
+
+#[test]
+fn shipped_migrations_increase_and_settings_apply_on_top() {
+    assert!(MIGRATIONS.windows(2).all(|w| w[0].version < w[1].version));
+    let settings = MIGRATIONS
+        .iter()
+        .find(|m| m.version == 4)
+        .expect("settings migration");
+    assert_eq!(
+        settings.checksum(),
+        MIGRATION_0004_SHA256,
+        "an applied migration was edited"
+    );
+    // Applying a migration overwrites the store's writer floor, so declared floors may never
+    // decrease: a later migration would otherwise re-admit writers an earlier one refused.
+    assert!(
+        MIGRATIONS
+            .windows(2)
+            .all(|w| w[0].minimum_writer <= w[1].minimum_writer),
+        "a shipped migration lowers the writer floor"
+    );
+    let highest_floor = MIGRATIONS.iter().map(|m| m.minimum_writer).max().unwrap();
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(2)).unwrap());
+    // Upgrade one shipped migration at a time: the store floor tracks the highest floor declared
+    // so far and never decreases.
+    let mut floor = 0;
+    for m in MIGRATIONS.iter().filter(|m| m.version > 2) {
+        let s = SqliteStore::open_with(h.config(), &through(m.version)).unwrap();
+        let report = s.compatibility().unwrap();
+        let declared = through(m.version)
+            .iter()
+            .map(|applied| applied.minimum_writer)
+            .max()
+            .unwrap();
+        assert_eq!(
+            (report.store_schema_version, report.minimum_writer),
+            (m.version, declared),
+            "after migration {}",
+            m.version
+        );
+        assert!(
+            report.minimum_writer >= floor,
+            "after migration {}",
+            m.version
+        );
+        floor = report.minimum_writer;
+    }
+    let s = h.store();
+    let report = s.compatibility().unwrap();
+    assert_eq!(
+        report.store_schema_version,
+        MIGRATIONS.last().unwrap().version
+    );
+    assert_eq!(
+        report.minimum_writer, highest_floor,
+        "the store keeps the highest declared writer floor"
+    );
+    assert!(report.migrations.iter().any(|m| m.version == 4));
+    drop(s);
+    assert_eq!(version_and_ledger(&h, "configuration_proposals").0, 1);
 }
 
 const EXTRA: Migration = Migration {
@@ -615,7 +688,7 @@ fn incompatible_stores_are_refused_before_any_write() {
     let h = Harness::new();
     drop(h.store());
     h.raw()
-        .execute("UPDATE store_meta SET schema_version=4", [])
+        .execute("UPDATE store_meta SET schema_version=9", [])
         .unwrap();
     let s = h.store();
     assert_eq!(s.info().access, AccessMode::ReadWrite);

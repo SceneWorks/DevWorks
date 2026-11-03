@@ -932,6 +932,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn packages(&self) -> &dyn PackageHandlerRead {
         self
     }
+    fn configuration(&self) -> &dyn ConfigurationRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1119,6 +1122,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
+        self
+    }
+    fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self
     }
 }
