@@ -277,7 +277,7 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
         ))
         .unwrap();
     let h = Harness::new();
-    let s = h.store();
+    let s = SqliteStore::open_with(h.config(), &MIGRATIONS[..1]).unwrap();
     drop(s);
     assert_eq!(schema(&h.raw()), schema(&fixture));
     assert_eq!(
@@ -285,6 +285,32 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
         MIGRATION_0001_SHA256,
         "an applied migration was edited"
     );
+    assert_eq!(
+        MIGRATIONS[1].checksum(),
+        MIGRATION_0002_SHA256,
+        "an applied migration was edited"
+    );
+    // Migration 2 upgrades a version-1 store in place: claims gain their boot binding.
+    let s = h.store();
+    let report = s.compatibility().unwrap();
+    assert_eq!(
+        (
+            report.store_schema_version,
+            report.minimum_writer,
+            report.migrations.len()
+        ),
+        (2, 2, 2)
+    );
+    drop(s);
+    let has_column: bool = h
+        .raw()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('queue_entries') WHERE name='claim_boot_id')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(has_column);
 }
 
 #[test]
@@ -385,23 +411,40 @@ fn every_shipped_table_is_strict_and_its_foreign_keys_resolve() {
 }
 
 const EXTRA: Migration = Migration {
-    version: 2,
-    minimum_reader: 1,
-    minimum_writer: 2,
-    sql: "CREATE TABLE fixture_extra(id TEXT PRIMARY KEY) STRICT;",
-};
-const BROKEN: Migration = Migration {
     version: 3,
     minimum_reader: 1,
     minimum_writer: 3,
+    sql: "CREATE TABLE fixture_extra(id TEXT PRIMARY KEY) STRICT;",
+};
+const BROKEN: Migration = Migration {
+    version: 4,
+    minimum_reader: 1,
+    minimum_writer: 4,
     sql: "CREATE TABLE fixture_partial(id TEXT PRIMARY KEY) STRICT; INSERT INTO no_such_table VALUES(1);",
 };
+/// Leaves a (deferred) foreign-key violation behind: the in-transaction check must refuse it.
+const DANGLING: Migration = Migration {
+    version: 4,
+    minimum_reader: 1,
+    minimum_writer: 4,
+    sql: "CREATE TABLE fixture_dangling(id TEXT PRIMARY KEY) STRICT; PRAGMA defer_foreign_keys=ON; INSERT INTO command_receipts VALUES('nobody','s','k','x','d',NULL,'{}',1);",
+};
+
+fn version_and_ledger(h: &Harness, table: &str) -> (i64, i64, i64) {
+    h.raw()
+        .query_row(
+            "SELECT (SELECT count(*) FROM sqlite_schema WHERE name=?1),(SELECT schema_version FROM store_meta),(SELECT count(*) FROM schema_migrations)",
+            [table],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+}
 
 #[test]
 fn migrations_apply_in_order_and_an_interrupted_one_leaves_nothing() {
     let h = Harness::new();
-    drop(SqliteStore::open_with(h.config(), &[MIGRATIONS[0]]).unwrap());
-    let s = SqliteStore::open_with(h.config(), &[MIGRATIONS[0], EXTRA]).unwrap();
+    drop(SqliteStore::open_with(h.config(), &MIGRATIONS[..1]).unwrap());
+    let s = SqliteStore::open_with(h.config(), &[MIGRATIONS[0], MIGRATIONS[1], EXTRA]).unwrap();
     let report = s.compatibility().unwrap();
     assert_eq!(
         (
@@ -409,7 +452,7 @@ fn migrations_apply_in_order_and_an_interrupted_one_leaves_nothing() {
             report.build_schema_version,
             report.minimum_writer
         ),
-        (2, 2, 2)
+        (3, 3, 3)
     );
     assert_eq!(
         report
@@ -417,29 +460,29 @@ fn migrations_apply_in_order_and_an_interrupted_one_leaves_nothing() {
             .iter()
             .map(|m| m.version)
             .collect::<Vec<_>>(),
-        [1, 2]
+        [1, 2, 3]
     );
     drop(s);
-    let failed = SqliteStore::open_with(h.config(), &[MIGRATIONS[0], EXTRA, BROKEN]);
-    assert!(failed.is_err());
-    let c = h.raw();
-    let partial: i64 = c
-        .query_row(
-            "SELECT count(*) FROM sqlite_schema WHERE name='fixture_partial'",
-            [],
-            |r| r.get(0),
-        )
+    for (bad, table) in [(BROKEN, "fixture_partial"), (DANGLING, "fixture_dangling")] {
+        let failed =
+            SqliteStore::open_with(h.config(), &[MIGRATIONS[0], MIGRATIONS[1], EXTRA, bad]);
+        assert!(failed.is_err(), "{table}");
+        assert_eq!(
+            version_and_ledger(&h, table),
+            (0, 3, 3),
+            "{table} left residue"
+        );
+    }
+    let orphans: i64 = h
+        .raw()
+        .query_row("SELECT count(*) FROM command_receipts", [], |r| r.get(0))
         .unwrap();
-    let (version, ledger): (i64, i64) = c
-        .query_row(
-            "SELECT (SELECT schema_version FROM store_meta),(SELECT count(*) FROM schema_migrations)",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!((partial, version, ledger), (0, 2, 2));
-    drop(c);
-    assert!(SqliteStore::open_with(h.config(), &[MIGRATIONS[0], EXTRA]).is_ok());
+    assert_eq!(orphans, 0);
+    assert!(SqliteStore::open_with(h.config(), &[MIGRATIONS[0], MIGRATIONS[1], EXTRA]).is_ok());
+}
+
+fn file_digest(h: &Harness) -> String {
+    devworks_core::fingerprint::sha256_hex(&std::fs::read(h.root.0.join(DATABASE_FILE)).unwrap())
 }
 
 fn boots(h: &Harness) -> i64 {
@@ -475,10 +518,12 @@ fn incompatible_stores_are_refused_before_any_write() {
             [],
         )
         .unwrap();
+    let digest = file_digest(&h);
     assert!(matches!(
         SqliteStore::open(h.config()),
         Err(StorageError::IncompatibleSchema(_))
     ));
+    assert_eq!(file_digest(&h), digest, "a refused store was rewritten");
 
     // Newer writer requirement: diagnostics/read-only mode, no writes at all.
     let h = Harness::new();
@@ -515,16 +560,27 @@ fn incompatible_stores_are_refused_before_any_write() {
         .unwrap();
     let s = h.store();
     assert_eq!(s.info().access, AccessMode::ReadWrite);
-    assert_eq!(s.compatibility().unwrap().migrations.len(), 1);
+    assert_eq!(
+        s.compatibility().unwrap().migrations.len(),
+        MIGRATIONS.len()
+    );
 
     // Not a DevWorks store.
     let h = Harness::new();
     std::fs::create_dir_all(&h.root.0).unwrap();
     h.raw().execute_batch("CREATE TABLE unrelated(x)").unwrap();
+    let digest = file_digest(&h);
     assert!(matches!(
         SqliteStore::open(h.config()),
         Err(StorageError::IncompatibleSchema(_))
     ));
+    // Refused before any writer PRAGMA: still a rollback-journal file, byte for byte.
+    assert_eq!(file_digest(&h), digest, "a foreign file was rewritten");
+    let mode: String = h
+        .raw()
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "delete");
 }
 
 // --- writer behavior ----------------------------------------------------------------------------
@@ -954,4 +1010,92 @@ fn driver_types_stay_inside_the_adapter() {
         }
     }
     scan(&root.join("crates/devworks-core/src"));
+}
+
+#[test]
+fn a_panicking_responder_never_stops_the_write_owner() {
+    let h = Harness::new();
+    let s = h.store();
+    s.submit_write(
+        WriteOptions::default(),
+        write_job(
+            |tx| append(tx, "Committed", json!({})),
+            |_| panic!("responder panicked"),
+        ),
+    )
+    .unwrap();
+    // The owner keeps serving; the panicking job's commit stands.
+    write(&s, |tx| append(tx, "After", json!({}))).unwrap();
+    assert_eq!(sequence(&s), 2);
+}
+
+#[test]
+fn queued_jobs_are_finished_when_the_owner_stops() {
+    let h = Harness::new();
+    let s = h.store();
+    let (release, _) = spawn_blocker(&s);
+    let (tx, rx) = mpsc::channel();
+    s.submit_write(
+        WriteOptions::default(),
+        write_job(
+            |tx| append(tx, "Queued", json!({})),
+            move |r| {
+                let _ = tx.send(r.map(|_| ()));
+            },
+        ),
+    )
+    .unwrap();
+    let stopper = std::thread::spawn(move || drop(s));
+    // Let the stop request land before the blocker finishes, then release it.
+    std::thread::sleep(Duration::from_millis(20));
+    release.send(()).unwrap();
+    stopper.join().unwrap();
+    // Finished either way (dispatched before the stop was seen, or reported not dispatched).
+    let outcome = rx
+        .recv()
+        .expect("queued job was dropped without being finished");
+    assert!(
+        matches!(
+            outcome,
+            Ok(())
+                | Err(StorageError::StorageUnavailable {
+                    cause: Unavailable::WriterStopped,
+                    ..
+                })
+        ),
+        "{outcome:?}"
+    );
+}
+
+#[test]
+fn a_cancelled_read_stops_waiting_promptly() {
+    let h = Harness::tuned(|c| {
+        c.read_connections = 1;
+        c.read_wait = Duration::from_secs(30);
+    });
+    let s = Arc::new(h.store());
+    let other = s.clone();
+    read_snapshot(&*s, &ReadOptions::default(), move |_| {
+        let token = Cancellation::new();
+        let waiter_token = token.clone();
+        let waiter = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let r = read_snapshot(
+                &*other,
+                &ReadOptions {
+                    cancellation: Some(waiter_token),
+                    deadline_ms: None,
+                },
+                |_| Ok(()),
+            );
+            (r.map(|_| ()), started.elapsed())
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        token.cancel();
+        let (r, waited) = waiter.join().unwrap();
+        assert!(matches!(r, Err(StorageError::Cancelled)), "{r:?}");
+        assert!(waited < Duration::from_secs(5), "{waited:?}");
+        Ok(())
+    })
+    .unwrap();
 }

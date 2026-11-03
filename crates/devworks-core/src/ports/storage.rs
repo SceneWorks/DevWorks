@@ -217,7 +217,9 @@ pub enum WritePriority {
 pub struct WriteOptions {
     pub priority: WritePriority,
     pub cancellation: Option<Cancellation>,
-    /// UTC milliseconds by the store clock; checked before admission and before commit.
+    /// UTC milliseconds by the store clock. It bounds admission and commit only: past it, an
+    /// undispatched job is not started and an admitted job is rolled back instead of committed.
+    /// It does not bound how long the caller waits for the reply, and it never revokes a commit.
     pub deadline_ms: Option<i64>,
 }
 #[derive(Clone, Debug, Default)]
@@ -356,9 +358,30 @@ pub fn read_snapshot<T>(
 }
 
 /// A savepoint inside the current write transaction. It is not a commit; only the job's outcome
-/// commits. Not `Clone`, so it can be rolled back or released once.
-#[derive(Debug)]
-pub struct Savepoint(pub u32);
+/// commits. Not `Clone`, so it can be rolled back or released once, and its fields are private:
+/// only the issuing transaction mints it and checks that it belongs to that transaction.
+///
+/// Semantics follow SQLite: rolling back to or releasing a savepoint also discards every savepoint
+/// opened after it that is still open, so an outer owner can always unwind work an inner handler
+/// left open.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Savepoint {
+    transaction: u64,
+    depth: u32,
+}
+impl Savepoint {
+    /// For [`WriteTransaction`] implementations: `transaction` is the implementation's private
+    /// serial for the current unit of work and `depth` is 1 for the outermost savepoint.
+    pub fn issue(transaction: u64, depth: u32) -> Self {
+        Self { transaction, depth }
+    }
+    pub fn transaction(&self) -> u64 {
+        self.transaction
+    }
+    pub fn depth(&self) -> u32 {
+        self.depth
+    }
+}
 
 /// The single write unit of work. All repositories borrow this transaction.
 pub trait WriteTransaction {
@@ -451,7 +474,8 @@ pub trait CommandLedgerRead {
     fn lookup(&self, identity: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError>;
 }
 pub trait CommandLedger: CommandLedgerRead {
-    /// Inserts a decided receipt. Identity `(actor, scopeKey, requestKey)` is unique.
+    /// Inserts a decided receipt. Identity `(actor, scopeKey, requestKey)` is unique. Only the
+    /// gateway records receipts: the transaction a use case receives refuses this call.
     fn record(
         &mut self,
         identity: &ReceiptIdentity,
@@ -707,6 +731,8 @@ pub struct QueueEntry {
     pub cancellation_epoch: i64,
     pub attempt_count: i64,
     pub payload: Value,
+    /// Boot epoch of the current claim; a claim is only current within the boot that made it.
+    pub claim_boot_id: Option<Id>,
 }
 impl QueueEntry {
     pub fn fence(&self) -> Option<QueueFence> {
@@ -746,8 +772,9 @@ pub enum FailureDisposition {
 pub enum ClaimRecovery {
     /// Claims whose lease expired by the transaction clock.
     Expired,
-    /// Every claim: used at startup, where all earlier owners belonged to a dead process.
-    AllClaimed,
+    /// Claims made under an earlier boot epoch. Their owners belonged to a dead process; claims
+    /// of the current boot are never touched, whatever their lease.
+    PriorBoots,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RecoveryOutcome {
@@ -788,7 +815,8 @@ pub trait DurableQueue: QueueRead {
         fence: &QueueFence,
         settlement: Settlement,
     ) -> Result<QueueEntry, StorageError>;
-    /// Records the cause durably and either schedules a retry or fails terminally.
+    /// Records the cause durably and either schedules a retry or fails terminally. An entry whose
+    /// operation may already have dispatched is held in `Reconciling` instead of becoming ready.
     fn fail(
         &mut self,
         id: &Id,
@@ -800,16 +828,21 @@ pub trait DurableQueue: QueueRead {
     /// stops cooperatively and settles it as cancelled.
     fn cancel(&mut self, id: &Id) -> Result<QueueEntry, StorageError>;
     /// Returns stale claims to `Ready` (new generation) when redelivery is safe, or holds them in
-    /// `Reconciling` when their operation may already have dispatched.
+    /// `Reconciling` when their operation may already have dispatched. Claims are bound to the
+    /// boot epoch that made them; renew/settle/fail also require the current boot.
     fn recover_claims(
         &mut self,
         mode: ClaimRecovery,
         limit: u16,
     ) -> Result<RecoveryOutcome, StorageError>;
-    /// Makes a `Reconciling` or `Failed` entry ready again after explicit resolution. Refused
-    /// while its operation is still possibly dispatched.
+    /// Makes a `Reconciling` or `Failed` entry ready again after explicit resolution (new
+    /// generation). Refused while its operation is still possibly dispatched. From `Failed` the
+    /// retry budget restarts (`attempt_count` = 0; earlier failures stay in history); from
+    /// `Reconciling` the attempt count is kept.
     fn requeue(&mut self, id: &Id, delay_ms: i64) -> Result<QueueEntry, StorageError>;
-    /// Removes a `Completed`/`Cancelled` delivery's bookkeeping. History is untouched.
+    /// Compacts a `Completed`/`Cancelled` delivery: its bookkeeping (payload, lease) is dropped
+    /// and it is no longer readable, but a tombstone keeps its `(consumer, event)` dedupe identity
+    /// so the same event can never be delivered to that consumer again. History is untouched.
     fn compact(&mut self, id: &Id) -> Result<(), StorageError>;
 }
 

@@ -350,14 +350,18 @@ impl WriteTransaction for MemTx<'_> {
     }
     fn savepoint(&mut self) -> Result<Savepoint, StorageError> {
         self.saved.push(self.state.clone());
-        Ok(Savepoint(self.saved.len() as u32))
+        Ok(Savepoint::issue(MEM_TX, self.saved.len() as u32))
     }
-    fn rollback_to(&mut self, _: Savepoint) -> Result<(), StorageError> {
-        self.state = self.saved.pop().expect("savepoint");
+    // SQLite semantics: unwinding an outer savepoint discards every inner one still open.
+    fn rollback_to(&mut self, sp: Savepoint) -> Result<(), StorageError> {
+        let depth = self.open(&sp)?;
+        self.state = self.saved[depth - 1].clone();
+        self.saved.truncate(depth - 1);
         Ok(())
     }
-    fn release(&mut self, _: Savepoint) -> Result<(), StorageError> {
-        self.saved.pop().expect("savepoint");
+    fn release(&mut self, sp: Savepoint) -> Result<(), StorageError> {
+        let depth = self.open(&sp)?;
+        self.saved.truncate(depth - 1);
         Ok(())
     }
     fn actors(&mut self) -> &mut dyn ActorRegistry {
@@ -377,6 +381,18 @@ impl WriteTransaction for MemTx<'_> {
     }
     fn grants(&mut self) -> &mut dyn GrantLedger {
         &mut self.unsupported
+    }
+}
+const MEM_TX: u64 = 7;
+impl MemTx<'_> {
+    fn open(&self, sp: &Savepoint) -> Result<usize, StorageError> {
+        let depth = sp.depth() as usize;
+        if sp.transaction() != MEM_TX || depth == 0 || depth > self.saved.len() {
+            return Err(StorageError::InvalidRecord(
+                "savepoint is not open in this transaction".into(),
+            ));
+        }
+        Ok(depth)
     }
 }
 impl ActorRegistry for MemTx<'_> {

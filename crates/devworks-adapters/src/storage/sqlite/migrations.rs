@@ -27,12 +27,24 @@ impl Migration {
 }
 
 /// This build's migrations, in version order. The last version is the build's schema version.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    minimum_reader: 1,
-    minimum_writer: 1,
-    sql: include_str!("migrations/0001_initial.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        minimum_reader: 1,
+        minimum_writer: 1,
+        sql: include_str!("migrations/0001_initial.sql"),
+    },
+    // Writers older than 2 would not bind claims to their boot epoch, so they may not write.
+    Migration {
+        version: 2,
+        minimum_reader: 1,
+        minimum_writer: 2,
+        sql: include_str!("migrations/0002_claim_boot.sql"),
+    },
+];
+/// Recorded checksum of migration 2; a test fails if the shipped text changes.
+pub const MIGRATION_0002_SHA256: &str =
+    "a400cacbe5ef06f2045e6fe839c35c3adbe46dcc52a4aa110608498d88da1d37";
 /// Recorded checksum of migration 1; a test fails if the shipped text changes.
 pub const MIGRATION_0001_SHA256: &str =
     "c64cc140ad8de8c4c2ca7e7d3e3efac32966cea8bfc0bdf5e46e9c55206bd6a4";
@@ -136,39 +148,29 @@ fn apply(
             params![m.version, m.checksum(), now_ms, app_build],
         ))?;
         db(conn.pragma_update(None, "user_version", m.version))?;
-        Ok(())
+        // Validate inside the transaction: a migration that breaks foreign keys or integrity is
+        // never committed.
+        verify_after(conn)
     })();
     match result {
-        Ok(()) => db(conn.execute_batch("COMMIT"))?,
+        Ok(()) => db(conn.execute_batch("COMMIT")),
         Err(e) => {
             let _ = conn.execute_batch("ROLLBACK");
-            return Err(e);
+            Err(e)
         }
     }
-    verify_after(conn)
 }
 
-/// Checks identity, compatibility versions and the ledger, applying pending migrations only when
-/// this build may write. Returns the resulting metadata and access mode.
-pub(crate) fn prepare(
+/// Checks store identity, minimum reader/writer versions and the migration ledger without
+/// writing anything. `Ok(None)` means an empty file that may be bootstrapped.
+pub(crate) fn check(
     conn: &Connection,
     migrations: &[Migration],
-    new_store_id: impl FnOnce() -> String,
-    now_ms: i64,
-    app_build: &str,
-) -> Result<(Meta, AccessMode), StorageError> {
+) -> Result<Option<(Meta, AccessMode)>, StorageError> {
     let build = migrations.last().map_or(0, |m| m.version);
     let meta = match read_meta(conn)? {
         Some(meta) => meta,
-        None if user_tables(conn)? == 0 => {
-            let first = migrations
-                .first()
-                .ok_or_else(|| StorageError::IncompatibleSchema("no migrations".into()))?;
-            apply(conn, first, Some(&new_store_id()), now_ms, app_build)?;
-            read_meta(conn)?.ok_or_else(|| {
-                StorageError::IncompatibleSchema("bootstrap lost store_meta".into())
-            })?
-        }
+        None if user_tables(conn)? == 0 => return Ok(None),
         None => {
             return Err(StorageError::IncompatibleSchema(
                 "database is not a DevWorks store (no store_meta)".into(),
@@ -204,12 +206,42 @@ pub(crate) fn prepare(
             }
         }
     }
-    if meta.minimum_writer > build {
-        let reason = format!(
-            "store schema {} requires writer version {}; this build is {build} (diagnostics/export only)",
-            meta.schema_version, meta.minimum_writer
-        );
-        return Ok((meta, AccessMode::ReadOnly { reason }));
+    let access = if meta.minimum_writer > build {
+        AccessMode::ReadOnly {
+            reason: format!(
+                "store schema {} requires writer version {}; this build is {build} (diagnostics/export only)",
+                meta.schema_version, meta.minimum_writer
+            ),
+        }
+    } else {
+        AccessMode::ReadWrite
+    };
+    Ok(Some((meta, access)))
+}
+
+/// Bootstraps an empty store or applies pending migrations, after [`check`]; only called when
+/// this build may write. Returns the resulting metadata.
+pub(crate) fn prepare(
+    conn: &Connection,
+    migrations: &[Migration],
+    new_store_id: impl FnOnce() -> String,
+    now_ms: i64,
+    app_build: &str,
+) -> Result<(Meta, AccessMode), StorageError> {
+    let (meta, access) = match check(conn, migrations)? {
+        Some(found) => found,
+        None => {
+            let first = migrations
+                .first()
+                .ok_or_else(|| StorageError::IncompatibleSchema("no migrations".into()))?;
+            apply(conn, first, Some(&new_store_id()), now_ms, app_build)?;
+            check(conn, migrations)?.ok_or_else(|| {
+                StorageError::IncompatibleSchema("bootstrap lost store_meta".into())
+            })?
+        }
+    };
+    if let AccessMode::ReadOnly { .. } = access {
+        return Ok((meta, access));
     }
     for m in migrations
         .iter()

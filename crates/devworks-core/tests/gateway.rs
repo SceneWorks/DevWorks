@@ -4,11 +4,15 @@ mod common;
 
 use common::*;
 use devworks_core::admission::{self, AdmissionError, Selection};
+use devworks_core::context::InvocationContext;
 use devworks_core::framing::FrameError;
+use devworks_core::gateway::AdmittedCommand;
 use devworks_core::gateway::GatewayFailure;
 use devworks_core::operations::{OperationInput, runs};
-use devworks_core::ports::storage::{StorageError, Unavailable};
-use devworks_core::ports::{AuthorityDenial, Decided, HandlerFailure, QueryAnswer};
+use devworks_core::ports::storage::{NewEvent, StorageError, Unavailable, WriteTransaction};
+use devworks_core::ports::{
+    AuthorityDenial, CommandHandler, Decided, HandlerFailure, IdKind, QueryAnswer,
+};
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, DomainQueryReply};
 use devworks_core::protocol::*;
 use devworks_core::registry::{EffectClass, Mode};
@@ -729,47 +733,156 @@ fn incompatible_stored_receipts_are_a_visible_hold_not_a_conflict() {
     }
 }
 
+/// A use case that really writes history in the transaction before deciding.
+#[derive(Clone, Copy)]
+enum Writes {
+    ThenConflict,
+    NestedThenConflict,
+    ThenRefuse,
+    ForgeCommandHistory,
+}
+struct Writer(Writes, Count);
+impl CommandHandler for Writer {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        _: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        self.1.bump();
+        let event = |tx: &mut dyn WriteTransaction, kind: &str, aggregate: &str| {
+            let id = EventId(tx.new_id(IdKind::Event));
+            tx.history().append(NewEvent {
+                id,
+                actor: ctx.principal().clone(),
+                project_id: None,
+                root_id: None,
+                operation_id: None,
+                aggregate_kind: aggregate.into(),
+                aggregate_id: "project-a".into(),
+                aggregate_revision: 2,
+                kind: kind.into(),
+                payload: json!({}),
+            })
+        };
+        event(tx, "ProjectEdited", "project")?;
+        let conflict = || {
+            HandlerFailure::Storage(StorageError::conflict(
+                RevisionDimension::Work,
+                "project",
+                id("project-a"),
+                revision(1),
+                revision(3),
+            ))
+        };
+        match self.0 {
+            Writes::ThenConflict => Err(conflict()),
+            Writes::NestedThenConflict => {
+                // An inner savepoint left open by an early return.
+                let _inner = tx.savepoint()?;
+                event(tx, "InnerWrite", "project")?;
+                Err(conflict())
+            }
+            Writes::ThenRefuse => Ok(Decided {
+                decision: DomainDecision::Refused {
+                    fault: fault(DomainErrorCode::DependencyBlocked),
+                },
+                operation_id: None,
+            }),
+            Writes::ForgeCommandHistory => {
+                event(tx, "CommandDecided", "command")?;
+                unreachable!("command history must be refused to use cases")
+            }
+        }
+    }
+}
+
 #[test]
 fn a_revision_conflict_undoes_partial_writes_and_is_a_durable_refusal() {
+    for mode in [Writes::ThenConflict, Writes::NestedThenConflict] {
+        let h = Harness::new();
+        let ctx = context("user-a");
+        let handler = Arc::new(Writer(mode, Count::default()));
+        let reply = h
+            .gateway()
+            .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
+            .unwrap();
+        let CommandReply::Recorded {
+            receipt,
+            replayed: false,
+            ..
+        } = &reply
+        else {
+            panic!("{reply:?}")
+        };
+        let DomainDecision::Refused { fault } = &receipt.decision else {
+            panic!("{receipt:?}")
+        };
+        assert!(matches!(fault.code, DomainErrorCode::RevisionConflict));
+        assert!(matches!(fault.retry, RetryAdvice::RefreshAndNewRequest));
+        assert_eq!(fault.current_revision, Some(revision(3)));
+        // Exact retry replays the committed conflict decision without deciding again.
+        let again = h
+            .gateway()
+            .command(&ctx, "projects.edit", EDIT.as_bytes(), handler.clone())
+            .unwrap();
+        assert!(matches!(
+            again,
+            CommandReply::Recorded { replayed: true, .. }
+        ));
+        assert_eq!(handler.1.get(), 1);
+        // The use case's writes (including those under its own open savepoint) are gone.
+        assert_eq!(h.store.event_kinds(), vec!["CommandDecided".to_owned()]);
+    }
+}
+
+#[test]
+fn a_refused_decision_never_mutates_work() {
     let h = Harness::new();
-    let ctx = context("user-a");
-    let conflicting = Commands::new(|_| {
-        Err(HandlerFailure::Storage(StorageError::conflict(
-            RevisionDimension::Work,
-            "project",
-            id("project-a"),
-            revision(1),
-            revision(3),
-        )))
-    });
+    let handler = Arc::new(Writer(Writes::ThenRefuse, Count::default()));
     let reply = h
         .gateway()
-        .command(&ctx, "projects.edit", EDIT.as_bytes(), conflicting.clone())
-        .unwrap();
-    let CommandReply::Recorded {
-        receipt,
-        replayed: false,
-        ..
-    } = &reply
-    else {
-        panic!("{reply:?}")
-    };
-    let DomainDecision::Refused { fault } = &receipt.decision else {
-        panic!("{receipt:?}")
-    };
-    assert!(matches!(fault.code, DomainErrorCode::RevisionConflict));
-    assert_eq!(fault.current_revision, Some(revision(3)));
-    // Exact retry replays the committed conflict decision.
-    let again = h
-        .gateway()
-        .command(&ctx, "projects.edit", EDIT.as_bytes(), conflicting.clone())
+        .command(
+            &context("user-a"),
+            "projects.edit",
+            EDIT.as_bytes(),
+            handler,
+        )
         .unwrap();
     assert!(matches!(
-        again,
-        CommandReply::Recorded { replayed: true, .. }
+        &reply,
+        CommandReply::Recorded { receipt, replayed: false, .. }
+            if matches!(receipt.decision, DomainDecision::Refused { .. })
     ));
-    assert_eq!(conflicting.calls.get(), 1);
     assert_eq!(h.store.event_kinds(), vec!["CommandDecided".to_owned()]);
+    assert_eq!(h.store.receipt_count(), 1);
+}
+
+#[test]
+fn use_cases_cannot_write_receipts_or_command_history() {
+    let h = Harness::new();
+    let handler = Arc::new(Writer(Writes::ForgeCommandHistory, Count::default()));
+    let reply = h
+        .gateway()
+        .command(
+            &context("user-a"),
+            "projects.edit",
+            EDIT.as_bytes(),
+            handler,
+        )
+        .unwrap();
+    // The refused append fails the use case; the whole command rolls back.
+    assert!(matches!(
+        reply,
+        CommandReply::Rejected {
+            code: Rejection::StorageUnavailable,
+            ..
+        }
+    ));
+    assert_eq!(
+        (h.store.receipt_count(), h.store.event_kinds().len()),
+        (0, 0)
+    );
 }
 
 #[test]

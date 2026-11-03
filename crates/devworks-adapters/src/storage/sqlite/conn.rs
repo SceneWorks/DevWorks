@@ -78,6 +78,13 @@ pub(crate) enum Role {
     Reader,
 }
 
+/// A read-only connection used to inspect a file before any write-capable connection (and its
+/// journal-mode/fsync PRAGMAs) is opened on it.
+pub(crate) fn open_probe(path: &Path) -> Result<Connection, StorageError> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    db(Connection::open_with_flags(path, flags))
+}
+
 pub(crate) fn open(path: &Path, role: Role, busy: Duration) -> Result<Connection, StorageError> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
