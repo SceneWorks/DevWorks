@@ -181,6 +181,9 @@ pub struct Chat {
     pub sending: Option<String>,
     /// What the in-flight append submitted (cleared from the draft only on success).
     pub submitted: Option<Submitted>,
+    /// Submitted attachments the user removed while the append was in flight: deleted only if
+    /// the append did not commit (a committed message references them).
+    pub removed_while_sending: Vec<ArtifactRef>,
     pub notice: Option<(Tone, String)>,
     /// The overlay sidebar is shown on narrow Home layouts.
     pub narrow_sidebar_open: bool,
@@ -204,6 +207,7 @@ impl Chat {
             send_after_start: false,
             sending: None,
             submitted: None,
+            removed_while_sending: Vec::new(),
             notice: None,
             narrow_sidebar_open: false,
             scrolls: Scrolls::default(),

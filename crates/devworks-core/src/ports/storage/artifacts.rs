@@ -209,7 +209,8 @@ impl StoredVersion {
 /// The work subject a link points at, in storage form.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SubjectKey {
-    /// `root`, `assignment`, `operation`, `resource` or `blocker`.
+    /// `root`, `assignment`, `operation`, `resource`, `blocker`, or `session` (a committed
+    /// transcript entry of that session names the version).
     pub kind: &'static str,
     pub id: Id,
 }
@@ -233,10 +234,24 @@ impl SubjectKey {
             id: root.0.clone(),
         }
     }
+    /// The session whose committed transcript references a version.
+    pub fn session(session: &Id) -> Self {
+        Self {
+            kind: "session",
+            id: session.clone(),
+        }
+    }
     pub fn parse_kind(kind: &str) -> Option<&'static str> {
-        ["root", "assignment", "operation", "resource", "blocker"]
-            .into_iter()
-            .find(|k| *k == kind)
+        [
+            "root",
+            "assignment",
+            "operation",
+            "resource",
+            "blocker",
+            "session",
+        ]
+        .into_iter()
+        .find(|k| *k == kind)
     }
 }
 

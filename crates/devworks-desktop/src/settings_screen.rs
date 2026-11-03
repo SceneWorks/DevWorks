@@ -342,6 +342,7 @@ impl SettingsScreen {
         if !view.is_dirty() {
             return;
         }
+        let buffers = &mut self.buffers;
         let n = view.dirty_keys().len();
         let blocked = view.has_blocking_issues();
         egui::Frame::new()
@@ -358,6 +359,8 @@ impl SettingsScreen {
                     ));
                     if widgets::secondary_button(ui, "Discard all").clicked() {
                         view.discard_all();
+                        // Editor text (model lists) shows drafts too: drop it with them.
+                        buffers.clear();
                     }
                     if ui
                         .add_enabled(!self.validating, egui::Button::new("Validate"))

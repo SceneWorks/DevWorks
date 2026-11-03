@@ -11,6 +11,8 @@ use std::path::Path;
 pub const FILE: &str = "ui-state.json";
 /// Version of this file's shape; another version is ignored, never misread.
 pub const VERSION: u32 = 1;
+/// Largest view-state file read back (it holds selections and drafts, never records).
+pub const MAX_BYTES: u64 = 16 << 20;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SidebarTab {
@@ -87,7 +89,7 @@ impl Default for Memory {
 impl Memory {
     /// Reads `path`; a missing, unreadable or other-version file restores the defaults.
     pub fn load(path: &Path) -> Self {
-        std::fs::read(path)
+        crate::files::read_regular(path, MAX_BYTES)
             .ok()
             .and_then(|b| serde_json::from_slice::<Memory>(&b).ok())
             .filter(|m| m.version == VERSION)

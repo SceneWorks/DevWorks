@@ -33,6 +33,7 @@
 pub mod attachments;
 pub mod backend;
 pub mod chat;
+pub mod files;
 pub mod host;
 pub mod memory;
 pub mod notifications;

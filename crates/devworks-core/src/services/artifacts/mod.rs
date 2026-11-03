@@ -633,6 +633,51 @@ pub fn versions_digest(versions: &[StoredVersion]) -> String {
 }
 
 /// Appends one artifact history event inside the command's transaction.
+/// Records that a committed transcript entry of `session` names `reference` (ART-02/05): in the
+/// same transaction as the entry, the version gains a `session` reference link and the
+/// artifact's reference revision advances (once per session and version), with an attributed
+/// `ArtifactReferenced` event. A deletion decided at the earlier reference revision is then a
+/// `RevisionConflict`, so referenced evidence is never removed by a stale decision. The caller
+/// has already resolved the reference ([`crate::services::sessions::transcript::reference_resolves`]).
+pub(crate) fn reference_from_transcript(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    reference: &ArtifactRef,
+    session: &Id,
+    root: Option<RootId>,
+) -> Result<(), StorageError> {
+    let added = tx.artifacts().add_link(&ArtifactLink {
+        version_id: reference.version_id.clone(),
+        subject: SubjectKey::session(session),
+        purpose: LinkPurpose::Reference,
+    })?;
+    if !added {
+        return Ok(());
+    }
+    let mut artifact = tx
+        .artifacts()
+        .artifact(&reference.artifact_id)?
+        .ok_or_else(|| StorageError::NotFound {
+            kind: "artifact",
+            id: reference.artifact_id.as_str().to_owned(),
+        })?;
+    artifact.reference_revision += 1;
+    tx.artifacts().update_artifact(&artifact)?;
+    event(
+        tx,
+        ctx,
+        &artifact,
+        root,
+        None,
+        "ArtifactReferenced",
+        json!({
+            "versionId": reference.version_id.as_str(), "subjectKind": "session",
+            "subjectId": session.as_str(), "referenceRevision": artifact.reference_revision,
+        }),
+    )?;
+    Ok(())
+}
+
 fn event(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,

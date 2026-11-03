@@ -649,6 +649,19 @@ fn append_message_saves_one_user_message_with_resolved_attachments() {
         panic!()
     };
     assert_eq!(value.revision.get(), 2);
+    // The committed message is a reference of the artifact (ART-02/05), in the same transaction:
+    // the version gains a session link and the reference revision advances, so a deletion
+    // decided at the earlier reference revision is refused.
+    let (artifact, links) = fx.read(|r| {
+        Ok((
+            r.artifacts().artifact(&id("artifact-a"))?.unwrap(),
+            r.artifacts().links(&id("artifact-a"))?,
+        ))
+    });
+    assert_eq!(artifact.reference_revision, 2);
+    assert!(links.iter().any(|l| l.subject == SubjectKey::session(&s.id)
+        && l.purpose == LinkPurpose::Reference
+        && l.version_id == id("version-a")));
     // A stale expected revision is a durable conflict; a reference with another digest, or one
     // the session's project cannot see, is NotFound and nothing is appended.
     let stale = refused(fx.raw_command(

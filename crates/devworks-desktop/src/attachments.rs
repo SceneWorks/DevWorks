@@ -45,37 +45,7 @@ pub fn previewable(media_type: &str) -> bool {
     matches!(media_type, "image/png" | "image/jpeg")
 }
 
-/// Opens `path` for reading only if it is a regular file, without blocking on or following
-/// into anything else: the name is checked without following links, the open itself neither
-/// follows a final link nor waits for a FIFO writer (Unix `O_NOFOLLOW | O_NONBLOCK`; Windows
-/// `FILE_FLAG_OPEN_REPARSE_POINT`), and the opened handle is checked again, so a FIFO, device,
-/// socket, directory or link swapped in between is refused before a byte is read.
-pub fn open_regular(path: &Path) -> std::io::Result<(std::fs::File, u64)> {
-    let not_regular =
-        || std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file");
-    if !std::fs::symlink_metadata(path)?.file_type().is_file() {
-        return Err(not_regular());
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        // FILE_FLAG_OPEN_REPARSE_POINT: open a link itself, never its target.
-        options.custom_flags(0x0020_0000);
-    }
-    let file = options.open(path)?;
-    let meta = file.metadata()?;
-    if !meta.file_type().is_file() {
-        return Err(not_regular());
-    }
-    Ok((file, meta.len()))
-}
+pub use crate::files::open_regular;
 
 /// SHA-256 and length of a regular file of at most `max` bytes.
 fn sha256_file(path: &Path, max: u64) -> Result<(String, u64), String> {
@@ -163,11 +133,12 @@ pub fn store(
 
 /// Decodes a bounded preview of an image file.
 pub fn preview(path: &Path) -> Result<TaskOutput, String> {
-    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
-    if meta.len() > PREVIEW_MAX_BYTES {
-        return Err("too large to preview".into());
-    }
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bytes =
+        crate::files::read_regular(path, PREVIEW_MAX_BYTES).map_err(|e| match e.kind() {
+            std::io::ErrorKind::InvalidInput => "not a regular file".to_owned(),
+            std::io::ErrorKind::FileTooLarge => "too large to preview".to_owned(),
+            _ => e.to_string(),
+        })?;
     preview_bytes(&bytes)
 }
 

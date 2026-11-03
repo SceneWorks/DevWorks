@@ -528,10 +528,21 @@ impl Shell {
         };
         if let Some(Attachment {
             state: AttachState::Stored(r),
+            local,
             ..
         }) = removed
         {
-            self.delete_removed(r);
+            let in_flight = self
+                .chat
+                .submitted
+                .as_ref()
+                .is_some_and(|s| s.locals.contains(&local));
+            if in_flight {
+                // The message being saved references it: decide once the append settles.
+                self.chat.removed_while_sending.push(r);
+            } else {
+                self.delete_removed(r);
+            }
         }
     }
 
@@ -694,7 +705,16 @@ impl Shell {
             (Slot::Append(id), Reply::Command(c)) => {
                 self.chat.sending = None;
                 let submitted = self.chat.submitted.take();
-                match ops::appended(c) {
+                let removed = std::mem::take(&mut self.chat.removed_while_sending);
+                let outcome = ops::appended(c);
+                if outcome.is_err() {
+                    // Not committed (or unknown: the artifact service refuses deleting an
+                    // artifact a committed message references, at its stale reference revision).
+                    for r in removed {
+                        self.delete_removed(r);
+                    }
+                }
+                match outcome {
                     Ok(record) => {
                         self.chat.upsert(record);
                         if let (Some(d), Some(sent)) = (self.chat.drafts.get_mut(&id), &submitted) {
