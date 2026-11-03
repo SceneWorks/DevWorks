@@ -150,17 +150,19 @@ pub enum OperationResult {
     #[serde(rename = "ui.current_screen")]
     UiCurrentScreen { value: ScreenContext },
     #[serde(rename = "history.events")]
-    HistoryEvents { value: Page<Event> },
+    HistoryEvents { value: HistoryPage<Event> },
     #[serde(rename = "history.work_lineage")]
-    HistoryWorkLineage { value: Page<LineageRecord> },
+    HistoryWorkLineage { value: HistoryPage<LineageRecord> },
     #[serde(rename = "history.git_links")]
-    HistoryGitLinks { value: Page<GitLink> },
+    HistoryGitLinks {
+        value: HistoryPage<AttributedGitLink>,
+    },
     #[serde(rename = "history.evidence_links")]
-    HistoryEvidenceLinks { value: Page<EvidenceLink> },
+    HistoryEvidenceLinks { value: HistoryPage<EvidenceLink> },
     #[serde(rename = "history.operation_status")]
     HistoryOperationStatus { value: OperationRef },
     #[serde(rename = "history.tool_usage")]
-    HistoryToolUsage { value: Page<UsageItem> },
+    HistoryToolUsage { value: UsagePage },
     #[serde(rename = "history.command_receipt")]
     HistoryCommandReceipt { value: ReceiptObservation },
     #[serde(rename = "code.search")]
@@ -373,6 +375,8 @@ pub enum OperationResult {
     ArtifactsReference { value: MutationSummary },
     #[serde(rename = "artifacts.delete")]
     ArtifactsDelete { value: MutationSummary },
+    #[serde(rename = "artifacts.tag")]
+    ArtifactsTag { value: MutationSummary },
     #[serde(rename = "conventions.list")]
     ConventionsList { value: Page<InstructionRecord> },
     #[serde(rename = "conventions.read")]
@@ -908,6 +912,7 @@ impl OperationResult {
             Self::ArtifactsExport { .. } => "artifacts.export",
             Self::ArtifactsReference { .. } => "artifacts.reference",
             Self::ArtifactsDelete { .. } => "artifacts.delete",
+            Self::ArtifactsTag { .. } => "artifacts.tag",
             Self::ConventionsList { .. } => "conventions.list",
             Self::ConventionsRead { .. } => "conventions.read",
             Self::ConventionsEdit { .. } => "conventions.edit",
@@ -1269,6 +1274,7 @@ impl Check for OperationResult {
             Self::ArtifactsExport { value } => value.check()?,
             Self::ArtifactsReference { value } => value.check()?,
             Self::ArtifactsDelete { value } => value.check()?,
+            Self::ArtifactsTag { value } => value.check()?,
             Self::ConventionsList { value } => value.check()?,
             Self::ConventionsRead { value } => value.check()?,
             Self::ConventionsEdit { value } => value.check()?,
@@ -1456,6 +1462,11 @@ impl Check for OperationResult {
 impl Revisioned for OperationResult {
     fn retain_revision(&mut self, revision: u32) {
         match self {
+            Self::HistoryEvents { value } => value.retain_revision(revision),
+            Self::HistoryWorkLineage { value } => value.retain_revision(revision),
+            Self::HistoryGitLinks { value } => value.retain_revision(revision),
+            Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
+            Self::HistoryToolUsage { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             _ => {}

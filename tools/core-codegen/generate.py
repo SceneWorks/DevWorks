@@ -40,9 +40,11 @@ SHARED = set('Id Revision Counter HoldRef Protocol CommandRequest QueryRequest R
 PROVIDER = set('Digest ArtifactRef SchemaRef TranscriptPage Attribution'.split())
 DATA = set('DataScope ViewSelection Coverage GitOid GraphPage RetrievalPage DeliveryBarrier DeliverySnapshot '
            'ArtifactTags'.split())
-SUPPORT = set('Check Label Text Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page Limit Depth Port '
-              'ByteLimit Url RelativePath Money SignedCounter PositiveCounter Finite Probability DynamicJson '
-              'DomainErrorCode DomainFault'.split())
+SUPPORT = set('Check Label Text Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page HistoryPage Limit '
+              'Depth Port ByteLimit TokenBudget PathSet Url RelativePath Money SignedCounter PositiveCounter Finite Probability '
+              'DynamicJson DomainErrorCode DomainFault'.split())
+# Hand-written support types that gate a member by schema revision themselves.
+GATED_SUPPORT = {'HistoryPage'}
 PRIMITIVE = {'bool', 'i32', 'Option'}
 
 SPECIALIZED = {
@@ -110,19 +112,49 @@ def imports(used, records_glob=True):
     return out
 
 
-def fields(fs, indent='    ', pub=True, since=None):
+def camel(s):
+    return re.sub(r'_([a-z])', lambda m: m[1].upper(), s)
+
+
+def fields(fs, indent='    ', pub=True, since=None, one=(), schema=None):
+    """`one`: members of an exactly-one choice (rendered without null); `schema`: extra keywords."""
     since = since or {}
+    schema = schema or {}
     lines = []
     for n, t in fs.items():
+        extra = ''.join(f', {json.dumps(k)} = {json.dumps(v)}' for k, v in schema.get(n, {}).items())
         if n in since:
             # A later-revision member is omitted or present, never null (see `gated_member`).
             lines.append(indent + '#[serde(default, skip_serializing_if = "Option::is_none", '
                          'deserialize_with = "gated_member")]')
-            lines.append(indent + f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}))]')
+            lines.append(indent + f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}{extra}))]')
         elif t.startswith('?'):
             lines.append(indent + '#[serde(default, skip_serializing_if = "Option::is_none")]')
+            if n in one:
+                lines.append(indent + f'#[schemars(with = "{rust(t[1:])}")]')
         lines.append(indent + ('pub ' if pub else '') + f'{n}: {rust(t)},')
     return '\n'.join(lines)
+
+
+def choice(fs, one, since):
+    """`oneOf` of an exactly-one member choice: each alternative lists the full required set (in
+    field order) with that member; one introduced later carries its `x-since`, so an earlier
+    revision's document folds back to the plain required list."""
+    alts = []
+    for m in one:
+        req = [camel(n) for n, t in fs.items() if not t.startswith('?') or n == m]
+        alts.append({'required': req, **({'x-since': since[m]} if m in since else {})})
+    return f'#[schemars(extend("oneOf" = {json.dumps(alts)}))]\n'
+
+
+def record_attrs(d):
+    out = ''
+    if d.get('schemaName'):
+        out += f'#[schemars(rename = "{d["schemaName"]}")]\n'
+    if d.get('earlierName'):
+        earlier = {'name': d['earlierName'], 'before': min(d['since'].values())}
+        out += f'#[schemars(extend("x-earlier" = {json.dumps(earlier)}))]\n'
+    return out
 
 
 def check_since(owner, fs, since):
@@ -210,7 +242,7 @@ def gen_records():
     for name, d in TYPES.items():
         if d['kind'] == 'record':
             since = d.get('since', {})
-            out += [RECORD + f'pub struct {name} {{', fields(d['fields'], since=since), '}',
+            out += [RECORD + record_attrs(d) + f'pub struct {name} {{', fields(d['fields'], since=since), '}',
                     f'impl Check for {name} {{', '    fn check(&self) -> Result<(), String> {',
                     checks(d['fields']),
                     f'        crate::protocol::rules::record("{name}", &serde_json::to_value(self).map_err(|e| e.to_string())?)?;',
@@ -347,9 +379,13 @@ def doc_since(doc, pointer=None, equals=None):
         return out
 
     def alternatives(node):
+        # A union is a node without its own properties; an object's own `oneOf` (a choice of
+        # required members, such as exactly one scope) belongs to that object's branch.
         node = resolve(node)
         alts = node.get('oneOf') or node.get('anyOf')
-        return [b for a in alts for b in alternatives(a)] if alts else [node]
+        if alts and 'properties' not in node:
+            return [b for a in alts for b in alternatives(a)]
+        return [node]
 
     if pointer is None:
         return collect(doc, set())
@@ -443,9 +479,12 @@ def gen_family(fam, ops):
             if ty in TYPES or ty in local:
                 fail('input type name clash ' + ty)
             local.add(ty)
-            since = {k: r for k, r in DOMAIN_OPS[o['operation']].get('since', {}).items() if k in fs}
-            out += [f'/// `{o["operation"]}` {mode} input.', RECORD + f'pub struct {ty} {{',
-                    fields(fs, since=since), '}',
+            d = DOMAIN_OPS[o['operation']]
+            since = {k: r for k, r in d.get('since', {}).items() if k in fs}
+            one = d.get('exactlyOne', [])
+            out += [f'/// `{o["operation"]}` {mode} input.',
+                    RECORD + (choice(fs, one, since) if one else '') + f'pub struct {ty} {{',
+                    fields(fs, since=since, one=one, schema=d.get('fieldSchema')), '}',
                     f'impl Check for {ty} {{', '    fn check(&self) -> Result<(), String> {', checks(fs),
                     '        Ok(())', '    }', '}', revisioned(ty, fs, since, RC), '']
     out += [f'/// An admitted input of the `{fam["family"]}` family, built only for the selected operation and mode.',
@@ -499,7 +538,8 @@ def gen_results(ops):
     out += ['        }', '    }', '}', 'impl Check for OperationResult {', '    fn check(&self) -> Result<(), String> {',
             '        match self {']
     out += [f'            Self::{pascal(n)} {{ value }} => value.check()?,' for n, _ in results]
-    projected = [n for n, t in results if tokens(t) & RC]
+    # HistoryPage is a support type with its own revision-2 member (the tail checkpoint).
+    projected = [n for n, t in results if tokens(t) & (RC | GATED_SUPPORT)]
     out += ['        }',
             '        crate::protocol::rules::result(self.operation(), &serde_json::to_value(self).map_err(|e| e.to_string())?)',
             '    }', '}',

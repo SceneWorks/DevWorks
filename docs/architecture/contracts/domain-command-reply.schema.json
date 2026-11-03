@@ -9980,6 +9980,23 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
+              "const": "artifacts.tag",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/MutationSummary"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
               "const": "runs.start",
               "type": "string"
             },
@@ -13062,7 +13079,7 @@
     "RelativePath": {
       "maxLength": 4096,
       "minLength": 1,
-      "pattern": "^(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+)(?:/(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+))*$",
+      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+)(?:[/\\\\](?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+))*$",
       "type": "string"
     },
     "ReleaseRecord": {

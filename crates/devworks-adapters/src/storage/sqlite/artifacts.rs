@@ -269,6 +269,42 @@ fn list(
     .collect::<rusqlite::Result<Vec<_>>>())?;
     rows.into_iter().map(artifact_of).collect()
 }
+fn list_workspace(
+    conn: &Connection,
+    owner: Option<&ActorId>,
+    tags: &[String],
+    after: Option<&ListPosition>,
+    limit: u16,
+) -> Result<Vec<StoredArtifact>, StorageError> {
+    let limit = bounded(limit)?;
+    let (at, id) = match after {
+        Some(p) => (p.created_at_ms, p.id.as_str().to_owned()),
+        None => (i64::MAX, String::new()),
+    };
+    let wanted = Value::from(tags.to_vec()).to_string();
+    let mut s = db(conn.prepare_cached(&format!(
+        "SELECT {ARTIFACT_COLUMNS} FROM artifacts a
+         WHERE a.scope_kind='Workspace' AND a.state='Live' AND a.current_version_id IS NOT NULL
+           AND a.retention='Explicit' AND (?1 IS NULL OR a.owner_actor_id=?1)
+           AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
+           AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
+                         AND t.tag IN (SELECT value FROM json_each(?5)))=?6)
+         ORDER BY a.created_at DESC, a.id DESC LIMIT ?4"
+    )))?;
+    let rows = db(db(s.query_map(
+        params![
+            owner.map(|o| o.0.as_str()),
+            at,
+            id,
+            limit,
+            wanted,
+            tags.len() as i64
+        ],
+        artifact_row,
+    ))?
+    .collect::<rusqlite::Result<Vec<_>>>())?;
+    rows.into_iter().map(artifact_of).collect()
+}
 fn tags(conn: &Connection, artifact: &Id) -> Result<Vec<String>, StorageError> {
     let mut s =
         db(conn.prepare_cached("SELECT tag FROM artifact_tags WHERE artifact_id=?1 ORDER BY tag"))?;
@@ -405,6 +441,15 @@ macro_rules! artifact_reads {
                 limit: u16,
             ) -> Result<Vec<StoredArtifact>, StorageError> {
                 list(self.conn, project, tags, after, limit)
+            }
+            fn list_workspace(
+                &self,
+                owner: Option<&ActorId>,
+                tags: &[String],
+                after: Option<&ListPosition>,
+                limit: u16,
+            ) -> Result<Vec<StoredArtifact>, StorageError> {
+                list_workspace(self.conn, owner, tags, after, limit)
             }
             fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
                 tags(self.conn, artifact)

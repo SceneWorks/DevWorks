@@ -40,8 +40,8 @@ use crate::jcs;
 use crate::ports::IdKind;
 use crate::ports::storage::{
     ApplicationStore, NewEvent, StorageError, StoredBatch, StoredCheckpoint, StoredContextSource,
-    StoredEntry, StoredEpoch, StoredLink, StoredSession, StoredToolCall, StoredUsage, WriteOptions,
-    WriteTransaction, run_write,
+    StoredEntry, StoredEpoch, StoredInvocation, StoredLink, StoredSession, StoredToolCall,
+    StoredUsage, WriteOptions, WriteTransaction, run_write,
 };
 use crate::protocol::provider::{
     ArtifactRef, ToolOutcome, TranscriptBatch, TranscriptBody, UserContent,
@@ -462,6 +462,9 @@ fn write_batch(
     // Links to the session's work root are written after the batch event (they carry its
     // sequence); collected here as (kind, entry ID, summary, body).
     let mut pending_links: Vec<(&'static str, Id, String, Value)> = Vec::new();
+    // Every completed invocation of every session is a durable fact (written once the batch's
+    // committed sequence is known), whether or not the session has a project or work root.
+    let mut invocations: Vec<StoredInvocation> = Vec::new();
     for entry in &b.entries {
         let kind = body_kind(&entry.body);
         *kinds.entry(kind).or_default() += 1;
@@ -549,6 +552,32 @@ fn write_batch(
                 recorded.outcome = Some(name.to_owned());
                 recorded.operation_id = operation.cloned();
                 tx.sessions().record_response(&recorded)?;
+                let call_entry = tx
+                    .sessions()
+                    .entries(&session.id, recorded.call_sequence - 1, 1)?
+                    .into_iter()
+                    .next()
+                    .filter(|e| e.sequence == recorded.call_sequence)
+                    .ok_or_else(|| StorageError::InvalidRecord("tool call entry missing".into()))?;
+                invocations.push(StoredInvocation {
+                    session_id: session.id.clone(),
+                    response_sequence: sequence,
+                    call_sequence: recorded.call_sequence,
+                    committed_sequence: 0,
+                    project_id: session.project_id.clone(),
+                    root_id: session.root_id.clone(),
+                    call_entry_id: call_entry.entry_id,
+                    capability_id: recorded.capability_id.clone(),
+                    outcome: name.to_owned(),
+                    error_code: match outcome {
+                        ToolOutcome::Failed { code } => Some(code.as_str().to_owned()),
+                        _ => None,
+                    },
+                    operation_id: operation.cloned(),
+                    actor: actor.clone(),
+                    called_at_ms: call_entry.created_at_ms,
+                    responded_at_ms: now,
+                });
                 pending_links.push((
                     "tool_response",
                     entry.entry_id.clone(),
@@ -686,6 +715,10 @@ fn write_batch(
         accepted_at_ms: now,
     };
     tx.sessions().insert_batch(&stored)?;
+    for mut invocation in invocations {
+        invocation.committed_sequence = committed;
+        tx.sessions().insert_invocation(&invocation)?;
+    }
     if let Some(checkpoint) = &batch.checkpoint {
         tx.sessions().insert_checkpoint(&StoredCheckpoint {
             session_id: session.id.clone(),

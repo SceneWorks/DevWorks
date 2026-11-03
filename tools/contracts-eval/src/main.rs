@@ -141,6 +141,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         "operation-result" => decode_domain::<OperationResult>(&raw, |v| {
                             at_revision(v, revision)?;
+                            // A union alternative introduced later (the command aggregate of an
+                            // event) cannot be cleared from a value; its revision refuses it.
+                            if let OperationResult::HistoryEvents { value } = v {
+                                for event in &value.items.0 {
+                                    event.validate_revision(revision)?;
+                                    event.validate()?;
+                                }
+                            }
                             devworks_contract_probe::domain_support::Check::check(v)
                         }),
                         "operation-completion" => {
@@ -156,6 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "query-request" => serde_json::from_str::<QueryRequest>(&raw)
                             .map_err(|e| e.to_string())
                             .and_then(|v| {
+                                at_revision(&v, revision)?;
                                 v.validate().map_err(str::to_owned)?;
                                 serde_json::to_value(v).map_err(|e| e.to_string())
                             }),
@@ -568,7 +577,7 @@ where
 
 /// JSON Schema documents per operation schema revision.
 mod revision {
-    use serde_json::{Map, Value, json};
+    use serde_json::{Value, json};
     use std::collections::BTreeSet;
 
     /// `name.rN` names revision document N of `name`; a plain name is revision 1.
@@ -605,21 +614,39 @@ mod revision {
         walk(v, &mut |x| found |= since(x) == Some(u64::from(revision)));
         found
     }
+    /// Marks a union that lost alternatives at the revision being produced.
+    const PRUNED: &str = "x-pruned";
+    fn later(v: &Value, revision: u32) -> bool {
+        v.get("x-since")
+            .and_then(Value::as_u64)
+            .is_some_and(|s| s > u64::from(revision))
+    }
+    /// Removes the members and union alternatives introduced after `revision`.
     fn strip(v: &mut Value, revision: u32) {
         match v {
             Value::Object(m) => {
+                let mut gone = Vec::new();
                 if let Some(Value::Object(props)) = m.get_mut("properties") {
-                    let gone: Vec<String> = props
+                    gone = props
                         .iter()
-                        .filter(|(_, p)| since(p).is_some_and(|s| s > u64::from(revision)))
+                        .filter(|(_, p)| later(p, revision))
                         .map(|(k, _)| k.clone())
                         .collect();
-                    for k in &gone {
-                        props.remove(k);
+                    props.retain(|k, _| !gone.contains(k));
+                }
+                if let Some(Value::Array(required)) = m.get_mut("required") {
+                    required.retain(|r| !gone.iter().any(|g| r == g));
+                }
+                let mut pruned = false;
+                for key in ["oneOf", "anyOf"] {
+                    if let Some(Value::Array(alts)) = m.get_mut(key) {
+                        let before = alts.len();
+                        alts.retain(|a| !later(a, revision));
+                        pruned |= alts.len() < before;
                     }
-                    if let Some(Value::Array(req)) = m.get_mut("required") {
-                        req.retain(|r| !gone.iter().any(|g| r == g));
-                    }
+                }
+                if pruned {
+                    m.insert(PRUNED.into(), Value::Bool(true));
                 }
                 m.values_mut().for_each(|x| strip(x, revision));
             }
@@ -627,20 +654,123 @@ mod revision {
             _ => {}
         }
     }
-    fn refs(v: &Value, out: &mut BTreeSet<String>) {
-        walk(v, &mut |x| {
-            if let Some(r) = x.get("$ref").and_then(Value::as_str)
-                && let Some(name) = r.strip_prefix("#/$defs/")
-            {
-                out.insert(name.to_owned());
+    /// A union that lost alternatives and is left with one is that alternative: alone it
+    /// replaces the union; an alternative that only lists the required members (an exactly-one
+    /// member choice) folds back into its object's required list.
+    fn collapse(v: &mut Value) {
+        if let Value::Object(m) = v
+            && m.remove(PRUNED).is_some()
+        {
+            for key in ["oneOf", "anyOf"] {
+                let single = m
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .filter(|alts| alts.len() == 1)
+                    .map(|alts| alts[0].clone());
+                let Some(alt) = single else { continue };
+                if m.len() == 1 {
+                    *v = alt;
+                    return collapse(v);
+                }
+                if alt.as_object().is_some_and(|a| a.len() == 1 && a.contains_key("required")) {
+                    m.remove(key);
+                    m.insert("required".into(), alt["required"].clone());
+                }
             }
-        });
+        }
+        match v {
+            Value::Object(m) => m.values_mut().for_each(collapse),
+            Value::Array(a) => a.iter_mut().for_each(collapse),
+            _ => {}
+        }
     }
-    /// The document at `revision`: members introduced later and definitions only they used are
-    /// removed. Revision 1 of a document without gated members is the document unchanged.
-    pub fn at(canonical: &Value, revision: u32) -> Value {
+    fn retarget(v: &mut Value, from: &str, to: &str) {
+        match v {
+            Value::Object(m) => {
+                if m.get("$ref").and_then(Value::as_str) == Some(from) {
+                    m.insert("$ref".into(), Value::String(to.to_owned()));
+                }
+                m.values_mut().for_each(|x| retarget(x, from, to));
+            }
+            Value::Array(a) => a.iter_mut().for_each(|x| retarget(x, from, to)),
+            _ => {}
+        }
+    }
+    /// The document at `revision`: members and union alternatives introduced later, and the
+    /// definitions only they reference, are removed. A definition annotated
+    /// `x-earlier: {name, before}` is, below `before`, the recorded definition `name` (its later
+    /// description is dropped): it takes that name, or merges into that definition, which it must
+    /// then equal exactly. Revision 1 of a document without gated members is unchanged.
+    fn revision_document(canonical: &Value, revision: u32) -> Value {
         let mut v = canonical.clone();
         strip(&mut v, revision);
+        let mut renames = Vec::new();
+        if let Some(Value::Object(defs)) = v.get_mut("$defs") {
+            for (name, d) in defs.iter_mut() {
+                let Some(m) = d.as_object_mut() else { continue };
+                if let Some(e) = m.remove("x-earlier")
+                    && e["before"].as_u64().is_some_and(|b| u64::from(revision) < b)
+                    && let Some(to) = e["name"].as_str()
+                {
+                    m.remove("description");
+                    renames.push((name.clone(), to.to_owned()));
+                }
+            }
+        }
+        collapse(&mut v);
+        // Definitions named after a renamed one (`List_<name>_0_500`) take the recorded name too.
+        if let Some(Value::Object(defs)) = v.get("$defs") {
+            let primary = renames.clone();
+            for name in defs.keys() {
+                for (from, to) in &primary {
+                    let segments: Vec<&str> = name.split('_').collect();
+                    if name != from && segments.contains(&from.as_str()) {
+                        let renamed: Vec<&str> = segments
+                            .iter()
+                            .map(|s| if s == from { to.as_str() } else { s })
+                            .collect();
+                        renames.push((name.clone(), renamed.join("_")));
+                    }
+                }
+            }
+        }
+        for (from, to) in &renames {
+            retarget(&mut v, &format!("#/$defs/{from}"), &format!("#/$defs/{to}"));
+        }
+        if let Some(Value::Object(defs)) = v.get_mut("$defs") {
+            for (from, to) in &renames {
+                let def = defs.remove(from).expect("renamed definition");
+                match defs.get(to) {
+                    Some(existing) => assert_eq!(
+                        existing, &def,
+                        "{from} at revision {revision} must equal the recorded {to}"
+                    ),
+                    None => {
+                        defs.insert(to.clone(), def);
+                    }
+                }
+            }
+        }
+        prune_definitions(v)
+    }
+    fn refs(v: &Value, out: &mut BTreeSet<String>) {
+        match v {
+            Value::Object(m) => {
+                if let Some(name) = m
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .and_then(|r| r.strip_prefix("#/$defs/"))
+                {
+                    out.insert(name.to_owned());
+                }
+                m.values().for_each(|x| refs(x, out));
+            }
+            Value::Array(a) => a.iter().for_each(|x| refs(x, out)),
+            _ => {}
+        }
+    }
+    /// Keeps only the definitions the document still references (transitively).
+    fn prune_definitions(mut v: Value) -> Value {
         let Some(Value::Object(defs)) = v.as_object_mut().and_then(|m| m.remove("$defs")) else {
             return v;
         };
@@ -652,17 +782,18 @@ mod revision {
             if let Some(d) = defs.get(&name) {
                 refs(d, &mut next);
             }
-            for n in next {
-                if live.insert(n.clone()) {
-                    frontier.push(n);
-                }
-            }
+            frontier.extend(next.into_iter().filter(|n| live.insert(n.clone())));
         }
-        let kept: Map<String, Value> = defs.into_iter().filter(|(k, _)| live.contains(k)).collect();
+        let kept: serde_json::Map<String, Value> =
+            defs.into_iter().filter(|(k, _)| live.contains(k)).collect();
         if !kept.is_empty() {
             v["$defs"] = Value::Object(kept);
         }
         v
+    }
+    /// The document at `revision` (see `revision_document`).
+    pub fn at(canonical: &Value, revision: u32) -> Value {
+        revision_document(canonical, revision)
     }
     /// Adds the negotiated `schemaRevision` member to each envelope object of a request
     /// document. Absent means 1; a revision-N document requires N or later.

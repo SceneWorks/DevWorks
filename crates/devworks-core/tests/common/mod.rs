@@ -998,6 +998,15 @@ pub fn repo_file(path: &str) -> PathBuf {
 }
 
 impl ArtifactRead for Unsupported {
+    fn list_workspace(
+        &self,
+        _: Option<&ActorId>,
+        _: &[String],
+        _: Option<&ListPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        nope()
+    }
     fn workspace_usage(&self) -> Result<i64, StorageError> {
         nope()
     }
@@ -1233,6 +1242,25 @@ impl SessionRead for Unsupported {
     ) -> Result<Vec<EventRecord>, StorageError> {
         nope()
     }
+    fn decisions(
+        &self,
+        _: &HistoryScope,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<EventRecord>, StorageError> {
+        nope()
+    }
+    fn project_scope_revision(&self, _: &ProjectId) -> Result<Option<i64>, StorageError> {
+        Ok(None)
+    }
+    fn usage_facts(
+        &self,
+        _: &HistoryScope,
+        _: Option<&SequenceKey>,
+        _: u16,
+    ) -> Result<Vec<UsageFact>, StorageError> {
+        nope()
+    }
 }
 impl SessionRepository for Unsupported {
     fn insert_session(&mut self, _: &StoredSession) -> Result<(), StorageError> {
@@ -1263,6 +1291,9 @@ impl SessionRepository for Unsupported {
         nope()
     }
     fn insert_usage(&mut self, _: &StoredUsage) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_invocation(&mut self, _: &StoredInvocation) -> Result<(), StorageError> {
         nope()
     }
     fn insert_link(&mut self, _: &StoredLink) -> Result<(), StorageError> {

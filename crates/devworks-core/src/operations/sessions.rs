@@ -61,16 +61,50 @@ impl Revisioned for GetInput {
 pub struct BriefingInput {
     pub session_id: Id,
     pub expected_context_epoch: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "RootId", extend("x-since" = 2))]
+    pub item: Option<RootId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PathSet", extend("x-since" = 2))]
+    pub paths: Option<PathSet>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "TokenBudget", extend("x-since" = 2))]
+    pub budget_tokens: Option<TokenBudget>,
 }
 impl Check for BriefingInput {
     fn check(&self) -> Result<(), String> {
         self.session_id.check()?;
         self.expected_context_epoch.check()?;
+        self.item.check()?;
+        self.paths.check()?;
+        self.budget_tokens.check()?;
         Ok(())
     }
 }
 impl Revisioned for BriefingInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.item = None;
+        }
+        if revision < 2 {
+            self.paths = None;
+        }
+        if revision < 2 {
+            self.budget_tokens = None;
+        }
+    }
 }
 
 /// `sessions.context_sources` Query input.

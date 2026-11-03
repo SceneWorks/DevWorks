@@ -149,6 +149,8 @@ pub struct DecodedRequest {
     pub action: Option<&'static str>,
     /// Work items the selected input names as its target, in priority order ([`work_targets`]).
     pub targets: Vec<crate::protocol::Id>,
+    /// Projects the selected input names ([`project_targets`]).
+    pub project_targets: Vec<crate::protocol::ProjectId>,
 }
 impl DecodedRequest {
     pub fn mode(&self) -> Mode {
@@ -235,6 +237,7 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
         .map_err(|e| refuse(AdmissionError::Fingerprint(e.to_string())))?;
     let (effect, action) = effective_effect(binding, &decoded.input).map_err(refuse)?;
     let targets = work_targets(&decoded.normalized);
+    let project_targets = project_targets(&decoded.normalized);
     Ok(DecodedRequest {
         descriptor,
         binding,
@@ -245,6 +248,7 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
         effect,
         action,
         targets,
+        project_targets,
     })
 }
 
@@ -297,6 +301,35 @@ pub fn work_targets(normalized: &Value) -> Vec<crate::protocol::Id> {
                 .get(member)
                 .and_then(Value::as_str)
                 .and_then(|s| crate::protocol::Id::new(s).ok())
+                && !out.contains(&id)
+            {
+                out.push(id);
+            }
+        }
+    }
+    out
+}
+
+/// The projects a normalized input names: a `projectId` member, or a project data scope
+/// (`scope: {"kind": "Project", "projectId": ..}`), of the input or of its `command`. The gateway
+/// attaches a decision without a work target to the first one visible to the invocation.
+pub fn project_targets(normalized: &Value) -> Vec<crate::protocol::ProjectId> {
+    let mut out = Vec::new();
+    for scope in [Some(normalized), normalized.get("command")]
+        .into_iter()
+        .flatten()
+    {
+        let scoped = scope
+            .get("scope")
+            .filter(|s| s.get("kind").and_then(Value::as_str) == Some("Project"));
+        for candidate in [
+            scope.get("projectId"),
+            scoped.and_then(|s| s.get("projectId")),
+        ] {
+            if let Some(id) = candidate
+                .and_then(Value::as_str)
+                .and_then(|s| crate::protocol::Id::new(s).ok())
+                .map(crate::protocol::ProjectId)
                 && !out.contains(&id)
             {
                 out.push(id);

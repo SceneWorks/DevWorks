@@ -795,6 +795,34 @@ pub struct EvidenceLink {
     pub target_id: Id,
     pub artifact: ArtifactRef,
     pub summary: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub actor_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub occurred_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub repository_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub revision: Option<Text>,
 }
 impl Check for EvidenceLink {
     fn check(&self) -> Result<(), String> {
@@ -802,11 +830,32 @@ impl Check for EvidenceLink {
         self.target_id.check()?;
         self.artifact.check()?;
         self.summary.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        self.repository_id.check()?;
+        self.revision.check()?;
         super::domain_rules::record(
             "EvidenceLink",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for EvidenceLink {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.actor_id = None;
+        }
+        if revision < 2 {
+            self.occurred_at_ms = None;
+        }
+        if revision < 2 {
+            self.repository_id = None;
+        }
+        if revision < 2 {
+            self.revision = None;
+        }
     }
 }
 
@@ -869,6 +918,34 @@ pub struct LineageRecord {
     pub kind: Label,
     pub related_id: Id,
     pub summary: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub actor_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub occurred_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub repository_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub revision: Option<Text>,
 }
 impl Check for LineageRecord {
     fn check(&self) -> Result<(), String> {
@@ -877,11 +954,32 @@ impl Check for LineageRecord {
         self.kind.check()?;
         self.related_id.check()?;
         self.summary.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        self.repository_id.check()?;
+        self.revision.check()?;
         super::domain_rules::record(
             "LineageRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for LineageRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.actor_id = None;
+        }
+        if revision < 2 {
+            self.occurred_at_ms = None;
+        }
+        if revision < 2 {
+            self.repository_id = None;
+        }
+        if revision < 2 {
+            self.revision = None;
+        }
     }
 }
 
@@ -2163,6 +2261,63 @@ impl Check for GitLink {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "GitLink", "before": 2}))]
+pub struct AttributedGitLink {
+    pub repository_id: Id,
+    pub work_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_url: Option<Url>,
+    pub head: GitOid,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub actor_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub occurred_at_ms: Option<Counter>,
+}
+impl Check for AttributedGitLink {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.work_id.check()?;
+        self.worktree_id.check()?;
+        self.branch.check()?;
+        self.pull_request_url.check()?;
+        self.head.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        super::domain_rules::record(
+            "AttributedGitLink",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for AttributedGitLink {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.actor_id = None;
+        }
+        if revision < 2 {
+            self.occurred_at_ms = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReleaseRecord {
     pub id: Id,
     pub revision: Revision,
@@ -3229,6 +3384,118 @@ impl Check for UsageItem {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ToolInvocationOutcome {
+    Completed,
+    Failed,
+    ApprovalRequired,
+    DependencyBlocked,
+    CancelledBeforeDispatch,
+    OutcomeUnknown,
+}
+impl Check for ToolInvocationOutcome {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolInvocation {
+    pub sequence: Revision,
+    pub call_id: Id,
+    pub session_id: Id,
+    pub tool_name: Label,
+    pub outcome: ToolInvocationOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    pub actor_id: ActorId,
+    pub occurred_at_ms: Counter,
+}
+impl Check for ToolInvocation {
+    fn check(&self) -> Result<(), String> {
+        self.sequence.check()?;
+        self.call_id.check()?;
+        self.session_id.check()?;
+        self.tool_name.check()?;
+        self.outcome.check()?;
+        self.duration_ms.check()?;
+        self.error_code.check()?;
+        self.operation_id.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        super::domain_rules::record(
+            "ToolInvocation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(rename = "Page")]
+pub struct UsagePage {
+    pub items: Rows<UsageItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 2))]
+    pub checkpoint: Option<Cursor>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<Revision>", extend("x-since" = 2))]
+    pub item_sequences: Option<Rows<Revision>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<ToolInvocation>", extend("x-since" = 2))]
+    pub tool_invocations: Option<Rows<ToolInvocation>>,
+}
+impl Check for UsagePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.checkpoint.check()?;
+        self.item_sequences.check()?;
+        self.tool_invocations.check()?;
+        super::domain_rules::record(
+            "UsagePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for UsagePage {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.checkpoint = None;
+        }
+        if revision < 2 {
+            self.item_sequences = None;
+        }
+        if revision < 2 {
+            self.tool_invocations = None;
+        }
     }
 }
 
@@ -5451,6 +5718,27 @@ pub enum DomainQuery {
     SessionsBriefing {
         session_id: Id,
         expected_context_epoch: Counter,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "RootId", extend("x-since" = 2))]
+        item: Option<RootId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PathSet", extend("x-since" = 2))]
+        paths: Option<PathSet>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "TokenBudget", extend("x-since" = 2))]
+        budget_tokens: Option<TokenBudget>,
     },
     #[serde(rename = "sessions.context_sources")]
     SessionsContextSources {
@@ -5467,7 +5755,27 @@ pub enum DomainQuery {
     #[serde(rename = "history.evidence_links")]
     HistoryEvidenceLinks { root_id: RootId, page: PageRequest },
     #[serde(rename = "history.tool_usage")]
-    HistoryToolUsage { root_id: RootId, page: PageRequest },
+    #[schemars(extend("oneOf" = [{"required": ["kind", "rootId", "page"]}, {"required": ["kind", "projectId", "page"], "x-since": 2}, {"required": ["kind", "workspace", "page"], "x-since": 2}]))]
+    HistoryToolUsage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "RootId")]
+        root_id: Option<RootId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ProjectId", extend("x-since" = 2))]
+        project_id: Option<ProjectId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 2, "const" = true))]
+        workspace: Option<bool>,
+        page: PageRequest,
+    },
     #[serde(rename = "indexing.discover")]
     IndexingDiscover {
         scope: DataScope,
@@ -6332,9 +6640,15 @@ impl Check for DomainQuery {
             Self::SessionsBriefing {
                 session_id,
                 expected_context_epoch,
+                item,
+                paths,
+                budget_tokens,
             } => {
                 session_id.check()?;
                 expected_context_epoch.check()?;
+                item.check()?;
+                paths.check()?;
+                budget_tokens.check()?;
             }
             Self::SessionsContextSources {
                 session_id,
@@ -6358,8 +6672,15 @@ impl Check for DomainQuery {
                 root_id.check()?;
                 page.check()?;
             }
-            Self::HistoryToolUsage { root_id, page } => {
+            Self::HistoryToolUsage {
+                root_id,
+                project_id,
+                workspace,
+                page,
+            } => {
                 root_id.check()?;
+                project_id.check()?;
+                workspace.check()?;
                 page.check()?;
             }
             Self::IndexingDiscover { scope, roots, page } => {
@@ -7169,7 +7490,39 @@ impl Check for DomainQuery {
 }
 
 impl Revisioned for DomainQuery {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::SessionsBriefing {
+                item,
+                paths,
+                budget_tokens,
+                ..
+            } => {
+                if revision < 2 {
+                    *item = None;
+                }
+                if revision < 2 {
+                    *paths = None;
+                }
+                if revision < 2 {
+                    *budget_tokens = None;
+                }
+            }
+            Self::HistoryToolUsage {
+                project_id,
+                workspace,
+                ..
+            } => {
+                if revision < 2 {
+                    *project_id = None;
+                }
+                if revision < 2 {
+                    *workspace = None;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -8308,6 +8661,12 @@ pub enum DomainCommand {
         feature_id: Option<RootId>,
         clear_feature: bool,
     },
+    #[serde(rename = "artifacts.tag")]
+    ArtifactsTag {
+        artifact_id: Id,
+        expected_revision: Revision,
+        tags: ArtifactTags,
+    },
 }
 impl DomainCommand {
     pub fn operation(&self) -> &'static str {
@@ -8478,6 +8837,7 @@ impl DomainCommand {
             Self::McpServerSetClientAccess { .. } => "mcp_server.set_client_access",
             Self::TasksPrioritize { .. } => "tasks.prioritize",
             Self::TasksSetFeature { .. } => "tasks.set_feature",
+            Self::ArtifactsTag { .. } => "artifacts.tag",
         }
     }
 }
@@ -10138,6 +10498,15 @@ impl Check for DomainCommand {
                 feature_id.check()?;
                 clear_feature.check()?;
             }
+            Self::ArtifactsTag {
+                artifact_id,
+                expected_revision,
+                tags,
+            } => {
+                artifact_id.check()?;
+                expected_revision.check()?;
+                tags.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -10304,13 +10673,15 @@ pub enum OperationResult {
     #[serde(rename = "ui.current_screen")]
     UiCurrentScreen { value: ScreenContext },
     #[serde(rename = "history.work_lineage")]
-    HistoryWorkLineage { value: Page<LineageRecord> },
+    HistoryWorkLineage { value: HistoryPage<LineageRecord> },
     #[serde(rename = "history.git_links")]
-    HistoryGitLinks { value: Page<GitLink> },
+    HistoryGitLinks {
+        value: HistoryPage<AttributedGitLink>,
+    },
     #[serde(rename = "history.evidence_links")]
-    HistoryEvidenceLinks { value: Page<EvidenceLink> },
+    HistoryEvidenceLinks { value: HistoryPage<EvidenceLink> },
     #[serde(rename = "history.tool_usage")]
-    HistoryToolUsage { value: Page<UsageItem> },
+    HistoryToolUsage { value: UsagePage },
     #[serde(rename = "indexing.discover")]
     IndexingDiscover { value: Page<RepositoryRecord> },
     #[serde(rename = "indexing.index")]
@@ -10781,6 +11152,8 @@ pub enum OperationResult {
     TasksPrioritize { value: MutationSummary },
     #[serde(rename = "tasks.set_feature")]
     TasksSetFeature { value: WorkRecord },
+    #[serde(rename = "artifacts.tag")]
+    ArtifactsTag { value: MutationSummary },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -10796,7 +11169,7 @@ pub enum OperationResult {
     #[serde(rename = "history.command_receipt")]
     HistoryCommandReceipt { value: ReceiptObservation },
     #[serde(rename = "history.events")]
-    HistoryEvents { value: Page<Event> },
+    HistoryEvents { value: HistoryPage<Event> },
     #[serde(rename = "sessions.append_message")]
     SessionsAppendMessage { value: SessionRecord },
     #[serde(rename = "sessions.transcript")]
@@ -11200,6 +11573,7 @@ impl OperationResult {
             Self::McpServerSetClientAccess { .. } => "mcp_server.set_client_access",
             Self::TasksPrioritize { .. } => "tasks.prioritize",
             Self::TasksSetFeature { .. } => "tasks.set_feature",
+            Self::ArtifactsTag { .. } => "artifacts.tag",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -11559,6 +11933,7 @@ impl Check for OperationResult {
             Self::McpServerSetClientAccess { value } => value.check()?,
             Self::TasksPrioritize { value } => value.check()?,
             Self::TasksSetFeature { value } => value.check()?,
+            Self::ArtifactsTag { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,
@@ -11628,6 +12003,11 @@ impl Check for OperationResult {
 impl Revisioned for OperationResult {
     fn retain_revision(&mut self, revision: u32) {
         match self {
+            Self::HistoryWorkLineage { value } => value.retain_revision(revision),
+            Self::HistoryGitLinks { value } => value.retain_revision(revision),
+            Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
+            Self::HistoryToolUsage { value } => value.retain_revision(revision),
+            Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             _ => {}

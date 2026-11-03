@@ -8,11 +8,35 @@
 //! Domain-envelope inputs are the `/body` members other than the `kind` discriminator; the
 //! registry decodes a body only into the input of the operation and mode the host selected.
 //! Specialized envelopes keep their recorded candidate shape and selector.
+use crate::protocol::data::ArtifactTags;
 #[allow(unused_imports)]
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
+use crate::protocol::{Id, Revision};
 use crate::registry::Mode;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// `artifacts.tag` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TagInput {
+    pub artifact_id: Id,
+    pub expected_revision: Revision,
+    pub tags: ArtifactTags,
+}
+impl Check for TagInput {
+    fn check(&self) -> Result<(), String> {
+        self.artifact_id.check()?;
+        self.expected_revision.check()?;
+        self.tags.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for TagInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// An admitted input of the `artifacts` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
@@ -31,6 +55,8 @@ pub enum Input {
     Reference(crate::protocol::data::ArtifactCommandRequest),
     /// `artifacts.delete` (Command).
     Delete(crate::protocol::data::ArtifactDeletionRequest),
+    /// `artifacts.tag` (Command).
+    Tag(TagInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -42,6 +68,7 @@ impl Input {
             Self::Export(_) => "artifacts.export",
             Self::Reference(_) => "artifacts.reference",
             Self::Delete(_) => "artifacts.delete",
+            Self::Tag(_) => "artifacts.tag",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -53,6 +80,7 @@ impl Input {
             Self::Export(_) => Mode::Query,
             Self::Reference(_) => Mode::Command,
             Self::Delete(_) => Mode::Command,
+            Self::Tag(_) => Mode::Command,
         }
     }
 }

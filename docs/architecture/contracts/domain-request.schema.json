@@ -82,6 +82,17 @@
       ],
       "type": "object"
     },
+    "ArtifactTags": {
+      "items": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[^\\u0000]*$",
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "uniqueItems": true
+    },
     "AtomicWorkPlan": {
       "additionalProperties": false,
       "properties": {
@@ -5995,6 +6006,31 @@
             "clearFeature"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "artifacts.tag",
+              "type": "string"
+            },
+            "tags": {
+              "$ref": "#/$defs/ArtifactTags"
+            }
+          },
+          "required": [
+            "kind",
+            "artifactId",
+            "expectedRevision",
+            "tags"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -11134,7 +11170,7 @@
     "RelativePath": {
       "maxLength": 4096,
       "minLength": 1,
-      "pattern": "^(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+)(?:/(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+))*$",
+      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+)(?:[/\\\\](?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+))*$",
       "type": "string"
     },
     "RepositoryDelivery": {

@@ -68,7 +68,7 @@ impl ArtifactSources for NoSources {
         &self,
         _: &InvocationContext,
         _: &ArtifactSource,
-        _: &ProjectId,
+        _: Option<&ProjectId>,
     ) -> Result<ResolvedSource, SourceRefusal> {
         Err(SourceRefusal::NotFound)
     }

@@ -232,6 +232,14 @@ fn check(case: &Fixture) -> Result<(), String> {
         "domain-command-reply" => dto::<DomainCommandReply>(raw, validate_command_reply),
         "operation-result" => dto::<OperationResult>(raw, |v| {
             at_revision(v, revision)?;
+            // A union alternative introduced later (the command aggregate of an event) cannot be
+            // cleared from a value; its revision refuses it, as in the recorded probe.
+            if let OperationResult::HistoryEvents { value } = v {
+                for event in &value.items.0 {
+                    s(event.validate_revision(revision))?;
+                    s(event.validate())?;
+                }
+            }
             v.check()
         }),
         "operation-completion" => dto::<OperationCompletion>(raw, |v| v.validate()),
@@ -300,7 +308,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 795), 795);
+    assert_eq!(run("domain-fixtures.json", 878), 878);
 }
 
 #[test]
@@ -365,8 +373,10 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
         missing.is_empty(),
         "bindings without an admitted recorded fixture: {missing:?}"
     );
-    // 358 operation/mode bindings at revision 1, plus artifacts.save and artifacts.list at 2.
-    assert_eq!(admitted.len(), 360);
+    // 359 operation/mode bindings at revision 1, plus revision 2 of artifacts.save and
+    // artifacts.list, history.events, .work_lineage, .git_links, .evidence_links, .tool_usage
+    // and sessions.briefing, and revision 3 of artifacts.save and artifacts.list.
+    assert_eq!(admitted.len(), 369);
 }
 
 #[test]
@@ -492,7 +502,10 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
         exercised_members,
         [
             "artifact-command-request/tags",
-            "artifact-query-request/tags"
+            "artifact-command-request/workspace",
+            "artifact-query-request/tags",
+            "artifact-query-request/workspace",
+            "query-request/projectId"
         ]
     );
 }

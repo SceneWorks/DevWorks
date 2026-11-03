@@ -117,7 +117,22 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0008_receipt_replies.sql"),
         rebuilds_tables: true,
     },
+    // Additive indexes and the tool_invocations table (backfilled from the recorded responses).
+    // The reader floor stays at 8: no earlier build reads tool_invocations, and the indexes leave
+    // every query's results unchanged. The writer floor rises to 9: a build 8 writer would append
+    // tool responses without their invocation facts, so revision-2 tool usage would silently
+    // miss them. Both are at least every earlier floor (8/8).
+    Migration {
+        version: 9,
+        minimum_reader: 8,
+        minimum_writer: 9,
+        sql: include_str!("migrations/0009_history_feeds.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 9; a test fails if the shipped text changes.
+pub const MIGRATION_0009_SHA256: &str =
+    "0a893b2c15371f9d9d251bb45814eb9666ee883f94a5706a165184f5fd88c128";
 /// Recorded checksum of migration 8; a test fails if the shipped text changes.
 pub const MIGRATION_0008_SHA256: &str =
     "682af46e64f4ee7d6d854acdbec0862309a2e37262cf639124ccfb0c57a79cb9";

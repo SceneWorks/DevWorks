@@ -438,7 +438,17 @@
         "id": "Id",
         "target_id": "Id",
         "artifact": "ArtifactRef",
-        "summary": "Content"
+        "summary": "Content",
+        "actor_id": "?ActorId",
+        "occurred_at_ms": "?Counter",
+        "repository_id": "?Id",
+        "revision": "?Text"
+      },
+      "since": {
+        "actor_id": 2,
+        "occurred_at_ms": 2,
+        "repository_id": 2,
+        "revision": 2
       }
     },
     "StatusRecord": {
@@ -469,7 +479,17 @@
         "parent_id": "?Id",
         "kind": "Label",
         "related_id": "Id",
-        "summary": "Content"
+        "summary": "Content",
+        "actor_id": "?ActorId",
+        "occurred_at_ms": "?Counter",
+        "repository_id": "?Id",
+        "revision": "?Text"
+      },
+      "since": {
+        "actor_id": 2,
+        "occurred_at_ms": 2,
+        "repository_id": 2,
+        "revision": 2
       }
     },
     "AgentRecord": {
@@ -1000,6 +1020,24 @@
         "head": "GitOid"
       }
     },
+    "AttributedGitLink": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "work_id": "Id",
+        "worktree_id": "?Id",
+        "branch": "?Text",
+        "pull_request_url": "?Url",
+        "head": "GitOid",
+        "actor_id": "?ActorId",
+        "occurred_at_ms": "?Counter"
+      },
+      "since": {
+        "actor_id": 2,
+        "occurred_at_ms": 2
+      },
+      "earlierName": "GitLink"
+    },
     "ReleaseRecord": {
       "kind": "record",
       "fields": {
@@ -1455,6 +1493,49 @@
         "price_revision": "?Revision",
         "incomplete": "bool"
       }
+    },
+    "ToolInvocationOutcome": {
+      "kind": "enum",
+      "values": [
+        "Completed",
+        "Failed",
+        "ApprovalRequired",
+        "DependencyBlocked",
+        "CancelledBeforeDispatch",
+        "OutcomeUnknown"
+      ]
+    },
+    "ToolInvocation": {
+      "kind": "record",
+      "fields": {
+        "sequence": "Revision",
+        "call_id": "Id",
+        "session_id": "Id",
+        "tool_name": "Label",
+        "outcome": "ToolInvocationOutcome",
+        "duration_ms": "?Counter",
+        "error_code": "?Label",
+        "operation_id": "?OperationId",
+        "actor_id": "ActorId",
+        "occurred_at_ms": "Counter"
+      }
+    },
+    "UsagePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<UsageItem>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "checkpoint": "?Cursor",
+        "item_sequences": "?Rows<Revision>",
+        "tool_invocations": "?Rows<ToolInvocation>"
+      },
+      "since": {
+        "checkpoint": 2,
+        "item_sequences": 2,
+        "tool_invocations": 2
+      },
+      "schemaName": "Page"
     },
     "UsageReport": {
       "kind": "record",
@@ -3032,12 +3113,20 @@
       "mode": "Query",
       "fields": {
         "session_id": "Id",
-        "expected_context_epoch": "Counter"
+        "expected_context_epoch": "Counter",
+        "item": "?RootId",
+        "paths": "?PathSet",
+        "budget_tokens": "?TokenBudget"
       },
       "result": "Page<ContextSource>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: item adds that visible work item of the session's scope to the briefing; paths (distinct) scope it; budgetTokens caps the summed source estimates (4 bytes per token, rounded up) at a prefix of the briefing order.",
+      "since": {
+        "item": 2,
+        "paths": 2,
+        "budget_tokens": 2
+      }
     },
     "sessions.context_sources": {
       "operation": "sessions.context_sources",
@@ -3093,10 +3182,10 @@
         "root_id": "RootId",
         "page": "PageRequest"
       },
-      "result": "Page<LineageRecord>",
+      "result": "HistoryPage<LineageRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution."
     },
     "history.git_links": {
       "operation": "history.git_links",
@@ -3105,10 +3194,10 @@
         "root_id": "RootId",
         "page": "PageRequest"
       },
-      "result": "Page<GitLink>",
+      "result": "HistoryPage<AttributedGitLink>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution."
     },
     "history.evidence_links": {
       "operation": "history.evidence_links",
@@ -3117,22 +3206,38 @@
         "root_id": "RootId",
         "page": "PageRequest"
       },
-      "result": "Page<EvidenceLink>",
+      "result": "HistoryPage<EvidenceLink>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: every page carries a continuation checkpoint, including at the current tail; records carry structured attribution."
     },
     "history.tool_usage": {
       "operation": "history.tool_usage",
       "mode": "Query",
       "fields": {
-        "root_id": "RootId",
+        "root_id": "?RootId",
+        "project_id": "?ProjectId",
+        "workspace": "?bool",
         "page": "PageRequest"
       },
-      "result": "Page<UsageItem>",
+      "result": "UsagePage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Exactly one of rootId, projectId (revision 2) and workspace: true (revision 2). Schema revision 2: tool invocations (one per durable initial tool response of any session in the scope) are interleaved with inference usage in committed-sequence order, each list carries its committed sequences, and every page carries a continuation checkpoint.",
+      "since": {
+        "project_id": 2,
+        "workspace": 2
+      },
+      "exactlyOne": [
+        "root_id",
+        "project_id",
+        "workspace"
+      ],
+      "fieldSchema": {
+        "workspace": {
+          "const": true
+        }
+      }
     },
     "indexing.discover": {
       "operation": "indexing.discover",
@@ -6233,6 +6338,19 @@
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Humans and agents share explicit set/clear feature membership, exactly one. Validate the same-project live feature and current task revision/access. Commit authoritative optional parent, queue revisions, coordinator responsibility, durable notification, future usage attribution, history and stale-dispatch fencing atomically. Linking authorizes delivery scope without plan reapproval. Existing agents continue on their branches/workspaces and notify the feature coordinator; absent agents are launched/resumed by it when eligible. Clear installs a durable issue pause requiring manual resume; set or direct transfer never clears holds. Direct transfers continue under new coordinator/budget. Preserve historical costs, assignments, workspace and PR evidence; never duplicate active task execution. The feature coordinator owns integration and final acceptance."
+    },
+    "artifacts.tag": {
+      "operation": "artifacts.tag",
+      "mode": "Command",
+      "fields": {
+        "artifact_id": "Id",
+        "expected_revision": "Revision",
+        "tags": "ArtifactTags"
+      },
+      "result": "MutationSummary",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Replaces the tag set (empty clears it) of a live, explicitly retained artifact the caller sees and whose owner scope its authorized scope covers, under the expected artifact revision; an equal set is NoChange. Receipt replies are never retagged."
     }
   },
   "earlierInputResults": {
@@ -6243,7 +6361,7 @@
     "runs.eligibility": "EligibilitySnapshot",
     "history.operation_status": "OperationRef",
     "history.command_receipt": "ReceiptObservation",
-    "history.events": "Page<Event>",
+    "history.events": "HistoryPage<Event>",
     "sessions.append_message": "SessionRecord",
     "sessions.transcript": "TranscriptPage",
     "addons.install": "PackageRecord",
@@ -6298,9 +6416,35 @@
   "schemaRevisions": {
     "artifacts.save": [
       1,
-      2
+      2,
+      3
     ],
     "artifacts.list": [
+      1,
+      2,
+      3
+    ],
+    "history.events": [
+      1,
+      2
+    ],
+    "history.work_lineage": [
+      1,
+      2
+    ],
+    "history.git_links": [
+      1,
+      2
+    ],
+    "history.evidence_links": [
+      1,
+      2
+    ],
+    "history.tool_usage": [
+      1,
+      2
+    ],
+    "sessions.briefing": [
       1,
       2
     ]

@@ -1288,3 +1288,52 @@ fn a_use_case_cannot_enqueue_a_receipt_reply_intent() {
         vec!["projects_index".to_owned(), "receipt_replies".to_owned()]
     );
 }
+
+#[test]
+fn an_event_with_a_later_aggregate_is_never_published_to_an_earlier_revision() {
+    let h = Harness::new();
+    let command_event = json!({"protocol": "1.0-draft.1", "eventId": "event-a", "sequence": "1",
+        "aggregate": {"kind": "command", "id": "cmd-a"}, "aggregateRevision": "1",
+        "aggregateRevisionKind": "Command", "actorId": "user-a", "occurredAtMs": "1",
+        "commandId": "cmd-a", "event": {"kind": "CommandDecided", "commandId": "cmd-a"}});
+    let handler = Queries::new(move |_| {
+        Ok(QueryAnswer {
+            stamp: stamp(),
+            result: result(
+                "history.events",
+                json!({"items": [command_event], "hasMore": false, "checkpoint": "c"}),
+            ),
+        })
+    });
+    let frame = |revision: Option<u32>| {
+        let mut f = json!({"protocol": "1.0-draft.1", "queryId": "q-1",
+            "query": {"kind": "history.events", "rootId": "root-a", "limit": 10}});
+        if let Some(r) = revision {
+            f["schemaRevision"] = json!(r);
+        }
+        f.to_string()
+    };
+    // Revision 1 has no command aggregate: the gateway refuses to publish one, whatever the
+    // handler produced.
+    for revision in [None, Some(1)] {
+        assert!(matches!(
+            h.gateway().query(
+                &context("user-a"),
+                "history.events",
+                frame(revision).as_bytes(),
+                &handler
+            ),
+            Err(GatewayFailure::HandlerContract(e)) if e.contains("revision 2")
+        ));
+    }
+    let reply = h
+        .gateway()
+        .query(
+            &context("user-a"),
+            "history.events",
+            frame(Some(2)).as_bytes(),
+            &handler,
+        )
+        .unwrap();
+    assert!(matches!(reply, DomainQueryReply::Result { .. }));
+}

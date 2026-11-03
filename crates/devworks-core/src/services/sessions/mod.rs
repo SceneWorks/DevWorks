@@ -865,6 +865,24 @@ impl SessionService {
     /// waiting for a response, operations its responses wait on, then the sources recorded for
     /// the epoch in recording order — at most [`BRIEFING_LIMIT`]. When recorded sources remain,
     /// the page continues through `sessions.context_sources` with the returned cursor.
+    ///
+    /// Schema revision 2 (the retained `get_briefing` arguments):
+    /// - `item` adds that work item (`focus:<kind>`) right after the session's own work item. It
+    ///   must be visible to the invocation and belong to the session's project (any visible
+    ///   project for a workspace session); otherwise it is `NotFound`, like any other work item
+    ///   outside the scope. Naming the session's own work item adds nothing.
+    /// - `paths` (1-128 distinct repository-relative paths) scope the path knowledge of the
+    ///   briefing. The sources a briefing composes today (work items, epoch snapshot, checkpoint,
+    ///   open calls and operations, the host's recorded sources) are not path-scoped and no
+    ///   path-scoped knowledge is stored yet, so paths are validated and select nothing more.
+    /// - `budgetTokens` caps the briefing's estimated size: the sum of its sources'
+    ///   `tokenEstimate`s (the attributed estimate of the material each source names: 4 bytes
+    ///   per token, rounded up, over the artifact length or work title; 0 for the references to
+    ///   calls and operations, whose material is not inlined). The briefing is the longest prefix
+    ///   of the order above whose sum fits; a source that does not fit ends it. When recorded
+    ///   sources were left out, the cursor continues them through `sessions.context_sources`
+    ///   (from the first one left out); the fixed sources a budget leaves out are re-served by a
+    ///   briefing with a larger budget. No inference is involved.
     fn briefing(
         &self,
         snapshot: &dyn ReadSnapshot,
@@ -881,6 +899,25 @@ impl SessionService {
             items.push(ContextSource {
                 id: w.id.0.clone(),
                 kind: label(&format!("work:{}", w.kind), "work"),
+                source_revision: rev(w.revision),
+                artifact: None,
+                token_estimate: counter(token_estimate(w.title.len() as i64)),
+            });
+        }
+        if let Some(item) = &input.item
+            && session.root_id.as_ref() != Some(item)
+        {
+            let w = visible_root(read, ctx, item)?;
+            if session
+                .project_id
+                .as_ref()
+                .is_some_and(|p| *p != w.project_id)
+            {
+                return Err(not_found("root", &item.0).into());
+            }
+            items.push(ContextSource {
+                id: w.id.0.clone(),
+                kind: label(&format!("focus:{}", w.kind), "focus"),
                 source_revision: rev(w.revision),
                 artifact: None,
                 token_estimate: counter(token_estimate(w.title.len() as i64)),
@@ -957,15 +994,45 @@ impl SessionService {
             });
         }
         items.truncate(BRIEFING_LIMIT);
+        // The budget keeps the longest prefix whose estimated size fits (revision 2).
+        let budget = input.budget_tokens.as_ref().map(|b| i64::from(b.get()));
+        let mut spent: i64 = 0;
+        let fits = |spent: &mut i64, s: &ContextSource| match budget {
+            None => true,
+            Some(b) => {
+                *spent = spent.saturating_add(s.token_estimate.get());
+                *spent <= b
+            }
+        };
+        if let Some(cut) = items.iter().position(|s| !fits(&mut spent, s)) {
+            items.truncate(cut);
+            let next_cursor = (!Self::recorded_sources(read, &session, 0, 1)?.is_empty())
+                .then(|| BoundedText(Self::sources_binding(ctx, &session).encode("0")));
+            return Ok(OperationResult::SessionsBriefing {
+                value: Page {
+                    items: BoundedList(items),
+                    has_more: next_cursor.is_some(),
+                    next_cursor,
+                },
+            });
+        }
         let room = BRIEFING_LIMIT - items.len();
         let mut next_cursor = None;
         if room > 0 {
             let recorded = Self::recorded_sources(read, &session, 0, room as u16 + 1)?;
             let more = recorded.len() > room;
-            let taken: Vec<_> = recorded.into_iter().take(room).collect();
-            if more && let Some((ordinal, _)) = taken.last() {
+            let mut taken: Vec<_> = recorded.into_iter().take(room).collect();
+            let within = taken
+                .iter()
+                .position(|(_, s)| !fits(&mut spent, s))
+                .unwrap_or(taken.len());
+            // Sources the budget leaves out continue after the last one included.
+            let cut = within < taken.len();
+            taken.truncate(within);
+            if more || cut {
+                let after = taken.last().map_or(0, |(ordinal, _)| *ordinal);
                 next_cursor = Some(BoundedText(
-                    Self::sources_binding(ctx, &session).encode(&ordinal.to_string()),
+                    Self::sources_binding(ctx, &session).encode(&after.to_string()),
                 ));
             }
             items.extend(taken.into_iter().map(|(_, s)| s));

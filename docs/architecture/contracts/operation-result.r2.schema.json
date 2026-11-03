@@ -389,6 +389,64 @@
       "type": "array",
       "uniqueItems": true
     },
+    "AttributedGitLink": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head": {
+          "$ref": "#/$defs/GitOid"
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "pullRequestUrl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "workId": {
+          "$ref": "#/$defs/Id"
+        },
+        "worktreeId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "repositoryId",
+        "workId",
+        "head"
+      ],
+      "type": "object"
+    },
     "BackupRecord": {
       "additionalProperties": false,
       "properties": {
@@ -1952,13 +2010,13 @@
           "$ref": "#/$defs/Id"
         },
         "aggregate": {
-          "$ref": "#/$defs/Subject"
+          "$ref": "#/$defs/EventSubject"
         },
         "aggregateRevision": {
           "$ref": "#/$defs/Revision"
         },
         "aggregateRevisionKind": {
-          "$ref": "#/$defs/RevisionKind"
+          "$ref": "#/$defs/EventRevisionKind"
         },
         "commandId": {
           "anyOf": [
@@ -2140,6 +2198,139 @@
         }
       ]
     },
+    "EventRevisionKind": {
+      "description": "The revision dimension of an [`Event`]'s aggregate: the recorded [`RevisionKind`] values\nplus, from schema revision 2, `Command` for a command aggregate ([`EventSubject::Command`]).\nSeparate from [`RevisionKind`] so that revision conflicts, which never concern a command, keep\ntheir recorded shape at every revision.",
+      "oneOf": [
+        {
+          "enum": [
+            "Work",
+            "Control",
+            "Blocker",
+            "Operation",
+            "Policy",
+            "Scope",
+            "Plan",
+            "Authority"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "Command",
+          "description": "Schema revision 2: the only revision (1) of a decided command.",
+          "type": "string",
+          "x-since": 2
+        }
+      ]
+    },
+    "EventSubject": {
+      "description": "The aggregate an [`Event`] is about: the recorded [`Subject`] variants plus, from schema\nrevision 2, the command (receipt) itself, for a decision whose command names no existing work\nitem or durable operation. A separate union from [`Subject`] so that blockers and revision\nconflicts, which can never name a command, keep their recorded shape at every revision.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "root",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "assignment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "resource",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "blocker",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Schema revision 2: the decided command; its revision is always 1 (a receipt is immutable).",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object",
+          "x-since": 2
+        }
+      ]
+    },
     "EvidenceKind": {
       "enum": [
         "Conversation",
@@ -2153,11 +2344,27 @@
     "EvidenceLink": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
         "artifact": {
           "$ref": "#/$defs/ArtifactRef"
         },
         "id": {
           "$ref": "#/$defs/Id"
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "revision": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         },
         "summary": {
           "$ref": "#/$defs/Text0To65536"
@@ -3384,11 +3591,19 @@
     "LineageRecord": {
       "additionalProperties": false,
       "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
         "kind": {
           "$ref": "#/$defs/Text1To256"
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         },
         "parentId": {
           "anyOf": [
@@ -3402,6 +3617,14 @@
         },
         "relatedId": {
           "$ref": "#/$defs/Id"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "revision": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         },
         "summary": {
           "$ref": "#/$defs/Text0To65536"
@@ -3450,6 +3673,14 @@
     "List_ArtifactRef_0_500": {
       "items": {
         "$ref": "#/$defs/ArtifactRef"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AttributedGitLink_0_500": {
+      "items": {
+        "$ref": "#/$defs/AttributedGitLink"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -3604,14 +3835,6 @@
         "$ref": "#/$defs/GitLink"
       },
       "maxItems": 128,
-      "minItems": 0,
-      "type": "array"
-    },
-    "List_GitLink_0_500": {
-      "items": {
-        "$ref": "#/$defs/GitLink"
-      },
-      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -3887,6 +4110,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_Revision_0_500": {
+      "items": {
+        "$ref": "#/$defs/Revision"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_RevisionedRef_0_500": {
       "items": {
         "$ref": "#/$defs/RevisionedRef"
@@ -3988,6 +4219,14 @@
         "$ref": "#/$defs/TierName"
       },
       "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_ToolInvocation_0_500": {
+      "items": {
+        "$ref": "#/$defs/ToolInvocation"
+      },
+      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -4887,8 +5126,16 @@
     "Page10": {
       "additionalProperties": false,
       "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
         "hasMore": {
           "type": "boolean"
+        },
+        "itemSequences": {
+          "$ref": "#/$defs/List_Revision_0_500",
+          "x-since": 2
         },
         "items": {
           "$ref": "#/$defs/List_UsageItem_0_500"
@@ -4902,6 +5149,10 @@
               "type": "null"
             }
           ]
+        },
+        "toolInvocations": {
+          "$ref": "#/$defs/List_ToolInvocation_0_500",
+          "x-since": 2
         }
       },
       "required": [
@@ -6057,6 +6308,11 @@
     "Page51": {
       "additionalProperties": false,
       "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
+          "x-since": 2
+        },
         "hasMore": {
           "type": "boolean"
         },
@@ -6135,6 +6391,11 @@
     "Page7": {
       "additionalProperties": false,
       "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
+          "x-since": 2
+        },
         "hasMore": {
           "type": "boolean"
         },
@@ -6161,11 +6422,16 @@
     "Page8": {
       "additionalProperties": false,
       "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
+          "x-since": 2
+        },
         "hasMore": {
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_GitLink_0_500"
+          "$ref": "#/$defs/List_AttributedGitLink_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -6187,6 +6453,11 @@
     "Page9": {
       "additionalProperties": false,
       "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
+          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
+          "x-since": 2
+        },
         "hasMore": {
           "type": "boolean"
         },
@@ -6839,7 +7110,7 @@
     "RelativePath": {
       "maxLength": 4096,
       "minLength": 1,
-      "pattern": "^(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+)(?:/(?:(?!\\.{1,2}(?:/|$))[^/\\u0000]+))*$",
+      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+)(?:[/\\\\](?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+))*$",
       "type": "string"
     },
     "ReleaseRecord": {
@@ -7537,19 +7808,6 @@
     "Revision": {
       "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
       "pattern": "^[1-9][0-9]{0,18}$",
-      "type": "string"
-    },
-    "RevisionKind": {
-      "enum": [
-        "Work",
-        "Control",
-        "Blocker",
-        "Operation",
-        "Policy",
-        "Scope",
-        "Plan",
-        "Authority"
-      ],
       "type": "string"
     },
     "RevisionedRef": {
@@ -8377,6 +8635,83 @@
         "ordinal"
       ],
       "type": "object"
+    },
+    "ToolInvocation": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "callId": {
+          "$ref": "#/$defs/Id"
+        },
+        "durationMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errorCode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "operationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/ToolInvocationOutcome"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Revision"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "toolName": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "sequence",
+        "callId",
+        "sessionId",
+        "toolName",
+        "outcome",
+        "actorId",
+        "occurredAtMs"
+      ],
+      "type": "object"
+    },
+    "ToolInvocationOutcome": {
+      "enum": [
+        "Completed",
+        "Failed",
+        "ApprovalRequired",
+        "DependencyBlocked",
+        "CancelledBeforeDispatch",
+        "OutcomeUnknown"
+      ],
+      "type": "string"
     },
     "ToolOutcome": {
       "oneOf": [
@@ -14510,6 +14845,23 @@
         },
         "value": {
           "$ref": "#/$defs/WorkRecord"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "artifacts.tag",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/MutationSummary"
         }
       },
       "required": [

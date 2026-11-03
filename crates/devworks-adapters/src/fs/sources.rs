@@ -242,7 +242,7 @@ impl ArtifactSources for HostArtifactSources {
         &self,
         ctx: &InvocationContext,
         source: &ArtifactSource,
-        project: &ProjectId,
+        project: Option<&ProjectId>,
     ) -> Result<ResolvedSource, SourceRefusal> {
         let (kind, id) = match source {
             ArtifactSource::Upload { ticket_id } => (Kind::Upload, ticket_id),
@@ -267,8 +267,8 @@ impl ArtifactSources for HostArtifactSources {
         }
         // A binding is satisfied only by exactly the bound project and work root: an invocation
         // without a root does not satisfy a root-bound handle.
-        let foreign_project = handle.project.as_ref().is_some_and(|p| p != project)
-            || ctx.project_id().is_some_and(|p| p != project);
+        let foreign_project = handle.project.as_ref().is_some_and(|p| Some(p) != project)
+            || ctx.project_id().is_some_and(|p| Some(p) != project);
         let foreign_root = handle
             .work_root
             .as_ref()

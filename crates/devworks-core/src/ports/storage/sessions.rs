@@ -25,6 +25,8 @@ pub struct WorkRoot {
     /// Advances whenever who can see the work changes; history cursors bind it.
     pub scope_revision: i64,
     pub parent_feature_id: Option<RootId>,
+    /// When the work item was created (UTC ms). Work items record no creator.
+    pub created_at_ms: i64,
 }
 
 /// A session: identity, lineage, lifecycle and its append position.
@@ -225,6 +227,65 @@ pub struct SequenceKey {
     pub id: String,
 }
 
+/// Which committed history a feed covers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HistoryScope {
+    /// The facts attached to one work root.
+    Root(RootId),
+    /// Every fact of one project.
+    Project(ProjectId),
+    /// The facts of the workspace itself (no project): Home sessions and workspace commands.
+    Workspace,
+}
+
+/// One completed tool invocation: a durable call and its single initial response, recorded with
+/// the response for every session (with or without a project or work root).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredInvocation {
+    pub session_id: Id,
+    /// Transcript sequence of the response entry (unique per session).
+    pub response_sequence: i64,
+    pub call_sequence: i64,
+    /// Committed sequence of the batch that recorded the response.
+    pub committed_sequence: i64,
+    pub project_id: Option<ProjectId>,
+    pub root_id: Option<RootId>,
+    /// Transcript entry ID of the call.
+    pub call_entry_id: Id,
+    pub capability_id: String,
+    /// Outcome variant of the response (`Completed`, `Failed`, ...).
+    pub outcome: String,
+    /// The `Failed` response's code, as recorded (redacted when served).
+    pub error_code: Option<String>,
+    pub operation_id: Option<OperationId>,
+    /// The principal the response batch was attributed to.
+    pub actor: ActorId,
+    pub called_at_ms: i64,
+    pub responded_at_ms: i64,
+}
+
+/// One usage fact of a scope in committed-sequence order: an attributed inference observation
+/// (key source 3, ID the zero-padded ordinal) or a completed tool invocation (key source 1, ID the
+/// zero-padded response sequence).
+#[derive(Clone, Debug, PartialEq)]
+pub enum UsageFact {
+    Inference {
+        key: SequenceKey,
+        usage: StoredUsage,
+    },
+    Tool {
+        key: SequenceKey,
+        invocation: StoredInvocation,
+    },
+}
+impl UsageFact {
+    pub fn key(&self) -> &SequenceKey {
+        match self {
+            Self::Inference { key, .. } | Self::Tool { key, .. } => key,
+        }
+    }
+}
+
 /// One row of a work root's lineage, in committed-sequence order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LineageRow {
@@ -276,6 +337,9 @@ pub trait SessionRead {
     /// The receipt of `batch_id` in `session` (batch identities are scoped per session).
     fn batch(&self, session: &Id, batch_id: &Id) -> Result<Option<StoredBatch>, StorageError>;
     fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError>;
+    /// The project's scope revision (it advances whenever who can see the project changes;
+    /// project feed cursors bind it), or `None` for an unknown project.
+    fn project_scope_revision(&self, project: &ProjectId) -> Result<Option<i64>, StorageError>;
     /// Digest of the root's work hierarchy (its parent feature and child work items); it
     /// changes whenever work is added to, moved into or out of the root's hierarchy.
     fn work_membership(&self, root: &RootId) -> Result<String, StorageError>;
@@ -324,6 +388,14 @@ pub trait SessionRead {
         after: Option<&SequenceKey>,
         limit: u16,
     ) -> Result<Vec<(SequenceKey, StoredUsage)>, StorageError>;
+    /// The usage facts of `scope` — its usage observations and completed tool invocations — in
+    /// committed-sequence order `(sequence, source, id)` after `after`, at most `limit`.
+    fn usage_facts(
+        &self,
+        scope: &HistoryScope,
+        after: Option<&SequenceKey>,
+        limit: u16,
+    ) -> Result<Vec<UsageFact>, StorageError>;
     fn link(&self, id: &Id) -> Result<Option<StoredLink>, StorageError>;
     /// Links of `root` whose kind is in `kinds` after `after`, at most `limit`.
     fn links(
@@ -357,6 +429,14 @@ pub trait SessionRead {
         after: i64,
         limit: u16,
     ) -> Result<Vec<EventRecord>, StorageError>;
+    /// The `CommandDecided` events of `scope`, whether or not they name a subject, sequence
+    /// greater than `after`, at most `limit`.
+    fn decisions(
+        &self,
+        scope: &HistoryScope,
+        after: i64,
+        limit: u16,
+    ) -> Result<Vec<EventRecord>, StorageError>;
 }
 
 pub trait SessionRepository: SessionRead {
@@ -379,6 +459,8 @@ pub trait SessionRepository: SessionRead {
     fn insert_context_source(&mut self, source: &StoredContextSource) -> Result<(), StorageError>;
     fn insert_checkpoint(&mut self, checkpoint: &StoredCheckpoint) -> Result<(), StorageError>;
     fn insert_usage(&mut self, usage: &StoredUsage) -> Result<(), StorageError>;
+    /// Records a completed invocation; `(session, response sequence)` is unique.
+    fn insert_invocation(&mut self, invocation: &StoredInvocation) -> Result<(), StorageError>;
     /// Adds a link; its ID is unique and a superseded or parent link must exist.
     fn insert_link(&mut self, link: &StoredLink) -> Result<(), StorageError>;
 }

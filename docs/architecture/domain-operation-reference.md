@@ -127,7 +127,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `sessions.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`closed`: `?bool` | `Page<SessionRecord>` |
 | `sessions.get` | **Query**<br>`sessionId`: `Id` | `SessionRecord` |
 | `sessions.transcript` | **Query**<br>[Existing input schema](contracts/session-query-request.schema.json)<br>None | `TranscriptPage` |
-| `sessions.briefing` | **Query**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter` | `Page<ContextSource>` |
+| `sessions.briefing` | **Query**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`item`: `?RootId`<br>`paths`: `?PathSet`<br>`budgetTokens`: `?TokenBudget`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ContextSource>` |
 | `sessions.append_message` | **Command**<br>[Existing input schema](contracts/session-command-request.schema.json)<br>None | `SessionRecord` |
 | `sessions.context_sources` | **Query**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`page`: `PageRequest` | `Page<ContextSource>` |
 | `sessions.start` | **Command**<br>`scope`: `DataScope`<br>`rootId`: `?RootId`<br>`title`: `Label` | `SessionRecord` |
@@ -147,12 +147,12 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `history.events` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.events'} | `Page<Event>` |
-| `history.work_lineage` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest` | `Page<LineageRecord>` |
-| `history.git_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest` | `Page<GitLink>` |
-| `history.evidence_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest` | `Page<EvidenceLink>` |
+| `history.events` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.events'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/query-request.r2.schema.json)) | `HistoryPage<Event>` |
+| `history.work_lineage` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<LineageRecord>` |
+| `history.git_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<AttributedGitLink>` |
+| `history.evidence_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<EvidenceLink>` |
 | `history.operation_status` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.operation_status'} | `OperationRef` |
-| `history.tool_usage` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest` | `Page<UsageItem>` |
+| `history.tool_usage` | **Query**<br>`rootId`: `?RootId`<br>`projectId`: `?ProjectId`<br>`workspace`: `?bool`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `UsagePage` |
 | `history.command_receipt` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.command_receipt'} | `ReceiptObservation` |
 
 ### Code
@@ -315,13 +315,14 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/artifact-command-request.r2.schema.json)) | `ArtifactRecord` |
-| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/artifact-query-request.r2.schema.json)) | `Page<ArtifactRecord>` |
+| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/artifact-command-request.r3.schema.json)) | `ArtifactRecord` |
+| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/artifact-query-request.r3.schema.json)) | `Page<ArtifactRecord>` |
 | `artifacts.read` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Read'} | `ArtifactReadContent` |
 | `artifacts.preview` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Preview'} | `ArtifactPreview` |
 | `artifacts.export` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Export'} | `ArtifactExport` |
 | `artifacts.reference` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Reference'} | `MutationSummary` |
 | `artifacts.delete` | **Command**<br>[Existing input schema](contracts/artifact-deletion-request.schema.json)<br>None | `MutationSummary` |
+| `artifacts.tag` | **Command**<br>`artifactId`: `Id`<br>`expectedRevision`: `Revision`<br>`tags`: `ArtifactTags` | `MutationSummary` |
 
 ### Conventions
 
@@ -976,6 +977,10 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `targetId` | `Id` |
 | `artifact` | `ArtifactRef` |
 | `summary` | `Content` |
+| `actorId` | `?ActorId` · *revision 2+* |
+| `occurredAtMs` | `?Counter` · *revision 2+* |
+| `repositoryId` | `?Id` · *revision 2+* |
+| `revision` | `?Text` · *revision 2+* |
 
 ### StatusRecord
 
@@ -1007,6 +1012,10 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `kind` | `Label` |
 | `relatedId` | `Id` |
 | `summary` | `Content` |
+| `actorId` | `?ActorId` · *revision 2+* |
+| `occurredAtMs` | `?Counter` · *revision 2+* |
+| `repositoryId` | `?Id` · *revision 2+* |
+| `revision` | `?Text` · *revision 2+* |
 
 ### AgentRecord
 
@@ -1526,6 +1535,19 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `pullRequestUrl` | `?Url` |
 | `head` | `GitOid` |
 
+### AttributedGitLink
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `workId` | `Id` |
+| `worktreeId` | `?Id` |
+| `branch` | `?Text` |
+| `pullRequestUrl` | `?Url` |
+| `head` | `GitOid` |
+| `actorId` | `?ActorId` · *revision 2+* |
+| `occurredAtMs` | `?Counter` · *revision 2+* |
+
 ### ReleaseRecord
 
 | Field | Type |
@@ -1925,6 +1947,36 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `priceOrigin` | `PriceOrigin` |
 | `priceRevision` | `?Revision` |
 | `incomplete` | `bool` |
+
+### ToolInvocationOutcome
+
+`Completed`, `Failed`, `ApprovalRequired`, `DependencyBlocked`, `CancelledBeforeDispatch`, `OutcomeUnknown`.
+
+### ToolInvocation
+
+| Field | Type |
+| --- | --- |
+| `sequence` | `Revision` |
+| `callId` | `Id` |
+| `sessionId` | `Id` |
+| `toolName` | `Label` |
+| `outcome` | `ToolInvocationOutcome` |
+| `durationMs` | `?Counter` |
+| `errorCode` | `?Label` |
+| `operationId` | `?OperationId` |
+| `actorId` | `ActorId` |
+| `occurredAtMs` | `Counter` |
+
+### UsagePage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<UsageItem>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `checkpoint` | `?Cursor` · *revision 2+* |
+| `itemSequences` | `?Rows<Revision>` · *revision 2+* |
+| `toolInvocations` | `?Rows<ToolInvocation>` · *revision 2+* |
 
 ### UsageReport
 

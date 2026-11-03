@@ -307,6 +307,16 @@ pub trait ArtifactRead {
         after: Option<&ListPosition>,
         limit: u16,
     ) -> Result<Vec<StoredArtifact>, StorageError>;
+    /// Live, explicitly retained workspace-scoped artifacts with a current version, owned by
+    /// `owner` (`None`: every owner) and carrying every tag in `tags`, newest first after
+    /// `after`, at most `limit` (1..=500). Receipt replies are not listed.
+    fn list_workspace(
+        &self,
+        owner: Option<&ActorId>,
+        tags: &[String],
+        after: Option<&ListPosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError>;
     /// The artifact's tags in byte order (empty when it has none).
     fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError>;
     /// Projects the artifact is shared with (its owner is not listed), in ID order.

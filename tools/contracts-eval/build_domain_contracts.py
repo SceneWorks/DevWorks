@@ -10,14 +10,33 @@ def rust(t):
 ATTR='#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]\n'
 REC=ATTR+'#[serde(rename_all = "camelCase", deny_unknown_fields)]\n'
 TAG=ATTR+'#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]\n'
-def fields(fs,indent='    ',since=None):
- lines=[]
+def camel(s):return re.sub(r'_([a-z])',lambda m:m[1].upper(),s)
+def literal(v):return json.dumps(v)
+def fields(fs,indent='    ',since=None,one=(),schema=None):
+ # `one`: members of an exactly-one choice (rendered without null); `schema`: extra keywords.
+ lines=[];schema=schema or {}
  for n,t in fs.items():
-  if since and n in since:lines += [indent+'#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "gated_member")]',indent+f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}))]']
-  elif t.startswith('?'):lines.append(indent+'#[serde(default, skip_serializing_if = "Option::is_none")]')
+  extra=''.join(f', {literal(k)} = {literal(v)}' for k,v in schema.get(n,{}).items())
+  if since and n in since:lines += [indent+'#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "gated_member")]',indent+f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}{extra}))]']
+  elif t.startswith('?'):
+   lines.append(indent+'#[serde(default, skip_serializing_if = "Option::is_none")]')
+   if n in one:lines.append(indent+f'#[schemars(with = "{rust(t[1:])}")]')
   lines.append(indent+f'pub {n}: {rust(t)},')
  return '\n'.join(lines)
-def enumfields(fs,since=None):return fields(fs,'        ',since).replace('pub ','')
+def enumfields(fs,since=None,one=(),schema=None):return fields(fs,'        ',since,one,schema).replace('pub ','')
+def choice(fs,one,since,kind):
+ """`oneOf` of an exactly-one member choice: each alternative lists the full required set (in
+ field order) with that member; one introduced later carries its `x-since`."""
+ alts=[]
+ for m in one:
+  req=(['kind'] if kind else [])+[camel(n) for n,t in fs.items() if not t.startswith('?') or n==m]
+  alts.append({'required':req,**({'x-since':since[m]} if m in since else {})})
+ return f'#[schemars(extend("oneOf" = {literal(alts)}))]'
+def record_attrs(d):
+ out=[]
+ if d.get('schemaName'):out.append(f'#[schemars(rename = "{d["schemaName"]}")]')
+ if d.get('earlierName'):out.append(f'#[schemars(extend("x-earlier" = {literal({"name":d["earlierName"],"before":min(d["since"].values())})}))]')
+ return ''.join(a+'\n' for a in out)
 def tokens(t):return set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*',t))
 # Members introduced in a later operation schema revision ("since") and the types that carry one.
 RC={n for n,d in TYPES.items() if d.get('since')}
@@ -44,7 +63,7 @@ lines=['//! Generated architecture DTOs. Edit domain_spec.py and regenerate; no 
  'use serde::{Serialize,Deserialize}; use schemars::JsonSchema;', '']
 for name,d in TYPES.items():
  if d['kind']=='record':
-  lines += [REC+f'pub struct {name} {{',fields(d['fields'],since=d.get('since')),'}',f'impl Check for {name} {{ fn check(&self)->Result<(),String>{{',checkfields(d['fields']),f'    super::domain_rules::record("{name}", &serde_json::to_value(self).map_err(|e|e.to_string())?)?;', '    Ok(()) } }','']
+  lines += [REC+record_attrs(d)+f'pub struct {name} {{',fields(d['fields'],since=d.get('since')),'}',f'impl Check for {name} {{ fn check(&self)->Result<(),String>{{',checkfields(d['fields']),f'    super::domain_rules::record("{name}", &serde_json::to_value(self).map_err(|e|e.to_string())?)?;', '    Ok(()) } }','']
   if name in RC:lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{',*retain(d['fields'],d.get('since',{}),'self.'),'}}','']
  elif d['kind']=='enum':
   lines += [ATTR+f'pub enum {name} {{',*['    '+pascal(v)+',' if v[0].isupper() else '    #[serde(rename = "'+v+'")] '+pascal(v)+',' for v in d['values']],'}',f'impl Check for {name} {{fn check(&self)->Result<(),String>{{Ok(())}}}}','']
@@ -65,7 +84,9 @@ def opsince(d,mode): return {n:r for n,r in d.get('since',{}).items() if n in op
 for mode in ['Query','Command']:
  lines += [TAG+f'pub enum Domain{mode} {{']
  for n,d in OPS.items():
-  if included(d,mode):lines += ['    #[serde(rename = "'+n+'")] '+pascal(n)+' {',enumfields(opfields(d,mode),opsince(d,mode)),'    },']
+  if included(d,mode):
+   one=d.get('exactlyOne',[]);fs=opfields(d,mode)
+   lines += ['    #[serde(rename = "'+n+'")] '+(choice(fs,one,opsince(d,mode),True) if one else '')+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema')),'    },']
  lines += ['}',f'impl Domain{mode} {{pub fn operation(&self)->&\'static str {{match self {{']
  for n,d in OPS.items():
   if included(d,mode):lines.append(f' Self::{pascal(n)} {{..}} => "{n}",')
@@ -93,7 +114,8 @@ for n in results: lines += [f' Self::{pascal(n)} {{..}}=>"{n}",']
 lines += ['}}}', 'impl Check for OperationResult {fn check(&self)->Result<(),String>{match self{']
 for n in results:lines += [f' Self::{pascal(n)} {{value}}=>value.check()?,']
 lines += ['} super::domain_rules::result(self.operation(), &serde_json::to_value(self).map_err(|e|e.to_string())?) }}', '']
-projected=[n for n,t in results.items() if tokens(t)&RC]
+# HistoryPage is a support type with its own revision-2 member (the tail checkpoint).
+projected=[n for n,t in results.items() if tokens(t)&(RC|{'HistoryPage'})]
 lines += ['impl Revisioned for OperationResult {fn retain_revision(&mut self,revision:u32){match self{',*[f' Self::{pascal(n)} {{value}}=>value.retain_revision(revision),' for n in projected],*([' _ => {}'] if len(projected)<len(results) else []),'}}}','']
 # Generic receipts preserve admitted/rejected/unknown command distinctions. Outcome
 # variants cannot mint human authority or make an external uncertainty successful.

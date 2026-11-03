@@ -1,5 +1,5 @@
 //! `ArtifactService`: the local artifact store behind `artifacts.save`, `.list`,
-//! `.read`, `.preview`, `.export`, `.reference` and `.delete` (ART-01..05), registered through
+//! `.read`, `.preview`, `.export`, `.reference`, `.delete` and `.tag` (ART-01..05), registered through
 //! [`crate::services::UseCases::with_artifacts`]. The UI, agent tools, packages and MCP reach the
 //! same use cases through the gateway; there is no second implementation of any rule.
 //!
@@ -75,7 +75,12 @@
 //! artifact, with the workspace as its scope: its audience is its owner, the user, the host and
 //! the unconfined workspace coordinator ([`Viewer`]), and a project sees it only once it is
 //! shared with that project. Workspace usage is measured against the workspace-level storage
-//! limit.
+//! limit. From schema revision 3, `artifacts.save` and `artifacts.list` name the workspace
+//! (`workspace: true`) instead of a project: only a workspace invocation of a principal whose
+//! authorized scope is the workspace may ([`WORKSPACE_SCOPE`]), a saved workspace artifact is
+//! owned by its saver, and the listing returns what the principal is in the audience of.
+//! `artifacts.tag` replaces an existing artifact's tag set under its revision (never a receipt's
+//! reply).
 //!
 //! A receipt's durable typed reply ([`replies`]) is a [`ArtifactRetention::Receipt`] artifact:
 //! system-owned, immutable and retained while its receipt is retained, because the shared
@@ -154,7 +159,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 /// The operations [`ArtifactService`] is registered for.
-pub const OPERATIONS: [&str; 7] = [
+pub const OPERATIONS: [&str; 8] = [
     "artifacts.save",
     "artifacts.list",
     "artifacts.read",
@@ -162,6 +167,7 @@ pub const OPERATIONS: [&str; 7] = [
     "artifacts.export",
     "artifacts.reference",
     "artifacts.delete",
+    "artifacts.tag",
 ];
 /// History aggregate of an artifact (`aggregate_id` = artifact ID). Events carry the owning
 /// project and, where there is one, the origin or referencing work root, so work history
@@ -452,6 +458,38 @@ fn require_project(ctx: &InvocationContext, project: &ProjectId) -> Result<(), R
     }
 }
 
+/// The schema revision that introduced the workspace scope of saves and listings.
+pub const WORKSPACE_SINCE: SchemaRevision = SchemaRevision(3);
+/// Fault target kind of a workspace save or listing outside the caller's authorized scope.
+pub const WORKSPACE_SCOPE: &str = "workspace_scope";
+
+/// The owner scope a save or listing names. The workspace scope (revision 3) is reachable only
+/// from a workspace invocation (no project, no work lineage) of a principal whose current
+/// authorized scope is the workspace: the user, the host and unconfined principals. A
+/// project-confined principal, or a work invocation, is refused (`PermissionDenied`).
+fn named_scope(
+    authority: &dyn AuthorityRead,
+    ctx: &InvocationContext,
+    project: Option<&ProjectId>,
+) -> Result<ArtifactScope, Failure> {
+    match project {
+        Some(p) => {
+            require_project(ctx, p)?;
+            Ok(ArtifactScope::Project(p.clone()))
+        }
+        None => {
+            let workspace_invocation = ctx.project_id().is_none() && ctx.root_id().is_none();
+            let viewer = Viewer::resolve(authority, ctx)?;
+            if !workspace_invocation || viewer.authorized != Some(AuthorizedScope::Workspace) {
+                return Err(
+                    Refusal::new(DomainErrorCode::PermissionDenied, WORKSPACE_SCOPE, None).into(),
+                );
+            }
+            Ok(ArtifactScope::Workspace)
+        }
+    }
+}
+
 /// The live artifact `id` if this invocation may see it (otherwise `NotFound`).
 fn visible_artifact(
     read: &dyn crate::ports::storage::ArtifactRead,
@@ -643,10 +681,10 @@ fn event(
 // ---------------------------------------------------------------------------------------------
 // Staging (preparation)
 
-/// One source to stage for `project`, with the caller's expected identity.
+/// One source to stage for `scope`, with the caller's expected identity.
 #[derive(Clone, Copy, Debug)]
 pub struct StageRequest<'a> {
-    pub project: &'a ProjectId,
+    pub scope: &'a ArtifactScope,
     pub source: &'a ArtifactSource,
     pub expected_digest: &'a Digest,
     pub expected_bytes: i64,
@@ -807,7 +845,7 @@ impl ArtifactService {
         request: &StageRequest<'_>,
     ) -> Result<Staging, StorageError> {
         let StageRequest {
-            project,
+            scope,
             source,
             expected_digest,
             expected_bytes,
@@ -820,9 +858,9 @@ impl ArtifactService {
         let digest = String::from(expected_digest.clone());
         let limits = env.read(|s| {
             let max = setting_i64(s.configuration(), None, ARTIFACT_MAX_FILE_KEY);
-            let quota = setting_i64(s.configuration(), Some(project), ARTIFACT_QUOTA_KEY);
+            let quota = setting_i64(s.configuration(), scope.project(), ARTIFACT_QUOTA_KEY);
             let row = s.artifacts().blob(&digest)?;
-            let usage = s.artifacts().project_usage(project)?;
+            let usage = usage(s.artifacts(), scope)?;
             Ok((max, quota, row, usage))
         })?;
         let (max, quota, row, usage) = limits;
@@ -852,9 +890,9 @@ impl ArtifactService {
         }
         // Bytes no blob holds yet always add to usage: refuse before reading or staging them.
         if quota > 0 && new_bytes && usage.saturating_add(expected_bytes) > quota {
-            return Ok(Staging::Refused(quota_refusal(project)));
+            return Ok(Staging::Refused(quota_refusal(scope)));
         }
-        let resolved = match self.sources.resolve(ctx, source, project) {
+        let resolved = match self.sources.resolve(ctx, source, scope.project()) {
             Ok(r) => r,
             Err(SourceRefusal::NotFound) => {
                 return Ok(Staging::Refused(Refusal::new(
@@ -888,7 +926,7 @@ impl ArtifactService {
             "digest": digest,
             "byteCount": expected_bytes,
             "requestDigest": request_digest,
-            "projectId": project.0.as_str(),
+            "projectId": scope.project().map(|p| p.0.as_str()),
             "source": source_json(source),
         });
         let mut reader = Stoppable {
@@ -1041,11 +1079,11 @@ impl ArtifactService {
     }
 }
 
-fn quota_refusal(project: &ProjectId) -> Refusal {
+fn quota_refusal(scope: &ArtifactScope) -> Refusal {
     Refusal::new(
         DomainErrorCode::CapacityWait,
         QUOTA_TARGET,
-        Some(project.0.clone()),
+        scope.project().map(|p| p.0.clone()),
     )
 }
 
@@ -1242,14 +1280,15 @@ impl ArtifactService {
             return Err(unsupported().into());
         };
         let tags = tags.as_ref().map_or(&[][..], |t| &t.0[..]);
-        require_project(ctx, project_id)?;
-        if !tx.artifacts().project_exists(project_id)? {
-            return Err(not_found("project", &project_id.0).into());
+        // Admission admits exactly one scope; the workspace only from revision 3.
+        let scope = named_scope(tx.authority(), ctx, project_id.as_ref())?;
+        if let ArtifactScope::Project(p) = &scope
+            && !tx.artifacts().project_exists(p)?
+        {
+            return Err(not_found("project", &p.0).into());
         }
-        if let Some(root) = ctx.root_id()
-            && !tx
-                .artifacts()
-                .subject_exists(project_id, &SubjectKey::root(root))?
+        if let (Some(root), ArtifactScope::Project(p)) = (ctx.root_id(), &scope)
+            && !tx.artifacts().subject_exists(p, &SubjectKey::root(root))?
         {
             return Err(Refusal::new(
                 DomainErrorCode::InvalidArgument,
@@ -1272,12 +1311,16 @@ impl ArtifactService {
         let artifact_id = tx.new_id(IdKind::Artifact);
         let mut artifact = StoredArtifact {
             id: artifact_id.clone(),
-            origin_project_id: Some(project_id.clone()),
+            origin_project_id: scope.project().cloned(),
             origin_work_id: ctx.root_id().cloned(),
             title: title.clone(),
             revision: 1,
-            scope: ArtifactScope::Project(project_id.clone()),
-            owner: None,
+            // A workspace artifact is owned by the principal that saved it.
+            owner: match &scope {
+                ArtifactScope::Workspace => Some(ctx.principal().clone()),
+                ArtifactScope::Project(_) => None,
+            },
+            scope,
             retention: ArtifactRetention::Explicit,
             scope_revision: 1,
             reference_revision: 1,
@@ -1419,6 +1462,89 @@ impl ArtifactService {
                     revision: rev(artifact.reference_revision),
                     changed: true,
                 },
+            },
+        })
+    }
+
+    /// `artifacts.tag`: replaces the tag set of an existing artifact (ART-02), reusing the tag
+    /// bounds and set normalization of saves (an empty set clears it). The caller must see the
+    /// artifact and act for its owner scope: for a project artifact, a principal authorized for
+    /// that project invoked from it (or from the workspace); for a workspace artifact, a member of
+    /// its audience with the workspace as its authorized scope. Seeing an artifact through a
+    /// share never grants it: a project it is only shared with does not own its metadata. The expected artifact revision
+    /// guards concurrent edits; a changed set advances it and records `ArtifactTagsChanged`, an
+    /// equal set is `NoChange`. A receipt's reply is never retagged (`Conflict`): it is an
+    /// immutable correctness record, never listed, so tags would neither find it nor belong to
+    /// the user's own outputs.
+    fn tag(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        input: &ops::TagInput,
+    ) -> Result<DomainDecision, Failure> {
+        let viewer = Viewer::resolve(tx.authority(), ctx)?;
+        let mut artifact = visible_artifact(tx.artifacts(), &viewer, &input.artifact_id)?;
+        require_explicit(&artifact)?;
+        // Only the owner scope edits metadata; seeing an artifact through a share never does.
+        let owns = match &artifact.scope {
+            // A workspace artifact: a member of its audience (its owner, the user, the host, the
+            // unconfined coordinator) acting with the workspace as its authorized scope.
+            ArtifactScope::Workspace => {
+                viewer.authorized == Some(AuthorizedScope::Workspace)
+                    && viewer.sees_owned(artifact.owner.as_ref())
+            }
+            // A project artifact: a principal authorized for the owner project, invoked from it
+            // or from the workspace (never from a project it is only shared with).
+            ArtifactScope::Project(owner) => {
+                viewer.authorized.as_ref().is_some_and(|a| a.covers(owner))
+                    && ctx.project_id().is_none_or(|p| p == owner)
+            }
+        };
+        if !owns {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "artifact",
+                Some(artifact.id.clone()),
+            )
+            .into());
+        }
+        if input.expected_revision.get() != artifact.revision {
+            return Err(conflict(
+                RevisionDimension::Artifact,
+                "artifact",
+                &artifact.id,
+                &input.expected_revision,
+                artifact.revision,
+            ));
+        }
+        let summary = |artifact: &StoredArtifact, changed| MutationSummary {
+            id: artifact.id.clone(),
+            revision: rev(artifact.revision),
+            changed,
+        };
+        let before = tx.artifacts().tags(&artifact.id)?;
+        if before == input.tags.0 {
+            return Ok(DomainDecision::NoChange {
+                result: OperationResult::ArtifactsTag {
+                    value: summary(&artifact, false),
+                },
+            });
+        }
+        tx.artifacts().set_tags(&artifact.id, &input.tags.0)?;
+        artifact.revision += 1;
+        tx.artifacts().update_artifact(&artifact)?;
+        event(
+            tx,
+            ctx,
+            &artifact,
+            artifact.origin_work_id.clone(),
+            None,
+            "ArtifactTagsChanged",
+            json!({"previous": before, "tags": input.tags.0, "revision": artifact.revision}),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::ArtifactsTag {
+                value: summary(&artifact, true),
             },
         })
     }
@@ -1691,9 +1817,13 @@ fn unsupported() -> Refusal {
 // ---------------------------------------------------------------------------------------------
 // Queries
 
-/// Binds a list cursor to its project and tag filter (a changed filter invalidates the cursor).
-fn list_binding(project: &ProjectId, tags: &[String]) -> String {
-    let mut basis = format!("artifacts.list|{}", project.0.as_str());
+/// Binds a list cursor to its scope and tag filter (a changed filter invalidates the cursor). A
+/// workspace listing depends on who lists it, so its cursor binds the principal too.
+fn list_binding(scope: &ListScope<'_>, ctx: &InvocationContext, tags: &[String]) -> String {
+    let mut basis = match scope {
+        ListScope::Project(p) => format!("artifacts.list|{}", p.0.as_str()),
+        ListScope::Workspace => format!("artifacts.list|workspace|{}", ctx.principal().0.as_str()),
+    };
     for tag in tags {
         basis.push('|');
         basis.push_str(&sha256_hex(tag.as_bytes()));
@@ -1701,9 +1831,16 @@ fn list_binding(project: &ProjectId, tags: &[String]) -> String {
     sha256_hex(basis.as_bytes())[..16].to_owned()
 }
 
+/// The scope an `artifacts.list` page covers.
+enum ListScope<'a> {
+    Project(&'a ProjectId),
+    /// Schema revision 3: the workspace artifacts the principal belongs to the audience of.
+    Workspace,
+}
+
 /// One `artifacts.list` page request, read at the negotiated `revision`.
 struct Listing<'a> {
-    project: &'a ProjectId,
+    scope: ListScope<'a>,
     tags: &'a [String],
     revision: SchemaRevision,
     limit: u16,
@@ -1718,18 +1855,30 @@ impl ArtifactService {
         listing: Listing<'_>,
     ) -> Result<OperationResult, Failure> {
         let Listing {
-            project,
+            scope,
             tags,
             revision,
             limit,
             cursor,
         } = listing;
-        require_project(ctx, project)?;
         let read = snapshot.artifacts();
-        if !read.project_exists(project)? {
-            return Err(not_found("project", &project.0).into());
-        }
-        let binding = list_binding(project, tags);
+        // The workspace audience: the user, the host and the unconfined coordinator list every
+        // workspace artifact; any other unconfined principal lists the ones it owns.
+        let owner = match &scope {
+            ListScope::Project(project) => {
+                require_project(ctx, project)?;
+                if !read.project_exists(project)? {
+                    return Err(not_found("project", &project.0).into());
+                }
+                None
+            }
+            ListScope::Workspace => {
+                named_scope(snapshot.authority(), ctx, None)?;
+                let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
+                (!viewer.sees_owned(None)).then(|| ctx.principal().clone())
+            }
+        };
+        let binding = list_binding(&scope, ctx, tags);
         let after = match cursor {
             None => None,
             Some(c) => {
@@ -1744,12 +1893,13 @@ impl ArtifactService {
                 Some(parsed.ok_or(Failure::Storage(StorageError::CursorExpired))?)
             }
         };
-        let mut rows = read.list(
-            project,
-            tags,
-            after.as_ref(),
-            limit.saturating_add(1).min(501),
-        )?;
+        let page = limit.saturating_add(1).min(501);
+        let mut rows = match &scope {
+            ListScope::Project(project) => read.list(project, tags, after.as_ref(), page)?,
+            ListScope::Workspace => {
+                read.list_workspace(owner.as_ref(), tags, after.as_ref(), page)?
+            }
+        };
         let has_more = rows.len() > limit as usize;
         rows.truncate(limit as usize);
         let mut items = Vec::with_capacity(rows.len());
@@ -2053,13 +2203,18 @@ impl QueryHandler for ArtifactService {
         };
         let cursor = request.cursor.as_deref();
         let answered = match &request.query {
-            ArtifactQuery::List { project_id, tags } => {
+            ArtifactQuery::List {
+                project_id, tags, ..
+            } => {
                 let tags = tags.as_ref().map_or(&[][..], |t| &t.0[..]);
                 self.list(
                     snapshot,
                     ctx,
                     Listing {
-                        project: project_id,
+                        // Admission admits exactly one scope; the workspace only from revision 3.
+                        scope: project_id
+                            .as_ref()
+                            .map_or(ListScope::Workspace, ListScope::Project),
                         tags,
                         revision: query.schema_revision(),
                         limit: request.limit,
@@ -2129,14 +2284,16 @@ impl CommandHandler for ArtifactService {
             return Ok(None);
         }
         // Scope refusals are decided (and recorded) by `decide`; stage nothing for them.
-        if let Err(r) = require_project(ctx, project_id) {
-            return Ok(Some(Prepared::new(Staging::Refused(r))));
-        }
+        let scope = match env.read(|s| Ok(named_scope(s.authority(), ctx, project_id.as_ref())))? {
+            Ok(scope) => scope,
+            Err(Failure::Refused(r)) => return Ok(Some(Prepared::new(Staging::Refused(r)))),
+            Err(Failure::Storage(e)) => return Err(e),
+        };
         let staging = self.stage(
             env,
             ctx,
             &StageRequest {
-                project: project_id,
+                scope: &scope,
                 source,
                 expected_digest,
                 expected_bytes: expected_bytes.get(),
@@ -2212,6 +2369,12 @@ impl CommandHandler for ArtifactService {
                 }),
             OperationInput::Artifacts(ops::Input::Delete(req)) => {
                 self.delete(tx, ctx, &req.deletion).map(|decision| Decided {
+                    decision,
+                    operation_id: None,
+                })
+            }
+            OperationInput::Artifacts(ops::Input::Tag(input)) => {
+                self.tag(tx, ctx, input).map(|decision| Decided {
                     decision,
                     operation_id: None,
                 })
