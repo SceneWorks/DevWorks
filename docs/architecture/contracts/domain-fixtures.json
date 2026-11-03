@@ -5516,6 +5516,20 @@
     "schemaValid": false
   },
   {
+    "id": "reject-revision-above-range",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"projectId\":\"project-a\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\"},\"schemaRevision\":70000}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-revision-float-spelling",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"projectId\":\"project-a\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\"},\"schemaRevision\":1.0}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
     "id": "r2-result-artifacts.save",
     "entry": "operation-result.r2",
     "raw": "{\"kind\":\"artifacts.save\",\"value\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"name\":\"fixture\",\"createdAtMs\":\"0\",\"scope\":{\"kind\":\"Workspace\"},\"referenceCount\":\"0\",\"tags\":[\"evidence\",\"release\"]}}",

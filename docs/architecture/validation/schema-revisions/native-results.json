@@ -25894,6 +25894,24 @@
       "typedValid": false
     },
     {
+      "entry": "artifact-command-request",
+      "error": "schemaRevision must be an integer from 1 to 65535",
+      "expectedSchemaValid": false,
+      "id": "reject-revision-above-range",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "artifact-command-request",
+      "error": "schemaRevision must be an integer from 1 to 65535",
+      "expectedSchemaValid": true,
+      "id": "reject-revision-float-spelling",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
       "entry": "operation-result.r2",
       "error": null,
       "expectedSchemaValid": true,

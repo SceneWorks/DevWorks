@@ -107,6 +107,8 @@ pub struct SchemaRevision(pub u32);
 impl SchemaRevision {
     /// The revision of a request that does not negotiate one.
     pub const INITIAL: Self = Self(1);
+    /// The largest revision the envelope member `schemaRevision` can name.
+    pub const MAX: Self = Self(65535);
 }
 
 /// A typed input together with its normalized representation (envelope identity removed).
@@ -316,12 +318,16 @@ fn decode_domain_body<T: DeserializeOwned + Serialize + Check + Revisioned + Clo
 
 /// A recorded specialized envelope: typed decode, its own cross-field validation and
 /// normalization. The normalized form drops the contract and caller-identity members, which are
-/// bound separately and never part of the intent fingerprint's input. An envelope whose shape
-/// grew in a later revision overrides [`SpecializedEnvelope::retain_revision`].
+/// bound separately and never part of the intent fingerprint's input.
+///
+/// [`SpecializedEnvelope::retain_revision`] is the envelope's strict revision reader and has no
+/// default: every envelope states it, so a member gated with `x-since` is never admitted at an
+/// earlier revision through an inherited no-op. The recorded-fixture tests refuse every `x-since`
+/// member of every envelope schema at the revision before it.
 pub(crate) trait SpecializedEnvelope: DeserializeOwned + Serialize + Clone {
     fn validate_envelope(&self) -> Result<(), String>;
     fn normalize(&mut self) {}
-    fn retain_revision(&mut self, _revision: u32) {}
+    fn retain_revision(&mut self, revision: u32);
 }
 /// Adapts a specialized envelope to the strict revision reader.
 #[derive(Clone, Serialize)]
@@ -358,6 +364,7 @@ fn decode_specialized<T: SpecializedEnvelope>(
     })
 }
 
+/// Envelopes whose every member exists since revision 1: their revision reader keeps everything.
 macro_rules! specialized {
     ($($ty:ty => $validate:expr),* $(,)?) => {$(
         impl SpecializedEnvelope for $ty {
@@ -365,6 +372,7 @@ macro_rules! specialized {
                 let check: fn(&$ty) -> Result<(), &'static str> = $validate;
                 check(self).map_err(str::to_owned)
             }
+            fn retain_revision(&mut self, _revision: u32) {}
         }
     )*};
 }
@@ -405,4 +413,6 @@ impl SpecializedEnvelope for crate::protocol::CommandRequest {
     fn normalize(&mut self) {
         crate::protocol::CommandRequest::normalize(self)
     }
+    /// Every member exists since revision 1.
+    fn retain_revision(&mut self, _revision: u32) {}
 }

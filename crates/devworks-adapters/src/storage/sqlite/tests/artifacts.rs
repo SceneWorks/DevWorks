@@ -28,7 +28,7 @@ use devworks_core::protocol::results::{
 use devworks_core::protocol::shared::Subject;
 use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, OperationState, ProjectId,
-    Rejection, Revision, RootId,
+    Rejection, RetryAdvice, Revision, RootId,
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::lifecycle::{
@@ -3867,4 +3867,109 @@ fn tag_bounds_duplicates_and_unregistered_revisions_are_refused_without_receipts
     assert_eq!(fx.receipts(), before);
     assert!(fx.staging_ops_all().is_empty());
     assert!(list(&fx, &fx.user(), "project-a").is_empty());
+}
+
+#[test]
+fn revision_one_commands_on_a_tagged_artifact_keep_its_tags_and_never_read_them() {
+    let fx = Fx::new();
+    let a = saved(fx.save_tagged("t-a", "Alpha", b"alpha", json!(["release", "evidence"])));
+    let r = a.artifact.clone();
+    // artifacts.reference stays at revision 1; referencing the artifact changes only its
+    // reference set, never its tags.
+    let worker = fx.worker("agent-a");
+    let s = summary(fx.reference(&worker, &r, json!({"kind": "root", "id": "task-a"}), 1));
+    assert!(s.changed);
+    let (items, _) = fx.listed(&list_frame(
+        Some(2),
+        Some(json!(["evidence", "release"])),
+        None,
+        50,
+    ));
+    assert_eq!(titles(&items), ["Alpha"]);
+    assert_eq!(items[0]["tags"], json!(["evidence", "release"]));
+    assert_eq!(items[0]["referenceCount"], json!("1"));
+    // A later revision-1 save and revision-1 lists leave its stored tags intact.
+    fx.saved("t-b", "Beta", "text/plain", b"beta");
+    let (r1, _) = fx.listed(&list_frame(None, None, None, 50));
+    assert!(r1.iter().all(|i| members(i) == REVISION_1_RECORD));
+    let aid = r.artifact_id.clone();
+    assert_eq!(
+        fx.read(move |s| s.artifacts().tags(&aid)),
+        ["evidence", "release"]
+    );
+
+    // Revision-1 callers never read stored tags: a stored tag outside the contract fails only a
+    // revision-2 read, which cannot receive it truthfully.
+    let id = r.artifact_id.as_str().to_owned();
+    fx.store
+        .with_writer_connection(move |c| {
+            super::super::conn::db(c.execute(
+                "INSERT INTO artifact_tags(artifact_id,tag) VALUES(?1,?2)",
+                rusqlite::params![id, "x".repeat(65)],
+            ))
+        })
+        .unwrap();
+    let (r1, _) = fx.listed(&list_frame(None, None, None, 50));
+    assert_eq!(titles(&r1), ["Beta", "Alpha"]);
+    assert!(matches!(
+        fault(fx.query_frame(
+            &fx.user(),
+            "artifacts.list",
+            &list_frame(Some(2), None, None, 50)
+        ))
+        .code,
+        DomainErrorCode::StorageUnavailable
+    ));
+}
+
+#[test]
+fn a_stored_receipt_under_an_unregistered_revision_is_a_visible_hold_on_sqlite() {
+    let fx = Fx::new();
+    fx.source("t-h", "t-h.bin", b"held", SourceOrigin::default());
+    let mut frame = fx.save_frame(
+        "held-key",
+        "project-a",
+        "Held",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t-h"}),
+        b"held",
+    );
+    frame["schemaRevision"] = json!(2);
+    frame["command"]["tags"] = json!(["evidence"]);
+    saved(fx.command(&fx.user(), "artifacts.save", frame.clone()));
+    // The stored receipt now names a revision artifacts.save does not register (as if recorded
+    // by a later build, or by a revision since withdrawn).
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute(
+                "UPDATE command_receipts SET result_json=json_set(result_json,'$.schemaRevision',7)
+                 WHERE idempotency_key='held-key'",
+                [],
+            ))
+        })
+        .unwrap();
+    let staged = fx.staging_ops_all().len();
+    for _ in 0..2 {
+        match fx.command(&fx.user(), "artifacts.save", frame.clone()) {
+            CommandReply::Rejected { code, retry, .. } => {
+                assert_eq!(code, Rejection::UnsupportedSchema);
+                assert_eq!(retry, RetryAdvice::ResolveReceipt);
+            }
+            other => panic!("expected a hold, got {other:?}"),
+        }
+    }
+    // Never replayed, rewritten or redispatched: one hold record, no new receipt or staging.
+    let holds: Vec<Value> = fx
+        .events()
+        .into_iter()
+        .filter(|e| e.kind == "ReceiptIncompatible")
+        .map(|e| e.payload)
+        .collect();
+    assert_eq!(holds.len(), 1);
+    assert_eq!(holds[0]["storedSchemaRevision"], json!(7));
+    assert_eq!(holds[0]["schemaRevision"], json!(2));
+    assert_eq!(fx.receipts(), 1);
+    assert_eq!(fx.staging_ops_all().len(), staged);
+    let (items, _) = fx.listed(&list_frame(Some(2), None, None, 50));
+    assert_eq!(titles(&items), ["Held"]);
 }

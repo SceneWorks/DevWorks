@@ -14,7 +14,7 @@ use devworks_core::protocol::provider::*;
 use devworks_core::protocol::results::*;
 use devworks_core::protocol::support::Revisioned;
 use devworks_core::protocol::*;
-use devworks_core::registry::{self, Envelope, Mode};
+use devworks_core::registry::{self, Envelope, Mode, SchemaRevision};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -300,7 +300,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 793), 793);
+    assert_eq!(run("domain-fixtures.json", 795), 795);
 }
 
 #[test]
@@ -383,4 +383,116 @@ fn oversized_frame_is_rejected_before_typed_parsing() {
         refusal.error,
         admission::AdmissionError::Frame(framing::FrameError::TooLarge { .. })
     ));
+}
+
+/// Every `x-since` member a schema declares, with the revision that introduced it.
+fn gated_members(v: &Value, out: &mut std::collections::BTreeSet<(String, u64)>) {
+    match v {
+        Value::Object(m) => {
+            if let Some(Value::Object(props)) = m.get("properties") {
+                for (name, p) in props {
+                    if let Some(since) = p.get("x-since").and_then(Value::as_u64) {
+                        out.insert((name.clone(), since));
+                    }
+                }
+            }
+            m.values().for_each(|x| gated_members(x, out));
+        }
+        Value::Array(a) => a.iter().for_each(|x| gated_members(x, out)),
+        _ => {}
+    }
+}
+fn has_member(v: &Value, member: &str) -> bool {
+    match v {
+        Value::Object(m) => m.contains_key(member) || m.values().any(|x| has_member(x, member)),
+        Value::Array(a) => a.iter().any(|x| has_member(x, member)),
+        _ => false,
+    }
+}
+
+/// Fail-closed revision readers: every `x-since` member of every specialized envelope schema is
+/// refused at the revision before the one that introduced it. Each conforming revision-N fixture
+/// carrying the member is replayed with its `schemaRevision` lowered (stripped, for revision 1).
+#[test]
+fn every_gated_envelope_member_is_refused_before_its_revision() {
+    let mut cases = Vec::new();
+    for file in [
+        "fixtures.json",
+        "domain-fixtures.json",
+        "data-delivery-fixtures.json",
+        "provider-package-fixtures.json",
+    ] {
+        let text = std::fs::read_to_string(common::contracts_dir().join(file)).unwrap();
+        cases.extend(serde_json::from_str::<Vec<Fixture>>(&text).unwrap());
+    }
+    let envelopes: std::collections::BTreeSet<&str> = registry::all()
+        .iter()
+        .filter_map(|d| match d.envelope {
+            Envelope::Specialized { schema } => Some(schema),
+            Envelope::Domain => None,
+        })
+        .collect();
+    let mut exercised_members = Vec::new();
+    for schema in envelopes {
+        let users: Vec<_> = registry::all()
+            .iter()
+            .filter(|d| d.envelope == (Envelope::Specialized { schema }))
+            .collect();
+        // The envelope type's full schema: the members of every revision.
+        let canonical =
+            serde_json::to_value(users[0].modes[0].input_schema(SchemaRevision::MAX)).unwrap();
+        let mut gated = std::collections::BTreeSet::new();
+        gated_members(&canonical, &mut gated);
+        for (member, since) in gated {
+            let mut exercised = 0;
+            for case in cases.iter().filter(|c| {
+                c.typed_valid && {
+                    let (entry, revision) = entry_revision(&c.entry);
+                    entry == schema && u64::from(revision) >= since
+                }
+            }) {
+                let value: Value = serde_json::from_str(&case.raw).unwrap();
+                if !has_member(&value, &member) {
+                    continue;
+                }
+                for d in &users {
+                    let selection = Selection {
+                        operation: d.name,
+                        mode: d.modes[0].mode,
+                    };
+                    if admission::decode(selection, case.raw.as_bytes()).is_err() {
+                        continue; // selected by another operation sharing the envelope
+                    }
+                    let mut earlier = value.clone();
+                    let envelope = earlier.as_object_mut().unwrap();
+                    envelope.remove("schemaRevision");
+                    if since - 1 > 1 {
+                        envelope.insert("schemaRevision".into(), (since - 1).into());
+                    }
+                    let refusal = admission::decode(selection, earlier.to_string().as_bytes())
+                        .expect_err("an earlier revision must refuse the member");
+                    assert!(
+                        matches!(refusal.error, admission::AdmissionError::Decode(_)),
+                        "{}: {member} at revision {} refused for the wrong reason: {}",
+                        case.id,
+                        since - 1,
+                        refusal.error
+                    );
+                    exercised += 1;
+                }
+            }
+            assert!(
+                exercised > 0,
+                "{schema}: no conforming fixture exercises the revision-{since} member {member}"
+            );
+            exercised_members.push(format!("{schema}/{member}"));
+        }
+    }
+    assert_eq!(
+        exercised_members,
+        [
+            "artifact-command-request/tags",
+            "artifact-query-request/tags"
+        ]
+    );
 }

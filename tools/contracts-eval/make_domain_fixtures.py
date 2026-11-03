@@ -253,6 +253,10 @@ case('reject-r2-null-tags','artifact-command-request.r2',r2(save,'command',None)
 case('reject-r2-duplicate-filter-tags','artifact-query-request.r2',r2(listing,'query',['a','a']),False,False)
 case('reject-revision-as-string','artifact-command-request',{**save,'schemaRevision':'2'},False,False)
 case('reject-revision-zero','artifact-command-request',{**save,'schemaRevision':0},False,False)
+case('reject-revision-above-range','artifact-command-request',{**save,'schemaRevision':70000},False,False)
+# JSON Schema 2020-12 "integer" matches any number with a zero fractional part, so no schema can
+# refuse the spelling 1.0; the typed reader refuses it like every other integer member.
+case('reject-revision-float-spelling','artifact-command-request',{**save,'schemaRevision':1.0},False,True)
 record=copy.deepcopy(POS['result-artifacts.save']['value'])
 case('r2-result-artifacts.save','operation-result.r2',{'kind':'artifacts.save','value':{**record,'tags':['evidence','release']}})
 case('r2-result-artifacts.list','operation-result.r2',{'kind':'artifacts.list','value':{'items':[{**record,'tags':['evidence']},{**record,'tags':[]}],'hasMore':False}})

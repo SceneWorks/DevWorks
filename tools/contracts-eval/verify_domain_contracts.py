@@ -1,10 +1,10 @@
 """Validate every registered input/result and old candidates without executing effects."""
-import argparse,copy,hashlib,json,platform,subprocess,tempfile
+import argparse,copy,datetime,hashlib,json,platform,subprocess,tempfile
 from pathlib import Path
 import jsonschema
 from domain_spec import OPS,LEGACY_RESULTS,TYPES,REVISIONS
 ROOT=Path(__file__).resolve().parents[2];D=ROOT/'docs/architecture';C=D/'contracts'
-p=argparse.ArgumentParser();p.add_argument('--binary',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
+p=argparse.ArgumentParser();p.add_argument('--binary',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--date',default=datetime.date.today().isoformat(),help='Report date (default: the run date)');a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
 files=[C/'fixtures.json',C/'provider-package-fixtures.json',D/'validation/provider-package-contracts/actual-frame-fixtures.json',C/'data-delivery-fixtures.json',C/'domain-fixtures.json']
 fixtures=[c for f in files for c in json.loads(f.read_text())]
 with tempfile.TemporaryDirectory(prefix='devworks-domain-dto-') as temp:
@@ -75,7 +75,7 @@ scenarios=json.loads(scenario.stdout);assert scenarios['allPassed']
 (a.output/'native-results.json').write_text(json.dumps(native,indent=2)+'\n')
 sources=[*files,C/'family-coverage.json',C/'manifest.json',D/'devworks-capability-catalog.json',ROOT/'tools/contracts-eval/Cargo.lock',ROOT/'tools/contracts-eval/domain_spec.py',ROOT/'tools/contracts-eval/domain-spec.json',ROOT/'tools/contracts-eval/build_domain_contracts.py',ROOT/'tools/contracts-eval/build_register.py',ROOT/'tools/contracts-eval/build_domain_reference.py',ROOT/'tools/contracts-eval/make_domain_fixtures.py',ROOT/'tools/contracts-eval/verify_domain_contracts.py',*sorted((ROOT/'tools/contracts-eval/src').glob('*.rs')),*sorted(C.glob('*.schema.json'))]
 new=json.loads(files[-1].read_text())
-report={'date':'2026-11-02','status':'Candidate schema/typed/binding checks passed; no production service, authority, source behavioral parity or platform acceptance',
+report={'date':a.date,'status':'Candidate schema/typed/binding checks passed; no production service, authority, source behavioral parity or platform acceptance',
  'host':platform.platform(),'schemaFiles':len(validators),'domainTypeDefinitions':len(TYPES),'catalogOperations':len(bindings),'inputCandidates':len(bindings),'revisionBindings':len(checks),'revisionedOperations':sorted(REVISIONS),'inputsPending':0,'qualifiedResultTags':len(bindings),
  'newOperationInputs':len(OPS),'newInputModeVariants':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'hybridOperations':[n for n,d in OPS.items() if d['mode']=='Hybrid'],
  'allMessageFixtures':len(fixtures),'newMessageFixtures':len(new),'newPositiveFixtures':sum(c['typedValid'] for c in new),'newNegativeFixtures':sum(not c['typedValid'] for c in new),

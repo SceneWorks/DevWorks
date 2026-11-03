@@ -258,17 +258,25 @@ fn negotiated_revision(
     let Some(member) = object.remove("schemaRevision") else {
         return Ok(SchemaRevision::INITIAL);
     };
-    let revision = member.as_u64().filter(|r| *r >= 1).ok_or_else(|| {
-        AdmissionError::InvalidEnvelope("schemaRevision must be a positive integer".into())
-    })?;
-    u32::try_from(revision)
-        .ok()
-        .map(SchemaRevision)
-        .filter(|r| descriptor.supports(*r))
-        .ok_or(AdmissionError::UnsupportedSchemaRevision {
+    // Only an integer spelling within the member's range names a revision: `1.0`, `2e0`, strings,
+    // 0 and values above the range are a malformed envelope, never a revision to look up.
+    let revision = member
+        .as_u64()
+        .filter(|r| (1..=u64::from(SchemaRevision::MAX.0)).contains(r))
+        .ok_or_else(|| {
+            AdmissionError::InvalidEnvelope(format!(
+                "schemaRevision must be an integer from 1 to {}",
+                SchemaRevision::MAX.0
+            ))
+        })?;
+    let revision = SchemaRevision(revision as u32);
+    if !descriptor.supports(revision) {
+        return Err(AdmissionError::UnsupportedSchemaRevision {
             operation: descriptor.name,
-            revision,
-        })
+            revision: u64::from(revision.0),
+        });
+    }
+    Ok(revision)
 }
 
 /// Input members that name an existing work item a command acts on, in priority order: the

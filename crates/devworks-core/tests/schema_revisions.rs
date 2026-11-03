@@ -85,10 +85,7 @@ fn an_unregistered_revision_is_refused_before_authority_with_no_receipt() {
             EDIT.replace(r#""mode""#, r#""schemaRevision":2,"mode""#),
         ),
         ("artifacts.save", save("key-1", Some(3), None)),
-        (
-            "artifacts.save",
-            save("key-1", Some(u64::from(u32::MAX) + 2), None),
-        ),
+        ("artifacts.save", save("key-1", Some(65535), None)),
     ] {
         let reply = h
             .gateway()
@@ -133,8 +130,20 @@ fn an_unregistered_revision_is_refused_before_authority_with_no_receipt() {
         ),
         (0, 0, 0, 0, 0)
     );
-    // A malformed member is an invalid envelope, not a revision.
-    for bad in [json!("2"), json!(0), json!(-1), json!(2.5), json!(null)] {
+    // A malformed member is an invalid envelope, not a revision: other types, values outside
+    // 1..=65535 and non-integer spellings of an integer.
+    for bad in [
+        "\"2\"",
+        "0",
+        "-1",
+        "2.5",
+        "null",
+        "65536",
+        "70000",
+        "4294967297",
+        "1.0",
+        "2e0",
+    ] {
         let frame = EDIT.replace(r#""mode""#, &format!(r#""schemaRevision":{bad},"mode""#));
         assert!(
             matches!(

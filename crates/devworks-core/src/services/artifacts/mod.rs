@@ -118,6 +118,7 @@ use crate::protocol::{
     CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
     ProjectId, RetryAdvice, Revision, RevisionDimension, RootId,
 };
+use crate::registry::SchemaRevision;
 use crate::settings::catalog::{ARTIFACT_MAX_FILE_KEY, ARTIFACT_QUOTA_KEY, descriptor};
 use crate::settings::model::{chain, current_chain};
 use lifecycle::{Readers, StreamPurpose, Streams};
@@ -392,10 +393,16 @@ fn label(title: &str) -> BoundedText<1, 256> {
     BoundedText(if t.is_empty() { "artifact".into() } else { t })
 }
 
+/// The schema revision that introduced artifact tags (ART-02).
+pub const TAGS_SINCE: SchemaRevision = SchemaRevision(2);
+
+/// The wire record of `a` at version `v` for a caller that negotiated `revision`. Tags are read
+/// (and their stored form validated) only for a caller that can receive them.
 fn record(
     read: &dyn crate::ports::storage::ArtifactRead,
     a: &StoredArtifact,
     v: &StoredVersion,
+    revision: SchemaRevision,
 ) -> Result<ArtifactRecord, StorageError> {
     let references = read
         .links(&a.id)?
@@ -403,9 +410,14 @@ fn record(
         .filter(|l| l.purpose == LinkPurpose::Reference)
         .count()
         + read.shares(&a.id)?.len();
-    // Tags are schema revision 2 metadata; the gateway removes them for revision-1 callers.
-    let tags = ArtifactTags::new(read.tags(&a.id)?)
-        .map_err(|e| StorageError::InvalidRecord(format!("stored artifact tags: {e}")))?;
+    let tags = if revision >= TAGS_SINCE {
+        Some(
+            ArtifactTags::new(read.tags(&a.id)?)
+                .map_err(|e| StorageError::InvalidRecord(format!("stored artifact tags: {e}")))?,
+        )
+    } else {
+        None
+    };
     Ok(ArtifactRecord {
         artifact: version_ref(v),
         name: label(&a.title),
@@ -414,7 +426,7 @@ fn record(
             project_id: a.current_project_id.clone(),
         },
         reference_count: counter(references as i64),
-        tags: Some(tags),
+        tags,
     })
 }
 
@@ -1107,7 +1119,12 @@ impl ArtifactService {
                 "repositoryRevision": staged.origin.repository_revision,
             }),
         )?;
-        let value = record(tx.artifacts(), &artifact, &version)?;
+        let value = record(
+            tx.artifacts(),
+            &artifact,
+            &version,
+            command.schema_revision(),
+        )?;
         Ok(Decided {
             decision: DomainDecision::Applied {
                 result: OperationResult::ArtifactsSave { value },
@@ -1472,16 +1489,29 @@ fn list_binding(project: &ProjectId, tags: &[String]) -> String {
     sha256_hex(basis.as_bytes())[..16].to_owned()
 }
 
+/// One `artifacts.list` page request, read at the negotiated `revision`.
+struct Listing<'a> {
+    project: &'a ProjectId,
+    tags: &'a [String],
+    revision: SchemaRevision,
+    limit: u16,
+    cursor: Option<&'a str>,
+}
+
 impl ArtifactService {
     fn list(
         &self,
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
-        project: &ProjectId,
-        tags: &[String],
-        limit: u16,
-        cursor: Option<&str>,
+        listing: Listing<'_>,
     ) -> Result<OperationResult, Failure> {
+        let Listing {
+            project,
+            tags,
+            revision,
+            limit,
+            cursor,
+        } = listing;
         require_project(ctx, project)?;
         let read = snapshot.artifacts();
         if !read.project_exists(project)? {
@@ -1518,7 +1548,7 @@ impl ArtifactService {
             let Some(v) = read.version(vid)? else {
                 continue;
             };
-            items.push(record(read, a, &v)?);
+            items.push(record(read, a, &v, revision)?);
         }
         let next_cursor = match (has_more, rows.last()) {
             (true, Some(last)) => Some(BoundedText(format!(
@@ -1812,7 +1842,17 @@ impl QueryHandler for ArtifactService {
         let answered = match &request.query {
             ArtifactQuery::List { project_id, tags } => {
                 let tags = tags.as_ref().map_or(&[][..], |t| &t.0[..]);
-                self.list(snapshot, ctx, project_id, tags, request.limit, cursor)
+                self.list(
+                    snapshot,
+                    ctx,
+                    Listing {
+                        project: project_id,
+                        tags,
+                        revision: query.schema_revision(),
+                        limit: request.limit,
+                        cursor,
+                    },
+                )
             }
             ArtifactQuery::Read {
                 artifact_id,
