@@ -41,6 +41,14 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_writer: 2,
         sql: include_str!("migrations/0002_claim_boot.sql"),
     },
+    // A version-2 build can still read deliveries, but writing them without partition/sequence
+    // and revision bookkeeping would break ordered delivery, so writers must understand 3.
+    Migration {
+        version: 3,
+        minimum_reader: 1,
+        minimum_writer: 3,
+        sql: include_str!("migrations/0003_durable_delivery.sql"),
+    },
 ];
 /// Recorded checksum of migration 2; a test fails if the shipped text changes.
 pub const MIGRATION_0002_SHA256: &str =
@@ -48,6 +56,9 @@ pub const MIGRATION_0002_SHA256: &str =
 /// Recorded checksum of migration 1; a test fails if the shipped text changes.
 pub const MIGRATION_0001_SHA256: &str =
     "c64cc140ad8de8c4c2ca7e7d3e3efac32966cea8bfc0bdf5e46e9c55206bd6a4";
+/// Recorded checksum of migration 3.
+pub const MIGRATION_0003_SHA256: &str =
+    "cbc54258a27e1db055d35b098e7a9af73b35b70f6fd66751098a6e650dcf5cd5";
 
 #[derive(Clone, Debug)]
 pub(crate) struct Meta {

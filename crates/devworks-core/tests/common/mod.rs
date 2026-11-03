@@ -333,6 +333,9 @@ impl ReadSnapshot for MemSnapshot {
     fn grants(&self) -> &dyn GrantRead {
         &self.unsupported
     }
+    fn packages(&self) -> &dyn PackageHandlerRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -380,6 +383,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn grants(&mut self) -> &mut dyn GrantLedger {
+        &mut self.unsupported
+    }
+    fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
         &mut self.unsupported
     }
 }
@@ -497,6 +503,50 @@ impl QueueRead for Unsupported {
     fn status(&self, _: &str) -> Result<QueueStatus, StorageError> {
         nope()
     }
+    fn deliveries(
+        &self,
+        _: &DeliveryFilter,
+        _: Option<&DeliveryKey>,
+        _: u16,
+    ) -> Result<DeliveryPage, StorageError> {
+        nope()
+    }
+    fn progress(&self, _: &str) -> Result<ConsumerProgress, StorageError> {
+        nope()
+    }
+    fn checkpoint(&self, _: &str, _: Option<&str>) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn next_due_ms(&self, _: i64) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
+}
+impl PackageHandlerRead for Unsupported {
+    fn package_state(&self, _: &str) -> Result<Option<PackageState>, StorageError> {
+        nope()
+    }
+    fn processing(
+        &self,
+        _: &str,
+        _: &Id,
+        _: &EventId,
+    ) -> Result<Option<ProcessingRecord>, StorageError> {
+        nope()
+    }
+}
+impl PackageHandlerLedger for Unsupported {
+    fn compare_and_set_state(
+        &mut self,
+        _: &str,
+        _: i64,
+        _: i64,
+        _: serde_json::Value,
+    ) -> Result<PackageState, StorageError> {
+        nope()
+    }
+    fn record_processing(&mut self, _: &ProcessingRecord) -> Result<(), StorageError> {
+        nope()
+    }
 }
 impl DurableQueue for Unsupported {
     fn enqueue(&mut self, _: NewQueueEntry) -> Result<QueueEntry, StorageError> {
@@ -539,6 +589,15 @@ impl DurableQueue for Unsupported {
         nope()
     }
     fn compact(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn hold(&mut self, _: &Id, _: &QueueFence, _: &str) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn dismiss(&mut self, _: &Id, _: &str) -> Result<QueueEntry, StorageError> {
+        nope()
+    }
+    fn reassert(&mut self, _: &Id, _: &QueueFence, _: i64) -> Result<QueueEntry, StorageError> {
         nope()
     }
 }
