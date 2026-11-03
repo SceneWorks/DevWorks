@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 2;
+pub const CATALOG_REVISION: i64 = 3;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -685,6 +685,29 @@ fn build() -> Vec<SettingDescriptor> {
             67_108_864,
             NextAdmission
         ),
+        setting!(
+            LOG_RETENTION_DAYS_KEY,
+            "Diagnostic log retention (days)",
+            "Diagnostic and log records older than this are removed by the hourly retention pass and at startup; records survive restarts until then. Thirty days keeps a month of history for recurring failures and post-incident review while the log stays bounded. Evidence artifacts a record names are kept under their own retention. Engineering default.",
+            Storage,
+            WORKSPACE,
+            ValueKind::Integer { min: 1, max: 365 },
+            30,
+            NextAdmission
+        ),
+        setting!(
+            LOG_MAX_RECORDS_KEY,
+            "Diagnostic log size (records)",
+            "Most diagnostic and log records kept; the oldest beyond it are removed by the retention pass. With messages bounded to 8 KiB and helper output to 16 KiB per record, 50 000 records stay within about 1.2 GiB in the worst case and a few tens of megabytes typically. Engineering default.",
+            Storage,
+            WORKSPACE,
+            ValueKind::Integer {
+                min: 1_000,
+                max: 1_000_000
+            },
+            50_000,
+            NextAdmission
+        ),
     ]);
     all
 }
@@ -697,6 +720,10 @@ pub const ARTIFACT_RETENTION_KEY: &str = "storage.artifactRetention";
 pub const ARTIFACT_QUOTA_KEY: &str = "storage.artifactQuotaBytes";
 /// Largest single artifact source file.
 pub const ARTIFACT_MAX_FILE_KEY: &str = "storage.artifactMaxFileBytes";
+/// Days a diagnostic log record is retained.
+pub const LOG_RETENTION_DAYS_KEY: &str = "diagnostics.logRetentionDays";
+/// Most diagnostic log records retained.
+pub const LOG_MAX_RECORDS_KEY: &str = "diagnostics.logMaxRecords";
 
 /// Looks up a descriptor by key. Unknown keys fail closed at every caller.
 pub fn descriptor(key: &str) -> Option<&'static SettingDescriptor> {

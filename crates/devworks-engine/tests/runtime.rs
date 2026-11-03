@@ -235,6 +235,14 @@ fn composition(
             devworks_core::services::runs::ControlService::new(h.ids.clone()),
         )),
         power: Arc::new(NativePower),
+        diagnostics: Arc::new(
+            devworks_core::services::diagnostics::DiagnosticService::new(
+                store.clone(),
+                h.ids.clone(),
+                h.clock(),
+                None,
+            ),
+        ),
         use_cases: UseCases::new()
             .with_queue()
             .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store)))

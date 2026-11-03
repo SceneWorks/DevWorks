@@ -51,7 +51,8 @@
 //! repository ([`ConfigurationRepository`]), the host authority ledger ([`AuthorityLedger`]), the
 //! artifact store records ([`ArtifactRepository`]), the session, transcript and lineage
 //! records ([`SessionRepository`]), the resource reservation and owned-process records
-//! ([`ResourceRepository`]) and the run root control records ([`RunRepository`]).
+//! ([`ResourceRepository`]), the run root control records ([`RunRepository`]) and the retained
+//! diagnostic log ([`DiagnosticRepository`]).
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -70,12 +71,14 @@ use std::sync::mpsc;
 mod artifacts;
 mod authority;
 mod configuration;
+mod diagnostics;
 mod resources;
 mod runs;
 mod sessions;
 pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
+pub use diagnostics::*;
 pub use resources::*;
 pub use runs::*;
 pub use sessions::*;
@@ -468,6 +471,7 @@ pub trait WriteTransaction {
     fn sessions(&mut self) -> &mut dyn SessionRepository;
     fn resources(&mut self) -> &mut dyn ResourceRepository;
     fn runs(&mut self) -> &mut dyn RunRepository;
+    fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -507,6 +511,7 @@ pub trait ReadSnapshot {
     fn sessions(&self) -> &dyn SessionRead;
     fn resources(&self) -> &dyn ResourceRead;
     fn runs(&self) -> &dyn RunRead;
+    fn diagnostics(&self) -> &dyn DiagnosticRead;
 }
 
 // ---------------------------------------------------------------------------------------------

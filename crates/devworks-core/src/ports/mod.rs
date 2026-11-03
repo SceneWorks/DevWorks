@@ -5,6 +5,7 @@
 //! Every port is `Send + Sync` and object-safe: ARCH-03 runs gateway calls off the UI thread,
 //! and command use cases execute on the storage write owner's thread, so the gateway hands them
 //! across threads. Core stays runtime-agnostic (no async runtime dependency).
+pub mod diagnostics;
 pub mod files;
 pub mod process;
 pub mod storage;
@@ -51,6 +52,7 @@ pub enum IdKind {
     Resource,
     Lease,
     Process,
+    Diagnostic,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

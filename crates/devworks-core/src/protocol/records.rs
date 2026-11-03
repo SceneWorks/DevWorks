@@ -132,6 +132,79 @@ impl Check for Severity {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DiagnosticOutcome {
+    Running,
+    Succeeded,
+    Partial,
+    Stale,
+    Cancelled,
+    Retryable,
+    Failed,
+}
+impl Check for DiagnosticOutcome {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DiagnosticErrorClass {
+    Transient,
+    Timeout,
+    Cancelled,
+    Configuration,
+    Authentication,
+    Permission,
+    NotFound,
+    InvalidInput,
+    ResourceExhausted,
+    Dependency,
+    Corruption,
+    Internal,
+    Unknown,
+}
+impl Check for DiagnosticErrorClass {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum HealthState {
+    Healthy,
+    Degraded,
+    Failed,
+    Unavailable,
+}
+impl Check for HealthState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DiagnosticOrigin {
+    Host,
+    Reported,
+}
+impl Check for DiagnosticOrigin {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum MetricAvailability {
+    Available,
+    Unavailable,
+}
+impl Check for MetricAvailability {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum TierName {
     Max,
     High,
@@ -4193,6 +4266,57 @@ impl Check for HelpTopic {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiagnosticMetric {
+    pub name: Label,
+    pub availability: MetricAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Text>,
+}
+impl Check for DiagnosticMetric {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.availability.check()?;
+        self.value.check()?;
+        self.unit.check()?;
+        self.reason.check()?;
+        crate::protocol::rules::record(
+            "DiagnosticMetric",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryAction {
+    pub operation: Label,
+    pub label: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<Id>,
+}
+impl Check for RecoveryAction {
+    fn check(&self) -> Result<(), String> {
+        self.operation.check()?;
+        self.label.check()?;
+        self.target_kind.check()?;
+        self.target_id.check()?;
+        crate::protocol::rules::record(
+            "RecoveryAction",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Diagnostic {
     pub id: Id,
     pub severity: Severity,
@@ -4218,6 +4342,345 @@ impl Check for Diagnostic {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "Diagnostic", "before": 2}))]
+pub struct DiagnosticEntry {
+    pub id: Id,
+    pub severity: Severity,
+    pub component: Label,
+    pub code: Label,
+    pub message: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<CorrelationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub sequence: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub recorded_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub actor_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DiagnosticOrigin", extend("x-since" = 2))]
+    pub origin: Option<DiagnosticOrigin>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 2))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub operation: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OperationId", extend("x-since" = 2))]
+    pub operation_id: Option<OperationId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub target_kind: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub target_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub stage: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub source_revision: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub attempt: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub started_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub finished_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub progress_completed: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub progress_total: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DiagnosticOutcome", extend("x-since" = 2))]
+    pub outcome: Option<DiagnosticOutcome>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DiagnosticErrorClass", extend("x-since" = 2))]
+    pub error_class: Option<DiagnosticErrorClass>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "HealthState", extend("x-since" = 2))]
+    pub health: Option<HealthState>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 2))]
+    pub output: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub output_omitted_bytes: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub redactions: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<DiagnosticMetric>", extend("x-since" = 2))]
+    pub metrics: Option<Items<DiagnosticMetric>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<RecoveryAction>", extend("x-since" = 2))]
+    pub recovery: Option<Items<RecoveryAction>>,
+}
+impl Check for DiagnosticEntry {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.severity.check()?;
+        self.component.check()?;
+        self.code.check()?;
+        self.message.check()?;
+        self.correlation_id.check()?;
+        self.evidence.check()?;
+        self.sequence.check()?;
+        self.recorded_at_ms.check()?;
+        self.actor_id.check()?;
+        self.origin.check()?;
+        self.project_id.check()?;
+        self.operation.check()?;
+        self.operation_id.check()?;
+        self.target_kind.check()?;
+        self.target_id.check()?;
+        self.stage.check()?;
+        self.source_revision.check()?;
+        self.attempt.check()?;
+        self.started_at_ms.check()?;
+        self.finished_at_ms.check()?;
+        self.progress_completed.check()?;
+        self.progress_total.check()?;
+        self.outcome.check()?;
+        self.error_class.check()?;
+        self.health.check()?;
+        self.output.check()?;
+        self.output_omitted_bytes.check()?;
+        self.redactions.check()?;
+        self.metrics.check()?;
+        self.recovery.check()?;
+        crate::protocol::rules::record(
+            "DiagnosticEntry",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DiagnosticEntry {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.sequence = None;
+        }
+        if revision < 2 {
+            self.recorded_at_ms = None;
+        }
+        if revision < 2 {
+            self.actor_id = None;
+        }
+        if revision < 2 {
+            self.origin = None;
+        }
+        if revision < 2 {
+            self.project_id = None;
+        }
+        if revision < 2 {
+            self.operation = None;
+        }
+        if revision < 2 {
+            self.operation_id = None;
+        }
+        if revision < 2 {
+            self.target_kind = None;
+        }
+        if revision < 2 {
+            self.target_id = None;
+        }
+        if revision < 2 {
+            self.stage = None;
+        }
+        if revision < 2 {
+            self.source_revision = None;
+        }
+        if revision < 2 {
+            self.attempt = None;
+        }
+        if revision < 2 {
+            self.started_at_ms = None;
+        }
+        if revision < 2 {
+            self.finished_at_ms = None;
+        }
+        if revision < 2 {
+            self.progress_completed = None;
+        }
+        if revision < 2 {
+            self.progress_total = None;
+        }
+        if revision < 2 {
+            self.outcome = None;
+        }
+        if revision < 2 {
+            self.error_class = None;
+        }
+        if revision < 2 {
+            self.health = None;
+        }
+        if revision < 2 {
+            self.output = None;
+        }
+        if revision < 2 {
+            self.output_omitted_bytes = None;
+        }
+        if revision < 2 {
+            self.redactions = None;
+        }
+        if revision < 2 {
+            self.metrics = None;
+        }
+        if revision < 2 {
+            self.recovery = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 2}))]
+pub struct DiagnosticPage {
+    pub items: Rows<DiagnosticEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub latest_sequence: Option<Counter>,
+}
+impl Check for DiagnosticPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.latest_sequence.check()?;
+        crate::protocol::rules::record(
+            "DiagnosticPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DiagnosticPage {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.latest_sequence = None;
+        }
+        self.items.retain_revision(revision);
     }
 }
 

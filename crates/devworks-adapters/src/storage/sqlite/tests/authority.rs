@@ -2242,6 +2242,9 @@ impl WriteTransaction for Lying<'_> {
     fn runs(&mut self) -> &mut dyn devworks_core::ports::storage::RunRepository {
         self.inner.runs()
     }
+    fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
+        self.inner.diagnostics()
+    }
 }
 
 fn seams_run(

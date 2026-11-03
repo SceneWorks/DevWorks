@@ -1047,6 +1047,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn runs(&self) -> &dyn RunRead {
         self
     }
+    fn diagnostics(&self) -> &dyn DiagnosticRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1252,6 +1255,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn runs(&mut self) -> &mut dyn RunRepository {
+        self
+    }
+    fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
         self
     }
 }

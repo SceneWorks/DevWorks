@@ -156,7 +156,25 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0011_run_controls.sql"),
         rebuilds_tables: false,
     },
+    // Additive: the retained diagnostic log, its retention boundary and export intents (three
+    // tables and their indexes), independent of every table of migration 11. The writer floor is
+    // 11, the floor migration 11 set: applying a migration overwrites the store's floors, so a
+    // lower value would re-admit the build-10 writers that migration 11 refuses (they would
+    // bypass run controls). It need not rise to 12: a build-11 writer never writes these tables,
+    // so it cannot break the log's sequence, retention boundary or export claims, and every
+    // other record it writes is unchanged here. The reader floor stays at 8: no earlier build
+    // reads these tables, and they leave every query an earlier reader makes unchanged.
+    Migration {
+        version: 12,
+        minimum_reader: 8,
+        minimum_writer: 11,
+        sql: include_str!("migrations/0012_diagnostics.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 12; a test fails if the shipped text changes.
+pub const MIGRATION_0012_SHA256: &str =
+    "dbcf28e8dc5a8eb6e4b801fb9f976021cd5e14cbf9e2b5b82af38f008c6cedba";
 /// Recorded checksum of migration 11; a test fails if the shipped text changes.
 pub const MIGRATION_0011_SHA256: &str =
     "8607df6d8f6fd0fe885e21595e7e5245422916b8bdf0d0679fd7f0ca5b0f19af";

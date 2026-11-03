@@ -7,6 +7,7 @@
 //! nothing unimplemented is advertised or recorded.
 pub mod artifacts;
 pub mod cursor;
+pub mod diagnostics;
 pub mod history;
 pub mod power;
 pub mod process;
@@ -134,6 +135,14 @@ impl UseCases {
     /// Registers the runs family (`ControlService`).
     pub fn with_runs(mut self, service: Arc<runs::ControlService>) -> Self {
         for op in runs::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the diagnostics operations of the workspace family (`DiagnosticService`).
+    pub fn with_diagnostics(mut self, service: Arc<diagnostics::DiagnosticService>) -> Self {
+        for op in diagnostics::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self
