@@ -248,6 +248,8 @@ pub fn dispatcher_with(
 pub struct Effects(Arc<EffectState>);
 pub struct EffectState {
     pub executed: AtomicUsize,
+    /// Notified (with a stored permit) each time an effect starts executing.
+    pub started: tokio::sync::Notify,
     pub observed: AtomicUsize,
     pub running: AtomicUsize,
     pub max_running: AtomicUsize,
@@ -265,6 +267,7 @@ impl Effects {
     pub fn new(result: EffectResult) -> Self {
         Self(Arc::new(EffectState {
             executed: AtomicUsize::new(0),
+            started: tokio::sync::Notify::new(),
             observed: AtomicUsize::new(0),
             running: AtomicUsize::new(0),
             max_running: AtomicUsize::new(0),
@@ -291,6 +294,7 @@ impl EffectExecutor for Effects {
         let me = self.clone();
         Box::pin(async move {
             me.executed.fetch_add(1, Ordering::SeqCst);
+            me.started.notify_one();
             let now = me.running.fetch_add(1, Ordering::SeqCst) + 1;
             me.max_running.fetch_max(now, Ordering::SeqCst);
             let gate = me.gate.lock().unwrap().clone();

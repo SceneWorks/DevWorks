@@ -6,13 +6,15 @@ use devworks_core::context::PrincipalKind;
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::*;
+use devworks_core::protocol::Id;
 use devworks_core::protocol::results::DomainDecision;
 use devworks_core::protocol::{CommandReply, OperationState};
 use devworks_core::services::UseCases;
 use devworks_engine::{Dispatcher, EffectResult, Outcome};
 use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
-use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn kinds(s: &dyn ApplicationStore, entry: &devworks_core::protocol::Id) -> Vec<String> {
@@ -634,5 +636,207 @@ fn bounded_fan_out_under_saturation() {
         let blocked = [12, 53, 74].iter().map(|i| (99 - i) / 10).sum::<i64>();
         assert_eq!(status.ready, blocked);
         assert_eq!(status.completed, 100 - 3 - blocked);
+    }
+}
+
+type HeldWrite = (WriteOptions, Box<dyn WriteJob>);
+
+/// Passes every write through, except that the first one submitted while `entry` is claimed is
+/// handed to the test instead of being admitted; the test admits it explicitly. The claim commits
+/// before its delivery task exists, so that write is the delivery's first transaction.
+struct Interposer {
+    inner: Arc<dyn ApplicationStore>,
+    hold: Mutex<Option<(Id, tokio::sync::mpsc::UnboundedSender<HeldWrite>)>>,
+}
+impl Interposer {
+    fn new(inner: Arc<dyn ApplicationStore>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            hold: Mutex::new(None),
+        })
+    }
+    fn hold_while_claimed(&self, entry: &Id) -> tokio::sync::mpsc::UnboundedReceiver<HeldWrite> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *self.hold.lock().unwrap() = Some((entry.clone(), tx));
+        rx
+    }
+}
+impl ApplicationStore for Interposer {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(
+        &self,
+        options: WriteOptions,
+        job: Box<dyn WriteJob>,
+    ) -> Result<(), StorageError> {
+        let mut hold = self.hold.lock().unwrap();
+        let claimed = hold.as_ref().is_some_and(|(id, _)| {
+            read(&*self.inner, |r| r.queue().entry(id))
+                .is_some_and(|e| e.state == QueueState::Claimed)
+        });
+        match hold.take_if(|_| claimed) {
+            Some((_, held)) => held
+                .send((options, job))
+                .map_err(|_| StorageError::Cancelled),
+            None => self.inner.submit_write(options, job),
+        }
+    }
+    fn read(
+        &self,
+        options: &ReadOptions,
+        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(options, work)
+    }
+}
+
+/// Cooperative cancellation of a claimed delivery, admitted while the dispatcher holds the claim
+/// and before its delivery transaction runs. The cancel raises the epoch but leaves the claim
+/// and its fence in place; the dispatcher observes the raised epoch at its next check and
+/// settles the delivery as cancelled without running the handler or dispatching the effect (an
+/// undispatched operation is cancelled with it). The stale claim can no longer settle it.
+#[test]
+fn a_claimed_delivery_cancelled_before_its_next_check_never_applies_or_dispatches() {
+    for with_effect in [false, true] {
+        let h = Harness::new();
+        let s = h.open();
+        let recorder = Recorder::ok();
+        let fx = Effects::new(EffectResult::Completed(json!({"remote": "done"})));
+        let mut c = consumer("work", recorder.clone());
+        if with_effect {
+            c.effect = Some(fx.executor());
+        }
+        let (op, queued) = write(&*s, move |tx| {
+            let op = if with_effect { Some(intent(tx)?) } else { None };
+            let e = enqueue_tx(tx, "work", None, op.clone(), json!({}))?;
+            Ok((op, e))
+        })
+        .unwrap();
+        let interposer = Interposer::new(s.clone());
+        let d = dispatcher(&h, interposer.clone(), vec![c]);
+        let mut held = interposer.hold_while_claimed(&queued.id);
+        let rt = runtime();
+        let claimed = rt.block_on(async {
+            assert_eq!(d.tick().await.unwrap().claimed, 1);
+            let (options, job) = held.recv().await.expect("the delivery's first transaction");
+            // The dispatcher holds the claim; nothing of the delivery has run yet.
+            let claimed = entry(&*s, &queued.id);
+            assert_eq!(claimed.state, QueueState::Claimed);
+            assert_eq!(d.in_flight(), 1);
+            assert_eq!(recorder.calls.load(Ordering::SeqCst), 0);
+            let qid = queued.id.clone();
+            let asked = write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+            assert_eq!(
+                (asked.state, asked.generation, asked.cancellation_epoch),
+                (
+                    QueueState::Claimed,
+                    claimed.generation,
+                    claimed.cancellation_epoch + 1
+                ),
+                "cancellation asks the owner to stop; it does not revoke the claim"
+            );
+            s.submit_write(options, job).unwrap();
+            d.idle().await;
+            claimed
+        });
+        let after = entry(&*s, &queued.id);
+        assert_eq!(after.state, QueueState::Cancelled, "effect={with_effect}");
+        assert_eq!(recorder.calls.load(Ordering::SeqCst), 0, "handler ran");
+        assert_eq!(
+            fx.executed(),
+            0,
+            "an effect was dispatched after cancellation"
+        );
+        if let Some(op) = &op {
+            assert_eq!(
+                read(&*s, |r| r.operations().operation(op)).unwrap().state,
+                OperationState::CancelledBeforeDispatch
+            );
+        }
+        // The claim's fence is spent: a late settlement by its holder is refused.
+        let (qid, fence) = (queued.id.clone(), claimed.fence().unwrap());
+        let late = write(&*s, move |tx| {
+            tx.queue().settle(&qid, &fence, Settlement::Completed)
+        });
+        assert!(
+            matches!(late, Err(StorageError::LeaseLost { .. })),
+            "{late:?}"
+        );
+        assert_eq!(entry(&*s, &queued.id).state, QueueState::Cancelled);
+        // Nothing is redelivered.
+        assert_eq!(rt.block_on(d.run_until_idle()).unwrap(), 0);
+        assert_eq!(
+            (recorder.calls.load(Ordering::SeqCst), fx.executed()),
+            (0, 0)
+        );
+    }
+}
+
+/// Cancellation admitted while an effect is already dispatched cannot take the effect back: the
+/// outcome is recorded from the target's evidence and the delivery is settled by that evidence
+/// (applied when the effect completed, held for reconciliation when unknown). The effect is
+/// never executed again and the operation is never marked cancelled.
+#[test]
+fn cancelling_after_dispatch_reconciles_the_effect_instead_of_undoing_it() {
+    for result in [
+        EffectResult::Completed(json!({"remote": "done"})),
+        EffectResult::Unknown("response lost".into()),
+    ] {
+        let h = Harness::new();
+        let s = h.open();
+        let recorder = Recorder::ok();
+        let fx = Effects::new(result.clone());
+        let gate = fx.gated();
+        let mut c = consumer("work", recorder.clone());
+        c.effect = Some(fx.executor());
+        let (op, queued) = write(&*s, |tx| {
+            let op = intent(tx)?;
+            let e = enqueue_tx(tx, "work", None, Some(op.clone()), json!({}))?;
+            Ok((op, e))
+        })
+        .unwrap();
+        let d = dispatcher(&h, s.clone(), vec![c]);
+        let rt = runtime();
+        rt.block_on(async {
+            assert_eq!(d.tick().await.unwrap().claimed, 1);
+            fx.started.notified().await;
+            // `Dispatching` is committed and the effect is running under the claim.
+            assert_eq!(
+                read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+                OperationState::Dispatching
+            );
+            let qid = queued.id.clone();
+            let asked = write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+            assert_eq!(asked.state, QueueState::Claimed);
+            gate.send(true).unwrap();
+            d.idle().await;
+        });
+        let rec = read(&*s, |r| r.operations().operation(&op)).unwrap();
+        let after = entry(&*s, &queued.id);
+        assert_eq!(fx.executed(), 1, "dispatched exactly once");
+        assert_eq!(after.cancellation_epoch, queued.cancellation_epoch + 1);
+        match result {
+            EffectResult::Completed(_) => {
+                assert_eq!(rec.state, OperationState::ObservedComplete);
+                assert_eq!(after.state, QueueState::Completed);
+                assert_eq!(recorder.calls.load(Ordering::SeqCst), 1);
+            }
+            _ => {
+                assert_eq!(rec.state, OperationState::OutcomeUnknown);
+                assert_eq!(after.state, QueueState::Reconciling);
+                assert_eq!(recorder.calls.load(Ordering::SeqCst), 0);
+                // Observation establishes what happened; it neither redelivers nor re-executes.
+                *fx.observation.lock().unwrap() = EffectResult::Completed(json!({"seen": true}));
+                assert_eq!(rt.block_on(d.observe_unknown()).unwrap(), 1);
+                assert_eq!(
+                    read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+                    OperationState::ObservedComplete
+                );
+                assert_eq!(entry(&*s, &queued.id).state, QueueState::Reconciling);
+            }
+        }
+        assert_eq!(rt.block_on(d.run_until_idle()).unwrap(), 0);
+        assert_eq!(fx.executed(), 1, "an effect was re-executed");
     }
 }
