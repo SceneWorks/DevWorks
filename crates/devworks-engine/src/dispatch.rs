@@ -332,6 +332,32 @@ struct Inner {
     passes: AtomicU64,
 }
 
+/// What one running delivery holds; released on drop (normal return or a panic unwinding its
+/// task), so a failing handler never leaks capacity.
+struct Slot {
+    inner: Arc<Inner>,
+    id: Id,
+    idx: usize,
+    permit: Option<OwnedSemaphorePermit>,
+}
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.inner
+            .in_flight
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.id);
+        self.inner
+            .consumer_load
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())[self.idx] -= 1;
+        drop(self.permit.take());
+        self.inner.status.send_modify(|v| *v = v.wrapping_add(1));
+        // Capacity freed: more ready work may be claimable now.
+        self.inner.wake.notify_one();
+    }
+}
+
 /// The dispatcher. Cheap to clone; clones share state.
 #[derive(Clone)]
 pub struct Dispatcher {
@@ -552,24 +578,29 @@ impl Dispatcher {
         }
         let budget = permits.len();
         let start = inner.rotation.fetch_add(1, Ordering::Relaxed) % inner.consumers.len();
-        // Each consumer may claim up to its own in-flight cap.
-        let load = inner
-            .consumer_load
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        let order: Vec<(usize, String, usize)> = (0..inner.consumers.len())
-            .map(|i| (start + i) % inner.consumers.len())
-            .map(|i| {
-                let c = &inner.consumers[i];
-                let room = c
-                    .max_in_flight
-                    .map_or(usize::MAX, |cap| cap.saturating_sub(load[i]));
-                (i, c.name.clone(), room)
-            })
-            .collect();
+        // Each consumer may claim up to its own in-flight cap. The room is reserved before the
+        // claim, so concurrent passes never exceed a cap together; what is not claimed is
+        // released right after.
+        let order: Vec<(usize, String, usize)> = {
+            let mut load = inner
+                .consumer_load
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            (0..inner.consumers.len())
+                .map(|i| (start + i) % inner.consumers.len())
+                .map(|i| {
+                    let c = &inner.consumers[i];
+                    let room = c
+                        .max_in_flight
+                        .map_or(budget, |cap| cap.saturating_sub(load[i]).min(budget));
+                    load[i] += room;
+                    (i, c.name.clone(), room)
+                })
+                .collect()
+        };
+        let reserved: Vec<(usize, usize)> = order.iter().map(|(i, _, r)| (*i, *r)).collect();
         let (owner, lease) = (inner.cfg.owner.clone(), inner.cfg.lease_ms);
-        let claimed = store::write(&inner.store, move |tx| {
+        let claiming = store::write(&inner.store, move |tx| {
             let mut out = Vec::new();
             for (idx, name, room) in &order {
                 let left = budget - out.len();
@@ -586,17 +617,22 @@ impl Dispatcher {
             }
             Ok(out)
         })
-        .await?;
-        report.claimed = claimed.len();
+        .await;
         {
+            // Release the reservation: each claimed delivery keeps one unit, held by its slot.
             let mut load = inner
                 .consumer_load
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
-            for (idx, _) in &claimed {
-                load[*idx] += 1;
+            for (idx, room) in reserved {
+                let kept = claiming
+                    .as_ref()
+                    .map_or(0, |c| c.iter().filter(|(i, _)| *i == idx).count());
+                load[idx] -= room - kept;
             }
         }
+        let claimed = claiming?;
+        report.claimed = claimed.len();
         for ((idx, entry), permit) in claimed.into_iter().zip(permits) {
             if let Some(f) = entry.fence() {
                 inner
@@ -605,23 +641,18 @@ impl Dispatcher {
                     .unwrap_or_else(|p| p.into_inner())
                     .insert(entry.id.clone(), f);
             }
+            // The slot releases the delivery's worker permit, in-flight entry and consumer load
+            // when the task ends, whether the delivery returns or its handler panics.
+            let slot = Slot {
+                inner: inner.clone(),
+                id: entry.id.clone(),
+                idx,
+                permit: Some(permit),
+            };
             let me = self.clone();
             tokio::spawn(async move {
-                let id = entry.id.clone();
+                let _slot = slot;
                 me.deliver(idx, entry).await;
-                me.inner
-                    .in_flight
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(&id);
-                me.inner
-                    .consumer_load
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())[idx] -= 1;
-                drop(permit);
-                me.notify_status();
-                // Capacity freed: more ready work may be claimable now.
-                me.inner.wake.notify_one();
             });
         }
         if report.claimed > 0 {

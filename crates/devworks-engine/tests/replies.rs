@@ -361,3 +361,84 @@ fn a_capped_consumer_burst_leaves_capacity_to_the_others() {
     assert_eq!(read(&*store, |s| s.queue().status("burst")).completed, 3);
     assert_eq!(started.load(Ordering::SeqCst), 3);
 }
+
+/// An asynchronous handler whose first delivery panics; later ones commit.
+struct PanicsOnce(AtomicUsize);
+impl AsyncDeliveryHandler for PanicsOnce {
+    fn start(&self, _: AsyncDelivery) -> AsyncFuture {
+        let first = self.0.fetch_add(1, Ordering::SeqCst) == 0;
+        Box::pin(async move {
+            if first {
+                panic!("handler fault");
+            }
+            AsyncOutcome::Committed
+        })
+    }
+}
+
+#[test]
+fn a_panicking_handler_releases_its_slot_and_the_consumer_keeps_going() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    for _ in 0..2 {
+        enqueue(&*store, "capped", None, json!({}));
+    }
+    let handler = Arc::new(PanicsOnce(AtomicUsize::new(0)));
+    let mut capped = consumer("capped", Recorder::ok());
+    capped.async_handler = Some(handler.clone());
+    capped.max_in_flight = Some(1);
+    let d = dispatcher(&h, store.clone(), vec![capped]);
+    rt.block_on(async {
+        within("dispatch after a panic", async {
+            d.recover().await.unwrap();
+            // The first delivery's handler panics; its slot is released, so the capped consumer
+            // still delivers the second, and the pass terminates.
+            assert_eq!(d.run_until_idle().await.unwrap(), 2);
+            assert_eq!(d.in_flight(), 0);
+            // The panicked claim expires into ordinary recovery and is delivered again.
+            h.advance(31_000);
+            assert_eq!(d.run_until_idle().await.unwrap(), 1);
+        })
+        .await
+    });
+    assert_eq!(read(&*store, |s| s.queue().status("capped")).completed, 2);
+    assert_eq!(handler.0.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn concurrent_passes_respect_a_consumer_cap_together() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    for _ in 0..3 {
+        enqueue(&*store, "burst", None, json!({}));
+    }
+    let (open, gate) = tokio::sync::watch::channel(false);
+    let mut burst = consumer("burst", Recorder::ok());
+    burst.async_handler = Some(Arc::new(Gated {
+        gate,
+        started: Arc::new(AtomicUsize::new(0)),
+    }));
+    burst.max_in_flight = Some(1);
+    let d = dispatcher_with(&h, store.clone(), vec![burst], |c| {
+        c.max_in_flight = 3;
+        c.claim_batch = 1;
+    });
+    rt.block_on(async {
+        within("concurrent passes", async {
+            d.recover().await.unwrap();
+            // Two passes interleave at their claim writes.
+            let (d1, d2) = (d.clone(), d.clone());
+            let a = tokio::spawn(async move { d1.tick().await });
+            let b = tokio::spawn(async move { d2.tick().await });
+            let (a, b) = (a.await.unwrap().unwrap(), b.await.unwrap().unwrap());
+            assert_eq!(a.claimed + b.claimed, 1);
+            assert_eq!(read(&*store, |s| s.queue().status("burst")).claimed, 1);
+            open.send(true).unwrap();
+            d.run_until_idle().await.unwrap();
+        })
+        .await
+    });
+    assert_eq!(read(&*store, |s| s.queue().status("burst")).completed, 3);
+}

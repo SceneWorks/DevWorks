@@ -230,8 +230,9 @@ pub enum ReplyOutcome {
     Stale,
     /// Transient: nothing visible was published; retry the delivery.
     Retry(String),
-    /// The receipt cannot be typed by this build (another contract or schema revision): hold the
-    /// delivery with its cause.
+    /// The receipt cannot be typed by this build (another contract or schema revision), or
+    /// publication failed deterministically (a violated record invariant, a missing or duplicate
+    /// record): retrying cannot help, so the delivery is held with its cause for an operator.
     Hold(String),
     /// The intent cannot be honoured (unreadable, or its receipt does not exist).
     Poison(String),
@@ -276,7 +277,7 @@ impl ReceiptReplies {
     pub fn publish(&self, store: &dyn ApplicationStore, claim: &QueueEntry) -> ReplyOutcome {
         match self.try_publish(store, claim) {
             Ok(outcome) => outcome,
-            Err(e) => ReplyOutcome::Retry(e.to_string()),
+            Err(e) => failure(e),
         }
     }
 
@@ -397,7 +398,7 @@ impl ReceiptReplies {
             // version did commit (an unknown commit outcome that succeeded), failed otherwise.
             Err(e) => {
                 self.resolve(&env, &staging, "the reply metadata was not committed");
-                Ok(ReplyOutcome::Retry(e.to_string()))
+                Ok(failure(e))
             }
         }
     }
@@ -498,6 +499,30 @@ impl ReceiptReplies {
         if matches!(bound, Ok(false)) {
             let _ = self.artifacts.files.unlink(&staged.digest, own.as_str());
         }
+    }
+}
+
+/// A storage failure of a publication attempt: transient conditions (a busy store or blob, an
+/// unavailable volume or I/O, a lost commit acknowledgment, a concurrent change, a cancelled or
+/// lost write) are retried; deterministic ones (a violated invariant, a missing or duplicate
+/// record, an incompatible schema, a denied scope) would fail the same way on every attempt and
+/// are held instead of reported as pending forever.
+fn failure(e: StorageError) -> ReplyOutcome {
+    let cause = e.to_string();
+    match e {
+        StorageError::Busy
+        | StorageError::StorageUnavailable { .. }
+        | StorageError::CommitUnknown
+        | StorageError::Cancelled
+        | StorageError::RevisionConflict(_)
+        | StorageError::LeaseLost { .. } => ReplyOutcome::Retry(cause),
+        StorageError::NotFound { .. }
+        | StorageError::Duplicate { .. }
+        | StorageError::InvalidRecord(_)
+        | StorageError::IncompatibleSchema(_)
+        | StorageError::ScopeDenied
+        | StorageError::ViewUnavailable
+        | StorageError::CursorExpired => ReplyOutcome::Hold(cause),
     }
 }
 

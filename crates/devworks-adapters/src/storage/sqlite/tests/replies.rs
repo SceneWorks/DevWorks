@@ -1551,3 +1551,146 @@ fn measure_reply_overhead() {
         bytes / N as i64
     );
 }
+
+#[test]
+fn a_deterministic_publication_failure_is_held_not_pending_forever() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let reply = fx.start_home(&user, "start-1", "Home");
+    // A blob row for the reply's exact bytes that disagrees with them (another byte count):
+    // binding it violates a record invariant, which no retry can cure.
+    let mut value = serde_json::to_value(&reply).unwrap();
+    value["replayed"] = json!(false);
+    let digest = sha256_hex(devworks_core::jcs::canonicalize(&value).unwrap().as_bytes());
+    fx.store
+        .with_writer_connection(move |c| {
+            super::super::conn::db(c.execute(
+                "INSERT INTO blobs(digest,byte_count,relative_path,state,generation)
+                 VALUES(?1,1,'artifacts/conflicting','Unlinked','old-generation')",
+                [digest],
+            ))
+        })
+        .unwrap();
+    let claimed = fx.claim();
+    let outcome = fx.replies.publish(&*fx.store, &claimed[0]);
+    let ReplyOutcome::Hold(cause) = outcome else {
+        panic!("expected a hold, got {outcome:?}")
+    };
+    assert!(cause.contains("byte count"), "{cause}");
+    // Nothing visible, nothing left behind: the staging is resolved and its file removed.
+    assert_eq!(fx.count("SELECT count(*) FROM artifacts"), 0);
+    assert!(fx.files.stored_files().unwrap().is_empty());
+    assert!(
+        fx.read(|s| s.artifacts().unresolved_staging(None, 10))
+            .is_empty()
+    );
+    // Held as the dispatcher holds it, the observation names the delivery to resolve.
+    let (id, fence) = (claimed[0].id.clone(), claimed[0].fence().unwrap());
+    fx.write(move |tx| tx.queue().hold(&id, &fence, &cause));
+    let f = fault(fx.receipt(&user, "start-1"));
+    assert_eq!(
+        (f.code, kind_of(&f), f.retry, f.target_id.clone()),
+        (
+            DomainErrorCode::ViewUnavailable,
+            RECEIPT_REPLY_HELD,
+            RetryAdvice::AfterBlockerClears,
+            Some(claimed[0].id.clone())
+        )
+    );
+}
+
+#[test]
+fn a_non_human_principal_without_a_binding_sees_no_receipt_reply() {
+    let fx = Fx::new();
+    let agent = fx.agent("agent-p", Some("project-a"));
+    recorded(&fx.start_project(&agent, "p-1"));
+    let r = published(fx.publish_all()).remove(0);
+    let resolves = |ctx: &InvocationContext| {
+        matches!(
+            fx.read(|s| fx.svc.resolve_version(s, ctx, &r)),
+            VersionResolution::Available(_)
+        )
+    };
+    assert!(resolves(&agent));
+    // Its binding is gone (never bound, or removed): it fails closed even for its own reply.
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(
+                c.execute_batch("DELETE FROM principal_authority WHERE actor_id='agent-p'"),
+            )
+        })
+        .unwrap();
+    assert!(!resolves(&agent));
+    assert!(resolves(&fx.user()), "the user still sees it");
+}
+
+#[test]
+fn a_backfilled_receipt_publishes_through_its_decision_event() {
+    // A receipt recorded by a build 7 store, whose build wrote no publication intent.
+    let h = Harness::new();
+    let before: Vec<Migration> = MIGRATIONS
+        .iter()
+        .filter(|m| m.version <= 7)
+        .copied()
+        .collect();
+    let reply = {
+        let store = Arc::new(SqliteStore::open_with(h.config(), &before).unwrap());
+        run_write(&*store, WriteOptions::default(), |tx| {
+            tx.actors()
+                .register(&actor("user-a"), PrincipalKind::Human, "user-a")
+        })
+        .unwrap();
+        let cases = UseCases::new()
+            .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store.clone())))
+            .with_history(Arc::new(HistoryService::new(h.ids.clone())));
+        let authority = HostAuthority {
+            store: &*store,
+            clock: &*h.clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*store,
+            ids: &*h.ids,
+        };
+        let info = store.info();
+        let user = HostIngress::new(&*store).context(
+            actor("user-a"),
+            PrincipalKind::Human,
+            id("invocation-1"),
+            id("ui-main"),
+            Counter::new(info.restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        );
+        let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": "old-1",
+            "body": {"kind": "sessions.start", "scope": {"kind": "Workspace"}, "title": "Home"}});
+        cases
+            .command(
+                &gateway,
+                &user,
+                "sessions.start",
+                frame.to_string().as_bytes(),
+            )
+            .unwrap()
+    };
+    recorded(&reply);
+    let c = h.raw();
+    c.execute_batch("DELETE FROM queue_entries WHERE consumer='receipt_replies'")
+        .unwrap();
+    drop(c);
+    // Migration 8 backfills the intent; the publisher verifies it names the receipt's own
+    // decision event and publishes.
+    let fx = Fx::open(h, Arc::new(AtomicU64::new(0)));
+    let r = published(fx.publish_all()).remove(0);
+    let o = observation(fx.receipt(&fx.user(), "old-1"));
+    o.check().unwrap();
+    assert_eq!(o.command_id.as_ref(), Some(&recorded(&reply).command_id));
+    assert_eq!(
+        o.reply_artifact.map(|a| a.version_id),
+        Some(r.version_id.clone())
+    );
+    let bytes = text(fx.read_reply(&fx.user(), &r));
+    let mut expected = serde_json::to_value(&reply).unwrap();
+    expected["replayed"] = json!(false);
+    assert_eq!(bytes, devworks_core::jcs::canonicalize(&expected).unwrap());
+}

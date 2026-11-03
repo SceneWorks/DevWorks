@@ -331,7 +331,8 @@ pub fn authorized_scope(
 }
 
 /// Who is looking at artifacts: the invocation, the principal's current authorized scope from
-/// its host binding (`None` once the binding is inactive), and whether it is the unconfined
+/// its host binding (`None` once the binding is inactive, or when a non-human principal has no
+/// binding at all), and whether it is the unconfined
 /// workspace coordinator.
 #[derive(Clone, Debug)]
 pub struct Viewer<'a> {
@@ -371,10 +372,11 @@ impl<'a> Viewer<'a> {
                         .map_or(AuthorizedScope::Workspace, AuthorizedScope::Project),
                 ),
             },
+            // A non-human principal with no host binding has no authorized scope: fail closed.
             None => Self {
                 ctx,
                 coordinator: false,
-                authorized: Some(AuthorizedScope::Workspace),
+                authorized: None,
             },
         })
     }
