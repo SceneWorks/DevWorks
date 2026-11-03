@@ -42,22 +42,20 @@ impl fmt::Debug for SecretRef {
     }
 }
 
-/// JSON member names whose values are always redacted (compared case-insensitively, ignoring
-/// `_` and `-`).
-const SENSITIVE_FIELDS: [&str; 12] = [
+/// Field-name fragments that mark a value as sensitive wherever they appear in the normalized
+/// name (case-insensitive, `_` and `-` ignored): `aws_secret_access_key`, `client_secret_id`, ...
+const SENSITIVE_PARTS: [&str; 8] = [
     "password",
+    "passwd",
     "passphrase",
     "secret",
-    "clientsecret",
-    "token",
-    "accesstoken",
-    "refreshtoken",
     "apikey",
-    "authorization",
-    "cookie",
+    "accesskey",
     "privatekey",
     "credential",
 ];
+/// Field-name suffixes that mark a value as sensitive (`accessToken`, `Authorization`, ...).
+const SENSITIVE_SUFFIXES: [&str; 3] = ["token", "authorization", "cookie"];
 
 /// Redacts known values and recognizable credential shapes.
 #[derive(Clone, Debug, Default)]
@@ -78,7 +76,7 @@ impl Redactor {
     }
 
     pub fn redact_text(&self, text: &str) -> String {
-        let mut out = text.to_owned();
+        let mut out = redact_pem(text);
         for k in &self.known {
             out = out.replace(k.as_str(), REDACTED);
         }
@@ -99,7 +97,8 @@ impl Redactor {
                 let mut out = Map::new();
                 for (k, v) in map {
                     // A secret reference under a credential field is kept: it is not a secret.
-                    let reference = SecretRef::from_setting(v).is_some();
+                    let reference = SecretRef::from_setting(v).is_some()
+                        || v.as_str().is_some_and(is_secret_ref);
                     let redacted = if sensitive(k) && !v.is_null() && !reference {
                         Value::String(REDACTED.into())
                     } else {
@@ -120,9 +119,38 @@ fn sensitive(field: &str) -> bool {
         .filter(|c| *c != '_' && *c != '-')
         .collect::<String>()
         .to_lowercase();
-    SENSITIVE_FIELDS
-        .iter()
-        .any(|s| norm == *s || norm.ends_with(s))
+    !norm.is_empty()
+        && (SENSITIVE_PARTS.iter().any(|s| norm.contains(s))
+            || SENSITIVE_SUFFIXES.iter().any(|s| norm.ends_with(s)))
+}
+
+/// Private-key PEM blocks, however short, including an unterminated one.
+fn redact_pem(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(begin) = rest.find("-----BEGIN ") {
+        let header_end = rest[begin..].find('\n').map_or(rest.len(), |n| begin + n);
+        let header = &rest[begin..header_end];
+        if !(header.contains("PRIVATE KEY") || header.contains("ENCRYPTED")) {
+            out.push_str(&rest[..header_end]);
+            rest = &rest[header_end..];
+            continue;
+        }
+        out.push_str(&rest[..begin]);
+        out.push_str(REDACTED);
+        rest = match rest[begin..].find("-----END ") {
+            Some(n) => {
+                let after = begin + n + "-----END ".len();
+                match rest[after..].find("-----") {
+                    Some(m) => &rest[after + m + 5..],
+                    None => "",
+                }
+            }
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Credential headers, `key=value` assignments of sensitive names and token-shaped words.
@@ -159,9 +187,13 @@ fn redact_line(line: &str) -> String {
             pending = false;
         } else {
             out.push_str(&redact_word(word));
+            // `token: value`, `password = value` and `--password value` / `--token value`.
             pending = word
                 .strip_suffix([':', '='])
-                .is_some_and(|k| sensitive(k.trim_start_matches(['-', '?'])));
+                .is_some_and(|k| sensitive(k.trim_start_matches(['-', '?'])))
+                || (word.starts_with('-')
+                    && !word.contains('=')
+                    && sensitive(word.trim_start_matches('-')));
         }
         word.clear();
     };
@@ -178,6 +210,36 @@ fn redact_line(line: &str) -> String {
 }
 
 fn redact_word(word: &str) -> String {
+    // URL userinfo: `scheme://user:secret@host` keeps the scheme, user and host.
+    if let Some(scheme_end) = word.find("://") {
+        let authority_start = scheme_end + 3;
+        let authority_end = word[authority_start..]
+            .find(['/', '?', '#'])
+            .map_or(word.len(), |n| authority_start + n);
+        if let Some(at) = word[authority_start..authority_end].rfind('@') {
+            let userinfo = &word[authority_start..authority_start + at];
+            let user = userinfo.split(':').next().unwrap_or("");
+            let kept = if userinfo.contains(':') {
+                format!("{user}:{REDACTED}")
+            } else {
+                REDACTED.to_owned()
+            };
+            return format!(
+                "{}{kept}{}",
+                &word[..authority_start],
+                redact_word_tail(&word[authority_start + at..])
+            );
+        }
+    }
+    // `-pSECRET` style short flags with an attached value that looks like a secret.
+    if let Some(value) = word.strip_prefix("-p")
+        && value.len() >= 6
+        && value.bytes().any(|b| b.is_ascii_digit())
+        && value.bytes().any(|b| b.is_ascii_alphabetic())
+        && !value.contains('=')
+    {
+        return format!("-p{REDACTED}");
+    }
     if let Some((k, v)) = word.split_once(['=', ':'])
         && !v.is_empty()
         && sensitive(k.trim_start_matches(['-', '?']))
@@ -192,6 +254,30 @@ fn redact_word(word: &str) -> String {
         return REDACTED.into();
     }
     word.to_owned()
+}
+
+fn redact_word_tail(tail: &str) -> String {
+    if looks_like_credential(tail) {
+        REDACTED.to_owned()
+    } else {
+        tail.to_owned()
+    }
+}
+
+/// A domain decision with credential-shaped content redacted, for receipts (persisted and
+/// returned). A decision that would no longer decode after redaction is kept as it was; its
+/// use case is responsible for not echoing secrets (settings refuse credentials outright).
+pub fn redact_decision(
+    decision: crate::protocol::results::DomainDecision,
+) -> crate::protocol::results::DomainDecision {
+    let Ok(value) = serde_json::to_value(&decision) else {
+        return decision;
+    };
+    let redacted = Redactor::new().redact_json(&value);
+    if redacted == value {
+        return decision;
+    }
+    serde_json::from_value(redacted).unwrap_or(decision)
 }
 
 /// Long unbroken base64/hex-like runs with mixed character classes (likely opaque credentials).

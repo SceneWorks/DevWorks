@@ -1297,7 +1297,9 @@ impl HistoryLog for Unit<'_> {
             e.aggregate_revision,
             e.kind,
             self.now,
-            text(&e.payload)
+            // History is persisted and exported: credential-shaped content in free text is
+            // redacted before it is written.
+            text(&devworks_core::authority::redact::Redactor::new().redact_json(&e.payload))
         ]))?;
         Ok(self.conn.last_insert_rowid())
     }

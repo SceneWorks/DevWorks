@@ -303,6 +303,7 @@ fn links_are_checked_at_the_entry_and_the_resolved_target() {
     fs.execute(
         &unlink.allowed_targets().unwrap()[0],
         DestructiveKind::Unlink,
+        unlink.protected_identities(),
     )
     .unwrap();
     assert!(t.s.0.join("repo/src/lib.rs").exists());
@@ -454,7 +455,13 @@ fn owned_worktree_cleanup_is_bounded_to_the_exact_stopped_worktree() {
         let ok = check_in(&t, rm, &[&t.s.p("worktrees/task-a")], None, cleanup("wt-a"));
         let fs = NativeFilesystem::new();
         revalidate(&fs, &ok, &t.roots.revision).unwrap();
-        let outcome = fs.execute(&ok.allowed_targets().unwrap()[0], rm).unwrap();
+        let outcome = fs
+            .execute(
+                &ok.allowed_targets().unwrap()[0],
+                rm,
+                ok.protected_identities(),
+            )
+            .unwrap();
         assert!(outcome.complete, "{outcome:?}");
         assert!(outcome.removed_entries >= 4);
         assert!(!t.s.0.join("worktrees/task-a").exists());
@@ -480,7 +487,8 @@ fn a_target_replaced_after_its_check_is_refused_at_the_step() {
     assert!(matches!(
         fs.execute(
             &decision.allowed_targets().unwrap()[0],
-            DestructiveKind::Unlink
+            DestructiveKind::Unlink,
+            decision.protected_identities()
         ),
         Err(ResolveError::Changed(_))
     ));
@@ -496,7 +504,8 @@ fn a_target_replaced_after_its_check_is_refused_at_the_step() {
     assert!(matches!(
         fs.execute(
             &decision.allowed_targets().unwrap()[0],
-            DestructiveKind::RemoveTree
+            DestructiveKind::RemoveTree,
+            decision.protected_identities()
         ),
         Err(ResolveError::Changed(_))
     ));
@@ -509,7 +518,13 @@ fn shell_plans_resolve_to_actual_targets_before_dispatch() {
     let fs = NativeFilesystem::new();
     let argv = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     let cwd = t.s.p("outside");
-    let script = "cd x; rm -rf ../repo && echo done";
+    // A working-directory change before a relative target is held, never resolved against the
+    // saved directory.
+    assert!(matches!(
+        assess_command(&argv(&["bash", "-c", "cd x; rm -rf ../repo"]), Some(&cwd)),
+        ShellAssessment::NeedsInput(InputNeeded::UnresolvedWorkingDirectory)
+    ));
+    let script = "true; rm -rf ../repo && echo done";
     let ShellAssessment::Destructive { plans, residual } =
         assess_command(&argv(&["bash", "-c", script]), Some(&cwd))
     else {
@@ -606,8 +621,17 @@ fn verified_reads_refuse_links_hard_links_swaps_and_moved_roots() {
     symlink(&repo, t.s.0.join("root-link")).unwrap();
     let linked = ReadRoot {
         location: t.s.0.join("root-link"),
+        identity,
+    };
+    // Without the registered identity nothing is read.
+    let unregistered = ReadRoot {
+        location: repo.clone(),
         identity: None,
     };
+    assert!(matches!(
+        read(&fs, &unregistered, "src/lib.rs"),
+        Err(ReadRefusal::Unsupported(_))
+    ));
     assert_eq!(
         read(&fs, &linked, "src/lib.rs"),
         Err(ReadRefusal::RootChanged)
@@ -634,4 +658,236 @@ fn verified_reads_refuse_links_hard_links_swaps_and_moved_roots() {
         read(&fs, &root, "src/lib.rs"),
         Err(ReadRefusal::LinkRefused)
     );
+}
+
+fn metadata_block() -> BlockReason {
+    BlockReason::RepositoryMetadata {
+        repository_id: id("repo-a"),
+    }
+}
+
+#[test]
+fn everything_inside_a_registered_git_directory_is_protected() {
+    let t = tree("gitdir");
+    std::fs::create_dir_all(t.s.0.join("repo/.git/objects/aa")).unwrap();
+    std::fs::write(t.s.0.join("repo/.git/HEAD"), b"ref: refs/heads/main\n").unwrap();
+    let rm = DestructiveKind::RemoveTree;
+    assert_eq!(
+        blocked(&check(&t, rm, &[&t.s.p("repo/.git/objects")], None)),
+        Some(&metadata_block())
+    );
+    assert_eq!(
+        blocked(&check(
+            &t,
+            DestructiveKind::Truncate,
+            &[&t.s.p("repo/.git/HEAD")],
+            None
+        )),
+        Some(&metadata_block())
+    );
+    assert_eq!(
+        blocked(&check(
+            &t,
+            DestructiveKind::Unlink,
+            &[&t.s.p("repo/.git/HEAD")],
+            None
+        )),
+        Some(&metadata_block())
+    );
+    assert_eq!(
+        blocked(&check(&t, rm, &[&t.s.p("repo/.git/*")], None)),
+        Some(&BlockReason::WholeContentErasure)
+    );
+    // Any glob at the top of a protected directory, however it is spelled.
+    for pattern in ["repo/[!.]*", "repo/?*", "repo/*?", "repo/*.rs", "repo/.*"] {
+        assert_eq!(
+            blocked(&check(&t, rm, &[&t.s.p(pattern)], None)),
+            Some(&BlockReason::WholeContentErasure),
+            "{pattern}"
+        );
+    }
+    // Deeper globs are checked per expanded target and stay allowed when ordinary.
+    std::fs::write(t.s.0.join("repo/src/a.tmp"), b"").unwrap();
+    assert_eq!(
+        check(
+            &t,
+            DestructiveKind::Unlink,
+            &[&t.s.p("repo/src/*.tmp")],
+            None
+        )
+        .verdict,
+        PreflightVerdict::Allowed
+    );
+}
+
+#[test]
+fn a_gitfile_points_protection_at_the_real_git_directory() {
+    let s = Scratch::new("gitfile");
+    std::fs::create_dir_all(s.0.join("main/.git/worktrees/linked/refs")).unwrap();
+    std::fs::create_dir_all(s.0.join("linked/src")).unwrap();
+    std::fs::create_dir_all(s.0.join("modules/sub.git/objects")).unwrap();
+    std::fs::create_dir_all(s.0.join("super/sub")).unwrap();
+    // A linked worktree registered as its own repository, and a relative submodule pointer.
+    std::fs::write(
+        s.0.join("linked/.git"),
+        format!("gitdir: {}\n", s.p("main/.git/worktrees/linked")),
+    )
+    .unwrap();
+    std::fs::write(
+        s.0.join("super/sub/.git"),
+        "gitdir: ../../modules/sub.git\n",
+    )
+    .unwrap();
+    let roots = ProtectedRoots::new(
+        vec![
+            RegisteredRepository {
+                id: id("linked"),
+                location: s.p("linked"),
+                revision: 1,
+            },
+            RegisteredRepository {
+                id: id("sub"),
+                location: s.p("super/sub"),
+                revision: 1,
+            },
+        ],
+        Vec::new(),
+        None,
+    );
+    let run = |kind, target: String| {
+        preflight(
+            &NativeFilesystem::new(),
+            &roots,
+            &EffectPlan {
+                kind,
+                targets: vec![target],
+                working_directory: None,
+                scope: IntendedScope::Ordinary,
+            },
+        )
+    };
+    let meta = |r: &str| BlockReason::RepositoryMetadata {
+        repository_id: id(r),
+    };
+    assert_eq!(
+        blocked(&run(
+            DestructiveKind::RemoveTree,
+            s.p("main/.git/worktrees/linked")
+        )),
+        Some(&meta("linked"))
+    );
+    assert_eq!(
+        blocked(&run(
+            DestructiveKind::RemoveTree,
+            s.p("main/.git/worktrees/linked/refs")
+        )),
+        Some(&meta("linked"))
+    );
+    // A recursive step over the ancestor of an external Git directory destroys it too.
+    assert_eq!(
+        blocked(&run(DestructiveKind::RemoveTree, s.p("modules"))),
+        Some(&meta("sub"))
+    );
+    assert_eq!(
+        blocked(&run(DestructiveKind::Unlink, s.p("linked/.git"))),
+        Some(&meta("linked"))
+    );
+}
+
+#[test]
+fn an_unresolvable_protected_root_fails_closed() {
+    let s = Scratch::new("unresolvable");
+    let roots = ProtectedRoots::new(
+        vec![RegisteredRepository {
+            id: id("repo-b"),
+            location: "relative/repo".into(),
+            revision: 1,
+        }],
+        Vec::new(),
+        None,
+    );
+    let d = preflight(
+        &NativeFilesystem::new(),
+        &roots,
+        &EffectPlan {
+            kind: DestructiveKind::RemoveTree,
+            targets: vec!["relative/repo".into()],
+            working_directory: Some(s.p("")),
+            scope: IntendedScope::Ordinary,
+        },
+    );
+    assert_eq!(
+        d.verdict,
+        PreflightVerdict::NeedsInput(InputNeeded::UnresolvedProtectedRoot)
+    );
+    // An unresolvable application data root likewise.
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some("data".into()));
+    let d = preflight(
+        &NativeFilesystem::new(),
+        &roots,
+        &EffectPlan {
+            kind: DestructiveKind::Unlink,
+            targets: vec![s.p("x")],
+            working_directory: None,
+            scope: IntendedScope::Ordinary,
+        },
+    );
+    assert_eq!(
+        d.verdict,
+        PreflightVerdict::NeedsInput(InputNeeded::UnresolvedProtectedRoot)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_repository_moved_into_the_tree_after_preflight_is_not_deleted() {
+    use devworks_core::authority::destructive::DestructiveExecutor;
+    let t = tree("moved-in");
+    let doomed = t.s.p("outside/doomed");
+    std::fs::create_dir_all(format!("{doomed}/a")).unwrap();
+    std::fs::write(format!("{doomed}/a/f"), b"x").unwrap();
+    let decision = check(&t, DestructiveKind::RemoveTree, &[&doomed], None);
+    assert_eq!(decision.verdict, PreflightVerdict::Allowed);
+    // Between preflight and execution the registered repository is renamed into the target.
+    std::fs::rename(t.s.0.join("repo"), t.s.0.join("outside/doomed/repo")).unwrap();
+    let fs = NativeFilesystem::new();
+    let outcome = fs
+        .execute(
+            &decision.allowed_targets().unwrap()[0],
+            DestructiveKind::RemoveTree,
+            decision.protected_identities(),
+        )
+        .unwrap();
+    assert!(!outcome.complete);
+    assert!(
+        outcome.remaining.iter().any(|r| r.ends_with("repo")),
+        "{outcome:?}"
+    );
+    assert!(t.s.0.join("outside/doomed/repo/src/lib.rs").exists());
+    assert!(!t.s.0.join("outside/doomed/a").exists());
+    // Without the protected set the same step would have taken the repository.
+    assert!(!decision.protected_identities().is_empty());
+}
+
+#[test]
+fn windows_device_names_and_streams_are_not_plain_components() {
+    use super::windows_unsafe_component as unsafe_name;
+    for name in [
+        "CON",
+        "con",
+        "NUL.txt",
+        "aux.",
+        "COM1",
+        "lpt9.log",
+        "COM\u{b9}",
+        "PRN ",
+        "a:stream",
+        "file.txt:$DATA",
+        "CONIN$",
+    ] {
+        assert!(unsafe_name(name), "{name}");
+    }
+    for name in ["CONSOLE", "nullable.rs", "COM10", "lib.rs", "LPT", "comma"] {
+        assert!(!unsafe_name(name), "{name}");
+    }
 }

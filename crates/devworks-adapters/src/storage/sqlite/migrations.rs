@@ -60,9 +60,11 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     // Additive tables. Writers older than 5 would ignore principal revocation and authority
     // grants, so they may not write; the floor also stays at or above every earlier floor.
+    // Readers older than 5 treat the `mcp_client` actor kind as corrupt, so they may not read
+    // either: older builds open such a store read-refused instead of misreporting corruption.
     Migration {
         version: 5,
-        minimum_reader: 1,
+        minimum_reader: 5,
         minimum_writer: 5,
         sql: include_str!("migrations/0005_authority.sql"),
     },

@@ -100,6 +100,8 @@ pub trait FilesystemResolver: Send + Sync {
         limit: usize,
     ) -> Result<Vec<String>, ResolveError>;
     fn home(&self) -> Option<PathBuf>;
+    /// The `gitdir:` pointer of a `.git` file (linked worktrees and submodules), unresolved.
+    fn gitfile_target(&self, gitfile: &Path) -> Option<String>;
 }
 
 /// An owned task worktree as recorded by its owner.
@@ -166,10 +168,13 @@ pub enum DestructiveKind {
     EraseContents,
     /// Overwrite/truncate a file (follows the final link).
     Truncate,
+    /// Move a tree away from its location (`mv`): for protection it destroys the location like
+    /// a recursive removal. Never executed by the destructive executor.
+    Move,
 }
 impl DestructiveKind {
     fn recursive(self) -> bool {
-        matches!(self, Self::RemoveTree | Self::EraseContents)
+        matches!(self, Self::RemoveTree | Self::EraseContents | Self::Move)
     }
     fn follows(self) -> bool {
         !matches!(self, Self::Unlink)
@@ -258,6 +263,14 @@ pub enum InputNeeded {
     UnresolvedDeclaredTarget,
     /// A shell argument depends on runtime expansion.
     UnresolvedExpansion,
+    /// A working-directory change precedes a relative destructive target.
+    UnresolvedWorkingDirectory,
+    /// A construct (compound command, unmodeled wrapper, encoded or piped script) whose effect
+    /// cannot be inspected before dispatch.
+    OpaqueCommand,
+    /// A protected root (registered repository, its Git directory, home, application data)
+    /// could not be resolved, so nothing can be checked against it.
+    UnresolvedProtectedRoot,
 }
 impl InputNeeded {
     pub fn as_str(self) -> &'static str {
@@ -266,6 +279,9 @@ impl InputNeeded {
             Self::UnresolvedTarget => "UnresolvedTarget",
             Self::UnresolvedDeclaredTarget => "UnresolvedDeclaredTarget",
             Self::UnresolvedExpansion => "UnresolvedExpansion",
+            Self::UnresolvedWorkingDirectory => "UnresolvedWorkingDirectory",
+            Self::OpaqueCommand => "OpaqueCommand",
+            Self::UnresolvedProtectedRoot => "UnresolvedProtectedRoot",
         }
     }
 }
@@ -331,8 +347,14 @@ pub struct PreflightDecision {
     pub offending: Option<String>,
     targets: Vec<CheckedTarget>,
     pub registry_revision: String,
+    /// Identities of every protected root and Git directory not covered by a deletion permit.
+    /// The executor re-checks them inside the tree at execution time.
+    protected: Vec<FileIdentity>,
 }
 impl PreflightDecision {
+    pub fn protected_identities(&self) -> &[FileIdentity] {
+        &self.protected
+    }
     /// Targets of an allowed decision; nothing for a refusal.
     pub fn allowed_targets(&self) -> Option<&[CheckedTarget]> {
         (self.verdict == PreflightVerdict::Allowed).then_some(&self.targets[..])
@@ -355,10 +377,52 @@ impl PreflightDecision {
 struct Protected {
     located: Located,
 }
-fn locate(fs: &dyn FilesystemResolver, location: &str) -> Option<Protected> {
-    let r = fs.resolve(location, None).ok()?;
-    Some(Protected {
+/// Resolves a protected location; `Err` when it cannot be resolved at all (relative, invalid,
+/// unreadable), which fails the preflight closed. A registered location that is currently
+/// missing stays protected by its path.
+fn locate(fs: &dyn FilesystemResolver, location: &str) -> Result<Protected, ()> {
+    let r = fs.resolve(location, None).map_err(|_| ())?;
+    Ok(Protected {
         located: r.target.unwrap_or(r.entry),
+    })
+}
+
+/// A registered repository: its root and every Git directory that belongs to it (the `.git`
+/// entry itself, and the real Git directory a `.git` link or gitfile points to).
+struct Repository {
+    id: Id,
+    root: Protected,
+    git_dirs: Vec<Protected>,
+}
+fn repository(fs: &dyn FilesystemResolver, r: &RegisteredRepository) -> Result<Repository, ()> {
+    let root = locate(fs, &r.location)?;
+    let dot = root.located.path.join(".git");
+    let dot_text = dot.to_string_lossy().into_owned();
+    let entry = fs.resolve(&dot_text, None).map_err(|_| ())?;
+    let mut git_dirs = Vec::new();
+    if let Some(target) = &entry.target
+        && entry.entry_kind == EntryKind::Symlink
+    {
+        git_dirs.push(Protected {
+            located: target.clone(),
+        });
+    }
+    if entry.entry_kind == EntryKind::File
+        && let Some(pointer) = fs.gitfile_target(&dot)
+    {
+        let base = root.located.path.to_string_lossy().into_owned();
+        let real = fs.resolve(&pointer, Some(&base)).map_err(|_| ())?;
+        git_dirs.push(Protected {
+            located: real.target.unwrap_or(real.entry),
+        });
+    }
+    git_dirs.push(Protected {
+        located: entry.entry,
+    });
+    Ok(Repository {
+        id: r.id.clone(),
+        root,
+        git_dirs,
     })
 }
 
@@ -409,26 +473,63 @@ pub fn preflight(
     roots: &ProtectedRoots,
     plan: &EffectPlan,
 ) -> PreflightDecision {
-    let decide = |verdict, offending: Option<&str>, targets| PreflightDecision {
-        verdict,
-        kind: plan.kind,
-        offending: offending.map(str::to_owned),
-        targets,
-        registry_revision: roots.revision.clone(),
+    let mut protected_ids: Vec<FileIdentity> = Vec::new();
+    let decide = |verdict, offending: Option<&str>, targets, protected: Vec<FileIdentity>| {
+        PreflightDecision {
+            verdict,
+            kind: plan.kind,
+            offending: offending.map(str::to_owned),
+            targets,
+            registry_revision: roots.revision.clone(),
+            protected,
+        }
+    };
+    let unresolved = |offending: &str| {
+        decide(
+            PreflightVerdict::NeedsInput(InputNeeded::UnresolvedProtectedRoot),
+            Some(offending),
+            Vec::new(),
+            Vec::new(),
+        )
     };
     let cwd = plan.working_directory.as_deref();
-    let repositories: Vec<(Id, Protected)> = roots
-        .repositories
-        .iter()
-        .filter_map(|r| locate(fs, &r.location).map(|p| (r.id.clone(), p)))
-        .collect();
-    let home = fs.home().and_then(|h| locate(fs, &h.to_string_lossy()));
-    let app_data = roots.app_data_root.as_deref().and_then(|a| locate(fs, a));
+    // Every protected root must resolve; one that cannot is a refusal, never a silent gap.
+    let mut repositories = Vec::with_capacity(roots.repositories.len());
+    for r in &roots.repositories {
+        match repository(fs, r) {
+            Ok(repo) => repositories.push(repo),
+            Err(()) => return unresolved(&r.location),
+        }
+    }
+    let Some(home_path) = fs.home() else {
+        return unresolved("~");
+    };
+    let Ok(home) = locate(fs, &home_path.to_string_lossy()) else {
+        return unresolved("~");
+    };
+    let app_data = match roots.app_data_root.as_deref().map(|a| (a, locate(fs, a))) {
+        Some((a, Err(()))) => return unresolved(a),
+        Some((_, Ok(p))) => Some(p),
+        None => None,
+    };
+    let permitted = match &plan.scope {
+        IntendedScope::PrimaryRepositoryDeletion(permit) => Some(permit.repository_id().clone()),
+        _ => None,
+    };
+    for repo in &repositories {
+        if Some(&repo.id) == permitted.as_ref() {
+            continue;
+        }
+        protected_ids.extend(repo.root.located.identity);
+        protected_ids.extend(repo.git_dirs.iter().filter_map(|g| g.located.identity));
+    }
+    protected_ids.extend(home.located.identity);
+    protected_ids.extend(app_data.as_ref().and_then(|a| a.located.identity));
     let protected_dirs = || {
         repositories
             .iter()
-            .map(|(_, p)| p)
-            .chain(home.iter())
+            .flat_map(|r| std::iter::once(&r.root).chain(r.git_dirs.iter()))
+            .chain(std::iter::once(&home))
             .chain(app_data.iter())
     };
 
@@ -448,16 +549,14 @@ pub fn preflight(
             Some(i) => (&requested[..i], &requested[i + 1..]),
             None => (".", requested.as_str()),
         };
+        // Any glob directly inside a protected directory may match all of its entries
+        // (`*`, `[!.]*`, `?*`, …): refused as whole-content erasure rather than pattern-guessed.
         if !has_wildcard(parent)
-            && !last.is_empty()
-            && last.chars().all(|c| c == '*' || c == '.')
+            && has_wildcard(last)
             && let Ok(dir) = fs.resolve(parent, cwd)
         {
             let dir = dir.target.unwrap_or(dir.entry);
-            let worktree_cleanup = matches!(plan.scope, IntendedScope::OwnedWorktreeCleanup { .. });
-            if dir.volume_root
-                || (!worktree_cleanup && protected_dirs().any(|p| same(&dir, &p.located)))
-            {
+            if dir.volume_root || protected_dirs().any(|p| same(&dir, &p.located)) {
                 return decide(
                     PreflightVerdict::Blocked(if dir.volume_root {
                         BlockReason::FilesystemRoot
@@ -465,6 +564,7 @@ pub fn preflight(
                         BlockReason::WholeContentErasure
                     }),
                     Some(requested),
+                    Vec::new(),
                     Vec::new(),
                 );
             }
@@ -476,12 +576,14 @@ pub fn preflight(
                     PreflightVerdict::NeedsInput(InputNeeded::UnboundedExpansion),
                     Some(requested),
                     Vec::new(),
+                    Vec::new(),
                 );
             }
             Err(_) => {
                 return decide(
                     PreflightVerdict::NeedsInput(InputNeeded::UnresolvedTarget),
                     Some(requested),
+                    Vec::new(),
                     Vec::new(),
                 );
             }
@@ -491,6 +593,7 @@ pub fn preflight(
                 PreflightVerdict::NeedsInput(InputNeeded::UnboundedExpansion),
                 Some(requested),
                 Vec::new(),
+                Vec::new(),
             );
         }
     }
@@ -498,6 +601,7 @@ pub fn preflight(
         return decide(
             PreflightVerdict::NeedsInput(InputNeeded::UnresolvedTarget),
             None,
+            Vec::new(),
             Vec::new(),
         );
     }
@@ -511,6 +615,7 @@ pub fn preflight(
                     PreflightVerdict::NeedsInput(InputNeeded::UnresolvedTarget),
                     Some(requested),
                     Vec::new(),
+                    Vec::new(),
                 );
             }
         };
@@ -518,7 +623,7 @@ pub fn preflight(
             &resolved,
             plan,
             &repositories,
-            home.as_ref(),
+            Some(&home),
             app_data.as_ref(),
             roots,
             fs,
@@ -536,17 +641,18 @@ pub fn preflight(
                     PreflightVerdict::Blocked(reason),
                     Some(requested),
                     Vec::new(),
+                    Vec::new(),
                 );
             }
         }
     }
-    decide(PreflightVerdict::Allowed, None, checked)
+    decide(PreflightVerdict::Allowed, None, checked, protected_ids)
 }
 
 fn classify(
     r: &ResolvedPath,
     plan: &EffectPlan,
-    repositories: &[(Id, Protected)],
+    repositories: &[Repository],
     home: Option<&Protected>,
     app_data: Option<&Protected>,
     roots: &ProtectedRoots,
@@ -583,15 +689,16 @@ fn classify(
         return Err(BlockReason::ProtectedUserDirectory);
     }
     let mut confirmed = false;
-    for (id, repo) in repositories {
-        if hits(repo) {
+    for repo in repositories {
+        let id = &repo.id;
+        if hits(&repo.root) {
             if let IntendedScope::PrimaryRepositoryDeletion(permit) = &plan.scope {
                 let exact = kind == DestructiveKind::RemoveTree
                     && r.entry_kind == EntryKind::Directory
                     && permit.repository_id() == id
                     && r.entry.identity.is_some()
                     && r.entry.identity == Some(permit.identity())
-                    && same(&r.entry, &repo.located);
+                    && same(&r.entry, &repo.root.located);
                 if exact {
                     confirmed = true;
                     continue;
@@ -602,20 +709,13 @@ fn classify(
                 repository_id: id.clone(),
             });
         }
-        // The repository's `.git` metadata: its parent is the registered root.
-        for a in &affected {
-            let is_metadata = a
-                .path
-                .file_name()
-                .is_some_and(|n| n.eq_ignore_ascii_case(".git"))
-                && match (a.ancestors.first(), repo.located.identity) {
-                    (Some(parent), Some(root)) => *parent == root,
-                    _ => a
-                        .path
-                        .parent()
-                        .is_some_and(|p| same_path(p, &repo.located.path)),
-                };
-            if is_metadata {
+        // Git metadata: anything inside one of the repository's Git directories (matched by
+        // identity), or a recursive step over a Git directory kept outside the root.
+        for g in &repo.git_dirs {
+            if affected
+                .iter()
+                .any(|a| within(a, &g.located) || (kind.recursive() && ancestor_of(a, &g.located)))
+            {
                 return Err(BlockReason::RepositoryMetadata {
                     repository_id: id.clone(),
                 });
@@ -635,12 +735,12 @@ fn classify(
             let Some(w) = roots.worktrees.iter().find(|w| &w.id == worktree_id) else {
                 return Err(BlockReason::WorktreeNotOwned);
             };
-            let Some(tree) = locate(fs, &w.location) else {
+            let Ok(tree) = locate(fs, &w.location) else {
                 return Err(BlockReason::WorktreeNotOwned);
             };
             if repositories
                 .iter()
-                .any(|(_, p)| same(&p.located, &tree.located))
+                .any(|p| same(&p.root.located, &tree.located))
             {
                 return Err(BlockReason::PrimaryRepository {
                     repository_id: w.repository_id.clone(),
@@ -706,10 +806,14 @@ pub struct RemovalOutcome {
 /// Performs one checked step through verified, no-follow, descriptor-relative handles where the
 /// platform provides them; refuses a case whose identity rule it cannot preserve.
 pub trait DestructiveExecutor: Send + Sync {
+    /// `protected` is [`PreflightDecision::protected_identities`]: a protected root or Git
+    /// directory found inside the tree at execution time (renamed in after the preflight) is
+    /// left in place and reported as remaining.
     fn execute(
         &self,
         target: &CheckedTarget,
         kind: DestructiveKind,
+        protected: &[FileIdentity],
     ) -> Result<RemovalOutcome, ResolveError>;
 }
 

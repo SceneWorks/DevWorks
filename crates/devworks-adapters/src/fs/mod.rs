@@ -278,6 +278,59 @@ impl FilesystemResolver for NativeFilesystem {
     fn home(&self) -> Option<PathBuf> {
         home()
     }
+
+    fn gitfile_target(&self, gitfile: &Path) -> Option<String> {
+        use std::io::Read;
+        let file = std::fs::OpenOptions::new().read(true).open(gitfile).ok()?;
+        if !file.metadata().ok()?.is_file() {
+            return None;
+        }
+        let mut head = String::new();
+        file.take(4096).read_to_string(&mut head).ok()?;
+        let pointer = head.lines().next()?.strip_prefix("gitdir:")?.trim();
+        (!pointer.is_empty()).then(|| pointer.to_owned())
+    }
+}
+
+/// A component Windows would not treat as a plain file beneath the root: an alternate data
+/// stream (`name:stream`) or a reserved device name (`CON`, `NUL`, `COM1`, …, with any
+/// extension and trailing dots or spaces).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_unsafe_component(name: &str) -> bool {
+    if name.contains(':') {
+        return true;
+    }
+    let trimmed = name.trim_end_matches(['.', ' ']);
+    let base = trimmed
+        .split('.')
+        .next()
+        .unwrap_or(trimmed)
+        .trim_end_matches(' ');
+    let upper = base.to_ascii_uppercase();
+    let numbered = |prefix: &str| {
+        upper.strip_prefix(prefix).is_some_and(|d| {
+            matches!(
+                d,
+                "0" | "1"
+                    | "2"
+                    | "3"
+                    | "4"
+                    | "5"
+                    | "6"
+                    | "7"
+                    | "8"
+                    | "9"
+                    | "\u{b9}"
+                    | "\u{b2}"
+                    | "\u{b3}"
+            )
+        })
+    };
+    matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || numbered("COM")
+        || numbered("LPT")
 }
 
 /// Glob match of one component: `*`, `?` and `[...]` classes (ranges, `!`/`^` negation).

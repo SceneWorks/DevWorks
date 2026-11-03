@@ -43,11 +43,54 @@ pub struct InvocationContext {
     capability_registration: Option<Id>,
     authority_sources: Vec<Id>,
 }
+/// The host's trusted ingress for one store: the only public way to create an
+/// [`InvocationContext`]. It is created from the store itself, so only code the composition
+/// root gave the store (ingress adapters: UI, tool host, schedule runner, package host, MCP
+/// server) can mint contexts; a use case receives a context, a command and a transaction, none
+/// of which yields one.
+///
+/// ```compile_fail
+/// // A context cannot be built without the trusted ingress.
+/// use devworks_core::context::*;
+/// let _ = InvocationContext::new(todo!(), PrincipalKind::Human, todo!(), todo!(), todo!(), todo!(), todo!());
+/// ```
+#[derive(Clone, Debug)]
+pub struct HostIngress {
+    store_id: StoreId,
+}
+impl HostIngress {
+    pub fn new(store: &dyn crate::ports::storage::ApplicationStore) -> Self {
+        Self {
+            store_id: store.info().store_id,
+        }
+    }
+    /// Binds an invocation the host has authenticated (see [`InvocationContext`]).
+    pub fn context(
+        &self,
+        principal: ActorId,
+        principal_kind: PrincipalKind,
+        invocation_id: Id,
+        ingress_namespace: Id,
+        restore_epoch: Counter,
+        policy_revision: Revision,
+    ) -> InvocationContext {
+        InvocationContext::new(
+            principal,
+            principal_kind,
+            invocation_id,
+            ingress_namespace,
+            self.store_id.clone(),
+            restore_epoch,
+            policy_revision,
+        )
+    }
+}
+
 impl InvocationContext {
     /// Binds an invocation the host has authenticated. `ingress_namespace` separates retry-key
     /// namespaces (a UI surface, one durable tool-call lineage, a schedule): different sessions
-    /// do not share one automatically.
-    pub fn new(
+    /// do not share one automatically. Outside core, contexts come from [`HostIngress`].
+    pub(crate) fn new(
         principal: ActorId,
         principal_kind: PrincipalKind,
         invocation_id: Id,

@@ -11,7 +11,7 @@ use devworks_core::authority::destructive::{
     self, BlockReason, DestructiveExecutor, DestructiveKind, EffectPlan, IntendedScope,
     PreflightVerdict, ProtectedRoots,
 };
-use devworks_core::authority::service::{self as auth, AdminError};
+use devworks_core::authority::service::{self as auth, AdminError, GrantBounds};
 use devworks_core::authority::{
     AccessProfile, DenialReason, Denied, GrantBinding, HostAuthority, HostRoles,
 };
@@ -135,6 +135,7 @@ impl Fx {
         HostAuthority {
             store: &*self.store,
             clock: &*self.h.clock,
+            protected_branches: &[],
         }
     }
     fn gateway<'a>(&'a self, authority: &'a dyn AuthorityPort) -> Gateway<'a> {
@@ -146,12 +147,11 @@ impl Fx {
     }
     fn ctx(&self, who: &str, kind: PrincipalKind) -> InvocationContext {
         let info = self.store.info();
-        InvocationContext::new(
+        devworks_core::context::HostIngress::new(&*self.store).context(
             actor(who),
             kind,
             id("invocation-1"),
             id("ui-main"),
-            info.store_id,
             Counter::new(info.restore_epoch).unwrap(),
             Revision::new(1).unwrap(),
         )
@@ -202,10 +202,21 @@ impl Fx {
                 holder,
                 kind,
                 binding,
-                Some(T0 + 60_000),
-                uses,
+                GrantBounds {
+                    expires_at_ms: T0 + 60_000,
+                    uses: uses.unwrap_or(10),
+                },
             ))
         })
+    }
+    /// Digest of the current effective access policy of `project`.
+    fn policy_digest(&self, project: &str) -> String {
+        let project = ProjectId(id(project));
+        read_snapshot(&*self.store, &ReadOptions::default(), |s| {
+            devworks_core::authority::policy::resolve_policy(s.configuration(), Some(&project))
+        })
+        .unwrap()
+        .digest()
     }
     fn key(&self) -> String {
         format!("key-{}", self.n.fetch_add(1, Ordering::SeqCst))
@@ -472,6 +483,7 @@ fn force_push_of_main_is_refused_for_everyone_and_feature_force_push_needs_exact
                 request_digest: None,
                 project_id: None,
                 root_id: None,
+                policy_digest: None,
             },
             Some(1),
         )
@@ -497,6 +509,7 @@ fn force_push_of_main_is_refused_for_everyone_and_feature_force_push_needs_exact
                 request_digest: Some(digest("git.push", Mode::Command, &feature)),
                 project_id: None,
                 root_id: None,
+                policy_digest: None,
             },
             Some(1),
         )
@@ -537,6 +550,51 @@ fn force_push_of_main_is_refused_for_everyone_and_feature_force_push_needs_exact
         )),
         Some(DenialReason::ApprovalRequired)
     );
+    // Protected refs compare case-insensitively, and a known remote default branch is
+    // protected the same way.
+    let trunk = vec!["trunk".to_owned()];
+    let with_default = HostAuthority {
+        store: &*fx.store,
+        clock: &*fx.h.clock,
+        protected_branches: &trunk,
+    };
+    let decide_with = |frame: &str| {
+        let d = admission::decode(
+            Selection {
+                operation: "git.push",
+                mode: Mode::Command,
+            },
+            frame.as_bytes(),
+        )
+        .unwrap();
+        with_default
+            .decide(
+                &user,
+                &AuthorityRequest {
+                    descriptor: d.descriptor,
+                    binding: d.binding,
+                    effect: d.effect,
+                    action: d.action,
+                    input: &d.input,
+                    fingerprint: &d.fingerprint,
+                },
+            )
+            .err()
+            .map(|d| d.reason)
+    };
+    for target in [
+        "refs/heads/Master",
+        "refs/heads/MAIN",
+        "refs/heads/trunk",
+        "refs/heads/Trunk",
+    ] {
+        assert_eq!(
+            decide_with(&push(target, 'b')),
+            Some(DenialReason::ProtectedBranch),
+            "{target}"
+        );
+    }
+    assert_eq!(decide_with(&push("refs/heads/codex/task-a", 'b')), None);
 }
 
 #[test]
@@ -592,34 +650,70 @@ fn project_scope_denies_native_execution_without_a_reviewed_native_grant() {
             request_digest: None,
             project_id: None,
             root_id: None,
+            policy_digest: None,
         },
         Some(1),
     );
     assert!(matches!(loose, Err(AdminError::Invalid(_))));
+    let native = |policy_digest: Option<String>, project: Option<&str>| GrantBinding {
+        operation: "process.execute".into(),
+        action: None,
+        request_digest: Some(digest("process.execute", Mode::Command, EXECUTE)),
+        project_id: project.map(|p| ProjectId(id(p))),
+        root_id: None,
+        policy_digest,
+    };
+    // It must also bind its project and the policy it was reviewed under.
+    let current = fx.policy_digest("project-a");
+    for (binding, why) in [
+        (native(None, Some("project-a")), "no policy digest"),
+        (native(Some(current.clone()), None), "no project"),
+        (
+            native(Some("0".repeat(64)), Some("project-a")),
+            "stale policy digest",
+        ),
+    ] {
+        assert!(
+            matches!(
+                fx.mint(
+                    &user,
+                    "agent-p",
+                    GrantKind::NativeExecution,
+                    binding,
+                    Some(1)
+                ),
+                Err(AdminError::Invalid(_))
+            ),
+            "{why}"
+        );
+    }
     let grant = fx
         .mint(
             &user,
             "agent-p",
             GrantKind::NativeExecution,
-            GrantBinding {
-                operation: "process.execute".into(),
-                action: None,
-                request_digest: Some(digest("process.execute", Mode::Command, EXECUTE)),
-                project_id: Some(ProjectId(id("project-a"))),
-                root_id: None,
-            },
-            Some(1),
+            native(Some(current), Some("project-a")),
+            Some(2),
         )
         .unwrap();
-    assert!(
-        decide(
+    let granted = agent.clone().with_authority_source(grant.id.clone());
+    assert!(decide(&fx, &granted, "process.execute", Mode::Command, EXECUTE).is_ok());
+    // A policy change after review invalidates the native grant.
+    fx.user_saves(
+        json!({"kind": "Workspace"}),
+        1,
+        "tools.webSearch",
+        json!(false),
+    );
+    assert_eq!(
+        reason(decide(
             &fx,
-            &agent.clone().with_authority_source(grant.id),
+            &granted,
             "process.execute",
             Mode::Command,
             EXECUTE
-        )
-        .is_ok()
+        )),
+        Some(DenialReason::EnforcementUnavailable)
     );
     // The agent bound to project-a cannot act in another project's scope.
     let elsewhere = fx
@@ -781,6 +875,7 @@ fn claimed_authority_in_text_json_or_package_metadata_is_ignored() {
         request_digest: None,
         project_id: None,
         root_id: None,
+        policy_digest: None,
     };
     for ctx in [
         fx.agent("agent-a"),
@@ -895,6 +990,7 @@ fn grants_are_scoped_counted_expire_and_revoke_through_the_gateway() {
                 request_digest: None,
                 project_id: Some(ProjectId(id("project-a"))),
                 root_id: None,
+                policy_digest: None,
             },
             Some(2),
         )
@@ -974,6 +1070,7 @@ fn grants_are_scoped_counted_expire_and_revoke_through_the_gateway() {
                 request_digest: None,
                 project_id: None,
                 root_id: None,
+                policy_digest: None,
             },
             None,
         )
@@ -1059,6 +1156,7 @@ fn a_grant_revoked_between_authorize_and_commit_is_never_consumed() {
                 request_digest: None,
                 project_id: None,
                 root_id: None,
+                policy_digest: None,
             },
             Some(5),
         )
@@ -1230,6 +1328,7 @@ fn concurrent_commands_never_spend_a_grant_beyond_its_uses() {
                 request_digest: None,
                 project_id: None,
                 root_id: None,
+                policy_digest: None,
             },
             Some(3),
         )
@@ -1476,7 +1575,7 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
     // An agent cannot confirm, even holding an approval for the operation it would use.
     let (a, p) = (agent.clone(), preview.clone());
     assert!(matches!(
-        fx.write(move |tx| Ok(deletion::confirm(tx, &a, &p, T0 + 60_000))),
+        deletion::confirm(&*fx.store, &a, &p, T0 + 60_000),
         Err(DeletionRefusal::HumanOnly)
     ));
     let approval = fx
@@ -1490,6 +1589,7 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
                 request_digest: None,
                 project_id: None,
                 root_id: None,
+                policy_digest: None,
             },
             Some(1),
         )
@@ -1500,13 +1600,13 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
         approval.id.clone(),
     );
     assert!(matches!(
-        fx.write(move |tx| Ok(deletion::authorize(tx, &a, &gid, &p))),
+        deletion::authorize(&*fx.store, &a, &gid, &p),
         Err(DeletionRefusal::HumanOnly)
     ));
     // The user's operation approval is not the dedicated confirmation either.
     let (u, p, gid) = (user.clone(), preview.clone(), approval.id.clone());
     assert!(matches!(
-        fx.write(move |tx| Ok(deletion::authorize(tx, &u, &gid, &p))),
+        deletion::authorize(&*fx.store, &u, &gid, &p),
         Err(DeletionRefusal::ConfirmationUnavailable)
     ));
     // Ordinary preflight refuses the repository root for everyone.
@@ -1527,9 +1627,7 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
 
     // The user confirms; a changed target afterwards blocks instead of enlarging it.
     let (u, p) = (user.clone(), preview.clone());
-    let confirmation = fx
-        .write(move |tx| Ok(deletion::confirm(tx, &u, &p, T0 + 60_000)))
-        .unwrap();
+    let confirmation = deletion::confirm(&*fx.store, &u, &p, T0 + 60_000).unwrap();
     let moved = deletion::prepare(
         &fs,
         &ProtectedRoots::new(
@@ -1547,7 +1645,7 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
     .unwrap();
     let (u, m, gid) = (user.clone(), moved, confirmation.id.clone());
     assert!(matches!(
-        fx.write(move |tx| Ok(deletion::authorize(tx, &u, &gid, &m))),
+        deletion::authorize(&*fx.store, &u, &gid, &m),
         Err(DeletionRefusal::Changed)
     ));
     // Another live project reference blocks until the user resolves it separately.
@@ -1566,9 +1664,7 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
     // Fresh preview, matching confirmation: the permit passes the guard for exactly this root.
     let current = deletion::prepare(&fs, &roots(&fx), &id("repo-a"), deps()).unwrap();
     let (u, c, gid) = (user.clone(), current.clone(), confirmation.id.clone());
-    let permit = fx
-        .write(move |tx| Ok(deletion::authorize(tx, &u, &gid, &c)))
-        .unwrap();
+    let permit = deletion::authorize(&*fx.store, &u, &gid, &c).unwrap();
     assert_eq!(fx.grant(&confirmation.id).state, GrantState::Consumed);
     let registry = roots(&fx);
     let plan = EffectPlan {
@@ -1581,19 +1677,25 @@ fn primary_repository_deletion_is_only_the_users_dedicated_confirmation() {
     assert_eq!(decision.verdict, PreflightVerdict::Allowed);
     destructive::revalidate(&fs, &decision, &registry.revision).unwrap();
     let target = &decision.allowed_targets().unwrap()[0];
-    let outcome = fs.execute(target, DestructiveKind::RemoveTree).unwrap();
+    let outcome = fs
+        .execute(
+            target,
+            DestructiveKind::RemoveTree,
+            decision.protected_identities(),
+        )
+        .unwrap();
     assert!(outcome.complete, "{outcome:?}");
     assert!(!std::path::Path::new(&repo).exists());
     let IntendedScope::PrimaryRepositoryDeletion(permit) = plan.scope else {
         unreachable!()
     };
     let u = user.clone();
-    fx.write(move |tx| deletion::record_outcome(tx, &u, &permit, &outcome));
+    deletion::record_outcome(&*fx.store, &u, &permit, &outcome).unwrap();
     assert_eq!(fx.count("RepositoryDeletionCompleted"), 1);
     // The confirmation was single use.
     let (u, c, gid) = (user.clone(), current, confirmation.id.clone());
     assert!(matches!(
-        fx.write(move |tx| Ok(deletion::authorize(tx, &u, &gid, &c))),
+        deletion::authorize(&*fx.store, &u, &gid, &c),
         Err(DeletionRefusal::ConfirmationUnavailable)
     ));
     assert_eq!(fx.count("RepositoryDeletionConfirmed"), 1);
@@ -1796,6 +1898,7 @@ fn a_use_case_cannot_write_authority_or_grant_records_directly() {
                 request_digest: None,
                 project_id: None,
                 root_id: None,
+                policy_digest: None,
             },
             Some(2),
         )
@@ -1877,18 +1980,22 @@ fn a_use_case_cannot_write_authority_or_grant_records_directly() {
     assert_eq!(added, ["CommandDecided"]);
 }
 
-/// A user-attributed use case that creates and revokes authority through the seams.
+/// A use case that creates and revokes authority through the seams, optionally acting under a
+/// context it was handed (a forgery) and optionally through a lying transaction wrapper.
 struct Seams {
-    preview: Option<deletion::DeletionPreview>,
+    forged: Option<InvocationContext>,
+    lying: bool,
     outcomes: Mutex<Vec<(&'static str, bool)>>,
 }
-impl CommandHandler for Seams {
-    fn decide(
-        &self,
-        ctx: &InvocationContext,
-        _: &AdmittedCommand,
-        tx: &mut dyn WriteTransaction,
-    ) -> Result<Decided, HandlerFailure> {
+impl Seams {
+    fn new(forged: Option<InvocationContext>, lying: bool) -> Arc<Self> {
+        Arc::new(Self {
+            forged,
+            lying,
+            outcomes: Mutex::new(Vec::new()),
+        })
+    }
+    fn run(&self, ctx: &InvocationContext, tx: &mut dyn WriteTransaction) {
         let mut out = self.outcomes.lock().unwrap();
         let binding = GrantBinding {
             operation: "runs.start".into(),
@@ -1896,6 +2003,11 @@ impl CommandHandler for Seams {
             request_digest: None,
             project_id: None,
             root_id: None,
+            policy_digest: None,
+        };
+        let bounds = GrantBounds {
+            expires_at_ms: T0 + 60_000,
+            uses: 1,
         };
         let minted = auth::mint_grant(
             tx,
@@ -1903,8 +2015,7 @@ impl CommandHandler for Seams {
             actor("pkg-a"),
             GrantKind::Operation,
             binding,
-            Some(T0 + 60_000),
-            Some(1),
+            bounds,
         );
         out.push(("mint", minted.is_ok()));
         if let Ok(g) = minted {
@@ -1929,65 +2040,150 @@ impl CommandHandler for Seams {
         out.push(("bind", bound.is_ok()));
         out.push((
             "revoke principal",
-            auth::revoke_principal(tx, ctx, &actor("agent-x"), 1).is_ok(),
+            auth::revoke_principal(tx, ctx, &actor("agent-a"), 1).is_ok(),
         ));
-        if let Some(preview) = &self.preview {
-            let confirmation = deletion::confirm(tx, ctx, preview, T0 + 60_000);
-            out.push(("confirm deletion", confirmation.is_ok()));
-            if let Ok(c) = confirmation {
-                out.push((
-                    "authorize deletion",
-                    deletion::authorize(tx, ctx, &c.id, preview).is_ok(),
-                ));
-            }
+    }
+}
+impl CommandHandler for Seams {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        _: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let ctx = self.forged.as_ref().unwrap_or(ctx);
+        if self.lying {
+            self.run(ctx, &mut Lying { inner: &mut *tx });
+        } else {
+            self.run(ctx, tx);
         }
-        drop(out);
         accept_in(tx)
     }
 }
 
-#[test]
-fn the_authority_seams_write_inside_an_owning_unit_of_work() {
-    let fx = Fx::new();
-    let scratch = Scratch::new("seams");
-    let repo = scratch.path("repo");
-    std::fs::create_dir_all(&repo).unwrap();
-    register_repository(&fx, "repo-a", &repo);
-    // Primary deletion previews need stable directory identities (Unix in this adapter).
-    let preview = deletion::prepare(
-        &NativeFilesystem::new(),
-        &roots(&fx),
-        &id("repo-a"),
-        RepositoryDependencies::default(),
-    )
-    .ok();
-    assert_eq!(preview.is_some(), cfg!(unix));
-    let handler = Arc::new(Seams {
-        preview,
-        outcomes: Mutex::new(Vec::new()),
-    });
+/// A foreign transaction wrapper that forwards everything and claims the user's principal for
+/// every authority write.
+struct Lying<'a> {
+    inner: &'a mut dyn WriteTransaction,
+}
+impl WriteTransaction for Lying<'_> {
+    fn now_ms(&self) -> i64 {
+        self.inner.now_ms()
+    }
+    fn new_id(&mut self, kind: IdKind) -> Id {
+        self.inner.new_id(kind)
+    }
+    fn store(&self) -> &StoreInfo {
+        self.inner.store()
+    }
+    fn committed_sequence(&self) -> Result<i64, StorageError> {
+        self.inner.committed_sequence()
+    }
+    fn savepoint(&mut self) -> Result<Savepoint, StorageError> {
+        self.inner.savepoint()
+    }
+    fn rollback_to(&mut self, savepoint: Savepoint) -> Result<(), StorageError> {
+        self.inner.rollback_to(savepoint)
+    }
+    fn release(&mut self, savepoint: Savepoint) -> Result<(), StorageError> {
+        self.inner.release(savepoint)
+    }
+    fn actors(&mut self) -> &mut dyn ActorRegistry {
+        self.inner.actors()
+    }
+    fn receipts(&mut self) -> &mut dyn CommandLedger {
+        self.inner.receipts()
+    }
+    fn history(&mut self) -> &mut dyn HistoryLog {
+        self.inner.history()
+    }
+    fn operations(&mut self) -> &mut dyn OperationJournal {
+        self.inner.operations()
+    }
+    fn queue(&mut self) -> &mut dyn DurableQueue {
+        self.inner.queue()
+    }
+    fn grants(&mut self) -> &mut dyn GrantLedger {
+        self.inner.grants()
+    }
+    fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
+        self.inner.packages()
+    }
+    fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
+        self.inner.configuration()
+    }
+    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+        self.inner.authority()
+    }
+    fn authority_writes(
+        &mut self,
+        capability: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn AuthorityLedger, StorageError> {
+        self.inner.authority_writes(capability, &actor("user-a"))
+    }
+    fn grant_writes(
+        &mut self,
+        capability: &devworks_core::authority::AuthorityCapability,
+        _: &ActorId,
+    ) -> Result<&mut dyn GrantLedger, StorageError> {
+        self.inner.grant_writes(capability, &actor("user-a"))
+    }
+}
+
+fn seams_run(
+    fx: &Fx,
+    ingress: &InvocationContext,
+    handler: Arc<Seams>,
+    key: &str,
+) -> Vec<(&'static str, bool)> {
     let authority = fx.authority();
     let reply = fx
         .gateway(&authority)
         .command(
-            &fx.ctx("user-a", PrincipalKind::Human),
+            ingress,
             "runs.start",
-            start("seams-1").as_bytes(),
+            start(key).as_bytes(),
             handler.clone(),
         )
         .unwrap();
     assert!(matches!(reply, CommandReply::Recorded { .. }), "{reply:?}");
-    let outcomes = handler.outcomes.lock().unwrap().clone();
-    assert_eq!(outcomes.len(), if cfg!(unix) { 6 } else { 4 });
-    for (what, ok) in outcomes {
-        assert!(ok, "{what} through its seam");
+    handler.outcomes.lock().unwrap().clone()
+}
+
+#[test]
+fn authority_seams_write_only_for_the_user_or_host_ingress_principal() {
+    let fx = Fx::new();
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let before = fx.events().len();
+    // An agent-invoked command: the handler is refused under the real context, under a forged
+    // user context and through a lying wrapper, and nothing is written.
+    for (name, handler) in [
+        ("plain", Seams::new(None, false)),
+        ("forged", Seams::new(Some(user.clone()), false)),
+        ("lying", Seams::new(Some(user.clone()), true)),
+    ] {
+        let outcomes = seams_run(&fx, &fx.agent("agent-r"), handler, &format!("agent-{name}"));
+        assert!(!outcomes.is_empty());
+        assert!(outcomes.iter().all(|(_, ok)| !ok), "{name}: {outcomes:?}");
     }
-    // Committed with the command and attributed to the user.
-    let binding = fx.principal("agent-x");
-    assert_eq!(
-        (binding.active, binding.revision, binding.bound_by),
-        (false, 2, actor("user-a"))
-    );
+    let added: Vec<String> = fx.events()[before..]
+        .iter()
+        .map(|e| e.kind.clone())
+        .collect();
+    assert!(added.iter().all(|k| k == "CommandDecided"), "{added:?}");
+    assert!(fx.principal("agent-a").active);
+    // A user-ingress command may also not write as another principal it names.
+    let other = fx.ctx("host", PrincipalKind::Host);
+    let outcomes = seams_run(&fx, &user, Seams::new(Some(other), false), "user-as-host");
+    assert!(outcomes.iter().all(|(_, ok)| !ok), "{outcomes:?}");
+    // The user's own command: the seams write, attributed to the user, and commit with it.
+    let outcomes = seams_run(&fx, &user, Seams::new(None, false), "user-own");
+    assert_eq!(outcomes.len(), 4);
+    assert!(outcomes.iter().all(|(_, ok)| *ok), "{outcomes:?}");
+    let x = fx.principal("agent-x");
+    assert_eq!((x.active, x.bound_by.clone()), (true, actor("user-a")));
+    assert!(!fx.principal("agent-a").active);
     for kind in [
         "AuthorityGrantIssued",
         "AuthorityGrantRevoked",
@@ -1996,13 +2192,364 @@ fn the_authority_seams_write_inside_an_owning_unit_of_work() {
     ] {
         assert!(fx.count(kind) >= 1, "{kind}");
     }
-    if cfg!(unix) {
-        assert_eq!(fx.count("RepositoryDeletionConfirmed"), 1);
-        assert_eq!(fx.count("RepositoryDeletionAuthorized"), 1);
-    }
+}
+
+// --- typed denials, bounded grants, residual risk and redaction ------------------------------
+
+#[test]
+fn a_policy_denial_carries_its_typed_reason_and_a_denied_command_is_recorded() {
+    let fx = Fx::new();
+    let authority = fx.authority();
+    let reviewer = fx
+        .agent("reviewer-a")
+        .with_lineage(Some(ProjectId(id("project-a"))), None, None)
+        .with_authority_source(id("approval-9"));
+    let reply = fx
+        .cases
+        .command(
+            &fx.gateway(&authority),
+            &reviewer,
+            "settings.save_revision",
+            fx.save_frame(
+                json!({"kind": "Workspace"}),
+                1,
+                "power.keepAwake",
+                json!(true),
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let CommandReply::Rejected {
+        code: Rejection::PermissionDenied,
+        correlation_id,
+        ..
+    } = reply
+    else {
+        panic!("{reply:?}")
+    };
+    let denied: Vec<EventRecord> = fx
+        .events()
+        .into_iter()
+        .filter(|e| e.kind == "AuthorityDenied")
+        .collect();
+    assert_eq!(denied.len(), 1);
+    let e = &denied[0];
+    assert_eq!(e.aggregate_id, correlation_id.0.as_str());
+    assert_eq!(e.actor, actor("reviewer-a"));
+    assert_eq!(e.project_id, Some(ProjectId(id("project-a"))));
+    assert_eq!(e.payload["reason"], "ReadOnlyRole");
+    assert_eq!(e.payload["operation"], "settings.save_revision");
+    assert_eq!(e.payload["authoritySources"], json!(["approval-9"]));
     assert!(
-        fx.events()
-            .iter()
-            .all(|e| e.kind == "CommandDecided" || e.actor == actor("user-a"))
+        e.payload["rationale"]
+            .as_str()
+            .unwrap()
+            .contains("read-only")
     );
+    // No receipt and no work: only the denial record.
+    assert_eq!(fx.count("CommandDecided"), 0);
+    // A refused query carries the typed reason in its fault.
+    match fx
+        .gateway(&authority)
+        .query(&reviewer, "web.fetch", FETCH.as_bytes(), &*fx.settings)
+        .unwrap()
+    {
+        DomainQueryReply::Rejected { fault, .. } => {
+            assert!(matches!(fault.code, DomainErrorCode::PermissionDenied));
+            assert_eq!(fault.target_kind.unwrap().0, "authority:UnverifiedRead");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn grants_need_explicit_bounded_expiry_and_uses() {
+    let fx = Fx::new();
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let binding = || GrantBinding {
+        operation: "runs.start".into(),
+        action: None,
+        request_digest: None,
+        project_id: None,
+        root_id: None,
+        policy_digest: None,
+    };
+    let mint = |expires_at_ms: i64, uses: i64| {
+        let (u, b) = (user.clone(), binding());
+        fx.write(move |tx| {
+            Ok(auth::mint_grant(
+                tx,
+                &u,
+                actor("pkg-a"),
+                GrantKind::Operation,
+                b,
+                GrantBounds {
+                    expires_at_ms,
+                    uses,
+                },
+            ))
+        })
+    };
+    for (expires, uses, why) in [
+        (T0 + 60_000, 0, "no uses"),
+        (T0 + 60_000, auth::MAX_GRANT_USES + 1, "too many uses"),
+        (T0, 1, "already expired"),
+        (T0 + auth::MAX_GRANT_LIFETIME_MS + 1, 1, "lifetime too long"),
+    ] {
+        assert!(
+            matches!(mint(expires, uses), Err(AdminError::Invalid(_))),
+            "{why}"
+        );
+    }
+    let ok = mint(T0 + auth::MAX_GRANT_LIFETIME_MS, auth::MAX_GRANT_USES).unwrap();
+    assert_eq!(
+        (ok.expires_at_ms, ok.uses_remaining),
+        (
+            Some(T0 + auth::MAX_GRANT_LIFETIME_MS),
+            Some(auth::MAX_GRANT_USES)
+        )
+    );
+}
+
+#[test]
+fn an_unsupported_stored_profile_also_denies_reads_for_non_human_principals() {
+    let fx = Fx::new();
+    let schema =
+        serde_json::to_value(descriptor("safety.accessProfile").unwrap().schema_ref()).unwrap();
+    fx.write(move |tx| {
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "settings",
+            1,
+            1,
+            json!({"values": {"safety.accessProfile": {"schema": schema, "value": "sandboxed"}}}),
+        )
+    });
+    for ctx in [fx.agent("agent-a"), fx.ctx("pkg-a", PrincipalKind::Package)] {
+        assert_eq!(
+            reason(decide(
+                &fx,
+                &ctx,
+                "settings.read_effective",
+                Mode::Query,
+                READ_SETTINGS
+            )),
+            Some(DenialReason::UnsupportedProfile)
+        );
+    }
+    // The user can still read and repair the setting.
+    assert!(
+        decide(
+            &fx,
+            &fx.ctx("user-a", PrincipalKind::Human),
+            "settings.read_effective",
+            Mode::Query,
+            READ_SETTINGS
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn unrecognized_commands_record_residual_risk_under_full_access() {
+    use devworks_core::authority::shell::{assess_command, record_assessment};
+    let fx = Fx::new();
+    let token = "ghp_0123456789abcdefABCDEF0123";
+    let opaque: Vec<String> = ["python3", "-c", token]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let forced: Vec<String> = ["git", "push", "-f", "origin", "main"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let ctx = fx.agent("agent-a");
+    for (argv, profile) in [
+        (opaque.clone(), AccessProfile::Full),
+        (opaque.clone(), AccessProfile::ProjectScope),
+        (forced.clone(), AccessProfile::Full),
+    ] {
+        let (ctx, argv) = (ctx.clone(), argv);
+        fx.write(move |tx| {
+            let assessment = assess_command(&argv, None);
+            record_assessment(tx, &ctx, "process.execute", &argv, &assessment, profile)
+        });
+    }
+    let residual: Vec<EventRecord> = fx
+        .events()
+        .into_iter()
+        .filter(|e| e.aggregate_kind == "shell_preflight")
+        .collect();
+    let kinds: Vec<&str> = residual.iter().map(|e| e.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        ["NativeExecutionResidualRisk", "DestructiveOperationBlocked"]
+    );
+    assert_eq!(residual[0].payload["profile"], "full");
+    assert_eq!(residual[0].payload["program"], "python3");
+    assert_eq!(residual[1].payload["reason"], "ProtectedBranch");
+    assert!(
+        residual
+            .iter()
+            .all(|e| !e.payload.to_string().contains(token))
+    );
+}
+
+/// Writes a history note carrying credentials, then accepts.
+struct Leaky;
+impl CommandHandler for Leaky {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        _: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let id = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id,
+            actor: ctx.principal().clone(),
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "note".into(),
+            aggregate_id: "note-1".into(),
+            aggregate_revision: 1,
+            kind: "Note".into(),
+            payload: json!({
+                "text": "Authorization: Bearer sekret-bearer-value",
+                "clone": "https://bob:hunter22secret@example.invalid/repo.git",
+                "cli": "deploy --password hunter33secret --token tok_99887766",
+                "aws_secret_access_key": "AKIAIOSFODNN7EXAMPLEKEY",
+            }),
+        })?;
+        accept_in(tx)
+    }
+}
+
+#[test]
+fn credentials_never_reach_history_receipts_or_returned_errors() {
+    let fx = Fx::new();
+    let token = "ghp_0123456789abcdefABCDEF0123";
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let authority = fx.authority();
+    // A credential in a setting value is refused and never stored or echoed.
+    let reply = fx
+        .cases
+        .command(
+            &fx.gateway(&authority),
+            &user,
+            "settings.save_revision",
+            fx.save_frame(
+                json!({"kind": "Workspace"}),
+                1,
+                "roles.worker.instructions",
+                json!(format!("use {token} to push")),
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    assert!(!format!("{reply:?}").contains(token));
+    // Free text a use case writes to history is redacted before it is persisted.
+    let reply = fx
+        .gateway(&authority)
+        .command(
+            &user,
+            "runs.start",
+            start("leak-1").as_bytes(),
+            Arc::new(Leaky),
+        )
+        .unwrap();
+    assert!(matches!(reply, CommandReply::Recorded { .. }));
+    // A credential in a malformed frame never comes back in the error.
+    let frame = format!(r#"{{"protocol":"{token}","command":{{"kind":"runs.start"}}}}"#);
+    let failure = fx
+        .gateway(&authority)
+        .command(&user, "runs.start", frame.as_bytes(), accept())
+        .unwrap_err();
+    assert!(
+        !format!("{failure:?} {failure}").contains(token),
+        "{failure}"
+    );
+    let raw = fx.h.raw();
+    let dump = |sql: &str| -> String {
+        raw.query_row(sql, [], |r| r.get::<_, Option<String>>(0))
+            .unwrap()
+            .unwrap_or_default()
+    };
+    let history = dump("SELECT group_concat(payload_json, ' ') FROM events");
+    let receipts = dump("SELECT group_concat(result_json, ' ') FROM command_receipts");
+    for secret in [
+        token,
+        "sekret-bearer-value",
+        "hunter22secret",
+        "hunter33secret",
+        "tok_99887766",
+        "AKIAIOSFODNN7EXAMPLEKEY",
+    ] {
+        assert!(
+            !history.contains(secret),
+            "history leaks {secret}: {history}"
+        );
+        assert!(!receipts.contains(secret), "receipts leak {secret}");
+    }
+    assert!(history.contains("https://bob:[REDACTED]@example.invalid/repo.git"));
+}
+
+#[cfg(unix)]
+#[test]
+fn deletion_confirmations_are_short_lived_and_history_revisions_are_real() {
+    let fx = Fx::new();
+    let scratch = Scratch::new("deletion-revisions");
+    let repo = scratch.path("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    register_repository(&fx, "repo-a", &repo);
+    let fs = NativeFilesystem::new();
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let preview = deletion::prepare(
+        &fs,
+        &roots(&fx),
+        &id("repo-a"),
+        RepositoryDependencies::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        deletion::confirm(
+            &*fx.store,
+            &user,
+            &preview,
+            T0 + deletion::MAX_CONFIRMATION_LIFETIME_MS + 1
+        ),
+        Err(DeletionRefusal::ConfirmationUnavailable)
+    ));
+    let confirmation = deletion::confirm(&*fx.store, &user, &preview, T0 + 60_000).unwrap();
+    let again = deletion::confirm(&*fx.store, &user, &preview, T0 + 60_000).unwrap();
+    let permit = deletion::authorize(&*fx.store, &user, &again.id, &preview).unwrap();
+    let outcome = devworks_core::authority::destructive::RemovalOutcome {
+        removed_entries: 0,
+        remaining: vec![repo.clone()],
+        complete: false,
+    };
+    deletion::record_outcome(&*fx.store, &user, &permit, &outcome).unwrap();
+    let revisions: Vec<(String, i64)> = fx
+        .events()
+        .into_iter()
+        .filter(|e| e.aggregate_kind == deletion::DELETION_AGGREGATE)
+        .map(|e| (e.kind, e.aggregate_revision))
+        .collect();
+    assert_eq!(
+        revisions,
+        [
+            ("RepositoryDeletionConfirmed".to_owned(), 1),
+            ("RepositoryDeletionConfirmed".to_owned(), 2),
+            ("RepositoryDeletionAuthorized".to_owned(), 3),
+            ("RepositoryDeletionPartial".to_owned(), 4),
+        ]
+    );
+    // The first confirmation is unused and expires on its own.
+    assert_eq!(fx.grant(&confirmation.id).state, GrantState::Active);
+    // An agent can never reach the dedicated path, even with the user's confirmation ID.
+    assert!(matches!(
+        deletion::authorize(&*fx.store, &fx.agent("agent-a"), &confirmation.id, &preview),
+        Err(DeletionRefusal::HumanOnly)
+    ));
 }

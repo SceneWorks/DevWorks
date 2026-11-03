@@ -9,20 +9,30 @@
 //! whatever its profile, role or approvals; an ordinary operation approval is a different grant
 //! kind and never satisfies the confirmation. Filesystem roots stay blocked even with a permit,
 //! network remotes are never deleted and no automatic backup or undo is implied.
+//!
+//! The confirming steps take the store and run their own unit of work: they are a dedicated
+//! user-ingress path, not something an operation handler (which only ever holds the gateway's
+//! handler view of a transaction) can reach.
 use super::destructive::{
     FileIdentity, FilesystemResolver, OwnedWorktree, ProtectedRoots, RemovalOutcome,
 };
-use super::service::{self, AdminError};
+use super::service::{self, AdminError, GrantBounds};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::jcs;
 use crate::ports::GrantUse;
-use crate::ports::storage::{AuthorityGrant, GrantKind, StorageError, WriteTransaction};
+use crate::ports::storage::{
+    ApplicationStore, AuthorityGrant, EventFilter, GrantKind, StorageError, WriteOptions,
+    WriteTransaction, run_write,
+};
 use crate::protocol::{ActorId, Id, ProjectId};
 use serde_json::{Value, json};
 
 /// History aggregate of a repository deletion (`aggregate_id` = repository ID).
 pub const DELETION_AGGREGATE: &str = "repository_deletion";
+/// Longest lifetime of a deletion confirmation: it is a short, single-use act, not a standing
+/// permission (engineering default).
+pub const MAX_CONFIRMATION_LIFETIME_MS: i64 = 15 * 60 * 1000;
 /// What the dedicated action never removes.
 pub const RETAINED: [&str; 3] = [
     "network remotes",
@@ -188,129 +198,186 @@ fn require_user(
     {
         return Err(DeletionRefusal::HumanOnly);
     }
+    if &tx.store().store_id != ctx.store_id() {
+        return Err(DeletionRefusal::HumanOnly);
+    }
     Ok(())
 }
 
+/// The next revision of this repository's deletion history (real, not assumed).
+fn next_revision(tx: &mut dyn WriteTransaction, repository: &Id) -> Result<i64, StorageError> {
+    let filter = EventFilter::Aggregate {
+        kind: DELETION_AGGREGATE.into(),
+        id: repository.as_str().to_owned(),
+    };
+    let mut after = 0;
+    let mut last = 0;
+    loop {
+        let page = tx.history().page(&filter, after, 500)?;
+        last = page
+            .events
+            .iter()
+            .map(|e| e.aggregate_revision)
+            .fold(last, i64::max);
+        if !page.has_more {
+            return Ok(last + 1);
+        }
+        after = page.next_after;
+    }
+}
+
+/// Runs one dedicated deletion step in its own unit of work on the store. These steps take the
+/// store, never a use case's transaction, so no operation handler can reach them.
+fn dedicated<T: Send + 'static>(
+    store: &dyn ApplicationStore,
+    work: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, DeletionRefusal> + Send + 'static,
+) -> Result<T, DeletionRefusal> {
+    run_write(store, WriteOptions::default(), move |tx| Ok(work(tx)))
+        .map_err(DeletionRefusal::Storage)?
+}
+
 /// The user's dedicated confirmation from the trusted local surface: mints a single-use grant
-/// bound to this exact preview, held by the user. `expires_at_ms` is required.
+/// bound to this exact preview, held by the user, expiring within
+/// [`MAX_CONFIRMATION_LIFETIME_MS`].
 pub fn confirm(
-    tx: &mut dyn WriteTransaction,
+    store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     preview: &DeletionPreview,
     expires_at_ms: i64,
 ) -> Result<AuthorityGrant, DeletionRefusal> {
-    require_user(tx, ctx)?;
-    if !preview.blockers.is_empty() {
-        return Err(DeletionRefusal::Blocked(preview.blockers.clone()));
-    }
-    let binding = json!({
-        "repositoryId": preview.repository_id.as_str(),
-        "previewDigest": preview.digest,
-    });
-    let grant = service::issue(
-        tx,
-        ctx,
-        ctx.principal().clone(),
-        GrantKind::PrimaryRepositoryDeletion,
-        binding,
-        Some(expires_at_ms),
-        Some(1),
-    )?;
-    service::record(
-        tx,
-        ctx,
-        DELETION_AGGREGATE,
-        preview.repository_id.as_str(),
-        1,
-        "RepositoryDeletionConfirmed",
-        json!({"grantId": grant.id.as_str(), "previewDigest": preview.digest, "resolved": preview.resolved}),
-    )?;
-    Ok(grant)
+    let (ctx, preview) = (ctx.clone(), preview.clone());
+    dedicated(store, move |tx| {
+        require_user(tx, &ctx)?;
+        if !preview.blockers.is_empty() {
+            return Err(DeletionRefusal::Blocked(preview.blockers.clone()));
+        }
+        let binding = json!({
+            "repositoryId": preview.repository_id.as_str(),
+            "previewDigest": preview.digest,
+        });
+        let grant = service::issue(
+            tx,
+            &ctx,
+            ctx.principal().clone(),
+            GrantKind::PrimaryRepositoryDeletion,
+            binding,
+            GrantBounds {
+                expires_at_ms,
+                uses: 1,
+            },
+            MAX_CONFIRMATION_LIFETIME_MS,
+        )?;
+        let revision = next_revision(tx, &preview.repository_id)?;
+        service::record(
+            tx,
+            &ctx,
+            DELETION_AGGREGATE,
+            preview.repository_id.as_str(),
+            revision,
+            "RepositoryDeletionConfirmed",
+            json!({"grantId": grant.id.as_str(), "previewDigest": preview.digest, "resolved": preview.resolved}),
+        )?;
+        Ok(grant)
+    })
 }
 
-/// Re-checks a freshly prepared preview against the confirmation and spends it, in the caller's
-/// transaction, immediately before the typed deletion. Agents are always refused.
+/// Re-checks a freshly prepared preview against the confirmation and spends it, in its own
+/// unit of work, immediately before the typed deletion. Agents are always refused.
 pub fn authorize(
-    tx: &mut dyn WriteTransaction,
+    store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     grant_id: &Id,
     current: &DeletionPreview,
 ) -> Result<PrimaryDeletionPermit, DeletionRefusal> {
-    require_user(tx, ctx)?;
-    let grant = tx
-        .authority()
-        .authority_grant(grant_id)?
-        .ok_or(DeletionRefusal::ConfirmationUnavailable)?;
-    let now = tx.now_ms();
-    if grant.kind != GrantKind::PrimaryRepositoryDeletion
-        || &grant.issued_by != ctx.principal()
-        || !grant.usable_by(ctx.principal(), now)
-    {
-        return Err(DeletionRefusal::ConfirmationUnavailable);
-    }
-    let bound = |k: &str| grant.binding.get(k).and_then(Value::as_str);
-    if bound("repositoryId") != Some(current.repository_id.as_str())
-        || bound("previewDigest") != Some(current.digest.as_str())
-    {
-        return Err(DeletionRefusal::Changed);
-    }
-    if !current.blockers.is_empty() {
-        return Err(DeletionRefusal::Blocked(current.blockers.clone()));
-    }
-    tx.authority_writes(&super::CAPABILITY)
-        .consume_grant(
-            &GrantUse {
-                grant_id: grant.id.clone(),
-                expected_revision: grant.revision,
-            },
-            ctx.principal(),
-        )
-        .map_err(|e| match e {
-            StorageError::ScopeDenied | StorageError::RevisionConflict(_) => {
-                DeletionRefusal::ConfirmationUnavailable
-            }
-            other => DeletionRefusal::Storage(other),
-        })?;
-    service::record(
-        tx,
-        ctx,
-        DELETION_AGGREGATE,
-        current.repository_id.as_str(),
-        2,
-        "RepositoryDeletionAuthorized",
-        json!({"grantId": grant.id.as_str(), "previewDigest": current.digest}),
-    )?;
-    Ok(PrimaryDeletionPermit {
-        repository_id: current.repository_id.clone(),
-        identity: current.identity,
-        grant_id: grant.id,
-        actor: ctx.principal().clone(),
+    let (ctx, grant_id, current) = (ctx.clone(), grant_id.clone(), current.clone());
+    dedicated(store, move |tx| {
+        require_user(tx, &ctx)?;
+        let grant = tx
+            .authority()
+            .authority_grant(&grant_id)?
+            .ok_or(DeletionRefusal::ConfirmationUnavailable)?;
+        let now = tx.now_ms();
+        if grant.kind != GrantKind::PrimaryRepositoryDeletion
+            || &grant.issued_by != ctx.principal()
+            || !grant.usable_by(ctx.principal(), now)
+        {
+            return Err(DeletionRefusal::ConfirmationUnavailable);
+        }
+        let bound = |k: &str| grant.binding.get(k).and_then(Value::as_str);
+        if bound("repositoryId") != Some(current.repository_id.as_str())
+            || bound("previewDigest") != Some(current.digest.as_str())
+        {
+            return Err(DeletionRefusal::Changed);
+        }
+        if !current.blockers.is_empty() {
+            return Err(DeletionRefusal::Blocked(current.blockers.clone()));
+        }
+        tx.authority_writes(&super::CAPABILITY, ctx.principal())?
+            .consume_grant(
+                &GrantUse {
+                    grant_id: grant.id.clone(),
+                    expected_revision: grant.revision,
+                },
+                ctx.principal(),
+            )
+            .map_err(|e| match e {
+                StorageError::ScopeDenied | StorageError::RevisionConflict(_) => {
+                    DeletionRefusal::ConfirmationUnavailable
+                }
+                other => DeletionRefusal::Storage(other),
+            })?;
+        let revision = next_revision(tx, &current.repository_id)?;
+        service::record(
+            tx,
+            &ctx,
+            DELETION_AGGREGATE,
+            current.repository_id.as_str(),
+            revision,
+            "RepositoryDeletionAuthorized",
+            json!({"grantId": grant.id.as_str(), "previewDigest": current.digest}),
+        )?;
+        Ok(PrimaryDeletionPermit {
+            repository_id: current.repository_id.clone(),
+            identity: current.identity,
+            grant_id: grant.id,
+            actor: ctx.principal().clone(),
+        })
     })
 }
 
 /// Records the actual outcome, partial or complete. Work history and remotes are untouched.
 pub fn record_outcome(
-    tx: &mut dyn WriteTransaction,
+    store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     permit: &PrimaryDeletionPermit,
     outcome: &RemovalOutcome,
-) -> Result<i64, StorageError> {
-    service::record(
-        tx,
-        ctx,
-        DELETION_AGGREGATE,
-        permit.repository_id.as_str(),
-        3,
-        if outcome.complete {
-            "RepositoryDeletionCompleted"
-        } else {
-            "RepositoryDeletionPartial"
-        },
-        json!({
-            "grantId": permit.grant_id.as_str(),
-            "removedEntries": outcome.removed_entries,
-            "remaining": outcome.remaining,
-            "retained": RETAINED,
-        }),
-    )
+) -> Result<i64, DeletionRefusal> {
+    let (ctx, repository, grant, outcome) = (
+        ctx.clone(),
+        permit.repository_id.clone(),
+        permit.grant_id.clone(),
+        outcome.clone(),
+    );
+    dedicated(store, move |tx| {
+        require_user(tx, &ctx)?;
+        let revision = next_revision(tx, &repository)?;
+        Ok(service::record(
+            tx,
+            &ctx,
+            DELETION_AGGREGATE,
+            repository.as_str(),
+            revision,
+            if outcome.complete {
+                "RepositoryDeletionCompleted"
+            } else {
+                "RepositoryDeletionPartial"
+            },
+            json!({
+                "grantId": grant.as_str(),
+                "removedEntries": outcome.removed_entries,
+                "remaining": outcome.remaining,
+                "retained": RETAINED,
+            }),
+        )?)
+    })
 }

@@ -385,9 +385,14 @@ fn migration_three_upgrades_existing_deliveries() {
     let report = s.compatibility().unwrap();
     assert!(report.store_schema_version >= 3 && report.minimum_writer >= 3);
     drop(s);
-    // An older build may still read the upgraded store but not write it.
-    let old = SqliteStore::open_with(h.config(), &through(2)).unwrap();
-    assert!(matches!(old.info().access, AccessMode::ReadOnly { .. }));
+    // A build older than the store's reader floor may not even read it: from migration 5 an
+    // older reader would misreport the `mcp_client` actor kind as corruption. (A build between
+    // the reader and writer floors reads but does not write; see the floor test.)
+    match SqliteStore::open_with(h.config(), &through(2)) {
+        Err(StorageError::IncompatibleSchema(_)) => {}
+        Ok(old) => panic!("an older build opened the store: {:?}", old.info().access),
+        Err(other) => panic!("{other}"),
+    }
 }
 
 #[test]
@@ -984,12 +989,11 @@ fn start(key: &str) -> String {
 }
 fn ctx(s: &SqliteStore) -> InvocationContext {
     let info = s.info();
-    InvocationContext::new(
+    devworks_core::context::HostIngress::new(s).context(
         ActorId(Id::new("user-a").unwrap()),
         PrincipalKind::Human,
         Id::new("inv").unwrap(),
         Id::new("ui-main").unwrap(),
-        info.store_id,
         Counter::new(info.restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     )

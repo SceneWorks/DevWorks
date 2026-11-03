@@ -142,10 +142,12 @@ pub enum StorageError {
     CommitUnknown,
 }
 impl StorageError {
+    /// Diagnostics are adapter text: credential-shaped content is redacted before it can be
+    /// logged or surfaced.
     pub fn unavailable(cause: Unavailable, diagnostic: impl Into<String>) -> Self {
         Self::StorageUnavailable {
             cause,
-            diagnostic: diagnostic.into(),
+            diagnostic: crate::authority::redact::Redactor::new().redact_text(&diagnostic.into()),
         }
     }
     pub fn conflict(
@@ -183,8 +185,8 @@ impl fmt::Display for StorageError {
             Self::CursorExpired => f.write_str("cursor expired"),
             Self::LeaseLost { kind, id } => write!(f, "{kind} {id}: ownership lost"),
             Self::Duplicate { kind, id } => write!(f, "{kind} {id} already exists"),
-            Self::InvalidRecord(e) => write!(f, "invalid record: {e}"),
-            Self::IncompatibleSchema(e) => write!(f, "incompatible schema: {e}"),
+            Self::InvalidRecord(e) => write!(f, "invalid record: {}", redacted(e)),
+            Self::IncompatibleSchema(e) => write!(f, "incompatible schema: {}", redacted(e)),
             Self::StorageUnavailable { cause, diagnostic } => {
                 write!(f, "storage unavailable ({cause:?}): {diagnostic}")
             }
@@ -193,6 +195,9 @@ impl fmt::Display for StorageError {
     }
 }
 impl std::error::Error for StorageError {}
+fn redacted(text: &str) -> String {
+    crate::authority::redact::Redactor::new().redact_text(text)
+}
 
 // ---------------------------------------------------------------------------------------------
 // Admission options and the transaction owner
@@ -416,14 +421,25 @@ pub trait WriteTransaction {
     /// served; its writes are refused there and happen through [`Self::authority_writes`].
     fn authority(&mut self) -> &mut dyn AuthorityLedger;
     /// Authority-ledger writes for the `crate::authority` seams, which alone can present the
-    /// capability. The handler view forwards these to the store; elsewhere it is the ledger.
-    fn authority_writes(&mut self, _: &AuthorityCapability) -> &mut dyn AuthorityLedger {
-        self.authority()
+    /// capability, on behalf of `actor`. On the store's own transaction (host code holding the
+    /// store) this is the ledger. The gateway's handler view allows it only for the principal of
+    /// a user- or host-ingress command, so a use case running for an agent, package, MCP client
+    /// or schedule can never write authority, whatever context it constructs or wraps.
+    fn authority_writes(
+        &mut self,
+        _: &AuthorityCapability,
+        _actor: &ActorId,
+    ) -> Result<&mut dyn AuthorityLedger, StorageError> {
+        Ok(self.authority())
     }
-    /// Resume-grant ledger writes for the `crate::authority` seams (see
-    /// [`Self::authority_writes`]); the handler view of [`Self::grants`] refuses writes.
-    fn grant_writes(&mut self, _: &AuthorityCapability) -> &mut dyn GrantLedger {
-        self.grants()
+    /// Resume-grant ledger writes for the `crate::authority` seams, under the same rule as
+    /// [`Self::authority_writes`]; the handler view of [`Self::grants`] refuses writes.
+    fn grant_writes(
+        &mut self,
+        _: &AuthorityCapability,
+        _actor: &ActorId,
+    ) -> Result<&mut dyn GrantLedger, StorageError> {
+        Ok(self.grants())
     }
 }
 

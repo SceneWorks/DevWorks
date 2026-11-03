@@ -289,11 +289,29 @@ fn force_push_target(input: &OperationInput) -> Option<&str> {
 /// Evaluates one request for a principal. `binding` is the principal's current host binding
 /// (required for every kind except Human and Host). Mandatory restrictions are evaluated first
 /// and hold under every profile.
+/// Whether `target` names a protected branch: `main`, `master` or one of `extra` (for example a
+/// remote default branch the Git adapter knows). Compared case-insensitively, because refs
+/// collide on case-insensitive filesystems and a near-alias must not slip through.
+pub fn protected_ref(target: &str, extra: &[String]) -> bool {
+    let short = |r: &str| {
+        r.strip_prefix("refs/heads/")
+            .unwrap_or(r)
+            .to_ascii_lowercase()
+    };
+    let name = short(target.trim_start_matches('+'));
+    PROTECTED_REFS
+        .iter()
+        .map(|r| short(r))
+        .chain(extra.iter().map(|r| short(r)))
+        .any(|p| p == name)
+}
+
 pub fn evaluate(
     ctx: &InvocationContext,
     binding: Option<&PrincipalBinding>,
     policy: &EffectivePolicy,
     request: &AuthorityRequest<'_>,
+    protected_branches: &[String],
 ) -> Verdict {
     let kind = ctx.principal_kind();
     let op = request.descriptor.name;
@@ -303,7 +321,7 @@ pub fn evaluate(
 
     // Mandatory for every principal, including the user and the host.
     if let Some(target) = force_push_target(request.input)
-        && PROTECTED_REFS.contains(&target)
+        && protected_ref(target, protected_branches)
     {
         return Verdict::Deny(DenialReason::ProtectedBranch);
     }
@@ -376,14 +394,15 @@ pub fn evaluate(
             return Verdict::Deny(DenialReason::WebToolsDisabled);
         }
     }
+    // An unsupported stored profile fails closed for reads and commands alike.
+    let Some(profile) = policy.profile else {
+        return Verdict::Deny(DenialReason::UnsupportedProfile);
+    };
     if !command {
         return Verdict::Allow;
     }
 
     // Commands from here on.
-    let Some(profile) = policy.profile else {
-        return Verdict::Deny(DenialReason::UnsupportedProfile);
-    };
     if matches!(kind, PrincipalKind::Package | PrincipalKind::McpClient)
         && class == AuthorityClass::Configuration
     {

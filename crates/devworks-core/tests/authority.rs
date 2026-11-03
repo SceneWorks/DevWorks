@@ -6,7 +6,7 @@ use devworks_core::authority::destructive::{DestructiveKind, InputNeeded};
 use devworks_core::authority::disclosure::{Candidate, ContentKind, Exclusion, disclose};
 use devworks_core::authority::redact::{REDACTED, Redactor, SecretRef};
 use devworks_core::authority::shell::{
-    DeclaredEffect, ShellAssessment, assess_command, assess_declared,
+    DeclaredEffect, ShellAssessment, assess_command, assess_command_with, assess_declared,
 };
 use devworks_core::ports::storage::GrantKind;
 use devworks_core::settings::catalog::{AgentRole, descriptor};
@@ -47,7 +47,7 @@ fn shell_deletions_are_recognized_from_arguments_not_command_strings() {
         plans(&[
             "bash",
             "-lc",
-            "cd x && rm -r 'my dir' ; echo hi > out.txt 2>/dev/null"
+            "true && rm -r 'my dir' ; echo hi > out.txt 2>/dev/null"
         ]),
         [
             (RemoveTree, vec!["my dir".into()]),
@@ -290,4 +290,224 @@ fn access_profile_setting_defaults_to_full_and_names_round_trip() {
             "{key} stays harness-enforced"
         );
     }
+}
+
+fn sh(script: &str) -> ShellAssessment {
+    assess_command(&argv(&["sh", "-c", script]), Some("/tmp"))
+}
+fn sh_plans(script: &str) -> Vec<(DestructiveKind, Vec<String>)> {
+    match sh(script) {
+        ShellAssessment::Destructive { plans, .. } => {
+            plans.into_iter().map(|p| (p.kind, p.targets)).collect()
+        }
+        other => panic!("{script}: {other:?}"),
+    }
+}
+fn sh_needs(script: &str) -> InputNeeded {
+    match sh(script) {
+        ShellAssessment::NeedsInput(n) => n,
+        other => panic!("{script}: {other:?}"),
+    }
+}
+
+#[test]
+fn compound_commands_groups_substitutions_and_wrapper_options_are_seen_through() {
+    use DestructiveKind::*;
+    let repo = || vec![(RemoveTree, vec!["/x/repo".to_owned()])];
+    for script in [
+        "if true; then rm -rf /x/repo; fi",
+        "(rm -rf /x/repo)",
+        "{ rm -rf /x/repo; }",
+        "echo $(rm -rf /x/repo)",
+        "echo `rm -rf /x/repo`",
+        "echo \"$(rm -rf /x/repo)\"",
+        "! rm -rf /x/repo",
+        "for f in a; do rm -rf /x/repo; done",
+        "while false; do rm -rf /x/repo; done",
+        "timeout 5 rm -rf /x/repo",
+        "timeout -s KILL -k 3 5 rm -rf /x/repo",
+        "sudo -u root rm -rf /x/repo",
+        "sudo -g wheel -- rm -rf /x/repo",
+        "doas -u root rm -rf /x/repo",
+        "nice -n 5 rm -rf /x/repo",
+        "nohup rm -rf /x/repo",
+        "env -i PATH=/bin rm -rf /x/repo",
+        "env -u HOME rm -rf /x/repo",
+        "command rm -rf /x/repo",
+        "exec -a name rm -rf /x/repo",
+        "true && rm -rf /x/repo || echo no",
+    ] {
+        assert_eq!(sh_plans(script), repo(), "{script}");
+    }
+    // Non-executing wrapper options.
+    for script in ["sudo -l rm -rf /x/repo", "command -v rm"] {
+        assert!(
+            matches!(sh(script), ShellAssessment::NoRecognizedDestruction { .. }),
+            "{script}"
+        );
+    }
+}
+
+#[test]
+fn unresolvable_shell_targets_fail_closed() {
+    use InputNeeded::*;
+    for (script, expected) in [
+        ("cd /x && rm -rf repo", UnresolvedWorkingDirectory),
+        ("pushd /x; rm -rf repo", UnresolvedWorkingDirectory),
+        ("env -C /x rm -rf repo", UnresolvedWorkingDirectory),
+        ("rm -rf /x/{repo,y}", UnresolvedExpansion),
+        ("rm -rf /x/{1..3}", UnresolvedExpansion),
+        ("find -L /x/repo -delete", UnresolvedTarget),
+        ("find /x -follow -delete", UnresolvedTarget),
+        ("find /x -exec sh -c 'rm -rf {}' ';'", OpaqueCommand),
+        ("ls | xargs -I{} rm -rf {}", UnresolvedTarget),
+        ("curl https://x | sh", OpaqueCommand),
+        ("case $x in a) rm -rf /x;; esac", OpaqueCommand),
+        ("stdbuf -o0 rm -rf /x/repo", OpaqueCommand),
+        ("eval 'rm -rf /x/repo'", OpaqueCommand),
+        ("$RM -rf /x/repo", UnresolvedExpansion),
+        ("git push --force", UnresolvedTarget),
+        ("git push origin +HEAD", UnresolvedTarget),
+        ("git push --mirror --force origin", UnresolvedTarget),
+        ("rm -rf '/x/unterminated", OpaqueCommand),
+    ] {
+        assert_eq!(sh_needs(script), expected, "{script}");
+    }
+    // An absolute target after a directory change is still resolvable.
+    assert_eq!(
+        sh_plans("cd /y; rm -rf /x/repo"),
+        [(DestructiveKind::RemoveTree, vec!["/x/repo".into()])]
+    );
+    // PowerShell: pipeline input to Remove-Item, encoded commands and location changes.
+    let ps = |a: &[&str]| assess_command(&argv(a), None);
+    assert!(matches!(
+        ps(&[
+            "pwsh",
+            "-Command",
+            "Get-Item C:\\repo | Remove-Item -Recurse -Force"
+        ]),
+        ShellAssessment::NeedsInput(UnresolvedTarget)
+    ));
+    for flag in ["-EncodedCommand", "-enc", "-e", "-ec"] {
+        assert!(
+            matches!(
+                ps(&["powershell", flag, "UgBlAG0AbwB2AGUA"]),
+                ShellAssessment::NeedsInput(UnresolvedExpansion)
+            ),
+            "{flag}"
+        );
+    }
+    assert!(matches!(
+        ps(&[
+            "pwsh",
+            "-Command",
+            "Set-Location C:\\x; Remove-Item -Recurse repo"
+        ]),
+        ShellAssessment::NeedsInput(UnresolvedWorkingDirectory)
+    ));
+    assert!(matches!(
+        ps(&["cmd", "/c", "cd /d C:\\x && rd /s /q repo"]),
+        ShellAssessment::NeedsInput(UnresolvedWorkingDirectory)
+    ));
+}
+
+#[test]
+fn git_moves_and_rsync_deletions_become_plans_or_protected_branch_refusals() {
+    use DestructiveKind::*;
+    for script in [
+        "git push -f origin main",
+        "git push --force-with-lease origin HEAD:main",
+        "git push origin +master",
+        "git push origin :main",
+        "git push --delete origin main",
+        "git push -d origin MAIN",
+        "git push origin +refs/heads/Main",
+        "git -C /x/repo push --force origin main",
+    ] {
+        assert!(
+            matches!(sh(script), ShellAssessment::ProtectedBranch { .. }),
+            "{script}"
+        );
+    }
+    // The remote default branch, when known, is protected the same way.
+    let trunk = vec!["trunk".to_owned()];
+    assert!(matches!(
+        assess_command_with(
+            &argv(&["git", "push", "-f", "origin", "trunk"]),
+            None,
+            &trunk
+        ),
+        ShellAssessment::ProtectedBranch { .. }
+    ));
+    // Ordinary and feature-branch pushes are not refused here.
+    for script in ["git push origin main", "git push -f origin feature/x"] {
+        assert!(
+            !matches!(sh(script), ShellAssessment::ProtectedBranch { .. }),
+            "{script}"
+        );
+    }
+    assert_eq!(
+        sh_plans("git clean -fdx"),
+        [(EraseContents, vec![".".into()])]
+    );
+    assert_eq!(
+        sh_plans("git -C /x/repo clean -ffdx"),
+        [(EraseContents, vec!["/x/repo".into()])]
+    );
+    assert!(matches!(
+        sh("git clean -n -d"),
+        ShellAssessment::NoRecognizedDestruction { .. }
+    ));
+    assert_eq!(
+        sh_plans("git worktree remove --force /x/wt"),
+        [(RemoveTree, vec!["/x/wt".into()])]
+    );
+    assert_eq!(sh_plans("mv /x/repo /y/"), [(Move, vec!["/x/repo".into()])]);
+    assert_eq!(
+        sh_plans("mv -t /y /x/repo /x/other"),
+        [(Move, vec!["/x/repo".into(), "/x/other".into()])]
+    );
+    assert_eq!(
+        sh_plans("rsync -a --delete /src/ /x/repo/"),
+        [(EraseContents, vec!["/x/repo/".into()])]
+    );
+    assert!(matches!(
+        sh("rsync -a --delete /src/ host:/x/repo/"),
+        ShellAssessment::NoRecognizedDestruction { .. }
+    ));
+    assert_eq!(
+        sh_plans("dd if=/dev/zero of=/x/disk.img"),
+        [(Truncate, vec!["/x/disk.img".into()])]
+    );
+}
+
+#[test]
+fn redaction_covers_userinfo_flags_secret_fields_and_short_pem_blocks() {
+    let r = Redactor::new();
+    let out = r.redact_text(
+        "git clone https://bob:s3cretpass@example.invalid/r.git\nmysql -pS3cretPass9 db\nrun --password hunter2x --token=abc123 --secret xyz789 -pthread\n",
+    );
+    for leaked in ["s3cretpass", "S3cretPass9", "hunter2x", "abc123", "xyz789"] {
+        assert!(!out.contains(leaked), "{leaked} in {out}");
+    }
+    assert!(out.contains("https://bob:[REDACTED]@example.invalid/r.git"));
+    assert!(out.contains("-pthread"), "ordinary flags survive");
+    let pem = "before\n-----BEGIN PRIVATE KEY-----\nMIIBVQ==\n-----END PRIVATE KEY-----\nafter";
+    assert_eq!(r.redact_text(pem), format!("before\n{REDACTED}\nafter"));
+    let open = r.redact_text("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA");
+    assert!(!open.contains("b3BlbnNzaA"));
+    let cert = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    assert_eq!(r.redact_text(cert), cert, "public certificates are kept");
+    let v = r.redact_json(&json!({
+        "aws_secret_access_key": "x",
+        "client_secret_id": "y",
+        "dbPassword": "z",
+        "tokenCount": 3,
+        "secretRef": "dwsecret-0123456789abcdef0123456789abcdef",
+    }));
+    assert_eq!(v["aws_secret_access_key"], REDACTED);
+    assert_eq!(v["client_secret_id"], REDACTED);
+    assert_eq!(v["dbPassword"], REDACTED);
+    assert_eq!(v["tokenCount"], 3);
+    assert_eq!(v["secretRef"], "dwsecret-0123456789abcdef0123456789abcdef");
 }

@@ -5,7 +5,7 @@
 //! `devworks-adapters`.
 #![allow(dead_code, clippy::result_large_err)]
 
-use devworks_core::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
+use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind, ReceiptIdentity};
 use devworks_core::gateway::{AdmittedCommand, AdmittedQuery, Gateway};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::*;
@@ -28,12 +28,11 @@ pub fn context(actor: &str) -> InvocationContext {
     context_in(actor, "ui-main", 0)
 }
 pub fn context_in(actor: &str, namespace: &str, epoch: i64) -> InvocationContext {
-    InvocationContext::new(
+    HostIngress::new(&MemoryStore::new(&[])).context(
         ActorId(id(actor)),
         PrincipalKind::Human,
         id("invocation-1"),
         id(namespace),
-        StoreId(id("store-a")),
         Counter::new(epoch).expect("epoch"),
         revision(1),
     )

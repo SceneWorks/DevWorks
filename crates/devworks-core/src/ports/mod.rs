@@ -62,6 +62,9 @@ pub enum AuthorityDenial {
     InvalidTarget,
     /// The target is not visible to this principal; existence is not disclosed.
     NotFound,
+    /// Refused by host authority policy. The wire code is `PermissionDenied`; the typed reason
+    /// is carried in the query fault and recorded, attributed, for a denied command.
+    Policy(crate::authority::DenialReason),
 }
 
 /// One use of a host grant (for example a user-minted resume authorization) that authority

@@ -26,6 +26,19 @@ use std::sync::Arc;
 pub const PRINCIPAL_AGGREGATE: &str = "principal_authority";
 /// History aggregate of a host-minted grant (`aggregate_id` = grant ID).
 pub const GRANT_AGGREGATE: &str = "authority_grant";
+/// History aggregate of a denied command (`aggregate_id` = the rejection's correlation ID).
+pub const DENIAL_AGGREGATE: &str = "authority_denial";
+/// Longest lifetime of an operation or native grant (engineering default).
+pub const MAX_GRANT_LIFETIME_MS: i64 = 24 * 60 * 60 * 1000;
+/// Most uses one grant may carry (engineering default).
+pub const MAX_GRANT_USES: i64 = 1000;
+
+/// Explicit, bounded lifetime and use count of a grant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GrantBounds {
+    pub expires_at_ms: i64,
+    pub uses: i64,
+}
 
 /// What an `Operation` or `NativeExecution` grant covers. Every present member must match the
 /// request; `request_digest` binds one exact normalized request.
@@ -41,10 +54,27 @@ pub struct GrantBinding {
     pub project_id: Option<ProjectId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_id: Option<RootId>,
+    /// Digest of the effective access policy the grant was reviewed under; a changed policy
+    /// invalidates it. Required for native grants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_digest: Option<String>,
 }
 impl GrantBinding {
-    fn covers(&self, ctx: &InvocationContext, request: &AuthorityRequest<'_>, exact: bool) -> bool {
+    fn covers(
+        &self,
+        ctx: &InvocationContext,
+        request: &AuthorityRequest<'_>,
+        exact: bool,
+        policy_digest: &str,
+    ) -> bool {
         if exact && self.request_digest.is_none() {
+            return false;
+        }
+        if self
+            .policy_digest
+            .as_deref()
+            .is_some_and(|d| d != policy_digest)
+        {
             return false;
         }
         self.operation == request.descriptor.name
@@ -75,7 +105,7 @@ pub struct Denied {
 }
 fn deny(reason: DenialReason) -> Denied {
     Denied {
-        denial: AuthorityDenial::PermissionDenied,
+        denial: AuthorityDenial::Policy(reason),
         reason,
     }
 }
@@ -106,6 +136,9 @@ pub struct EffectivePermissions {
 pub struct HostAuthority<'a> {
     pub store: &'a dyn ApplicationStore,
     pub clock: &'a dyn Clock,
+    /// Branch names protected in addition to `main`/`master`, for example remote default
+    /// branches the Git adapter knows.
+    pub protected_branches: &'a [String],
 }
 
 impl HostAuthority<'_> {
@@ -118,7 +151,13 @@ impl HostAuthority<'_> {
     ) -> Result<Authorization, Denied> {
         let now = self.clock.now_ms().get();
         read_snapshot(self.store, &ReadOptions::default(), |snapshot| {
-            Ok(decide_in(snapshot, ctx, request, now))
+            Ok(decide_in(
+                snapshot,
+                ctx,
+                request,
+                now,
+                self.protected_branches,
+            ))
         })
         .unwrap_or(Err(deny(DenialReason::AuthorityUnavailable)))
     }
@@ -187,6 +226,7 @@ fn decide_in(
     ctx: &InvocationContext,
     request: &AuthorityRequest<'_>,
     now: i64,
+    protected_branches: &[String],
 ) -> Result<Authorization, Denied> {
     let unavailable = |_: StorageError| deny(DenialReason::AuthorityUnavailable);
     let stamp = s.stamp();
@@ -202,7 +242,8 @@ fn decide_in(
     }
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
-    let verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request);
+    let verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
+    let digest = policy.digest();
     let fences = fences_for(ctx, binding.as_ref(), &policy);
     match verdict {
         Verdict::Allow => Ok(Authorization::direct().fenced_by(fences)),
@@ -225,7 +266,7 @@ fn decide_in(
                 else {
                     continue;
                 };
-                if !binding.covers(ctx, request, exact) {
+                if !binding.covers(ctx, request, exact, &digest) {
                     continue;
                 }
                 if grant.usable_by(ctx.principal(), now) {
@@ -436,7 +477,7 @@ pub fn bind_principal(
     binding.bound_by = ctx.principal().clone();
     let actor = binding.actor.clone();
     let binding = tx
-        .authority_writes(&super::CAPABILITY)
+        .authority_writes(&super::CAPABILITY, ctx.principal())?
         .bind_principal(binding, expected_revision)?;
     record(
         tx,
@@ -464,7 +505,7 @@ pub fn revoke_principal(
 ) -> Result<PrincipalBinding, AdminError> {
     require_kind(tx, ctx, &[PrincipalKind::Human, PrincipalKind::Host])?;
     let binding = tx
-        .authority_writes(&super::CAPABILITY)
+        .authority_writes(&super::CAPABILITY, ctx.principal())?
         .revoke_principal(actor, expected_revision)?;
     record(
         tx,
@@ -479,16 +520,17 @@ pub fn revoke_principal(
 }
 
 /// Mints an `Operation` or `NativeExecution` grant from the user's trusted local action. The
-/// holder may be an agent: it can exercise the grant only within its binding. Native grants
-/// must bind one exact request. Primary repository deletion has its own confirmation seam.
+/// holder may be an agent: it can exercise the grant only within its binding. Every grant has
+/// an explicit expiry within [`MAX_GRANT_LIFETIME_MS`] and 1..=[`MAX_GRANT_USES`] uses. Native
+/// grants bind one exact request, a project and the effective policy digest of that project.
+/// Primary repository deletion has its own confirmation seam.
 pub fn mint_grant(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     holder: ActorId,
     kind: GrantKind,
     binding: GrantBinding,
-    expires_at_ms: Option<i64>,
-    uses: Option<i64>,
+    bounds: GrantBounds,
 ) -> Result<AuthorityGrant, AdminError> {
     let command = registry::find(&binding.operation).and_then(|d| d.binding(Mode::Command));
     if command.is_none() {
@@ -504,6 +546,15 @@ pub fn mint_grant(
                     "a native grant binds one exact native execution request",
                 ));
             }
+            let Some(project) = binding.project_id.as_ref() else {
+                return Err(AdminError::Invalid("a native grant binds its project"));
+            };
+            let current = resolve_policy(tx.configuration(), Some(project))?.digest();
+            if binding.policy_digest.as_deref() != Some(current.as_str()) {
+                return Err(AdminError::Invalid(
+                    "a native grant binds the current effective policy of its project",
+                ));
+            }
         }
         GrantKind::PrimaryRepositoryDeletion => {
             return Err(AdminError::Invalid(
@@ -512,7 +563,15 @@ pub fn mint_grant(
         }
     }
     let binding = serde_json::to_value(&binding).expect("grant binding");
-    issue(tx, ctx, holder, kind, binding, expires_at_ms, uses)
+    issue(
+        tx,
+        ctx,
+        holder,
+        kind,
+        binding,
+        bounds,
+        MAX_GRANT_LIFETIME_MS,
+    )
 }
 
 /// Shared minting: user only, registered holder, bounded lifetime and uses, attributed history.
@@ -522,21 +581,26 @@ pub(crate) fn issue(
     holder: ActorId,
     kind: GrantKind,
     binding: Value,
-    expires_at_ms: Option<i64>,
-    uses: Option<i64>,
+    bounds: GrantBounds,
+    max_lifetime_ms: i64,
 ) -> Result<AuthorityGrant, AdminError> {
     require_kind(tx, ctx, &[PrincipalKind::Human])?;
     if tx.actors().actor_kind(&holder)?.is_none() {
         return Err(AdminError::Invalid("the grant holder is not registered"));
     }
-    if uses.is_some_and(|u| u <= 0) || expires_at_ms.is_some_and(|t| t <= tx.now_ms()) {
+    let now = tx.now_ms();
+    if !(1..=MAX_GRANT_USES).contains(&bounds.uses)
+        || bounds.expires_at_ms <= now
+        || bounds.expires_at_ms > now.saturating_add(max_lifetime_ms)
+    {
         return Err(AdminError::Invalid(
-            "a grant needs remaining uses and lifetime",
+            "a grant needs an explicit, bounded expiry and use count",
         ));
     }
+    let (expires_at_ms, uses) = (Some(bounds.expires_at_ms), Some(bounds.uses));
     let id = tx.new_id(IdKind::Grant);
     let grant = tx
-        .authority_writes(&super::CAPABILITY)
+        .authority_writes(&super::CAPABILITY, ctx.principal())?
         .issue_grant(NewAuthorityGrant {
             id: id.clone(),
             actor: holder.clone(),
@@ -573,11 +637,9 @@ pub fn revoke_grant(
     expected_revision: i64,
 ) -> Result<AuthorityGrant, AdminError> {
     require_kind(tx, ctx, &[PrincipalKind::Human, PrincipalKind::Host])?;
-    let grant = tx.authority_writes(&super::CAPABILITY).revoke_grant(
-        id,
-        expected_revision,
-        ctx.principal(),
-    )?;
+    let grant = tx
+        .authority_writes(&super::CAPABILITY, ctx.principal())?
+        .revoke_grant(id, expected_revision, ctx.principal())?;
     record(
         tx,
         ctx,

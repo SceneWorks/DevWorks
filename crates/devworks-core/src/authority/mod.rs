@@ -14,9 +14,16 @@
 //!   grant is usable only by its recorded holder within its recorded binding.
 //! * **Authority records are written only by their seams.** A use case sees the authority and
 //!   resume-grant ledgers through the gateway's handler view: reads are served, every direct
-//!   write is refused. Binding, minting, revoking and the deletion confirmation write through
-//!   [`service`] and [`deletion`], which alone hold the [`AuthorityCapability`]; grant
-//!   consumption is the gateway's own step on the unwrapped transaction.
+//!   write is refused. Binding, minting and revoking write through [`service`], which alone holds
+//!   the [`AuthorityCapability`], and inside a use case only for the principal of a user- or
+//!   host-ingress command: a handler running for an agent, package, MCP client or schedule is
+//!   refused whatever context it forges or wrapper it adds. Contexts come only from
+//!   [`crate::context::HostIngress`], which needs the store. The deletion confirmation
+//!   ([`deletion`]) takes the store and runs its own unit of work, so no handler reaches it.
+//!   Grant consumption is the gateway's own step on the unwrapped transaction.
+//! * **Typed denials are visible.** A policy refusal carries its [`DenialReason`]: a query fault
+//!   names it (`authority:<DenialReason>`), and a denied command records one attributed
+//!   `AuthorityDenied` history event keyed by the rejection's correlation ID.
 //! * **Mandatory restrictions hold under Full access.** Code reviewers are read-only and limited
 //!   to verified reads; main is never force-pushed; explicit approvals stay required; the
 //!   destructive guard always runs; primary repository deletion is only the user's dedicated

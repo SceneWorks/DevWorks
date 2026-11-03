@@ -113,6 +113,12 @@ fn refusal(e: &io::Error, dir: RawFd, name: &CStr) -> ReadRefusal {
 impl VerifiedReader for NativeFilesystem {
     fn read(&self, req: &ReadRequest<'_>) -> Result<VerifiedBytes, ReadRefusal> {
         let parts = normal_components(req.relative).ok_or(ReadRefusal::Escape)?;
+        // The registered identity is mandatory: without it a replaced root cannot be detected.
+        let Some(expected_root) = req.root.identity else {
+            return Err(ReadRefusal::Unsupported(
+                "a verified read needs the root's registered identity".into(),
+            ));
+        };
         let root = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
@@ -123,27 +129,36 @@ impl VerifiedReader for NativeFilesystem {
             })?;
         let root_stat =
             fstat(root.as_raw_fd()).map_err(|e| ReadRefusal::Io(e.kind().to_string()))?;
-        if req.root.identity.is_some_and(|id| id != ident(&root_stat)) {
+        if ident(&root_stat) != expected_root {
             return Err(ReadRefusal::RootChanged);
         }
         let mut dir: OwnedFd = root.into();
         let last = parts.len() - 1;
         for (i, part) in parts.iter().enumerate() {
             let name = cname(part).map_err(|_| ReadRefusal::Escape)?;
-            let flags = libc::O_RDONLY
-                | libc::O_NOFOLLOW
-                | libc::O_NONBLOCK
-                | if i < last { libc::O_DIRECTORY } else { 0 };
-            let fd = open_at(dir.as_raw_fd(), &name, flags)
-                .map_err(|e| refusal(&e, dir.as_raw_fd(), &name))?;
             if i < last {
-                dir = fd;
+                let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY;
+                dir = open_at(dir.as_raw_fd(), &name, flags)
+                    .map_err(|e| refusal(&e, dir.as_raw_fd(), &name))?;
                 continue;
             }
+            // Check the entry's type before opening it: FIFOs, devices and sockets are refused
+            // without the side effects an open could have.
+            let before =
+                stat_at(dir.as_raw_fd(), &name).map_err(|e| refusal(&e, dir.as_raw_fd(), &name))?;
+            if is_link(&before) {
+                return Err(ReadRefusal::LinkRefused);
+            }
+            if !is_reg(&before) {
+                return Err(ReadRefusal::NotRegularFile);
+            }
+            let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY;
+            let fd = open_at(dir.as_raw_fd(), &name, flags)
+                .map_err(|e| refusal(&e, dir.as_raw_fd(), &name))?;
             let opened =
                 fstat(fd.as_raw_fd()).map_err(|e| ReadRefusal::Io(e.kind().to_string()))?;
-            if !is_reg(&opened) {
-                return Err(ReadRefusal::NotRegularFile);
+            if !is_reg(&opened) || ident(&opened) != ident(&before) {
+                return Err(ReadRefusal::Changed);
             }
             if opened.st_nlink > 1 && !req.allow_hard_links {
                 return Err(ReadRefusal::HardLinked);
@@ -184,7 +199,16 @@ fn io_err(e: io::Error) -> ResolveError {
 
 /// Removes everything inside `dir` (descriptor-relative, never following links, never crossing
 /// a mount point). Entries it cannot remove are reported, not hidden.
-fn erase(dir: &OwnedFd, path: &Path, volume: libc::dev_t, out: &mut RemovalOutcome, depth: u32) {
+/// Protected roots and Git directories found inside the tree (renamed in after the preflight)
+/// are left in place and reported.
+fn erase(
+    dir: &OwnedFd,
+    path: &Path,
+    volume: libc::dev_t,
+    protected: &[FileIdentity],
+    out: &mut RemovalOutcome,
+    depth: u32,
+) {
     if depth > 512 {
         out.remaining.push(path.to_string_lossy().into_owned());
         return;
@@ -225,6 +249,10 @@ fn erase(dir: &OwnedFd, path: &Path, volume: libc::dev_t, out: &mut RemovalOutco
             out.remaining.push(child_text());
             continue;
         };
+        if protected.contains(&ident(&st)) {
+            out.remaining.push(child_text());
+            continue;
+        }
         if is_dir(&st) {
             if st.st_dev != volume {
                 // A mount point inside the tree is never crossed.
@@ -234,7 +262,7 @@ fn erase(dir: &OwnedFd, path: &Path, volume: libc::dev_t, out: &mut RemovalOutco
             let before = out.remaining.len();
             match open_at(dir.as_raw_fd(), &name, DIR_NOFOLLOW) {
                 Ok(fd) if fstat(fd.as_raw_fd()).is_ok_and(|s| ident(&s) == ident(&st)) => {
-                    erase(&fd, &child, volume, out, depth + 1)
+                    erase(&fd, &child, volume, protected, out, depth + 1)
                 }
                 _ => {
                     out.remaining.push(child_text());
@@ -262,6 +290,7 @@ impl DestructiveExecutor for NativeFilesystem {
         &self,
         target: &CheckedTarget,
         kind: DestructiveKind,
+        protected: &[FileIdentity],
     ) -> Result<RemovalOutcome, ResolveError> {
         let path = target.path();
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
@@ -297,6 +326,9 @@ impl DestructiveExecutor for NativeFilesystem {
             EntryKind::Other
         };
         if target.entry_identity() != Some(ident(&st)) || target.entry_kind() != expected_kind {
+            return Err(changed(target.requested()));
+        }
+        if protected.contains(&ident(&st)) {
             return Err(changed(target.requested()));
         }
         let parent = parent_fd.as_raw_fd();
@@ -342,7 +374,14 @@ impl DestructiveExecutor for NativeFilesystem {
                 if fstat(dir.as_raw_fd()).map(|s| ident(&s)).map_err(io_err)? != ident(&st) {
                     return Err(changed(target.requested()));
                 }
-                erase(&dir, &PathBuf::from(path), st.st_dev, &mut outcome, 0);
+                erase(
+                    &dir,
+                    &PathBuf::from(path),
+                    st.st_dev,
+                    protected,
+                    &mut outcome,
+                    0,
+                );
                 if kind == DestructiveKind::RemoveTree && outcome.remaining.is_empty() {
                     drop(dir);
                     match unlink_at(parent, &cname, true) {
@@ -351,6 +390,11 @@ impl DestructiveExecutor for NativeFilesystem {
                     }
                 }
                 outcome.complete = outcome.remaining.is_empty();
+            }
+            DestructiveKind::Move => {
+                return Err(ResolveError::Unsupported(
+                    "moves are preflighted only; the executor does not perform them".into(),
+                ));
             }
         }
         Ok(outcome)

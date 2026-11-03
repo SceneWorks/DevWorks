@@ -360,12 +360,11 @@ pub fn principal(s: &dyn ApplicationStore, name: &str, kind: PrincipalKind) -> I
     })
     .unwrap();
     let info = s.info();
-    InvocationContext::new(
+    devworks_core::context::HostIngress::new(s).context(
         actor,
         kind,
         id(&format!("inv-{name}")),
         id(&format!("ingress-{name}")),
-        info.store_id,
         Counter::new(info.restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     )
