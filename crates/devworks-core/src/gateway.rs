@@ -23,7 +23,9 @@ use crate::context::{InvocationContext, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
-    EventFilter, LedgerEntry, NewEvent, ReadOptions, RevisionConflict, StorageError, WriteOptions,
+    ActorRegistry, CommandLedger, CommandLedgerRead, DurableQueue, EventFilter, EventPage,
+    EventRecord, GrantLedger, HistoryLog, HistoryRead, LedgerEntry, NewEvent, OperationJournal,
+    ReadOptions, RevisionConflict, Savepoint, StorageError, StoreInfo, WriteOptions,
     WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
@@ -36,10 +38,11 @@ use crate::protocol::results::{
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
     CONTRACT, Check, CommandId, CommandReply, CorrelationId, DomainErrorCode, DomainFault, EventId,
-    Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
+    Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
 };
 use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor};
 use serde_json::json;
+use std::cell::RefCell;
 use std::fmt;
 use std::sync::Arc;
 
@@ -498,9 +501,15 @@ fn unit_of_work(
         return Ok(Unit::Denied);
     }
 
-    // Step 3: the receipt check precedes any current-state evaluation.
+    // Step 3: the receipt check precedes any current-state evaluation. A key reused for another
+    // operation is a different intent. The stored contract/schema revision is checked before the
+    // fingerprint because the fingerprint embeds the schema revision: a re-bound operation would
+    // otherwise be misreported as a changed intent instead of an incompatible record.
     match tx.receipts().lookup(&command.identity)? {
         Some(LedgerEntry::Current(stored)) => {
+            if stored.operation != command.descriptor.name {
+                return Ok(Unit::IdempotencyConflict);
+            }
             if stored.contract != CONTRACT
                 || stored.schema_revision != command.descriptor.schema_revision
             {
@@ -513,22 +522,44 @@ fn unit_of_work(
                 Unit::IdempotencyConflict
             });
         }
-        Some(LedgerEntry::Incompatible { contract, .. }) => {
+        Some(LedgerEntry::Incompatible {
+            operation,
+            contract,
+            ..
+        }) => {
+            if operation != command.descriptor.name {
+                return Ok(Unit::IdempotencyConflict);
+            }
             hold_incompatible(tx, ctx, command, &contract)?;
             return Ok(Unit::IncompatibleRecord);
         }
         None => {}
     }
 
-    // Step 4: the use case reads current state and decides inside this transaction.
+    // Step 4: the use case reads current state and decides inside this transaction. It gets a
+    // view of the transaction that cannot record receipts or command history (ARCH-02). Any
+    // savepoint it leaves open is discarded when this outer savepoint is unwound.
     let savepoint = tx.savepoint()?;
-    let decided = match handler.decide(ctx, command, tx) {
+    let outcome = handler.decide(ctx, command, &mut HandlerTx::new(tx));
+    let decided = match outcome {
         Ok(decided) => {
             if let Err(e) = check_decision(command, &decided) {
                 tx.rollback_to(savepoint)?;
                 return Ok(Unit::Contract(e));
             }
-            if !matches!(decided.decision, DomainDecision::Refused { .. }) {
+            if matches!(decided.decision, DomainDecision::Refused { .. }) {
+                // Receipt-only decisions do not mutate work (step 5): every write the use case
+                // made is undone and only the receipt and its CommandDecided history remain.
+                tx.rollback_to(savepoint)?;
+                if let Some(op) = &decided.operation_id
+                    && tx.operations().operation(op)?.is_none()
+                {
+                    return Ok(Unit::Contract(
+                        "a refused decision can only reference an operation that already existed"
+                            .into(),
+                    ));
+                }
+            } else {
                 for grant in authorization.grants() {
                     match tx.grants().consume(grant, ctx.principal()) {
                         Ok(_) => {}
@@ -543,8 +574,8 @@ fn unit_of_work(
                         Err(e) => return Err(e),
                     }
                 }
+                tx.release(savepoint)?;
             }
-            tx.release(savepoint)?;
             decided
         }
         Err(HandlerFailure::Storage(StorageError::RevisionConflict(conflict))) => {
@@ -605,6 +636,108 @@ fn unit_of_work(
         },
     )?;
     Ok(Unit::Recorded(receipt))
+}
+
+/// History kinds only the gateway may write.
+fn gateway_owned(event: &NewEvent) -> bool {
+    matches!(event.aggregate_kind.as_str(), "command" | "command_receipt")
+        || matches!(
+            event.kind.as_str(),
+            "CommandDecided" | "ReceiptIncompatible"
+        )
+}
+
+/// The transaction a use case decides against: every repository of the unit of work except the
+/// receipt ledger and command history, which only the gateway records.
+struct HandlerTx<'a> {
+    inner: RefCell<&'a mut dyn WriteTransaction>,
+    info: StoreInfo,
+}
+impl<'a> HandlerTx<'a> {
+    fn new(inner: &'a mut dyn WriteTransaction) -> Self {
+        let info = inner.store().clone();
+        Self {
+            inner: RefCell::new(inner),
+            info,
+        }
+    }
+}
+fn ledger_owned() -> StorageError {
+    StorageError::InvalidRecord("command receipts are recorded only by the gateway".into())
+}
+impl CommandLedgerRead for HandlerTx<'_> {
+    fn lookup(&self, _: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError> {
+        Err(ledger_owned())
+    }
+}
+impl CommandLedger for HandlerTx<'_> {
+    fn record(&mut self, _: &ReceiptIdentity, _: &StoredReceipt) -> Result<(), StorageError> {
+        Err(ledger_owned())
+    }
+}
+impl HistoryRead for HandlerTx<'_> {
+    fn event(&self, id: &EventId) -> Result<Option<EventRecord>, StorageError> {
+        self.inner.borrow_mut().history().event(id)
+    }
+    fn page(
+        &self,
+        filter: &EventFilter,
+        after: i64,
+        limit: u16,
+    ) -> Result<EventPage, StorageError> {
+        self.inner.borrow_mut().history().page(filter, after, limit)
+    }
+}
+impl HistoryLog for HandlerTx<'_> {
+    fn append(&mut self, event: NewEvent) -> Result<i64, StorageError> {
+        if gateway_owned(&event) {
+            return Err(StorageError::InvalidRecord(
+                "command history is recorded only by the gateway".into(),
+            ));
+        }
+        self.inner.get_mut().history().append(event)
+    }
+}
+impl WriteTransaction for HandlerTx<'_> {
+    fn now_ms(&self) -> i64 {
+        self.inner.borrow().now_ms()
+    }
+    fn new_id(&mut self, kind: IdKind) -> Id {
+        self.inner.get_mut().new_id(kind)
+    }
+    fn store(&self) -> &StoreInfo {
+        &self.info
+    }
+    fn committed_sequence(&self) -> Result<i64, StorageError> {
+        self.inner.borrow().committed_sequence()
+    }
+    fn savepoint(&mut self) -> Result<Savepoint, StorageError> {
+        self.inner.get_mut().savepoint()
+    }
+    fn rollback_to(&mut self, savepoint: Savepoint) -> Result<(), StorageError> {
+        self.inner.get_mut().rollback_to(savepoint)
+    }
+    fn release(&mut self, savepoint: Savepoint) -> Result<(), StorageError> {
+        self.inner.get_mut().release(savepoint)
+    }
+    fn actors(&mut self) -> &mut dyn ActorRegistry {
+        self.inner.get_mut().actors()
+    }
+    fn receipts(&mut self) -> &mut dyn CommandLedger {
+        self
+    }
+    fn history(&mut self) -> &mut dyn HistoryLog {
+        self
+    }
+    fn operations(&mut self) -> &mut dyn OperationJournal {
+        self.inner.get_mut().operations()
+    }
+    fn queue(&mut self) -> &mut dyn DurableQueue {
+        self.inner.get_mut().queue()
+    }
+    fn grants(&mut self) -> &mut dyn GrantLedger {
+        self.inner.get_mut().grants()
+    }
 }
 
 /// Records one visible `ReceiptIncompatible` history entry per receipt identity. The stored

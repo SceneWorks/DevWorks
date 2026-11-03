@@ -465,7 +465,7 @@ fn unresolved(conn: &Connection, max: u16) -> Result<Vec<OperationRecord>, Stora
     raws.into_iter().map(|r| op_of(conn, r)).collect()
 }
 
-const QUEUE_COLUMNS: &str = "id,consumer,event_id,root_id,operation_id,priority,ready_at,state,owner_id,lease_until,generation,cancellation_epoch,attempt_count,payload_json";
+const QUEUE_COLUMNS: &str = "id,consumer,event_id,root_id,operation_id,priority,ready_at,state,owner_id,lease_until,generation,cancellation_epoch,attempt_count,payload_json,claim_boot_id";
 type QueueRaw = (
     String,
     String,
@@ -481,6 +481,7 @@ type QueueRaw = (
     i64,
     i64,
     String,
+    Option<String>,
 );
 fn queue_row(r: &Row<'_>) -> rusqlite::Result<QueueRaw> {
     Ok((
@@ -498,6 +499,7 @@ fn queue_row(r: &Row<'_>) -> rusqlite::Result<QueueRaw> {
         r.get(11)?,
         r.get(12)?,
         r.get(13)?,
+        r.get(14)?,
     ))
 }
 fn queue_of(raw: QueueRaw) -> Result<QueueEntry, StorageError> {
@@ -516,6 +518,7 @@ fn queue_of(raw: QueueRaw) -> Result<QueueEntry, StorageError> {
         epoch,
         attempts,
         payload,
+        claim_boot,
     ) = raw;
     Ok(QueueEntry {
         id: id_of(id)?,
@@ -532,12 +535,13 @@ fn queue_of(raw: QueueRaw) -> Result<QueueEntry, StorageError> {
         cancellation_epoch: epoch,
         attempt_count: attempts,
         payload: json_of(&payload)?,
+        claim_boot_id: opt_id(claim_boot)?,
     })
 }
 fn entry(conn: &Connection, id: &Id) -> Result<Option<QueueEntry>, StorageError> {
     let raw = db(stmt(
         conn,
-        &format!("SELECT {QUEUE_COLUMNS} FROM queue_entries WHERE id=?1"),
+        &format!("SELECT {QUEUE_COLUMNS} FROM queue_entries WHERE id=?1 AND state<>'Compacted'"),
     )?
     .query_row([id.as_str()], queue_row)
     .optional())?;
@@ -546,7 +550,7 @@ fn entry(conn: &Connection, id: &Id) -> Result<Option<QueueEntry>, StorageError>
 fn status(conn: &Connection, consumer: &str) -> Result<QueueStatus, StorageError> {
     let mut s = stmt(
         conn,
-        "SELECT state,count(*),min(ready_at) FROM queue_entries WHERE consumer=?1 GROUP BY state",
+        "SELECT state,count(*),min(ready_at) FROM queue_entries WHERE consumer=?1 AND state<>'Compacted' GROUP BY state",
     )?;
     let rows: Vec<(String, i64, Option<i64>)> =
         db(db(s.query_map([consumer], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))))?.collect())?;
@@ -708,11 +712,20 @@ pub(crate) struct Unit<'c> {
     pub now: i64,
     pub ids: &'c dyn IdSource,
     pub info: &'c StoreInfo,
+    /// Open savepoint depth.
     pub savepoints: u32,
+    /// Serial of this unit of work; a savepoint issued by another unit is refused.
+    pub serial: u64,
 }
 read_impls!(Unit<'_>);
 
 impl Unit<'_> {
+    fn open_savepoint(&self, sp: &Savepoint) -> Result<u32, StorageError> {
+        if sp.transaction() != self.serial || sp.depth() == 0 || sp.depth() > self.savepoints {
+            return Err(invalid("savepoint is not open in this transaction"));
+        }
+        Ok(sp.depth())
+    }
     fn boot(&self) -> Result<&Id, StorageError> {
         self.info
             .boot_id
@@ -748,6 +761,7 @@ impl Unit<'_> {
         if e.state != QueueState::Claimed
             || e.owner.as_ref() != Some(&fence.owner)
             || e.generation != fence.generation
+            || e.claim_boot_id.as_ref() != self.info.boot_id.as_ref()
         {
             return Err(StorageError::LeaseLost {
                 kind: "queue_entry",
@@ -835,28 +849,24 @@ impl WriteTransaction for Unit<'_> {
         committed_sequence(self.conn)
     }
     fn savepoint(&mut self) -> Result<Savepoint, StorageError> {
-        self.savepoints += 1;
-        db(self
-            .conn
-            .execute_batch(&format!("SAVEPOINT dw_sp{}", self.savepoints)))?;
-        Ok(Savepoint(self.savepoints))
+        let depth = self.savepoints + 1;
+        db(self.conn.execute_batch(&format!("SAVEPOINT dw_sp{depth}")))?;
+        self.savepoints = depth;
+        Ok(Savepoint::issue(self.serial, depth))
     }
     fn rollback_to(&mut self, sp: Savepoint) -> Result<(), StorageError> {
-        if sp.0 != self.savepoints || sp.0 == 0 {
-            return Err(invalid("savepoints must be unwound innermost first"));
-        }
+        let depth = self.open_savepoint(&sp)?;
+        // SQLite semantics: unwinding an outer savepoint also discards every inner one.
         db(self
             .conn
-            .execute_batch(&format!("ROLLBACK TO dw_sp{0}; RELEASE dw_sp{0}", sp.0)))?;
-        self.savepoints -= 1;
+            .execute_batch(&format!("ROLLBACK TO dw_sp{depth}; RELEASE dw_sp{depth}")))?;
+        self.savepoints = depth - 1;
         Ok(())
     }
     fn release(&mut self, sp: Savepoint) -> Result<(), StorageError> {
-        if sp.0 != self.savepoints || sp.0 == 0 {
-            return Err(invalid("savepoints must be unwound innermost first"));
-        }
-        db(self.conn.execute_batch(&format!("RELEASE dw_sp{}", sp.0)))?;
-        self.savepoints -= 1;
+        let depth = self.open_savepoint(&sp)?;
+        db(self.conn.execute_batch(&format!("RELEASE dw_sp{depth}")))?;
+        self.savepoints = depth - 1;
         Ok(())
     }
     fn actors(&mut self) -> &mut dyn ActorRegistry {
@@ -1220,7 +1230,13 @@ impl DurableQueue for Unit<'_> {
             "SELECT 1 FROM queue_entries WHERE consumer=?1 AND event_id=?2",
         )?
         .exists(params![e.consumer, e.event_id.0.as_str()]))?;
-        if duplicate || entry(self.conn, &e.id)?.is_some() {
+        if duplicate
+            || exists(
+                self.conn,
+                "SELECT 1 FROM queue_entries WHERE id=?1",
+                e.id.as_str(),
+            )?
+        {
             return Err(StorageError::Duplicate {
                 kind: "queue_delivery",
                 id: format!("{}/{}", e.consumer, e.event_id.0.as_str()),
@@ -1262,12 +1278,13 @@ impl DurableQueue for Unit<'_> {
             }))?
             .collect())?
         };
+        let boot = self.boot()?.clone();
         let mut claimed = Vec::new();
         for (id, generation) in candidates {
             let changed = db(stmt(self.conn,
-                "UPDATE queue_entries SET state='Claimed',owner_id=?1,lease_until=?2,generation=generation+1,attempt_count=attempt_count+1 WHERE id=?3 AND state='Ready' AND generation=?4",
+                "UPDATE queue_entries SET state='Claimed',owner_id=?1,lease_until=?2,generation=generation+1,attempt_count=attempt_count+1,claim_boot_id=?5 WHERE id=?3 AND state='Ready' AND generation=?4",
             )?
-            .execute(params![req.owner.as_str(), lease_until, id, generation]))?;
+            .execute(params![req.owner.as_str(), lease_until, id, generation, boot.as_str()]))?;
             if changed != 1 {
                 continue; // lost race or no longer eligible
             }
@@ -1275,7 +1292,7 @@ impl DurableQueue for Unit<'_> {
             self.observe_queue(
                 &e,
                 "QueueClaimed",
-                json!({"owner": req.owner.as_str(), "generation": e.generation, "leaseUntil": lease_until, "attempt": e.attempt_count}),
+                json!({"owner": req.owner.as_str(), "generation": e.generation, "leaseUntil": lease_until, "attempt": e.attempt_count, "boot": boot.as_str()}),
             )?;
             claimed.push(e);
         }
@@ -1323,7 +1340,7 @@ impl DurableQueue for Unit<'_> {
             Settlement::Cancelled => QueueState::Cancelled,
         };
         db(stmt(self.conn,
-            "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL WHERE id=?2 AND generation=?3",
+            "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL WHERE id=?2 AND generation=?3",
         )?
         .execute(params![queue_state_name(state), id.as_str(), fence.generation]))?;
         self.reload(id)
@@ -1346,8 +1363,16 @@ impl DurableQueue for Unit<'_> {
                 if delay_ms < 0 || max_attempts <= 0 {
                     return Err(invalid("retry delay/attempt bounds"));
                 }
+                let dispatched = match &e.operation_id {
+                    Some(op) => possibly_dispatched(self.load_op(op)?.state),
+                    None => false,
+                };
                 if e.attempt_count >= max_attempts {
                     (QueueState::Failed, e.ready_at_ms)
+                } else if dispatched {
+                    // A retry hint never authorizes replaying an effect that may have happened:
+                    // hold the delivery for reconciliation, exactly as claim recovery does.
+                    (QueueState::Reconciling, e.ready_at_ms)
                 } else {
                     (
                         QueueState::Ready,
@@ -1360,7 +1385,7 @@ impl DurableQueue for Unit<'_> {
             FailureDisposition::Terminal => (QueueState::Failed, e.ready_at_ms),
         };
         db(stmt(self.conn,
-            "UPDATE queue_entries SET state=?1,ready_at=?2,owner_id=NULL,lease_until=NULL WHERE id=?3 AND generation=?4",
+            "UPDATE queue_entries SET state=?1,ready_at=?2,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL WHERE id=?3 AND generation=?4",
         )?
         .execute(params![queue_state_name(state), ready_at, id.as_str(), fence.generation]))?;
         let after = self.reload(id)?;
@@ -1373,6 +1398,7 @@ impl DurableQueue for Unit<'_> {
                 "outcome": queue_state_name(state),
                 "readyAt": ready_at,
                 "terminal": state == QueueState::Failed,
+                "held": state == QueueState::Reconciling,
             }),
         )?;
         Ok(after)
@@ -1416,12 +1442,20 @@ impl DurableQueue for Unit<'_> {
                 ClaimRecovery::Expired => {
                     "SELECT id FROM queue_entries WHERE state='Claimed' AND lease_until<?1 ORDER BY lease_until,id LIMIT ?2"
                 }
-                ClaimRecovery::AllClaimed => {
-                    "SELECT id FROM queue_entries WHERE state='Claimed' AND ?1=?1 ORDER BY lease_until,id LIMIT ?2"
+                ClaimRecovery::PriorBoots => {
+                    "SELECT id FROM queue_entries WHERE state='Claimed' AND (claim_boot_id IS NULL OR claim_boot_id<>?1) ORDER BY lease_until,id LIMIT ?2"
                 }
             };
             let mut s = stmt(self.conn, sql)?;
-            db(db(s.query_map(params![self.now, n], |r| r.get(0)))?.collect())?
+            match mode {
+                ClaimRecovery::Expired => {
+                    db(db(s.query_map(params![self.now, n], |r| r.get(0)))?.collect())?
+                }
+                ClaimRecovery::PriorBoots => {
+                    let boot = self.boot()?.clone();
+                    db(db(s.query_map(params![boot.as_str(), n], |r| r.get(0)))?.collect())?
+                }
+            }
         };
         let mut out = RecoveryOutcome::default();
         for raw in stale {
@@ -1439,7 +1473,7 @@ impl DurableQueue for Unit<'_> {
                 QueueState::Ready
             };
             db(stmt(self.conn,
-                "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL,generation=generation+1 WHERE id=?2 AND state='Claimed' AND generation=?3",
+                "UPDATE queue_entries SET state=?1,owner_id=NULL,lease_until=NULL,claim_boot_id=NULL,generation=generation+1 WHERE id=?2 AND state='Claimed' AND generation=?3",
             )?
             .execute(params![queue_state_name(state), id.as_str(), e.generation]))?;
             let after = self.reload(&id)?;
@@ -1484,12 +1518,21 @@ impl DurableQueue for Unit<'_> {
             .now
             .checked_add(delay_ms)
             .ok_or_else(|| invalid("delay overflows"))?;
+        let attempts = if e.state == QueueState::Failed {
+            0
+        } else {
+            e.attempt_count
+        };
         db(stmt(self.conn,
-            "UPDATE queue_entries SET state='Ready',ready_at=?1,generation=generation+1 WHERE id=?2 AND generation=?3",
+            "UPDATE queue_entries SET state='Ready',ready_at=?1,attempt_count=?4,generation=generation+1 WHERE id=?2 AND generation=?3",
         )?
-        .execute(params![ready, id.as_str(), e.generation]))?;
+        .execute(params![ready, id.as_str(), e.generation, attempts]))?;
         let after = self.reload(id)?;
-        self.observe_queue(&after, "QueueRequeued", json!({"readyAt": ready}))?;
+        self.observe_queue(
+            &after,
+            "QueueRequeued",
+            json!({"readyAt": ready, "from": queue_state_name(e.state), "previousAttempts": e.attempt_count}),
+        )?;
         Ok(after)
     }
 
@@ -1503,7 +1546,11 @@ impl DurableQueue for Unit<'_> {
                 "only completed or cancelled deliveries can be compacted",
             ));
         }
-        db(stmt(self.conn, "DELETE FROM queue_entries WHERE id=?1")?.execute([id.as_str()]))?;
+        // Tombstone: the row (and its UNIQUE(consumer, event_id)) stays; its bookkeeping goes.
+        db(stmt(self.conn,
+            "UPDATE queue_entries SET state='Compacted',payload_json='{}',owner_id=NULL,lease_until=NULL,claim_boot_id=NULL WHERE id=?1",
+        )?
+        .execute([id.as_str()]))?;
         Ok(())
     }
 }

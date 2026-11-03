@@ -31,7 +31,7 @@ mod writer;
 mod tests;
 
 pub use conn::{EXPECTED_VEC_VERSION, EffectiveSettings, MIN_SQLITE_VERSION};
-pub use migrations::{MIGRATION_0001_SHA256, MIGRATIONS, Migration};
+pub use migrations::{MIGRATION_0001_SHA256, MIGRATION_0002_SHA256, MIGRATIONS, Migration};
 
 use conn::{Role, db};
 use devworks_core::context::PrincipalKind;
@@ -95,6 +95,9 @@ impl SqliteConfig {
     }
 }
 
+/// Longest delay before a cancelled read stops waiting for a free connection.
+const CANCEL_POLL: Duration = Duration::from_millis(10);
+
 struct ReadPool {
     idle: Mutex<Vec<Connection>>,
     available: Condvar,
@@ -115,9 +118,10 @@ impl ReadPool {
             if left.is_zero() {
                 return Err(StorageError::Busy);
             }
+            // Wake at least every CANCEL_POLL so a cancelled caller stops waiting promptly.
             idle = self
                 .available
-                .wait_timeout(idle, left)
+                .wait_timeout(idle, left.min(CANCEL_POLL))
                 .unwrap_or_else(|p| p.into_inner())
                 .0;
         }
@@ -191,43 +195,55 @@ impl SqliteStore {
             Err(TryLockError::Error(e)) => return Err(io(e)),
         }
         let path = config.data_root.join(DATABASE_FILE);
-        let writer_conn = conn::open(&path, Role::Writer, config.busy_timeout)?;
-        let runtime = conn::verify_runtime(&writer_conn)?;
+        // Gate on a read-only connection first: a foreign file or a store this build may not read
+        // is refused before any writer PRAGMA (journal mode, fsync policy) can touch it.
+        let gated = if path.exists() {
+            migrations::check(&conn::open_probe(&path)?, migrations)?
+        } else {
+            None
+        };
+        let read_only = matches!(gated, Some((_, AccessMode::ReadOnly { .. })));
         let now = config.clock.now_ms().get();
-        let ids = config.ids.clone();
-        let (meta, access) = migrations::prepare(
-            &writer_conn,
-            migrations,
-            || ids.next_id(IdKind::Store).as_str().to_owned(),
-            now,
-            &config.app_build,
-        )?;
+        let mut previous_shutdown = None;
+        let (writer_conn, runtime, meta, access, boot_id) = if read_only {
+            let Some((meta, access)) = gated else {
+                unreachable!("read-only implies a gated store")
+            };
+            let probe = conn::open(&path, Role::Reader, config.busy_timeout)?;
+            let runtime = conn::verify_runtime(&probe)?;
+            (None, runtime, meta, access, None)
+        } else {
+            let writer_conn = conn::open(&path, Role::Writer, config.busy_timeout)?;
+            let runtime = conn::verify_runtime(&writer_conn)?;
+            let ids = config.ids.clone();
+            let (meta, access) = migrations::prepare(
+                &writer_conn,
+                migrations,
+                || ids.next_id(IdKind::Store).as_str().to_owned(),
+                now,
+                &config.app_build,
+            )?;
+            let boot = config.ids.next_id(IdKind::Boot);
+            previous_shutdown = record_boot(&writer_conn, &config, &boot, now)?;
+            (Some(writer_conn), runtime, meta, access, Some(boot))
+        };
         let store_id = StoreId(
             Id::new(meta.store_id.clone())
                 .map_err(|_| StorageError::IncompatibleSchema("invalid store identity".into()))?,
         );
-        let mut previous_shutdown = None;
-        let boot_id = match access {
-            AccessMode::ReadWrite => {
-                let boot = config.ids.next_id(IdKind::Boot);
-                previous_shutdown = record_boot(&writer_conn, &config, &boot, now)?;
-                Some(boot)
-            }
-            AccessMode::ReadOnly { .. } => None,
-        };
         let info = StoreInfo {
             store_id,
             restore_epoch: meta.restore_epoch,
             boot_id,
             host_actor: config.host_actor.clone(),
-            access: access.clone(),
+            access,
         };
         let mut idle = Vec::with_capacity(config.read_connections.max(1));
         for _ in 0..config.read_connections.max(1) {
             idle.push(conn::open(&path, Role::Reader, config.busy_timeout)?);
         }
-        let writer = match access {
-            AccessMode::ReadWrite => Some(WriterHandle::start(
+        let writer = match writer_conn {
+            Some(writer_conn) => Some(WriterHandle::start(
                 writer_conn,
                 WriterConfig {
                     capacity: config.mailbox_capacity,
@@ -237,7 +253,7 @@ impl SqliteStore {
                     info: info.clone(),
                 },
             )?),
-            AccessMode::ReadOnly { .. } => None,
+            None => None,
         };
         Ok(Self {
             writer,

@@ -81,6 +81,7 @@ impl WriterHandle {
             stopping: stopping.clone(),
             faults: faults.clone(),
             streak: 0,
+            serial: 0,
             cfg,
         };
         let thread = std::thread::Builder::new()
@@ -157,6 +158,8 @@ struct Worker {
     stopping: Arc<AtomicBool>,
     faults: Arc<Faults>,
     streak: u32,
+    /// Serial of the current unit of work (savepoint ownership).
+    serial: u64,
     cfg: WriterConfig,
 }
 
@@ -238,10 +241,13 @@ impl Worker {
         self.bulk.close();
         while let Some(e) = self.next() {
             if let Envelope::Job { job, .. } = e {
-                job.finish(Err(StorageError::unavailable(
-                    Unavailable::WriterStopped,
-                    "write owner stopped before dispatch",
-                )));
+                finish(
+                    job,
+                    Err(StorageError::unavailable(
+                        Unavailable::WriterStopped,
+                        "write owner stopped before dispatch",
+                    )),
+                );
             }
         }
         if let Some(boot) = &self.cfg.info.boot_id {
@@ -275,27 +281,39 @@ impl Worker {
         let now = self.cfg.clock.now_ms().get();
         if self.expired(&options, now) {
             // Cancellation before admission prevents dispatch entirely.
-            job.finish(Err(StorageError::Cancelled));
+            finish(job, Err(StorageError::Cancelled));
             return;
         }
         let tx = match TxGuard::begin(&self.conn) {
             Ok(tx) => tx,
             Err(e) => {
-                job.finish(Err(e));
+                finish(job, Err(e));
                 return;
             }
         };
-        let ran = {
+        self.serial += 1;
+        let (ran, open_savepoints) = {
             let mut unit = Unit {
                 conn: &self.conn,
                 now,
                 ids: &*self.cfg.ids,
                 info: &self.cfg.info,
                 savepoints: 0,
+                serial: self.serial,
             };
-            catch_unwind(AssertUnwindSafe(|| job.run(&mut unit)))
+            let ran = catch_unwind(AssertUnwindSafe(|| job.run(&mut unit)));
+            (ran, unit.savepoints)
         };
         let outcome = match ran {
+            // SQLite rolled the transaction back on an error the job swallowed; any statements
+            // after that ran in autocommit mode, so what is durable is unknown.
+            Ok(Ok(())) if self.conn.is_autocommit() => Err(StorageError::CommitUnknown),
+            Ok(Ok(())) if open_savepoints != 0 => {
+                tx.rollback();
+                Err(StorageError::InvalidRecord(format!(
+                    "write job left {open_savepoints} savepoint(s) open; rolled back"
+                )))
+            }
             Ok(Ok(())) if self.expired(&options, self.cfg.clock.now_ms().get()) => {
                 // Admitted but cancelled before commit: roll back and say so.
                 tx.rollback();
@@ -319,6 +337,11 @@ impl Worker {
                 ))
             }
         };
-        job.finish(outcome);
+        finish(job, outcome);
     }
+}
+
+/// Reports an outcome; a panicking responder cannot take the write owner down with it.
+fn finish(job: Box<dyn WriteJob>, outcome: Result<(), StorageError>) {
+    let _ = catch_unwind(AssertUnwindSafe(move || job.finish(outcome)));
 }

@@ -37,7 +37,9 @@ macro_rules! store_contract_tests {
             deletion_and_old_snapshots, restart_persists_committed_state, gateway_command_unit,
             concurrent_duplicates_decide_once, cancellation_and_deadlines, history_paging,
             actor_registry, operation_lifecycle_and_fencing, interrupted_work_after_restart,
-            queue_claims_and_fencing, queue_retry_terminal_and_cancel);
+            queue_claims_and_fencing, queue_retry_terminal_and_cancel,
+            refused_decisions_persist_only_receipt_and_history,
+            nested_savepoint_conflict_is_a_durable_refusal);
     };
     (@cases $harness:expr; $($case:ident),*) => {$(
         #[test]
@@ -215,9 +217,37 @@ pub fn savepoints_undo_only_inner_work(h: &mut dyn StoreHarness) {
         let sp2 = tx.savepoint()?;
         event(tx, "inner2", "Released")?;
         tx.release(sp2)?;
+        // Unwinding an outer savepoint discards inner ones that are still open (SQLite rules).
+        let a = tx.savepoint()?;
+        let b = tx.savepoint()?;
+        event(tx, "nested", "Discarded")?;
+        let b_depth = b.depth();
+        tx.rollback_to(a)?;
+        assert!(matches!(
+            tx.release(Savepoint::issue(b.transaction(), b_depth)),
+            Err(StorageError::InvalidRecord(_))
+        ));
+        let _ = b;
+        // A savepoint of another transaction is refused.
+        let mine = tx.savepoint()?;
+        assert!(matches!(
+            tx.release(Savepoint::issue(
+                mine.transaction().wrapping_add(1),
+                mine.depth()
+            )),
+            Err(StorageError::InvalidRecord(_))
+        ));
+        tx.release(mine)?;
         Ok((outer, inner))
     })
     .unwrap();
+    // A job that leaves a savepoint open is rolled back rather than committed piecemeal.
+    let left_open = write(&*s, |tx| {
+        event(tx, "dangling", "NeverCommitted")?;
+        let _left_open = tx.savepoint()?;
+        Ok(())
+    });
+    assert!(matches!(left_open, Err(StorageError::InvalidRecord(_))));
     read(&*s, |r| {
         assert!(r.history().event(&outer)?.is_some());
         assert!(r.history().event(&inner)?.is_none());
@@ -361,6 +391,8 @@ enum StartMode {
     Accept,
     FailAfterWrites,
     ConflictAfterWrites,
+    RefuseAfterWrites,
+    NestedConflictAfterWrites,
 }
 struct Start {
     mode: StartMode,
@@ -399,7 +431,31 @@ impl CommandHandler for Start {
             ready_at_ms: 0,
             payload: json!({}),
         })?;
+        if self.mode == StartMode::NestedConflictAfterWrites {
+            // The use case opens its own savepoint and returns early with it still open.
+            let _inner = tx.savepoint()?;
+            intent(tx)?;
+        }
         match self.mode {
+            StartMode::RefuseAfterWrites => Ok(Decided {
+                decision: DomainDecision::Refused {
+                    fault: crate::protocol::DomainFault {
+                        code: crate::protocol::DomainErrorCode::DependencyBlocked,
+                        retry: crate::protocol::RetryAdvice::AfterBlockerClears,
+                        correlation_id: crate::protocol::CorrelationId(id("corr-refused")),
+                        target_id: None,
+                        target_kind: None,
+                        revision_dimension: None,
+                        expected_revision: None,
+                        current_revision: None,
+                        blocker_ids: crate::protocol::support::BoundedList(vec![
+                            crate::protocol::HoldId(id("hold-a")),
+                        ]),
+                        diagnostic_id: None,
+                    },
+                },
+                operation_id: None,
+            }),
             StartMode::Accept => Ok(Decided {
                 decision: DomainDecision::Accepted {
                     operation_id: op.clone(),
@@ -410,13 +466,15 @@ impl CommandHandler for Start {
                 Unavailable::Io,
                 "injected after domain update",
             ))),
-            StartMode::ConflictAfterWrites => Err(HandlerFailure::Storage(StorageError::conflict(
-                RevisionDimension::Control,
-                "root",
-                id("root-a"),
-                Revision::new(1).unwrap(),
-                Revision::new(2).unwrap(),
-            ))),
+            StartMode::ConflictAfterWrites | StartMode::NestedConflictAfterWrites => {
+                Err(HandlerFailure::Storage(StorageError::conflict(
+                    RevisionDimension::Control,
+                    "root",
+                    id("root-a"),
+                    Revision::new(1).unwrap(),
+                    Revision::new(2).unwrap(),
+                )))
+            }
         }
     }
 }
@@ -938,11 +996,18 @@ pub fn interrupted_work_after_restart(h: &mut dyn StoreHarness) {
     drop(s);
 
     let s = h.open();
+    // A claim made by the previous boot is not current, even with a matching fence.
+    let stale = read(&*s, |r| r.queue().entry(&plain_entry)).unwrap();
+    let (sid, f) = (stale.id.clone(), stale.fence().unwrap());
+    assert!(matches!(
+        write(&*s, move |tx| tx.queue().renew(&sid, &f, 1_000)),
+        Err(StorageError::LeaseLost { .. })
+    ));
     let classified = write(&*s, |tx| tx.operations().classify_interrupted(10)).unwrap();
     assert!(classified.contains(&(pre.clone(), RetryPending)));
     assert!(classified.contains(&(sent.clone(), OutcomeUnknown)));
     let recovered = write(&*s, |tx| {
-        tx.queue().recover_claims(ClaimRecovery::AllClaimed, 10)
+        tx.queue().recover_claims(ClaimRecovery::PriorBoots, 10)
     })
     .unwrap();
     assert_eq!(recovered.requeued, std::slice::from_ref(&plain_entry));
@@ -995,6 +1060,13 @@ pub fn queue_claims_and_fencing(h: &mut dyn StoreHarness) {
     })
     .unwrap();
     let first = claim(&*s, "work", "owner-a", 1_000, 2).unwrap();
+    // Startup recovery of earlier boots never touches a live claim of the current boot.
+    let untouched = write(&*s, |tx| {
+        tx.queue().recover_claims(ClaimRecovery::PriorBoots, 10)
+    })
+    .unwrap();
+    assert_eq!(untouched, RecoveryOutcome::default());
+    assert!(first.iter().all(|e| e.claim_boot_id == s.info().boot_id));
     let mut expected = vec![high_a.clone(), high_b.clone()];
     expected.sort_by(|x, y| x.as_str().cmp(y.as_str()));
     assert_eq!(
@@ -1174,6 +1246,79 @@ pub fn queue_retry_terminal_and_cancel(h: &mut dyn StoreHarness) {
     let rid = running.id.clone();
     write(&*s, move |tx| tx.queue().compact(&rid)).unwrap();
 
+    // A compacted delivery keeps its (consumer, event) tombstone: the event is never redelivered.
+    let (consumer, event_id) = (running.consumer.clone(), running.event_id.clone());
+    let redelivery = write(&*s, move |tx| {
+        let id_ = tx.new_id(IdKind::QueueEntry);
+        tx.queue().enqueue(NewQueueEntry {
+            id: id_,
+            consumer,
+            event_id,
+            root_id: None,
+            operation_id: None,
+            priority: 0,
+            ready_at_ms: 0,
+            payload: json!({}),
+        })
+    });
+    assert!(
+        matches!(redelivery, Err(StorageError::Duplicate { .. })),
+        "{redelivery:?}"
+    );
+    let rid = running.id.clone();
+    assert!(read(&*s, move |r| r.queue().entry(&rid)).is_none());
+
+    // Requeue from Failed restarts the retry budget (history keeps the failures).
+    let eid = e.id.clone();
+    let requeued = write(&*s, move |tx| tx.queue().requeue(&eid, 0)).unwrap();
+    assert_eq!(
+        (requeued.state, requeued.attempt_count),
+        (QueueState::Ready, 0)
+    );
+
+    // A retryable failure of a delivery whose operation may have dispatched is held, not
+    // returned to Ready: the retry hint never authorizes replaying a possible effect.
+    let (d, op) = write(&*s, |tx| {
+        let op = intent(tx)?;
+        let a = tx
+            .operations()
+            .begin_attempt(&op.id, 1, AttemptBinding::default())?;
+        tx.operations().transition(
+            &op.id,
+            2,
+            Some(&a.fence()),
+            OperationState::Dispatching,
+            None,
+        )?;
+        Ok((enqueue(tx, "effects", 1, 0, Some(op.id.clone()))?, op.id))
+    })
+    .unwrap();
+    let c = claim(&*s, "effects", "w", 1_000, 1).unwrap().remove(0);
+    let (did, f) = (d.id.clone(), c.fence().unwrap());
+    let held = write(&*s, move |tx| {
+        tx.queue().fail(&did, &f, "connection reset", retry)
+    })
+    .unwrap();
+    assert_eq!(held.state, QueueState::Reconciling);
+    // Requeue from Reconciling keeps the attempt count once the outcome is established.
+    let did = d.id.clone();
+    let requeued = write(&*s, move |tx| {
+        let rec = tx.operations().operation(&op)?.unwrap();
+        tx.operations().transition(
+            &op,
+            rec.revision,
+            rec.latest_attempt().map(AttemptRecord::fence).as_ref(),
+            OperationState::RetryPending,
+            Some(json!({"observed": "not applied"})),
+        )?;
+        tx.queue().requeue(&did, 0)
+    })
+    .unwrap();
+    assert_eq!(
+        (requeued.state, requeued.attempt_count),
+        (QueueState::Ready, 1)
+    );
+
     // Delivery dedupe is per (consumer, event); unknown events are refused.
     write(&*s, |tx| {
         let (event_id, _) = event(tx, "dedupe", "Changed")?;
@@ -1203,4 +1348,116 @@ pub fn queue_retry_terminal_and_cancel(h: &mut dyn StoreHarness) {
         Ok(())
     })
     .unwrap();
+}
+
+fn gateway_for<'a>(s: &'a dyn ApplicationStore, ids: &'a Correlations) -> Gateway<'a> {
+    Gateway {
+        authority: &AllowAll,
+        store: s,
+        ids,
+    }
+}
+
+/// Receipt-only decisions do not mutate work: a handler that wrote domain, journal and outbox
+/// state and then refused leaves only the receipt and its CommandDecided history.
+pub fn refused_decisions_persist_only_receipt_and_history(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let ctx = principal(&*s);
+    let ids = Correlations::default();
+    let before = counts(&*s);
+    let refusing = Arc::new(Start {
+        mode: StartMode::RefuseAfterWrites,
+        calls: AtomicUsize::new(0),
+    });
+    let reply = gateway_for(&*s, &ids)
+        .command(
+            &ctx,
+            "runs.start",
+            start_body("k-refuse", "1").as_bytes(),
+            refusing.clone(),
+        )
+        .unwrap();
+    let CommandReply::Recorded {
+        receipt,
+        replayed: false,
+        ..
+    } = &reply
+    else {
+        panic!("{reply:?}")
+    };
+    assert!(matches!(receipt.decision, DomainDecision::Refused { .. }));
+    assert_eq!(counts(&*s), (before.0 + 1, before.1));
+    assert_eq!(
+        kinds(&*s, EventFilter::All).last().map(String::as_str),
+        Some("CommandDecided")
+    );
+    assert_eq!(read(&*s, |r| r.queue().status("supervisor")).ready, 0);
+    let again = gateway_for(&*s, &ids)
+        .command(
+            &ctx,
+            "runs.start",
+            start_body("k-refuse", "1").as_bytes(),
+            refusing.clone(),
+        )
+        .unwrap();
+    assert!(matches!(
+        again,
+        CommandReply::Recorded { replayed: true, .. }
+    ));
+    assert_eq!(refusing.calls.load(Ordering::SeqCst), 1);
+}
+
+/// A handler that leaves its own savepoint open and hits a revision conflict still yields a
+/// durable `RevisionConflict` refusal (not a storage failure), with all its writes undone.
+pub fn nested_savepoint_conflict_is_a_durable_refusal(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let ctx = principal(&*s);
+    let ids = Correlations::default();
+    let before = counts(&*s);
+    let nested = Arc::new(Start {
+        mode: StartMode::NestedConflictAfterWrites,
+        calls: AtomicUsize::new(0),
+    });
+    let reply = gateway_for(&*s, &ids)
+        .command(
+            &ctx,
+            "runs.start",
+            start_body("k-nested", "1").as_bytes(),
+            nested.clone(),
+        )
+        .unwrap();
+    let CommandReply::Recorded {
+        receipt,
+        replayed: false,
+        ..
+    } = &reply
+    else {
+        panic!("{reply:?}")
+    };
+    let DomainDecision::Refused { fault } = &receipt.decision else {
+        panic!("{receipt:?}")
+    };
+    assert!(matches!(
+        fault.code,
+        crate::protocol::DomainErrorCode::RevisionConflict
+    ));
+    assert!(matches!(
+        fault.retry,
+        crate::protocol::RetryAdvice::RefreshAndNewRequest
+    ));
+    assert_eq!(counts(&*s), (before.0 + 1, before.1));
+    assert_eq!(read(&*s, |r| r.queue().status("supervisor")).ready, 0);
+    let again = gateway_for(&*s, &ids)
+        .command(
+            &ctx,
+            "runs.start",
+            start_body("k-nested", "1").as_bytes(),
+            nested.clone(),
+        )
+        .unwrap();
+    assert!(matches!(
+        again,
+        CommandReply::Recorded { replayed: true, .. }
+    ));
+    assert_eq!(nested.calls.load(Ordering::SeqCst), 1);
 }
