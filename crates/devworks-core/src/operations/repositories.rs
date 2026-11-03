@@ -35,6 +35,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `repositories.get` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -47,6 +50,9 @@ impl Check for GetInput {
         self.repository_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for GetInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `repositories.nodes` Query input.
@@ -65,6 +71,9 @@ impl Check for NodesInput {
         Ok(())
     }
 }
+impl Revisioned for NodesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `repositories.remove_index` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -79,6 +88,9 @@ impl Check for RemoveIndexInput {
         self.expected_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for RemoveIndexInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `repositories.readme` Query input.
@@ -95,6 +107,9 @@ impl Check for ReadmeInput {
         Ok(())
     }
 }
+impl Revisioned for ReadmeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `repositories.summary` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -109,6 +124,9 @@ impl Check for SummaryInput {
         self.views.check()?;
         Ok(())
     }
+}
+impl Revisioned for SummaryInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `repositories.search` Query input.
@@ -128,6 +146,9 @@ impl Check for SearchInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for SearchInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `repositories` family, built only for the selected operation and mode.

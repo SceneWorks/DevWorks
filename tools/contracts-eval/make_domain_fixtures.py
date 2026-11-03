@@ -226,5 +226,38 @@ mutate('reject-review-silence-as-zero-findings','review-ready-explicit-zero-find
 mutate('reject-review-wrong-head','review-ready-explicit-zero-findings',['value','sources',0,'headDigest'],'b'*64,schema=True,entry='operation-result')
 mutate('reject-review-partial-findings','review-ready-explicit-zero-findings',['value','sources',0,'findingsCoverage','state'],'Partial',schema=True,entry='operation-result')
 mutate('review-in-app-fallback-evidence','review-ready-explicit-zero-findings',['value','sources',0,'sourceKind'],'InAppFallback',True,True,entry='operation-result')
+# Schema revision 2 (artifact tags). A request negotiates it with the envelope member
+# schemaRevision; `<entry>.r2` documents describe revision 2. Revision-1 shapes stay strict.
+def recorded(id):return json.loads(next(c['raw'] for c in ALL if c['id']==id))
+save,listing=recorded('artifact-Save'),recorded('artifact-query-List')
+def r2(base,path,tags,revision=2):
+ obj=copy.deepcopy(base)
+ if revision is not None:obj['schemaRevision']=revision
+ if tags is not DELETE:obj[path]['tags']=tags
+ return obj
+case('r2-save-with-tags','artifact-command-request.r2',r2(save,'command',['release','evidence']))
+case('r2-save-without-tags','artifact-command-request.r2',r2(save,'command',DELETE))
+case('r2-save-tag-bounds','artifact-command-request.r2',r2(save,'command',['t'+str(i).zfill(63) for i in range(32)]))
+case('r2-list-by-tags','artifact-query-request.r2',r2(listing,'query',['evidence','release']))
+case('r1-explicit-revision-save','artifact-command-request',r2(save,'command',DELETE,1))
+case('r1-save-negotiating-revision-2','artifact-command-request',r2(save,'command',DELETE))
+case('reject-r1-save-tags','artifact-command-request',r2(save,'command',['evidence'],None),False,False)
+case('reject-r1-explicit-save-tags','artifact-command-request',r2(save,'command',['evidence'],1),False,False)
+case('reject-r1-list-tags','artifact-query-request',r2(listing,'query',['evidence'],None),False,False)
+case('reject-r2-save-not-negotiated','artifact-command-request.r2',r2(save,'command',['evidence'],None),False,False)
+case('reject-r2-too-many-tags','artifact-command-request.r2',r2(save,'command',['t'+str(i) for i in range(33)]),False,False)
+case('reject-r2-duplicate-tags','artifact-command-request.r2',r2(save,'command',['evidence','evidence']),False,False)
+case('reject-r2-empty-tag','artifact-command-request.r2',r2(save,'command',['']),False,False)
+case('reject-r2-long-tag','artifact-command-request.r2',r2(save,'command',['x'*65]),False,False)
+case('reject-r2-null-tags','artifact-command-request.r2',r2(save,'command',None),False,False)
+case('reject-r2-duplicate-filter-tags','artifact-query-request.r2',r2(listing,'query',['a','a']),False,False)
+case('reject-revision-as-string','artifact-command-request',{**save,'schemaRevision':'2'},False,False)
+case('reject-revision-zero','artifact-command-request',{**save,'schemaRevision':0},False,False)
+record=copy.deepcopy(POS['result-artifacts.save']['value'])
+case('r2-result-artifacts.save','operation-result.r2',{'kind':'artifacts.save','value':{**record,'tags':['evidence','release']}})
+case('r2-result-artifacts.list','operation-result.r2',{'kind':'artifacts.list','value':{'items':[{**record,'tags':['evidence']},{**record,'tags':[]}],'hasMore':False}})
+case('r1-result-artifacts.list-items','operation-result',{'kind':'artifacts.list','value':{'items':[record],'hasMore':False}})
+case('reject-r1-result-tags','operation-result',{'kind':'artifacts.save','value':{**record,'tags':['evidence']}},False,False)
+case('reject-r1-list-result-tags','operation-result',{'kind':'artifacts.list','value':{'items':[{**record,'tags':[]}],'hasMore':False}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

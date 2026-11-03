@@ -15,6 +15,14 @@
 //! 5. `Recorded` only after the commit is confirmed; a lost acknowledgment is
 //!    `CommandStatusUnknown`, resolved by resubmitting the same command/key (receipt lookup).
 //!
+//! **Schema revisions.** Admission resolves the negotiated revision before authority; an
+//! unregistered one is refused there (`UnsupportedSchema`) and never reaches the store. A result
+//! is published and a receipt recorded under that revision's projection, and the receipt stores
+//! its revision: a replay returns it under the same projection. The same key under another
+//! registered revision is a different intent (`IdempotencyConflict`; the fingerprint binds the
+//! revision), while a receipt under a revision the operation no longer registers is an
+//! incompatible record (visible hold, never replayed).
+//!
 //! Malformed, unsupported and denied requests stop before the store, so they never mint durable
 //! work or a receipt record. A command refused by authority policy records one attributed
 //! `AuthorityDenied` history event (keyed by the rejection's correlation ID) so its typed reason
@@ -40,12 +48,13 @@ use crate::ports::{
 use crate::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, validate_command_reply,
 };
+use crate::protocol::support::Revisioned;
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
     ActorId, CONTRACT, Check, CommandId, CommandReply, CorrelationId, DomainErrorCode, DomainFault,
     EventId, Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
 };
-use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor};
+use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor, SchemaRevision};
 use serde_json::json;
 use std::cell::RefCell;
 use std::fmt;
@@ -60,6 +69,7 @@ pub struct AdmittedQuery {
     query_id: QueryId,
     input: OperationInput,
     fingerprint: Fingerprint,
+    revision: SchemaRevision,
 }
 impl AdmittedQuery {
     pub fn descriptor(&self) -> &'static OperationDescriptor {
@@ -78,6 +88,10 @@ impl AdmittedQuery {
     pub fn fingerprint(&self) -> &Fingerprint {
         &self.fingerprint
     }
+    /// The schema revision the query negotiated; the gateway projects the result onto it.
+    pub fn schema_revision(&self) -> SchemaRevision {
+        self.revision
+    }
 }
 
 /// A new command that passed admission, authority and the in-transaction receipt lookup.
@@ -88,6 +102,7 @@ pub struct AdmittedCommand {
     identity: ReceiptIdentity,
     input: OperationInput,
     fingerprint: Fingerprint,
+    revision: SchemaRevision,
     effect: EffectClass,
     action: Option<&'static str>,
     prepared: Option<Prepared>,
@@ -107,6 +122,10 @@ impl AdmittedCommand {
     }
     pub fn fingerprint(&self) -> &Fingerprint {
         &self.fingerprint
+    }
+    /// The schema revision the command negotiated; its receipt is recorded under it.
+    pub fn schema_revision(&self) -> SchemaRevision {
+        self.revision
     }
     /// Effective effect class (action-dependent bindings already classified).
     pub fn effect(&self) -> EffectClass {
@@ -231,6 +250,7 @@ impl Gateway<'_> {
             query_id,
             input: decoded.input,
             fingerprint: decoded.fingerprint,
+            revision: decoded.revision,
         };
         let answered = read_snapshot(self.store, &ReadOptions::default(), |snapshot| {
             let stamp = snapshot.stamp().clone();
@@ -290,11 +310,14 @@ impl Gateway<'_> {
                         snapshot.committed_sequence
                     )));
                 }
+                // Published under the negotiated revision's projection only.
+                let mut result = answer.result;
+                result.retain_revision(admitted.revision.0);
                 DomainQueryReply::Result {
                     protocol: Protocol::Draft1,
                     query_id: admitted.query_id,
                     stamp: answer.stamp,
-                    result: answer.result,
+                    result,
                 }
             }
             Ok(Some((Err(fault), _))) => DomainQueryReply::Rejected {
@@ -380,6 +403,7 @@ impl Gateway<'_> {
             identity: ReceiptIdentity::bind(ctx, request_key.clone()),
             input: decoded.input,
             fingerprint: decoded.fingerprint,
+            revision: decoded.revision,
             effect: decoded.effect,
             action: decoded.action,
             prepared: None,
@@ -526,7 +550,8 @@ impl Gateway<'_> {
             return None;
         };
         let code = match error {
-            AdmissionError::UnsupportedProtocol(_) => Rejection::UnsupportedSchema,
+            AdmissionError::UnsupportedProtocol(_)
+            | AdmissionError::UnsupportedSchemaRevision { .. } => Rejection::UnsupportedSchema,
             _ => Rejection::InvalidRequest,
         };
         Some(self.rejected(request_key, code, RetryAdvice::Never))
@@ -537,7 +562,8 @@ impl Gateway<'_> {
             return None;
         };
         let code = match error {
-            AdmissionError::UnsupportedProtocol(_) => DomainErrorCode::SchemaMismatch,
+            AdmissionError::UnsupportedProtocol(_)
+            | AdmissionError::UnsupportedSchemaRevision { .. } => DomainErrorCode::SchemaMismatch,
             _ => DomainErrorCode::InvalidArgument,
         };
         Some(self.query_fault(query_id, code, RetryAdvice::Never))
@@ -667,35 +693,41 @@ fn unit_of_work(
     }
 
     // Step 3: the receipt check precedes any current-state evaluation. A key reused for another
-    // operation is a different intent. The stored contract/schema revision is checked before the
-    // fingerprint because the fingerprint embeds the schema revision: a re-bound operation would
-    // otherwise be misreported as a changed intent instead of an incompatible record.
+    // operation is a different intent. The stored contract and schema revision are checked before
+    // the fingerprint because the fingerprint embeds the schema revision: a receipt under a
+    // revision the operation no longer registers would otherwise be misreported as a changed
+    // intent instead of an incompatible record. A receipt under another *registered* revision is
+    // a different intent of the same key (its fingerprint differs), never a replay.
     match tx.receipts().lookup(&command.identity)? {
         Some(LedgerEntry::Current(stored)) => {
             if stored.operation != command.descriptor.name {
                 return Ok(Unit::IdempotencyConflict);
             }
-            if stored.contract != CONTRACT
-                || stored.schema_revision != command.descriptor.schema_revision
-            {
-                hold_incompatible(tx, ctx, command, &stored.contract)?;
+            if stored.contract != CONTRACT || !command.descriptor.supports(stored.schema_revision) {
+                hold_incompatible(tx, ctx, command, &stored.contract, stored.schema_revision)?;
                 return Ok(Unit::IncompatibleRecord);
             }
-            return Ok(if stored.fingerprint == command.fingerprint {
-                Unit::Replayed(stored.receipt)
-            } else {
-                Unit::IdempotencyConflict
-            });
+            if stored.schema_revision != command.revision
+                || stored.fingerprint != command.fingerprint
+            {
+                return Ok(Unit::IdempotencyConflict);
+            }
+            // Replayed under the projection of the revision it was recorded under (the
+            // negotiated one): an older receipt is never widened, a newer one never narrowed.
+            let mut receipt = stored.receipt;
+            project_decision(&mut receipt.decision, stored.schema_revision);
+            return Ok(Unit::Replayed(receipt));
         }
         Some(LedgerEntry::Incompatible {
             operation,
             contract,
+            schema_revision,
             ..
         }) => {
             if operation != command.descriptor.name {
                 return Ok(Unit::IdempotencyConflict);
             }
-            hold_incompatible(tx, ctx, command, &contract)?;
+            hold_incompatible(tx, ctx, command, &contract, schema_revision)?;
             return Ok(Unit::IncompatibleRecord);
         }
         // Authority that can only replay never reaches a new decision.
@@ -724,6 +756,8 @@ fn unit_of_work(
                     return Ok(Unit::Contract(e));
                 }
             };
+            // The receipt (and so every replay) carries the negotiated revision's projection.
+            project_decision(&mut decided.decision, command.revision);
             if matches!(decided.decision, DomainDecision::Refused { .. }) {
                 // Receipt-only decisions do not mutate work (step 5): every write the use case
                 // made is undone and only the receipt and its CommandDecided history remain.
@@ -797,6 +831,7 @@ fn unit_of_work(
         payload: json!({
             "operation": command.descriptor.name,
             "contract": CONTRACT,
+            "schemaRevision": command.revision.0,
             "requestDigest": command.fingerprint.as_str(),
             "decision": decision_kind(&decided.decision),
         }),
@@ -817,7 +852,7 @@ fn unit_of_work(
         &StoredReceipt {
             operation: command.descriptor.name.to_owned(),
             contract: CONTRACT.to_owned(),
-            schema_revision: command.descriptor.schema_revision,
+            schema_revision: command.revision,
             fingerprint: command.fingerprint.clone(),
             receipt: receipt.clone(),
         },
@@ -1033,6 +1068,7 @@ fn hold_incompatible(
     ctx: &InvocationContext,
     command: &AdmittedCommand,
     stored_contract: &str,
+    stored_revision: SchemaRevision,
 ) -> Result<(), StorageError> {
     let identity = &command.identity;
     let aggregate_id = fingerprint::sha256_hex(
@@ -1066,7 +1102,8 @@ fn hold_incompatible(
             "operation": command.descriptor.name,
             "storedContract": stored_contract,
             "currentContract": CONTRACT,
-            "schemaRevision": command.descriptor.schema_revision.0,
+            "storedSchemaRevision": stored_revision.0,
+            "schemaRevision": command.revision.0,
         }),
     })?;
     Ok(())
@@ -1084,6 +1121,13 @@ fn conflict_fault(c: RevisionConflict, correlation_id: CorrelationId) -> DomainF
         current_revision: Some(c.current),
         blocker_ids: BoundedList(Vec::new()),
         diagnostic_id: None,
+    }
+}
+
+/// Projects a decision's result onto `revision` (members introduced later are removed).
+fn project_decision(decision: &mut DomainDecision, revision: SchemaRevision) {
+    if let DomainDecision::Applied { result } | DomainDecision::NoChange { result } = decision {
+        result.retain_revision(revision.0);
     }
 }
 

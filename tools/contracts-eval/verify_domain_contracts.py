@@ -2,7 +2,7 @@
 import argparse,copy,hashlib,json,platform,subprocess,tempfile
 from pathlib import Path
 import jsonschema
-from domain_spec import OPS,LEGACY_RESULTS,TYPES
+from domain_spec import OPS,LEGACY_RESULTS,TYPES,REVISIONS
 ROOT=Path(__file__).resolve().parents[2];D=ROOT/'docs/architecture';C=D/'contracts'
 p=argparse.ArgumentParser();p.add_argument('--binary',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
 files=[C/'fixtures.json',C/'provider-package-fixtures.json',D/'validation/provider-package-contracts/actual-frame-fixtures.json',C/'data-delivery-fixtures.json',C/'domain-fixtures.json']
@@ -45,19 +45,22 @@ def selected(b,value):
 positive=[(c,json.loads(c['raw'])) for c in fixtures if c['typedValid']]
 checks=[]
 for b in bindings:
- entry=b['inputSchema'].removesuffix('.schema.json')
- matching=[(c,v) for c,v in positive if c['entry']==entry and selected(b,v)]
- assert matching,b['operation']
- if entry=='domain-request':assert {v['mode'] for _,v in matching}==set(b['requestModes']),b['operation']
- outputs=[(c,v) for c,v in positive if c['entry']=='operation-result' and v['kind']==b['operation']]
- assert outputs,b['operation']
- assert all(validators['operation-result'].is_valid(v) for _,v in outputs)
- other=next((v for c,v in positive if c['entry']==entry and b['selectionConstraint'] and not selected(b,v)),None)
- if b['selectionConstraint'] and entry=='domain-request':assert other is not None
- # A catalog-qualified result cannot be substituted under another selected operation.
- another=next(v for c,v in positive if c['entry']=='operation-result' and v['kind']!=b['operation'])
- assert another['kind']!=b['resultSelectionConstraint']['equals']
- checks.append({'operation':b['operation'],'inputFixtureIds':[c['id'] for c,_ in matching], 'resultFixtureIds':[c['id'] for c,_ in outputs], 'modes':b['requestModes'],'wrongOperationPayloadChecked':other is not None,'wrongResultTagRejected':True})
+ assert [r['revision'] for r in b['schemaRevisions']]==REVISIONS.get(b['operation'],[1]),b['operation']
+ # Every negotiated schema revision has its own conforming input and result fixtures.
+ for rv in b['schemaRevisions']:
+  entry=rv['inputSchema'].removesuffix('.schema.json');result_entry=rv['resultSchema'].removesuffix('.schema.json')
+  matching=[(c,v) for c,v in positive if c['entry']==entry and selected(b,v) and v.get('schemaRevision',1)==rv['revision']]
+  assert matching,(b['operation'],rv['revision'])
+  if entry=='domain-request':assert {v['mode'] for _,v in matching}==set(b['requestModes']),b['operation']
+  outputs=[(c,v) for c,v in positive if c['entry']==result_entry and v['kind']==b['operation']]
+  assert outputs,(b['operation'],rv['revision'])
+  assert all(validators[result_entry].is_valid(v) for _,v in outputs)
+  other=next((v for c,v in positive if c['entry']==entry and b['selectionConstraint'] and not selected(b,v)),None)
+  if b['selectionConstraint'] and entry=='domain-request':assert other is not None
+  # A catalog-qualified result cannot be substituted under another selected operation.
+  another=next(v for c,v in positive if c['entry']=='operation-result' and v['kind']!=b['operation'])
+  assert another['kind']!=b['resultSelectionConstraint']['equals']
+  checks.append({'operation':b['operation'],'schemaRevision':rv['revision'],'inputSchema':rv['inputSchema'],'resultSchema':rv['resultSchema'],'inputFixtureIds':[c['id'] for c,_ in matching], 'resultFixtureIds':[c['id'] for c,_ in outputs], 'modes':b['requestModes'],'wrongOperationPayloadChecked':other is not None,'wrongResultTagRejected':True})
 # Exact selector equality classes are disclosed aliases, not falsely called isolation.
 aliases={}
 for b in bindings:
@@ -73,7 +76,7 @@ scenarios=json.loads(scenario.stdout);assert scenarios['allPassed']
 sources=[*files,C/'family-coverage.json',C/'manifest.json',D/'devworks-capability-catalog.json',ROOT/'tools/contracts-eval/Cargo.lock',ROOT/'tools/contracts-eval/domain_spec.py',ROOT/'tools/contracts-eval/domain-spec.json',ROOT/'tools/contracts-eval/build_domain_contracts.py',ROOT/'tools/contracts-eval/build_register.py',ROOT/'tools/contracts-eval/build_domain_reference.py',ROOT/'tools/contracts-eval/make_domain_fixtures.py',ROOT/'tools/contracts-eval/verify_domain_contracts.py',*sorted((ROOT/'tools/contracts-eval/src').glob('*.rs')),*sorted(C.glob('*.schema.json'))]
 new=json.loads(files[-1].read_text())
 report={'date':'2026-11-02','status':'Candidate schema/typed/binding checks passed; no production service, authority, source behavioral parity or platform acceptance',
- 'host':platform.platform(),'schemaFiles':len(validators),'domainTypeDefinitions':len(TYPES),'catalogOperations':len(bindings),'inputCandidates':len(bindings),'inputsPending':0,'qualifiedResultTags':len(bindings),
+ 'host':platform.platform(),'schemaFiles':len(validators),'domainTypeDefinitions':len(TYPES),'catalogOperations':len(bindings),'inputCandidates':len(bindings),'revisionBindings':len(checks),'revisionedOperations':sorted(REVISIONS),'inputsPending':0,'qualifiedResultTags':len(bindings),
  'newOperationInputs':len(OPS),'newInputModeVariants':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'hybridOperations':[n for n,d in OPS.items() if d['mode']=='Hybrid'],
  'allMessageFixtures':len(fixtures),'newMessageFixtures':len(new),'newPositiveFixtures':sum(c['typedValid'] for c in new),'newNegativeFixtures':sum(not c['typedValid'] for c in new),
  'coreAndPriorMessagesRerun':len(fixtures)-len(new),'historicalHelperFramesReplayed':55,'newHelperExecutionClaimed':False,

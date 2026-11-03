@@ -32,6 +32,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `resources.acquire` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -51,6 +54,9 @@ impl Check for AcquireInput {
         Ok(())
     }
 }
+impl Revisioned for AcquireInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `resources.renew` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -68,6 +74,9 @@ impl Check for RenewInput {
         Ok(())
     }
 }
+impl Revisioned for RenewInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `resources.release` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -82,6 +91,9 @@ impl Check for ReleaseInput {
         self.expected_fence.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReleaseInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `resources.holders` Query input.
@@ -98,6 +110,9 @@ impl Check for HoldersInput {
         Ok(())
     }
 }
+impl Revisioned for HoldersInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `resources.waiters` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -112,6 +127,9 @@ impl Check for WaitersInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for WaitersInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `resources` family, built only for the selected operation and mode.

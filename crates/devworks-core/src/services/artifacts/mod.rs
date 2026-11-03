@@ -105,8 +105,8 @@ use crate::ports::{
     QueryAnswer, QueryHandler,
 };
 use crate::protocol::data::{
-    ArtifactCommand, ArtifactDeletion, ArtifactQuery, ArtifactSource, Coverage, CoverageState,
-    DataScope,
+    ArtifactCommand, ArtifactDeletion, ArtifactQuery, ArtifactSource, ArtifactTags, Coverage,
+    CoverageState, DataScope,
 };
 use crate::protocol::provider::{ArtifactRef, Digest};
 use crate::protocol::records::{
@@ -403,6 +403,9 @@ fn record(
         .filter(|l| l.purpose == LinkPurpose::Reference)
         .count()
         + read.shares(&a.id)?.len();
+    // Tags are schema revision 2 metadata; the gateway removes them for revision-1 callers.
+    let tags = ArtifactTags::new(read.tags(&a.id)?)
+        .map_err(|e| StorageError::InvalidRecord(format!("stored artifact tags: {e}")))?;
     Ok(ArtifactRecord {
         artifact: version_ref(v),
         name: label(&a.title),
@@ -411,6 +414,7 @@ fn record(
             project_id: a.current_project_id.clone(),
         },
         reference_count: counter(references as i64),
+        tags: Some(tags),
     })
 }
 
@@ -1015,11 +1019,13 @@ impl ArtifactService {
             project_id,
             title,
             media_type,
+            tags,
             ..
         } = &req.command
         else {
             return Err(unsupported().into());
         };
+        let tags = tags.as_ref().map_or(&[][..], |t| &t.0[..]);
         require_project(ctx, project_id)?;
         if !tx.artifacts().project_exists(project_id)? {
             return Err(not_found("project", &project_id.0).into());
@@ -1073,6 +1079,7 @@ impl ArtifactService {
             }),
         };
         tx.artifacts().insert_artifact(&artifact)?;
+        tx.artifacts().set_tags(&artifact_id, tags)?;
         let version = new_version(tx, ctx, &artifact_id, 1, media_type, &staged, generation);
         tx.artifacts().insert_version(&version)?;
         artifact.current_version_id = Some(version.id.clone());
@@ -1096,7 +1103,7 @@ impl ArtifactService {
             json!({
                 "versionId": version.id.as_str(), "versionNo": 1, "digest": staged.digest,
                 "byteCount": staged.byte_count, "mediaType": media_type, "title": title,
-                "source": staged.source, "repositoryId": staged.origin.repository_id.as_ref().map(Id::as_str),
+                "tags": tags, "source": staged.source, "repositoryId": staged.origin.repository_id.as_ref().map(Id::as_str),
                 "repositoryRevision": staged.origin.repository_revision,
             }),
         )?;
@@ -1455,9 +1462,14 @@ fn unsupported() -> Refusal {
 // ---------------------------------------------------------------------------------------------
 // Queries
 
-/// Binds a list cursor to its project.
-fn list_binding(project: &ProjectId) -> String {
-    sha256_hex(format!("artifacts.list|{}", project.0.as_str()).as_bytes())[..16].to_owned()
+/// Binds a list cursor to its project and tag filter (a changed filter invalidates the cursor).
+fn list_binding(project: &ProjectId, tags: &[String]) -> String {
+    let mut basis = format!("artifacts.list|{}", project.0.as_str());
+    for tag in tags {
+        basis.push('|');
+        basis.push_str(&sha256_hex(tag.as_bytes()));
+    }
+    sha256_hex(basis.as_bytes())[..16].to_owned()
 }
 
 impl ArtifactService {
@@ -1466,6 +1478,7 @@ impl ArtifactService {
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         project: &ProjectId,
+        tags: &[String],
         limit: u16,
         cursor: Option<&str>,
     ) -> Result<OperationResult, Failure> {
@@ -1474,7 +1487,7 @@ impl ArtifactService {
         if !read.project_exists(project)? {
             return Err(not_found("project", &project.0).into());
         }
-        let binding = list_binding(project);
+        let binding = list_binding(project, tags);
         let after = match cursor {
             None => None,
             Some(c) => {
@@ -1489,7 +1502,12 @@ impl ArtifactService {
                 Some(parsed.ok_or(Failure::Storage(StorageError::CursorExpired))?)
             }
         };
-        let mut rows = read.list(project, after.as_ref(), limit.saturating_add(1).min(501))?;
+        let mut rows = read.list(
+            project,
+            tags,
+            after.as_ref(),
+            limit.saturating_add(1).min(501),
+        )?;
         let has_more = rows.len() > limit as usize;
         rows.truncate(limit as usize);
         let mut items = Vec::with_capacity(rows.len());
@@ -1792,8 +1810,9 @@ impl QueryHandler for ArtifactService {
         };
         let cursor = request.cursor.as_deref();
         let answered = match &request.query {
-            ArtifactQuery::List { project_id } => {
-                self.list(snapshot, ctx, project_id, request.limit, cursor)
+            ArtifactQuery::List { project_id, tags } => {
+                let tags = tags.as_ref().map_or(&[][..], |t| &t.0[..]);
+                self.list(snapshot, ctx, project_id, tags, request.limit, cursor)
             }
             ArtifactQuery::Read {
                 artifact_id,

@@ -246,14 +246,18 @@ pub trait ArtifactRead {
         &self,
         operation: &OperationId,
     ) -> Result<Option<StoredVersion>, StorageError>;
-    /// Live artifacts with a current version that `project` owns or is shared with, newest
-    /// first after `after`, at most `limit` (1..=500).
+    /// Live artifacts with a current version that `project` owns or is shared with and that carry
+    /// every tag in `tags` (all-of; empty means no tag filter), newest first after `after`, at
+    /// most `limit` (1..=500). `tags` holds distinct values.
     fn list(
         &self,
         project: &ProjectId,
+        tags: &[String],
         after: Option<&ListPosition>,
         limit: u16,
     ) -> Result<Vec<StoredArtifact>, StorageError>;
+    /// The artifact's tags in byte order (empty when it has none).
+    fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError>;
     /// Projects the artifact is shared with (its owner is not listed), in ID order.
     fn shares(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError>;
     /// Links of every version of `artifact`.
@@ -315,6 +319,8 @@ pub trait ArtifactRepository: ArtifactRead {
     fn tombstone_version(&mut self, version: &Id, at_ms: i64) -> Result<(), StorageError>;
     /// Adds a link; `false` when the identical link already exists.
     fn add_link(&mut self, link: &ArtifactLink) -> Result<bool, StorageError>;
+    /// Replaces the artifact's tag set with `tags` (distinct values). The artifact must exist.
+    fn set_tags(&mut self, artifact: &Id, tags: &[String]) -> Result<(), StorageError>;
     /// Adds a project share; `false` when it already exists.
     fn add_share(&mut self, artifact: &Id, project: &ProjectId) -> Result<bool, StorageError>;
     /// Removes a project share; `false` when there was none.

@@ -36,6 +36,9 @@ impl Check for ListInput {
         Ok(())
     }
 }
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `approvals.inspect` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +51,9 @@ impl Check for InspectInput {
         self.proposal_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `approvals.propose` Command input.
@@ -73,6 +79,9 @@ impl Check for ProposeInput {
         Ok(())
     }
 }
+impl Revisioned for ProposeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `approvals.record_human_decision` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -93,6 +102,9 @@ impl Check for RecordHumanDecisionInput {
         self.rationale.check()?;
         Ok(())
     }
+}
+impl Revisioned for RecordHumanDecisionInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `approvals` family, built only for the selected operation and mode.

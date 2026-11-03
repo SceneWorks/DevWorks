@@ -26,6 +26,9 @@ impl Check for StatusInput {
         Ok(())
     }
 }
+impl Revisioned for StatusInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `mcp_server.configure` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -46,6 +49,9 @@ impl Check for ConfigureInput {
         Ok(())
     }
 }
+impl Revisioned for ConfigureInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `mcp_server.clients` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -59,6 +65,9 @@ impl Check for ClientsInput {
         Ok(())
     }
 }
+impl Revisioned for ClientsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `mcp_server.set_client_access` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -71,6 +80,9 @@ impl Check for SetClientAccessInput {
         self.action.check()?;
         Ok(())
     }
+}
+impl Revisioned for SetClientAccessInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `mcp_server` family, built only for the selected operation and mode.

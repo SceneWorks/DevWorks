@@ -3545,3 +3545,316 @@ fn one_failed_quarantine_does_not_stop_verification() {
     assert_eq!(report.quarantine_failed[0].0, d1);
     assert_eq!(report.quarantined, vec![d2]);
 }
+
+/// A list query frame at an optional negotiated revision.
+fn list_frame(
+    revision: Option<u64>,
+    tags: Option<Value>,
+    cursor: Option<&str>,
+    limit: u16,
+) -> Value {
+    let mut frame = json!({"protocol": "1.0-draft.1", "queryId": "q-tags",
+        "query": {"kind": "List", "projectId": "project-a"}, "limit": limit});
+    if let Some(r) = revision {
+        frame["schemaRevision"] = json!(r);
+    }
+    if let Some(t) = tags {
+        frame["query"]["tags"] = t;
+    }
+    if let Some(c) = cursor {
+        frame["cursor"] = json!(c);
+    }
+    frame
+}
+impl Fx {
+    fn query_frame(&self, ctx: &InvocationContext, op: &str, frame: &Value) -> DomainQueryReply {
+        let authority = self.authority();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*self.store,
+            ids: &*self.h.ids,
+        };
+        self.cases
+            .query(&gateway, ctx, op, frame.to_string().as_bytes())
+            .expect("addressable")
+    }
+    /// The listed records as wire JSON, with the page's continuation cursor.
+    fn listed(&self, frame: &Value) -> (Vec<Value>, Option<String>) {
+        let value = serde_json::to_value(result(self.query_frame(
+            &self.user(),
+            "artifacts.list",
+            frame,
+        )))
+        .unwrap()["value"]
+            .clone();
+        (
+            value["items"].as_array().unwrap().clone(),
+            value["nextCursor"].as_str().map(str::to_owned),
+        )
+    }
+    /// Saves `bytes` under `handle` at schema revision 2 with `tags`.
+    fn save_tagged(
+        &self,
+        handle: &str,
+        title: &str,
+        bytes: &[u8],
+        tags: Value,
+    ) -> DomainCommandReply {
+        self.source(
+            handle,
+            &format!("{handle}.bin"),
+            bytes,
+            SourceOrigin::default(),
+        );
+        let mut frame = self.save_frame(
+            &self.key(),
+            "project-a",
+            title,
+            "text/plain",
+            json!({"kind": "Upload", "ticketId": handle}),
+            bytes,
+        );
+        frame["schemaRevision"] = json!(2);
+        frame["command"]["tags"] = tags;
+        self.command(&self.user(), "artifacts.save", frame)
+    }
+    fn receipts(&self) -> i64 {
+        self.store
+            .with_writer_connection(|c| {
+                super::super::conn::db(c.query_row(
+                    "SELECT COUNT(*) FROM command_receipts",
+                    [],
+                    |r| r.get(0),
+                ))
+            })
+            .unwrap()
+    }
+}
+fn titles(items: &[Value]) -> Vec<&str> {
+    items.iter().map(|i| i["name"].as_str().unwrap()).collect()
+}
+/// The exact revision-1 `ArtifactRecord` members: a strict revision-1 reader refuses any other.
+const REVISION_1_RECORD: [&str; 5] = ["artifact", "createdAtMs", "name", "referenceCount", "scope"];
+fn members(item: &Value) -> Vec<&str> {
+    let mut keys: Vec<&str> = item
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort();
+    keys
+}
+
+#[test]
+fn revision_two_tags_are_saved_filtered_returned_only_at_revision_two_and_survive_restart() {
+    let fx = Fx::new();
+    // Revision-2 saves with tag sets; the stored and returned set is sorted, an empty set is none.
+    let a = saved(fx.save_tagged("t-a", "Alpha", b"alpha", json!(["release", "evidence"])));
+    assert_eq!(a.tags.as_ref().unwrap().0, ["evidence", "release"]);
+    let b = saved(fx.save_tagged("t-b", "Beta", b"beta", json!(["evidence"])));
+    let c = saved(fx.save_tagged("t-c", "Gamma", b"gamma", json!([])));
+    assert_eq!(c.tags.as_ref().unwrap().0, Vec::<String>::new());
+    // A revision-1 save is unaffected and its record has the exact revision-1 shape.
+    let d = fx.saved("t-d", "Delta", "text/plain", b"delta");
+    assert!(d.tags.is_none());
+    // A revision-1 receipt is stored in the revision-1 shape and replays under it although the
+    // revision-2 binding exists; the same key at revision 2 is a different intent.
+    fx.source("t-e", "t-e.bin", b"epsilon", SourceOrigin::default());
+    let r1 = fx.save_frame(
+        "r1-key",
+        "project-a",
+        "Epsilon",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t-e"}),
+        b"epsilon",
+    );
+    let first =
+        serde_json::to_value(saved(fx.command(&fx.user(), "artifacts.save", r1.clone()))).unwrap();
+    assert_eq!(members(&first), REVISION_1_RECORD);
+    let (decision, replayed) = recorded(fx.command(&fx.user(), "artifacts.save", r1.clone()));
+    assert!(replayed);
+    let DomainDecision::Applied {
+        result: OperationResult::ArtifactsSave { value },
+    } = decision
+    else {
+        panic!("{decision:?}")
+    };
+    assert_eq!(serde_json::to_value(value).unwrap(), first);
+    let stored: String = fx
+        .store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.query_row(
+                "SELECT result_json FROM command_receipts WHERE idempotency_key='r1-key'",
+                [],
+                |r| r.get(0),
+            ))
+        })
+        .unwrap();
+    let stored: Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(stored["schemaRevision"], json!(1));
+    assert!(!stored.to_string().contains("\"tags\""));
+    let mut r2 = r1;
+    r2["schemaRevision"] = json!(2);
+    assert_eq!(
+        rejected(fx.command(&fx.user(), "artifacts.save", r2)),
+        Rejection::IdempotencyConflict
+    );
+    let tags_of = |aid: &Id| {
+        let aid = aid.clone();
+        fx.read(move |s| s.artifacts().tags(&aid))
+    };
+    assert_eq!(tags_of(&a.artifact.artifact_id), ["evidence", "release"]);
+    assert!(tags_of(&c.artifact.artifact_id).is_empty());
+
+    // Revision-2 list: every record carries tags; the filter is all-of.
+    let (all, _) = fx.listed(&list_frame(Some(2), None, None, 50));
+    assert_eq!(titles(&all), ["Epsilon", "Delta", "Gamma", "Beta", "Alpha"]);
+    assert_eq!(all[0]["tags"], json!([]));
+    assert_eq!(all[4]["tags"], json!(["evidence", "release"]));
+    let (evidence, _) = fx.listed(&list_frame(Some(2), Some(json!(["evidence"])), None, 50));
+    assert_eq!(titles(&evidence), ["Beta", "Alpha"]);
+    let (both, _) = fx.listed(&list_frame(
+        Some(2),
+        Some(json!(["release", "evidence"])),
+        None,
+        50,
+    ));
+    assert_eq!(titles(&both), ["Alpha"]);
+    let (none, _) = fx.listed(&list_frame(
+        Some(2),
+        Some(json!(["evidence", "absent"])),
+        None,
+        50,
+    ));
+    assert!(none.is_empty());
+    // An empty filter is no filter.
+    let (unfiltered, _) = fx.listed(&list_frame(Some(2), Some(json!([])), None, 50));
+    assert_eq!(titles(&unfiltered), titles(&all));
+
+    // Revision-1 list: the same artifacts in the exact revision-1 shape (no tags member), which
+    // strict revision-1 readers decode; a revision-1 tag filter is refused, not ignored.
+    for frame in [
+        list_frame(None, None, None, 50),
+        list_frame(Some(1), None, None, 50),
+    ] {
+        let (items, _) = fx.listed(&frame);
+        assert_eq!(titles(&items), titles(&all));
+        for item in &items {
+            assert_eq!(members(item), REVISION_1_RECORD);
+        }
+    }
+    assert!(matches!(
+        fault(fx.query_frame(
+            &fx.user(),
+            "artifacts.list",
+            &list_frame(None, Some(json!(["evidence"])), None, 50)
+        ))
+        .code,
+        DomainErrorCode::InvalidArgument
+    ));
+
+    // The cursor binds the tag filter: paging the filtered list works, a changed filter expires it.
+    let (page, cursor) = fx.listed(&list_frame(Some(2), Some(json!(["evidence"])), None, 1));
+    assert_eq!(titles(&page), ["Beta"]);
+    let cursor = cursor.expect("more evidence");
+    let (rest, _) = fx.listed(&list_frame(
+        Some(2),
+        Some(json!(["evidence"])),
+        Some(&cursor),
+        1,
+    ));
+    assert_eq!(titles(&rest), ["Alpha"]);
+    assert!(matches!(
+        fault(fx.query_frame(
+            &fx.user(),
+            "artifacts.list",
+            &list_frame(Some(2), None, Some(&cursor), 1)
+        ))
+        .code,
+        DomainErrorCode::CursorExpired
+    ));
+
+    // Tags persist with the artifact and survive a restart.
+    let fx = fx.restart();
+    let (after, _) = fx.listed(&list_frame(Some(2), Some(json!(["release"])), None, 50));
+    assert_eq!(titles(&after), ["Alpha"]);
+    assert_eq!(after[0]["tags"], json!(["evidence", "release"]));
+    assert_eq!(
+        after[0]["artifact"]["artifactId"],
+        json!(a.artifact.artifact_id.as_str())
+    );
+    let (r1, _) = fx.listed(&list_frame(None, None, None, 50));
+    assert!(r1.iter().all(|i| members(i) == REVISION_1_RECORD));
+    // The publication history records the tags it saved.
+    let published: Vec<Value> = fx
+        .events()
+        .into_iter()
+        .filter(|e| e.kind == "ArtifactVersionPublished")
+        .map(|e| e.payload["tags"].clone())
+        .collect();
+    assert!(published.contains(&json!(["evidence", "release"])));
+    let _ = (b, d);
+}
+
+#[test]
+fn tag_bounds_duplicates_and_unregistered_revisions_are_refused_without_receipts() {
+    let fx = Fx::new();
+    let before = fx.receipts();
+    let too_many: Vec<String> = (0..33).map(|i| format!("t{i}")).collect();
+    for tags in [
+        json!(too_many),
+        json!(["dup", "dup"]),
+        json!([""]),
+        json!(["x".repeat(65)]),
+        json!(null),
+    ] {
+        assert_eq!(
+            rejected(fx.save_tagged("t-bad", "Bad", b"bad", tags.clone())),
+            Rejection::InvalidRequest,
+            "{tags}"
+        );
+    }
+    // Tags at revision 1 are refused rather than silently dropped.
+    fx.source("t-r1", "t-r1.bin", b"r1", SourceOrigin::default());
+    let mut frame = fx.save_frame(
+        &fx.key(),
+        "project-a",
+        "R1",
+        "text/plain",
+        json!({"kind": "Upload", "ticketId": "t-r1"}),
+        b"r1",
+    );
+    frame["command"]["tags"] = json!(["evidence"]);
+    assert_eq!(
+        rejected(fx.command(&fx.user(), "artifacts.save", frame.clone())),
+        Rejection::InvalidRequest
+    );
+    // A revision the operation does not register is refused before authority.
+    frame["schemaRevision"] = json!(3);
+    assert_eq!(
+        rejected(fx.command(&fx.user(), "artifacts.save", frame)),
+        Rejection::UnsupportedSchema
+    );
+    let mut reference = json!({"protocol": "1.0-draft.1", "requestKey": fx.key(), "command": {
+        "kind": "Reference", "artifactId": "artifact-x", "versionId": "version-x",
+        "subject": {"kind": "root", "id": "root-a"}, "expectedRevision": "1"}});
+    reference["schemaRevision"] = json!(2);
+    assert_eq!(
+        rejected(fx.command(&fx.user(), "artifacts.reference", reference)),
+        Rejection::UnsupportedSchema
+    );
+    assert!(matches!(
+        fault(fx.query_frame(
+            &fx.user(),
+            "artifacts.list",
+            &list_frame(Some(9), None, None, 50)
+        ))
+        .code,
+        DomainErrorCode::SchemaMismatch
+    ));
+    // None of these minted a receipt, staged a file or created an artifact.
+    assert_eq!(fx.receipts(), before);
+    assert!(fx.staging_ops_all().is_empty());
+    assert!(list(&fx, &fx.user(), "project-a").is_empty());
+}

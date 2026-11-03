@@ -315,8 +315,8 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'} | `ArtifactRecord` |
-| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'} | `Page<ArtifactRecord>` |
+| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/artifact-command-request.r2.schema.json)) | `ArtifactRecord` |
+| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/artifact-query-request.r2.schema.json)) | `Page<ArtifactRecord>` |
 | `artifacts.read` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Read'} | `ArtifactReadContent` |
 | `artifacts.preview` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Preview'} | `ArtifactPreview` |
 | `artifacts.export` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Export'} | `ArtifactExport` |
@@ -697,7 +697,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 ## Domain types
 
-Reference names reused from earlier shared/provider/data contracts retain their existing schema definitions; they are not redeclared here. Other types below are closed records, enumerations or `kind`-tagged unions. Generic lists/pages and scalar bounds are native checked support types.
+Reference names reused from earlier shared/provider/data contracts retain their existing schema definitions; they are not redeclared here. Other types below are closed records, enumerations or `kind`-tagged unions. Generic lists/pages and scalar bounds are native checked support types. A field marked *revision N+* was introduced at schema revision N: callers that negotiated an earlier revision never receive it and may not send it.
 
 ### LifeState
 
@@ -2473,6 +2473,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `createdAtMs` | `Counter` |
 | `scope` | `DataScope` |
 | `referenceCount` | `Counter` |
+| `tags` | `?ArtifactTags` · *revision 2+* |
 
 ### ArtifactReadContent
 

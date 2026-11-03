@@ -33,6 +33,9 @@ impl Check for DiagnosticsInput {
         Ok(())
     }
 }
+impl Revisioned for DiagnosticsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `workspace.backup` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -47,6 +50,9 @@ impl Check for BackupInput {
         self.expected_store_sequence.check()?;
         Ok(())
     }
+}
+impl Revisioned for BackupInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `workspace.restore` Command input.
@@ -67,6 +73,9 @@ impl Check for RestoreInput {
         Ok(())
     }
 }
+impl Revisioned for RestoreInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `workspace.migrate` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -85,6 +94,9 @@ impl Check for MigrateInput {
         Ok(())
     }
 }
+impl Revisioned for MigrateInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `workspace.update_status` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -94,6 +106,9 @@ impl Check for UpdateStatusInput {
     fn check(&self) -> Result<(), String> {
         Ok(())
     }
+}
+impl Revisioned for UpdateStatusInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `workspace.approve_install` Command input.
@@ -114,6 +129,9 @@ impl Check for ApproveInstallInput {
         Ok(())
     }
 }
+impl Revisioned for ApproveInstallInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `workspace.logs` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -131,6 +149,9 @@ impl Check for LogsInput {
         self.after_sequence.check()?;
         Ok(())
     }
+}
+impl Revisioned for LogsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `workspace.record_diagnostic` Command input.
@@ -153,6 +174,9 @@ impl Check for RecordDiagnosticInput {
         self.evidence.check()?;
         Ok(())
     }
+}
+impl Revisioned for RecordDiagnosticInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `workspace` family, built only for the selected operation and mode.

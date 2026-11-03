@@ -31,6 +31,9 @@ impl Check for CatalogInput {
         Ok(())
     }
 }
+impl Revisioned for CatalogInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `router.connections` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -43,6 +46,9 @@ impl Check for ConnectionsInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for ConnectionsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `router.route` Command input.
@@ -65,6 +71,9 @@ impl Check for RouteInput {
         Ok(())
     }
 }
+impl Revisioned for RouteInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `router.pin` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -84,6 +93,9 @@ impl Check for PinInput {
         Ok(())
     }
 }
+impl Revisioned for PinInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `router.availability` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -100,6 +112,9 @@ impl Check for AvailabilityInput {
         self.required_capabilities.check()?;
         Ok(())
     }
+}
+impl Revisioned for AvailabilityInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `router.usage` Query input.
@@ -123,6 +138,9 @@ impl Check for UsageInput {
         Ok(())
     }
 }
+impl Revisioned for UsageInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `router.request_status` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -135,6 +153,9 @@ impl Check for RequestStatusInput {
         self.request_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for RequestStatusInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `router.price_status` Query input.
@@ -151,6 +172,9 @@ impl Check for PriceStatusInput {
         Ok(())
     }
 }
+impl Revisioned for PriceStatusInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `router.price_refresh` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -165,6 +189,9 @@ impl Check for PriceRefreshInput {
         self.expected_price_revision.check()?;
         Ok(())
     }
+}
+impl Revisioned for PriceRefreshInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `router.price_override` Command input.
@@ -183,6 +210,9 @@ impl Check for PriceOverrideInput {
         Ok(())
     }
 }
+impl Revisioned for PriceOverrideInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `router.configure` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -195,6 +225,9 @@ impl Check for ConfigureInput {
         self.action.check()?;
         Ok(())
     }
+}
+impl Revisioned for ConfigureInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `router.decision_models` Query input.
@@ -210,6 +243,9 @@ impl Check for DecisionModelsInput {
         self.include_disabled.check()?;
         Ok(())
     }
+}
+impl Revisioned for DecisionModelsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `router.decide` Command input.
@@ -235,6 +271,9 @@ impl Check for DecideInput {
         self.timeout_ms.check()?;
         Ok(())
     }
+}
+impl Revisioned for DecideInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `router` family, built only for the selected operation and mode.

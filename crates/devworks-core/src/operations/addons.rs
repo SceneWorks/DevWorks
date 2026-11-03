@@ -30,6 +30,9 @@ impl Check for CatalogInput {
         Ok(())
     }
 }
+impl Revisioned for CatalogInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `addons.configure` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -46,6 +49,9 @@ impl Check for ConfigureInput {
         self.config.check()?;
         Ok(())
     }
+}
+impl Revisioned for ConfigureInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `addons.propose` Command input.
@@ -68,6 +74,9 @@ impl Check for ProposeInput {
         Ok(())
     }
 }
+impl Revisioned for ProposeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `addons.logs` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -84,6 +93,9 @@ impl Check for LogsInput {
         self.page.check()?;
         Ok(())
     }
+}
+impl Revisioned for LogsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `addons` family, built only for the selected operation and mode.

@@ -874,9 +874,13 @@ impl ArtifactRead for Unsupported {
     fn list(
         &self,
         _: &ProjectId,
+        _: &[String],
         _: Option<&ListPosition>,
         _: u16,
     ) -> Result<Vec<StoredArtifact>, StorageError> {
+        nope()
+    }
+    fn tags(&self, _: &Id) -> Result<Vec<String>, StorageError> {
         nope()
     }
     fn shares(&self, _: &Id) -> Result<Vec<ProjectId>, StorageError> {
@@ -942,6 +946,9 @@ impl ArtifactRepository for Unsupported {
         nope()
     }
     fn add_link(&mut self, _: &ArtifactLink) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn set_tags(&mut self, _: &Id, _: &[String]) -> Result<(), StorageError> {
         nope()
     }
     fn add_share(&mut self, _: &Id, _: &ProjectId) -> Result<bool, StorageError> {

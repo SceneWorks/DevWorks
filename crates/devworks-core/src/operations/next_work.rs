@@ -33,6 +33,9 @@ impl Check for ClaimProjectQueueInput {
         Ok(())
     }
 }
+impl Revisioned for ClaimProjectQueueInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `next_work.claim_feature_task` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -50,6 +53,9 @@ impl Check for ClaimFeatureTaskInput {
         Ok(())
     }
 }
+impl Revisioned for ClaimFeatureTaskInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `next_work.inspect_claim` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -62,6 +68,9 @@ impl Check for InspectClaimInput {
         self.claim_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for InspectClaimInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `next_work.release_claim` Command input.
@@ -77,6 +86,9 @@ impl Check for ReleaseClaimInput {
         self.expected_fence.check()?;
         Ok(())
     }
+}
+impl Revisioned for ReleaseClaimInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `next_work` family, built only for the selected operation and mode.

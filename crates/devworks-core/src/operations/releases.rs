@@ -29,6 +29,9 @@ impl Check for InspectInput {
         Ok(())
     }
 }
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// An admitted input of the `releases` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]

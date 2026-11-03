@@ -40,6 +40,9 @@ impl Check for ReadInput {
         Ok(())
     }
 }
+impl Revisioned for ReadInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `database.execute_write` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -64,6 +67,9 @@ impl Check for ExecuteWriteInput {
         Ok(())
     }
 }
+impl Revisioned for ExecuteWriteInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `database.apply_migration` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -85,6 +91,9 @@ impl Check for ApplyMigrationInput {
         self.proposal_id.check()?;
         Ok(())
     }
+}
+impl Revisioned for ApplyMigrationInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `database.direct_schema_change` Command input.
@@ -110,6 +119,9 @@ impl Check for DirectSchemaChangeInput {
         Ok(())
     }
 }
+impl Revisioned for DirectSchemaChangeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `database.configure_sensitive_columns` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -126,6 +138,9 @@ impl Check for ConfigureSensitiveColumnsInput {
         self.column_ids.check()?;
         Ok(())
     }
+}
+impl Revisioned for ConfigureSensitiveColumnsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `database` family, built only for the selected operation and mode.

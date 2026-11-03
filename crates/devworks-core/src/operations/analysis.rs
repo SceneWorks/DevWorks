@@ -36,6 +36,9 @@ impl Check for HealthInput {
         Ok(())
     }
 }
+impl Revisioned for HealthInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `analysis.cross_repo_links` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -54,6 +57,9 @@ impl Check for CrossRepoLinksInput {
         self.filters.check()?;
         Ok(())
     }
+}
+impl Revisioned for CrossRepoLinksInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `analysis.community_analysis` Command input.
@@ -79,6 +85,9 @@ impl Check for CommunityAnalysisInput {
         Ok(())
     }
 }
+impl Revisioned for CommunityAnalysisInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `analysis.status` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -98,6 +107,9 @@ impl Check for StatusInput {
         Ok(())
     }
 }
+impl Revisioned for StatusInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `analysis.clusters` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -116,6 +128,9 @@ impl Check for ClustersInput {
         self.filters.check()?;
         Ok(())
     }
+}
+impl Revisioned for ClustersInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `analysis.cluster_detail` Query input.
@@ -137,6 +152,9 @@ impl Check for ClusterDetailInput {
         self.filters.check()?;
         Ok(())
     }
+}
+impl Revisioned for ClusterDetailInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `analysis.link_and_detect` Command input.
@@ -162,6 +180,9 @@ impl Check for LinkAndDetectInput {
         Ok(())
     }
 }
+impl Revisioned for LinkAndDetectInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `analysis.process_batch` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -186,6 +207,9 @@ impl Check for ProcessBatchInput {
         Ok(())
     }
 }
+impl Revisioned for ProcessBatchInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `analysis.security` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -204,6 +228,9 @@ impl Check for SecurityInput {
         self.filters.check()?;
         Ok(())
     }
+}
+impl Revisioned for SecurityInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `analysis.metrics` Query input.
@@ -224,6 +251,9 @@ impl Check for MetricsInput {
         Ok(())
     }
 }
+impl Revisioned for MetricsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `analysis.hotspots` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -242,6 +272,9 @@ impl Check for HotspotsInput {
         self.filters.check()?;
         Ok(())
     }
+}
+impl Revisioned for HotspotsInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `analysis.reanalyze` Command input.
@@ -267,6 +300,9 @@ impl Check for ReanalyzeInput {
         Ok(())
     }
 }
+impl Revisioned for ReanalyzeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `analysis.synthesize` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -291,6 +327,9 @@ impl Check for SynthesizeInput {
         Ok(())
     }
 }
+impl Revisioned for SynthesizeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `analysis.fleet_health` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -310,6 +349,9 @@ impl Check for FleetHealthInput {
         Ok(())
     }
 }
+impl Revisioned for FleetHealthInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
 
 /// `analysis.archival_candidates` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -328,6 +370,9 @@ impl Check for ArchivalCandidatesInput {
         self.filters.check()?;
         Ok(())
     }
+}
+impl Revisioned for ArchivalCandidatesInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// `analysis.file_hotspot` Query input.
@@ -349,6 +394,9 @@ impl Check for FileHotspotInput {
         self.filters.check()?;
         Ok(())
     }
+}
+impl Revisioned for FileHotspotInput {
+    fn retain_revision(&mut self, _: u32) {}
 }
 
 /// An admitted input of the `analysis` family, built only for the selected operation and mode.

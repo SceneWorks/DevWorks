@@ -2,7 +2,7 @@
 // Do not edit by hand; regenerate and commit the result.
 
 //! The complete operation catalog: one descriptor per registered operation with its family,
-//! owner, envelope, selector, per-mode policy, input decoder and result binding.
+//! owner, envelope, selector, per-mode policy, input decoder, result binding and the schema revisions it negotiates.
 #![allow(clippy::large_const_arrays)]
 use super::{
     AuthorityClass, Decoded, EffectClass, Envelope, ModeBinding, OperationDescriptor,
@@ -92,7 +92,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ProjectRecord>",
         result_schema: schema_of::<Page<ProjectRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "projects.get",
@@ -114,7 +114,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "projects.create",
@@ -136,7 +136,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "projects.edit",
@@ -158,7 +158,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "projects.membership",
@@ -180,7 +180,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "projects.archive",
@@ -202,7 +202,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "projects.restore",
@@ -224,7 +224,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "projects.delete",
@@ -246,7 +246,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "features.list",
@@ -268,7 +268,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "features.get",
@@ -290,7 +290,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "features.create",
@@ -312,7 +312,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "features.edit_plan",
@@ -334,7 +334,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "features.prioritize",
@@ -356,7 +356,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "features.dependencies",
@@ -378,7 +378,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "features.request_plan_approval",
@@ -400,7 +400,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "features.edit",
@@ -422,7 +422,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "issues.list",
@@ -444,7 +444,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "issues.get",
@@ -466,7 +466,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "issues.create",
@@ -488,7 +488,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "issues.edit",
@@ -510,7 +510,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "issues.prioritize",
@@ -532,7 +532,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "issues.publish",
@@ -554,7 +554,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GitLink",
         result_schema: schema_of::<GitLink>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "issues.link",
@@ -576,7 +576,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GitLink",
         result_schema: schema_of::<GitLink>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.list",
@@ -598,7 +598,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.get",
@@ -620,7 +620,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.create",
@@ -642,7 +642,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.edit",
@@ -664,7 +664,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.prioritize",
@@ -686,7 +686,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.move",
@@ -708,7 +708,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.assign",
@@ -730,7 +730,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.dependency_links",
@@ -752,7 +752,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.acceptance_evidence",
@@ -774,7 +774,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.sync_plan",
@@ -796,7 +796,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "tasks.set_feature",
@@ -818,7 +818,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workflows.list",
@@ -840,7 +840,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<StatusRecord>",
         result_schema: schema_of::<Page<StatusRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workflows.create_status",
@@ -862,7 +862,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "StatusRecord",
         result_schema: schema_of::<StatusRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workflows.rename_status",
@@ -884,7 +884,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "StatusRecord",
         result_schema: schema_of::<StatusRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workflows.order",
@@ -906,7 +906,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<StatusRecord>",
         result_schema: schema_of::<Page<StatusRecord>>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workflows.reassign_and_remove",
@@ -928,7 +928,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "next_work.claim_project_queue",
@@ -950,7 +950,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ClaimRecord",
         result_schema: schema_of::<ClaimRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "next_work.claim_feature_task",
@@ -972,7 +972,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ClaimRecord",
         result_schema: schema_of::<ClaimRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "next_work.inspect_claim",
@@ -994,7 +994,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ClaimRecord",
         result_schema: schema_of::<ClaimRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "next_work.release_claim",
@@ -1016,7 +1016,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ClaimRecord",
         result_schema: schema_of::<ClaimRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "runs.start",
@@ -1040,7 +1040,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RootSnapshot",
         result_schema: schema_of::<RootSnapshot>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "runs.pause",
@@ -1064,7 +1064,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RootSnapshot",
         result_schema: schema_of::<RootSnapshot>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "runs.continue",
@@ -1088,7 +1088,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RootSnapshot",
         result_schema: schema_of::<RootSnapshot>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "runs.redirect",
@@ -1110,7 +1110,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "runs.inspect",
@@ -1134,7 +1134,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RootSnapshot",
         result_schema: schema_of::<RootSnapshot>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "runs.stop",
@@ -1156,7 +1156,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "runs.eligibility",
@@ -1180,7 +1180,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "EligibilitySnapshot",
         result_schema: schema_of::<EligibilitySnapshot>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "agents.inspect",
@@ -1202,7 +1202,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AgentRecord",
         result_schema: schema_of::<AgentRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "agents.delegate",
@@ -1224,7 +1224,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AgentRecord",
         result_schema: schema_of::<AgentRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "agents.messages",
@@ -1246,7 +1246,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AgentMessage",
         result_schema: schema_of::<AgentMessage>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "agents.inbox",
@@ -1268,7 +1268,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<AgentMessage>",
         result_schema: schema_of::<Page<AgentMessage>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "agents.acknowledge",
@@ -1290,7 +1290,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AgentMessage",
         result_schema: schema_of::<AgentMessage>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "agents.checkpoint",
@@ -1312,7 +1312,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "CheckpointRecord",
         result_schema: schema_of::<CheckpointRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "sessions.list",
@@ -1334,7 +1334,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<SessionRecord>",
         result_schema: schema_of::<Page<SessionRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "sessions.get",
@@ -1356,7 +1356,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "sessions.transcript",
@@ -1377,7 +1377,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "TranscriptPage",
         result_schema: schema_of::<TranscriptPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "sessions.briefing",
@@ -1399,7 +1399,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ContextSource>",
         result_schema: schema_of::<Page<ContextSource>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "sessions.append_message",
@@ -1420,7 +1420,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "sessions.context_sources",
@@ -1442,7 +1442,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ContextSource>",
         result_schema: schema_of::<Page<ContextSource>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "sessions.start",
@@ -1464,7 +1464,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "sessions.end",
@@ -1486,7 +1486,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "SessionRecord",
         result_schema: schema_of::<SessionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "ui.current_screen",
@@ -1508,7 +1508,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ScreenContext",
         result_schema: schema_of::<ScreenContext>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "history.events",
@@ -1532,7 +1532,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<Event>",
         result_schema: schema_of::<Page<Event>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "history.work_lineage",
@@ -1554,7 +1554,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<LineageRecord>",
         result_schema: schema_of::<Page<LineageRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "history.git_links",
@@ -1576,7 +1576,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<GitLink>",
         result_schema: schema_of::<Page<GitLink>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "history.evidence_links",
@@ -1598,7 +1598,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<EvidenceLink>",
         result_schema: schema_of::<Page<EvidenceLink>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "history.operation_status",
@@ -1622,7 +1622,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "history.tool_usage",
@@ -1644,7 +1644,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<UsageItem>",
         result_schema: schema_of::<Page<UsageItem>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "history.command_receipt",
@@ -1668,7 +1668,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReceiptObservation",
         result_schema: schema_of::<ReceiptObservation>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.search",
@@ -1692,7 +1692,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.architecture",
@@ -1716,7 +1716,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.dependency",
@@ -1740,7 +1740,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.impact",
@@ -1764,7 +1764,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.source",
@@ -1788,7 +1788,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.traverse",
@@ -1812,7 +1812,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.graph_scope_status",
@@ -1836,7 +1836,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.overview",
@@ -1860,7 +1860,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.nodes_by_file",
@@ -1884,7 +1884,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.node_detail",
@@ -1908,7 +1908,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.set_trust",
@@ -1932,7 +1932,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.file_impact",
@@ -1956,7 +1956,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.graph_schema",
@@ -1980,7 +1980,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.call_path",
@@ -2004,7 +2004,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.data_lineage",
@@ -2028,7 +2028,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.consumers",
@@ -2052,7 +2052,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.publishers",
@@ -2076,7 +2076,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.snippet",
@@ -2100,7 +2100,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "code.repository_dependencies",
@@ -2124,7 +2124,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "indexing.discover",
@@ -2146,7 +2146,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<RepositoryRecord>",
         result_schema: schema_of::<Page<RepositoryRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "indexing.index",
@@ -2168,7 +2168,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "indexing.reindex",
@@ -2190,7 +2190,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "indexing.refresh_overlay",
@@ -2214,7 +2214,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "indexing.retire_view",
@@ -2236,7 +2236,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "indexing.cancel",
@@ -2260,7 +2260,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "indexing.status",
@@ -2282,7 +2282,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RepositoryIndexStatus",
         result_schema: schema_of::<RepositoryIndexStatus>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "indexing.runs",
@@ -2304,7 +2304,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<IndexRunRecord>",
         result_schema: schema_of::<Page<IndexRunRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "indexing.configure_sources",
@@ -2326,7 +2326,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.health",
@@ -2348,7 +2348,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.cross_repo_links",
@@ -2370,7 +2370,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.community_analysis",
@@ -2392,7 +2392,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.status",
@@ -2414,7 +2414,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.clusters",
@@ -2436,7 +2436,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ClusterRecord>",
         result_schema: schema_of::<Page<ClusterRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.cluster_detail",
@@ -2458,7 +2458,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ClusterRecord",
         result_schema: schema_of::<ClusterRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.link_and_detect",
@@ -2480,7 +2480,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.process_batch",
@@ -2502,7 +2502,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.security",
@@ -2524,7 +2524,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.metrics",
@@ -2546,7 +2546,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.hotspots",
@@ -2568,7 +2568,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.reanalyze",
@@ -2590,7 +2590,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.synthesize",
@@ -2612,7 +2612,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "AnalysisRecord",
         result_schema: schema_of::<AnalysisRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.fleet_health",
@@ -2634,7 +2634,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.archival_candidates",
@@ -2656,7 +2656,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "analysis.file_hotspot",
@@ -2678,7 +2678,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<MetricRecord>",
         result_schema: schema_of::<Page<MetricRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "schemas.connections",
@@ -2700,7 +2700,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<SchemaConnection>",
         result_schema: schema_of::<Page<SchemaConnection>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "schemas.objects",
@@ -2722,7 +2722,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<SchemaObject>",
         result_schema: schema_of::<Page<SchemaObject>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "schemas.relationships",
@@ -2744,7 +2744,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<SchemaRelation>",
         result_schema: schema_of::<Page<SchemaRelation>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "schemas.index",
@@ -2766,7 +2766,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "schemas.refresh",
@@ -2788,7 +2788,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "schemas.remove_index",
@@ -2810,7 +2810,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "schemas.configure",
@@ -2832,7 +2832,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "SchemaConnection",
         result_schema: schema_of::<SchemaConnection>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "database.read",
@@ -2854,7 +2854,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DbReadResult",
         result_schema: schema_of::<DbReadResult>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "database.execute_write",
@@ -2876,7 +2876,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DbWriteResult",
         result_schema: schema_of::<DbWriteResult>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "database.apply_migration",
@@ -2898,7 +2898,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DbWriteResult",
         result_schema: schema_of::<DbWriteResult>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "database.direct_schema_change",
@@ -2920,7 +2920,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DbWriteResult",
         result_schema: schema_of::<DbWriteResult>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "database.configure_sensitive_columns",
@@ -2942,7 +2942,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "SchemaConnection",
         result_schema: schema_of::<SchemaConnection>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.search",
@@ -2964,7 +2964,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<KnowledgeClaim>",
         result_schema: schema_of::<Page<KnowledgeClaim>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.read",
@@ -2986,7 +2986,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.record",
@@ -3008,7 +3008,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.revise",
@@ -3030,7 +3030,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.relate",
@@ -3052,7 +3052,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.tag",
@@ -3074,7 +3074,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.verify",
@@ -3096,7 +3096,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.retract",
@@ -3118,7 +3118,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.scope",
@@ -3140,7 +3140,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.diagnostics",
@@ -3162,7 +3162,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.delete_by_source",
@@ -3184,7 +3184,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.delete_selected",
@@ -3206,7 +3206,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.write_status",
@@ -3228,7 +3228,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.subgraph",
@@ -3250,7 +3250,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.entity_bundle",
@@ -3272,7 +3272,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.entity_graph",
@@ -3294,7 +3294,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.claim_bundle",
@@ -3316,7 +3316,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.expand_frontier",
@@ -3338,7 +3338,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.render_summary",
@@ -3360,7 +3360,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ArtifactRef",
         result_schema: schema_of::<ArtifactRef>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.query",
@@ -3382,7 +3382,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.import_user_data",
@@ -3404,7 +3404,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.promote",
@@ -3426,7 +3426,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.challenge",
@@ -3448,7 +3448,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "knowledge.tagged_lessons",
@@ -3470,7 +3470,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<KnowledgeClaim>",
         result_schema: schema_of::<Page<KnowledgeClaim>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "dreaming.run",
@@ -3492,7 +3492,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DreamRun",
         result_schema: schema_of::<DreamRun>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "dreaming.runs",
@@ -3514,7 +3514,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<DreamRun>",
         result_schema: schema_of::<Page<DreamRun>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "dreaming.report",
@@ -3536,7 +3536,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DreamRun",
         result_schema: schema_of::<DreamRun>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "dreaming.settings",
@@ -3568,7 +3568,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DreamSettingsRecord",
         result_schema: schema_of::<DreamSettingsRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "dreaming.instructions",
@@ -3600,7 +3600,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "dreaming.propose",
@@ -3622,7 +3622,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "dreaming.revert",
@@ -3644,7 +3644,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "dreaming.review",
@@ -3666,7 +3666,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.import",
@@ -3688,7 +3688,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.list",
@@ -3710,7 +3710,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<DocumentRecord>",
         result_schema: schema_of::<Page<DocumentRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.read",
@@ -3734,7 +3734,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.search",
@@ -3755,7 +3755,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RetrievalPage",
         result_schema: schema_of::<RetrievalPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.share",
@@ -3779,7 +3779,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.move",
@@ -3803,7 +3803,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.index",
@@ -3825,7 +3825,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.retry",
@@ -3847,7 +3847,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.disable_retrieval",
@@ -3871,7 +3871,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "documents.remove_index",
@@ -3895,7 +3895,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DocumentRecord",
         result_schema: schema_of::<DocumentRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "artifacts.save",
@@ -3919,7 +3919,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ArtifactRecord",
         result_schema: schema_of::<ArtifactRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "artifacts.list",
@@ -3943,7 +3943,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ArtifactRecord>",
         result_schema: schema_of::<Page<ArtifactRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "artifacts.read",
@@ -3967,7 +3967,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ArtifactReadContent",
         result_schema: schema_of::<ArtifactReadContent>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "artifacts.preview",
@@ -3991,7 +3991,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ArtifactPreview",
         result_schema: schema_of::<ArtifactPreview>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "artifacts.export",
@@ -4015,7 +4015,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ArtifactExport",
         result_schema: schema_of::<ArtifactExport>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "artifacts.reference",
@@ -4039,7 +4039,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "artifacts.delete",
@@ -4060,7 +4060,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.list",
@@ -4082,7 +4082,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.read",
@@ -4104,7 +4104,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.edit",
@@ -4126,7 +4126,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.version",
@@ -4148,7 +4148,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.applicability",
@@ -4170,7 +4170,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.retire",
@@ -4192,7 +4192,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.index",
@@ -4214,7 +4214,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.import",
@@ -4236,7 +4236,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.delete",
@@ -4258,7 +4258,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.move",
@@ -4280,7 +4280,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.resources",
@@ -4302,7 +4302,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.delete_resource",
@@ -4324,7 +4324,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "conventions.search",
@@ -4346,7 +4346,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "skills.discover",
@@ -4368,7 +4368,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "skills.read",
@@ -4390,7 +4390,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "skills.resources",
@@ -4412,7 +4412,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ArtifactRef>",
         result_schema: schema_of::<Page<ArtifactRef>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "skills.draft",
@@ -4434,7 +4434,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "skills.propose",
@@ -4456,7 +4456,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "skills.history",
@@ -4478,7 +4478,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "skills.rollback",
@@ -4500,7 +4500,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "roles.read",
@@ -4522,7 +4522,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "roles.draft",
@@ -4544,7 +4544,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "roles.propose",
@@ -4566,7 +4566,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "roles.history",
@@ -4588,7 +4588,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<InstructionRecord>",
         result_schema: schema_of::<Page<InstructionRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "roles.rollback",
@@ -4610,7 +4610,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "InstructionRecord",
         result_schema: schema_of::<InstructionRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "approvals.list",
@@ -4632,7 +4632,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ProposalRecord>",
         result_schema: schema_of::<Page<ProposalRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "approvals.inspect",
@@ -4654,7 +4654,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "approvals.propose",
@@ -4676,7 +4676,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "approvals.record_human_decision",
@@ -4698,7 +4698,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "notifications.list",
@@ -4720,7 +4720,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<NotificationRecord>",
         result_schema: schema_of::<Page<NotificationRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "notifications.read",
@@ -4742,7 +4742,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "NotificationRecord",
         result_schema: schema_of::<NotificationRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "notifications.acknowledge",
@@ -4764,7 +4764,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "NotificationRecord",
         result_schema: schema_of::<NotificationRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "notifications.settings",
@@ -4796,7 +4796,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "NotificationSettingsRecord",
         result_schema: schema_of::<NotificationSettingsRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "git.worktree",
@@ -4818,7 +4818,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GitInspection",
         result_schema: schema_of::<GitInspection>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "git.inspect",
@@ -4840,7 +4840,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GitInspection",
         result_schema: schema_of::<GitInspection>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "git.diff",
@@ -4862,7 +4862,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ArtifactRef>",
         result_schema: schema_of::<Page<ArtifactRef>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "git.commit",
@@ -4886,7 +4886,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GitInspection",
         result_schema: schema_of::<GitInspection>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "git.push",
@@ -4910,7 +4910,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GitInspection",
         result_schema: schema_of::<GitInspection>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "git.pull_request",
@@ -4934,7 +4934,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GitLink",
         result_schema: schema_of::<GitLink>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "git.integrate",
@@ -4958,7 +4958,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DeliverySnapshot",
         result_schema: schema_of::<DeliverySnapshot>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "git.cleanup",
@@ -4982,7 +4982,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "reviews.list",
@@ -5004,7 +5004,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ReviewRecord>",
         result_schema: schema_of::<Page<ReviewRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "reviews.inspect",
@@ -5026,7 +5026,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReviewRecord",
         result_schema: schema_of::<ReviewRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "reviews.request",
@@ -5048,7 +5048,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReviewRecord",
         result_schema: schema_of::<ReviewRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "reviews.findings",
@@ -5070,7 +5070,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ReviewFinding>",
         result_schema: schema_of::<Page<ReviewFinding>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "reviews.respond",
@@ -5092,7 +5092,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReviewFinding",
         result_schema: schema_of::<ReviewFinding>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "reviews.adjudicate",
@@ -5114,7 +5114,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReviewFinding",
         result_schema: schema_of::<ReviewFinding>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "reviews.readiness",
@@ -5136,7 +5136,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReviewReadiness",
         result_schema: schema_of::<ReviewReadiness>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "releases.inspect",
@@ -5158,7 +5158,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReleaseRecord",
         result_schema: schema_of::<ReleaseRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "releases.prepare",
@@ -5182,7 +5182,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReleaseRecord",
         result_schema: schema_of::<ReleaseRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "releases.publish",
@@ -5206,7 +5206,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReleaseRecord",
         result_schema: schema_of::<ReleaseRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "releases.deploy",
@@ -5230,7 +5230,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ReleaseRecord",
         result_schema: schema_of::<ReleaseRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "github.account",
@@ -5262,7 +5262,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GithubAccountState",
         result_schema: schema_of::<GithubAccountState>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "github.repositories",
@@ -5284,7 +5284,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<RepositoryRecord>",
         result_schema: schema_of::<Page<RepositoryRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "github.poll_status",
@@ -5306,7 +5306,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<GithubObservation>",
         result_schema: schema_of::<Page<GithubObservation>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "github.issue_sync",
@@ -5328,7 +5328,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "github.checks",
@@ -5350,7 +5350,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<GithubObservation>",
         result_schema: schema_of::<Page<GithubObservation>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "github.reviews",
@@ -5372,7 +5372,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<GithubObservation>",
         result_schema: schema_of::<Page<GithubObservation>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "resources.list",
@@ -5394,7 +5394,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ResourceRecord>",
         result_schema: schema_of::<Page<ResourceRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "resources.acquire",
@@ -5416,7 +5416,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "LeaseRecord",
         result_schema: schema_of::<LeaseRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "resources.renew",
@@ -5438,7 +5438,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "LeaseRecord",
         result_schema: schema_of::<LeaseRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "resources.release",
@@ -5460,7 +5460,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "LeaseRecord",
         result_schema: schema_of::<LeaseRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "resources.holders",
@@ -5482,7 +5482,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<LeaseRecord>",
         result_schema: schema_of::<Page<LeaseRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "resources.waiters",
@@ -5504,7 +5504,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<LeaseRecord>",
         result_schema: schema_of::<Page<LeaseRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "browser.sessions",
@@ -5536,7 +5536,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<BrowserSession>",
         result_schema: schema_of::<Page<BrowserSession>>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "browser.inspect",
@@ -5558,7 +5558,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "BrowserSnapshot",
         result_schema: schema_of::<BrowserSnapshot>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "browser.navigate",
@@ -5580,7 +5580,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "BrowserSnapshot",
         result_schema: schema_of::<BrowserSnapshot>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "browser.input",
@@ -5602,7 +5602,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "BrowserObservation",
         result_schema: schema_of::<BrowserObservation>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "browser.upload",
@@ -5624,7 +5624,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "BrowserObservation",
         result_schema: schema_of::<BrowserObservation>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "browser.screenshot",
@@ -5646,7 +5646,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ArtifactRef",
         result_schema: schema_of::<ArtifactRef>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "browser.console",
@@ -5668,7 +5668,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<BrowserObservation>",
         result_schema: schema_of::<Page<BrowserObservation>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "browser.network",
@@ -5690,7 +5690,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<BrowserObservation>",
         result_schema: schema_of::<Page<BrowserObservation>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "desktop.inspect",
@@ -5712,7 +5712,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "desktop.capture",
@@ -5734,7 +5734,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DesktopCapture",
         result_schema: schema_of::<DesktopCapture>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "desktop.request_control",
@@ -5756,7 +5756,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "desktop.input",
@@ -5778,7 +5778,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "desktop.release_control",
@@ -5800,7 +5800,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "process.execute",
@@ -5822,7 +5822,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProcessRecord",
         result_schema: schema_of::<ProcessRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "process.output",
@@ -5844,7 +5844,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProcessOutput",
         result_schema: schema_of::<ProcessOutput>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "process.cancel",
@@ -5866,7 +5866,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProcessRecord",
         result_schema: schema_of::<ProcessRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "process.install_project_dependencies",
@@ -5888,7 +5888,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProcessRecord",
         result_schema: schema_of::<ProcessRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "process.request_system_install",
@@ -5910,7 +5910,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "web.search",
@@ -5932,7 +5932,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<WebResult>",
         result_schema: schema_of::<Page<WebResult>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "web.fetch",
@@ -5954,7 +5954,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "WebDocument",
         result_schema: schema_of::<WebDocument>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "containers.capabilities",
@@ -5976,7 +5976,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ContainerCapability>",
         result_schema: schema_of::<Page<ContainerCapability>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "containers.build",
@@ -5998,7 +5998,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ContainerImage",
         result_schema: schema_of::<ContainerImage>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "containers.pull",
@@ -6020,7 +6020,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ContainerImage",
         result_schema: schema_of::<ContainerImage>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "containers.create",
@@ -6042,7 +6042,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ContainerRecord",
         result_schema: schema_of::<ContainerRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "containers.start",
@@ -6064,7 +6064,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ContainerRecord",
         result_schema: schema_of::<ContainerRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "containers.exec",
@@ -6086,7 +6086,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProcessRecord",
         result_schema: schema_of::<ProcessRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "containers.inspect",
@@ -6108,7 +6108,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ContainerRecord",
         result_schema: schema_of::<ContainerRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "containers.logs",
@@ -6130,7 +6130,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ArtifactRef",
         result_schema: schema_of::<ArtifactRef>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "containers.stop",
@@ -6152,7 +6152,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ContainerRecord",
         result_schema: schema_of::<ContainerRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "jobs.list",
@@ -6174,7 +6174,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<JobRecord>",
         result_schema: schema_of::<Page<JobRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "jobs.create",
@@ -6196,7 +6196,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "jobs.edit",
@@ -6218,7 +6218,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "jobs.enable",
@@ -6240,7 +6240,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "jobs.run_now",
@@ -6262,7 +6262,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "JobRun",
         result_schema: schema_of::<JobRun>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "jobs.inspect",
@@ -6284,7 +6284,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "JobInspection",
         result_schema: schema_of::<JobInspection>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "jobs.cancel",
@@ -6306,7 +6306,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "JobRun",
         result_schema: schema_of::<JobRun>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "jobs.delete",
@@ -6328,7 +6328,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "jobs.disable",
@@ -6350,7 +6350,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "settings.read_effective",
@@ -6372,7 +6372,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<SettingEntry>",
         result_schema: schema_of::<Page<SettingEntry>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "settings.validate",
@@ -6394,7 +6394,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ValidationReport",
         result_schema: schema_of::<ValidationReport>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "settings.save_revision",
@@ -6416,7 +6416,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<SettingEntry>",
         result_schema: schema_of::<Page<SettingEntry>>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "settings.explain_source",
@@ -6438,7 +6438,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<SettingEntry>",
         result_schema: schema_of::<Page<SettingEntry>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.catalog",
@@ -6460,7 +6460,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<RouteModel>",
         result_schema: schema_of::<Page<RouteModel>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.connections",
@@ -6482,7 +6482,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ConnectionRecord>",
         result_schema: schema_of::<Page<ConnectionRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.route",
@@ -6504,7 +6504,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RouteChoice",
         result_schema: schema_of::<RouteChoice>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.pin",
@@ -6526,7 +6526,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RouteChoice",
         result_schema: schema_of::<RouteChoice>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.availability",
@@ -6548,7 +6548,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RouteAvailability",
         result_schema: schema_of::<RouteAvailability>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.usage",
@@ -6570,7 +6570,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "UsageReport",
         result_schema: schema_of::<UsageReport>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.request_status",
@@ -6592,7 +6592,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.price_status",
@@ -6614,7 +6614,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ModelPriceStatus>",
         result_schema: schema_of::<Page<ModelPriceStatus>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.price_refresh",
@@ -6636,7 +6636,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.price_override",
@@ -6658,7 +6658,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PriceRecord",
         result_schema: schema_of::<PriceRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.configure",
@@ -6680,7 +6680,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.decision_models",
@@ -6702,7 +6702,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<DecisionModel>",
         result_schema: schema_of::<Page<DecisionModel>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "router.decide",
@@ -6724,7 +6724,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "DecisionResult",
         result_schema: schema_of::<DecisionResult>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp.servers",
@@ -6746,7 +6746,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<McpServer>",
         result_schema: schema_of::<Page<McpServer>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp.configure",
@@ -6768,7 +6768,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "McpServer",
         result_schema: schema_of::<McpServer>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp.connect",
@@ -6790,7 +6790,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "McpServer",
         result_schema: schema_of::<McpServer>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp.discover",
@@ -6812,7 +6812,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<McpCapability>",
         result_schema: schema_of::<Page<McpCapability>>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp.select_tools",
@@ -6834,7 +6834,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "McpServer",
         result_schema: schema_of::<McpServer>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp.resources",
@@ -6856,7 +6856,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<McpResource>",
         result_schema: schema_of::<Page<McpResource>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp.prompts",
@@ -6878,7 +6878,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<McpPrompt>",
         result_schema: schema_of::<Page<McpPrompt>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp.capabilities",
@@ -6900,7 +6900,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<McpCapability>",
         result_schema: schema_of::<Page<McpCapability>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.catalog",
@@ -6922,7 +6922,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<PackageRecord>",
         result_schema: schema_of::<Page<PackageRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.install",
@@ -6946,7 +6946,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.configure",
@@ -6968,7 +6968,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.enable",
@@ -6992,7 +6992,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.disable",
@@ -7016,7 +7016,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.update",
@@ -7040,7 +7040,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.propose",
@@ -7062,7 +7062,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ProposalRecord",
         result_schema: schema_of::<ProposalRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.logs",
@@ -7084,7 +7084,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.rollback",
@@ -7108,7 +7108,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "addons.uninstall",
@@ -7132,7 +7132,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "help.search",
@@ -7154,7 +7154,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<HelpTopic>",
         result_schema: schema_of::<Page<HelpTopic>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "help.read",
@@ -7176,7 +7176,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "HelpTopic",
         result_schema: schema_of::<HelpTopic>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "help.topic_for_screen",
@@ -7198,7 +7198,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<HelpTopic>",
         result_schema: schema_of::<Page<HelpTopic>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "help.package_guides",
@@ -7220,7 +7220,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<HelpTopic>",
         result_schema: schema_of::<Page<HelpTopic>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "help.generate_capability_docs",
@@ -7242,7 +7242,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workspace.diagnostics",
@@ -7264,7 +7264,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workspace.backup",
@@ -7286,7 +7286,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "BackupRecord",
         result_schema: schema_of::<BackupRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workspace.restore",
@@ -7308,7 +7308,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "BackupRecord",
         result_schema: schema_of::<BackupRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workspace.migrate",
@@ -7330,7 +7330,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workspace.update_status",
@@ -7352,7 +7352,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<UpdateRecord>",
         result_schema: schema_of::<Page<UpdateRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workspace.approve_install",
@@ -7374,7 +7374,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "UpdateRecord",
         result_schema: schema_of::<UpdateRecord>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workspace.logs",
@@ -7396,7 +7396,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "workspace.record_diagnostic",
@@ -7418,7 +7418,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Diagnostic",
         result_schema: schema_of::<Diagnostic>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "repositories.list",
@@ -7440,7 +7440,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<RepositoryRecord>",
         result_schema: schema_of::<Page<RepositoryRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "repositories.get",
@@ -7462,7 +7462,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RepositoryRecord",
         result_schema: schema_of::<RepositoryRecord>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "repositories.nodes",
@@ -7484,7 +7484,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "repositories.remove_index",
@@ -7506,7 +7506,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "repositories.readme",
@@ -7528,7 +7528,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RepositoryText",
         result_schema: schema_of::<RepositoryText>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "repositories.summary",
@@ -7550,7 +7550,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "RepositoryText",
         result_schema: schema_of::<RepositoryText>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "repositories.search",
@@ -7572,7 +7572,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<RepositoryRecord>",
         result_schema: schema_of::<Page<RepositoryRecord>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "queue.inspect",
@@ -7594,7 +7594,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<QueueDelivery>",
         result_schema: schema_of::<Page<QueueDelivery>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "queue.resolve",
@@ -7616,7 +7616,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "QueueDelivery",
         result_schema: schema_of::<QueueDelivery>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "queue.retry",
@@ -7638,7 +7638,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "QueueDelivery",
         result_schema: schema_of::<QueueDelivery>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "queue.consumer_status",
@@ -7660,7 +7660,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ConsumerStatus",
         result_schema: schema_of::<ConsumerStatus>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "queue.reconcile",
@@ -7682,7 +7682,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "QueueDelivery",
         result_schema: schema_of::<QueueDelivery>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "imports.preview",
@@ -7704,7 +7704,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ImportRun",
         result_schema: schema_of::<ImportRun>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "imports.configure",
@@ -7726,7 +7726,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "imports.apply",
@@ -7748,7 +7748,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ImportRun",
         result_schema: schema_of::<ImportRun>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "imports.runs",
@@ -7770,7 +7770,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<ImportRun>",
         result_schema: schema_of::<Page<ImportRun>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "imports.inspect",
@@ -7792,7 +7792,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "ImportRun",
         result_schema: schema_of::<ImportRun>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "maintenance.prune_diagnostics",
@@ -7814,7 +7814,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PrunePreview",
         result_schema: schema_of::<PrunePreview>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "maintenance.prune_index_runs",
@@ -7836,7 +7836,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PrunePreview",
         result_schema: schema_of::<PrunePreview>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "maintenance.prune_messages",
@@ -7858,7 +7858,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PrunePreview",
         result_schema: schema_of::<PrunePreview>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "maintenance.prune_sessions",
@@ -7880,7 +7880,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "PrunePreview",
         result_schema: schema_of::<PrunePreview>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "repository_docs.generate",
@@ -7902,7 +7902,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp_server.status",
@@ -7924,7 +7924,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "McpInboundStatus",
         result_schema: schema_of::<McpInboundStatus>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp_server.configure",
@@ -7946,7 +7946,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "McpInboundStatus",
         result_schema: schema_of::<McpInboundStatus>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp_server.clients",
@@ -7968,7 +7968,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "Page<McpClientAccess>",
         result_schema: schema_of::<Page<McpClientAccess>>,
         completion: false,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
     OperationDescriptor {
         name: "mcp_server.set_client_access",
@@ -7990,7 +7990,7 @@ pub(super) static CATALOG: [OperationDescriptor; 353] = [
         result_type: "McpClientAccess",
         result_schema: schema_of::<McpClientAccess>,
         completion: true,
-        schema_revision: SchemaRevision::INITIAL,
+        revisions: &[SchemaRevision(1)],
     },
 ];
 
@@ -8353,2102 +8353,3768 @@ pub(super) fn index_of(name: &str) -> Option<usize> {
     }
 }
 
-fn decode_projects_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::projects::ListInput>("projects.list", Mode::Query, v, |i| {
+fn decode_projects_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::projects::ListInput>("projects.list", Mode::Query, revision, v, |i| {
         OperationInput::Projects(ops::projects::Input::List(i))
     })
 }
-fn decode_projects_get_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::projects::GetInput>("projects.get", Mode::Query, v, |i| {
+fn decode_projects_get_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::projects::GetInput>("projects.get", Mode::Query, revision, v, |i| {
         OperationInput::Projects(ops::projects::Input::Get(i))
     })
 }
-fn decode_projects_create_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::projects::CreateInput>("projects.create", Mode::Command, v, |i| {
-        OperationInput::Projects(ops::projects::Input::Create(i))
-    })
+fn decode_projects_create_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::projects::CreateInput>(
+        "projects.create",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Projects(ops::projects::Input::Create(i)),
+    )
 }
-fn decode_projects_edit_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::projects::EditInput>("projects.edit", Mode::Command, v, |i| {
-        OperationInput::Projects(ops::projects::Input::Edit(i))
-    })
+fn decode_projects_edit_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::projects::EditInput>(
+        "projects.edit",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Projects(ops::projects::Input::Edit(i)),
+    )
 }
-fn decode_projects_membership_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_projects_membership_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::projects::MembershipInput>(
         "projects.membership",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Projects(ops::projects::Input::Membership(i)),
     )
 }
-fn decode_projects_archive_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::projects::ArchiveInput>("projects.archive", Mode::Command, v, |i| {
-        OperationInput::Projects(ops::projects::Input::Archive(i))
-    })
+fn decode_projects_archive_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::projects::ArchiveInput>(
+        "projects.archive",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Projects(ops::projects::Input::Archive(i)),
+    )
 }
-fn decode_projects_restore_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::projects::RestoreInput>("projects.restore", Mode::Command, v, |i| {
-        OperationInput::Projects(ops::projects::Input::Restore(i))
-    })
+fn decode_projects_restore_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::projects::RestoreInput>(
+        "projects.restore",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Projects(ops::projects::Input::Restore(i)),
+    )
 }
-fn decode_projects_delete_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::projects::DeleteInput>("projects.delete", Mode::Command, v, |i| {
-        OperationInput::Projects(ops::projects::Input::Delete(i))
-    })
+fn decode_projects_delete_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::projects::DeleteInput>(
+        "projects.delete",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Projects(ops::projects::Input::Delete(i)),
+    )
 }
-fn decode_features_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::features::ListInput>("features.list", Mode::Query, v, |i| {
+fn decode_features_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::features::ListInput>("features.list", Mode::Query, revision, v, |i| {
         OperationInput::Features(ops::features::Input::List(i))
     })
 }
-fn decode_features_get_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::features::GetInput>("features.get", Mode::Query, v, |i| {
+fn decode_features_get_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::features::GetInput>("features.get", Mode::Query, revision, v, |i| {
         OperationInput::Features(ops::features::Input::Get(i))
     })
 }
-fn decode_features_create_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::features::CreateInput>("features.create", Mode::Command, v, |i| {
-        OperationInput::Features(ops::features::Input::Create(i))
-    })
+fn decode_features_create_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::features::CreateInput>(
+        "features.create",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Features(ops::features::Input::Create(i)),
+    )
 }
-fn decode_features_edit_plan_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_features_edit_plan_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::features::EditPlanInput>(
         "features.edit_plan",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Features(ops::features::Input::EditPlan(i)),
     )
 }
-fn decode_features_prioritize_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_features_prioritize_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::features::PrioritizeInput>(
         "features.prioritize",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Features(ops::features::Input::Prioritize(i)),
     )
 }
-fn decode_features_dependencies_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_features_dependencies_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::features::DependenciesInput>(
         "features.dependencies",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Features(ops::features::Input::Dependencies(i)),
     )
 }
-fn decode_features_request_plan_approval_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_features_request_plan_approval_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::features::RequestPlanApprovalInput>(
         "features.request_plan_approval",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Features(ops::features::Input::RequestPlanApproval(i)),
     )
 }
-fn decode_features_edit_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::features::EditInput>("features.edit", Mode::Command, v, |i| {
-        OperationInput::Features(ops::features::Input::Edit(i))
-    })
+fn decode_features_edit_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::features::EditInput>(
+        "features.edit",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Features(ops::features::Input::Edit(i)),
+    )
 }
-fn decode_issues_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::issues::ListInput>("issues.list", Mode::Query, v, |i| {
+fn decode_issues_list_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::issues::ListInput>("issues.list", Mode::Query, revision, v, |i| {
         OperationInput::Issues(ops::issues::Input::List(i))
     })
 }
-fn decode_issues_get_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::issues::GetInput>("issues.get", Mode::Query, v, |i| {
+fn decode_issues_get_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::issues::GetInput>("issues.get", Mode::Query, revision, v, |i| {
         OperationInput::Issues(ops::issues::Input::Get(i))
     })
 }
-fn decode_issues_create_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::issues::CreateInput>("issues.create", Mode::Command, v, |i| {
-        OperationInput::Issues(ops::issues::Input::Create(i))
-    })
+fn decode_issues_create_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::issues::CreateInput>(
+        "issues.create",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Issues(ops::issues::Input::Create(i)),
+    )
 }
-fn decode_issues_edit_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::issues::EditInput>("issues.edit", Mode::Command, v, |i| {
+fn decode_issues_edit_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::issues::EditInput>("issues.edit", Mode::Command, revision, v, |i| {
         OperationInput::Issues(ops::issues::Input::Edit(i))
     })
 }
-fn decode_issues_prioritize_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::issues::PrioritizeInput>("issues.prioritize", Mode::Command, v, |i| {
-        OperationInput::Issues(ops::issues::Input::Prioritize(i))
-    })
+fn decode_issues_prioritize_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::issues::PrioritizeInput>(
+        "issues.prioritize",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Issues(ops::issues::Input::Prioritize(i)),
+    )
 }
-fn decode_issues_publish_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::issues::PublishInput>("issues.publish", Mode::Command, v, |i| {
-        OperationInput::Issues(ops::issues::Input::Publish(i))
-    })
+fn decode_issues_publish_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::issues::PublishInput>(
+        "issues.publish",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Issues(ops::issues::Input::Publish(i)),
+    )
 }
-fn decode_issues_link_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::issues::LinkInput>("issues.link", Mode::Command, v, |i| {
+fn decode_issues_link_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::issues::LinkInput>("issues.link", Mode::Command, revision, v, |i| {
         OperationInput::Issues(ops::issues::Input::Link(i))
     })
 }
-fn decode_tasks_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::tasks::ListInput>("tasks.list", Mode::Query, v, |i| {
+fn decode_tasks_list_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::tasks::ListInput>("tasks.list", Mode::Query, revision, v, |i| {
         OperationInput::Tasks(ops::tasks::Input::List(i))
     })
 }
-fn decode_tasks_get_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::tasks::GetInput>("tasks.get", Mode::Query, v, |i| {
+fn decode_tasks_get_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::tasks::GetInput>("tasks.get", Mode::Query, revision, v, |i| {
         OperationInput::Tasks(ops::tasks::Input::Get(i))
     })
 }
-fn decode_tasks_create_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::tasks::CreateInput>("tasks.create", Mode::Command, v, |i| {
+fn decode_tasks_create_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::tasks::CreateInput>("tasks.create", Mode::Command, revision, v, |i| {
         OperationInput::Tasks(ops::tasks::Input::Create(i))
     })
 }
-fn decode_tasks_edit_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::tasks::EditInput>("tasks.edit", Mode::Command, v, |i| {
+fn decode_tasks_edit_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::tasks::EditInput>("tasks.edit", Mode::Command, revision, v, |i| {
         OperationInput::Tasks(ops::tasks::Input::Edit(i))
     })
 }
-fn decode_tasks_prioritize_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::tasks::PrioritizeInput>("tasks.prioritize", Mode::Command, v, |i| {
-        OperationInput::Tasks(ops::tasks::Input::Prioritize(i))
-    })
+fn decode_tasks_prioritize_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::tasks::PrioritizeInput>(
+        "tasks.prioritize",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Tasks(ops::tasks::Input::Prioritize(i)),
+    )
 }
-fn decode_tasks_move_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::tasks::MoveInput>("tasks.move", Mode::Command, v, |i| {
+fn decode_tasks_move_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::tasks::MoveInput>("tasks.move", Mode::Command, revision, v, |i| {
         OperationInput::Tasks(ops::tasks::Input::Move(i))
     })
 }
-fn decode_tasks_assign_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::tasks::AssignInput>("tasks.assign", Mode::Command, v, |i| {
+fn decode_tasks_assign_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::tasks::AssignInput>("tasks.assign", Mode::Command, revision, v, |i| {
         OperationInput::Tasks(ops::tasks::Input::Assign(i))
     })
 }
-fn decode_tasks_dependency_links_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_tasks_dependency_links_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::tasks::DependencyLinksInput>(
         "tasks.dependency_links",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Tasks(ops::tasks::Input::DependencyLinks(i)),
     )
 }
-fn decode_tasks_acceptance_evidence_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_tasks_acceptance_evidence_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::tasks::AcceptanceEvidenceInput>(
         "tasks.acceptance_evidence",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Tasks(ops::tasks::Input::AcceptanceEvidence(i)),
     )
 }
-fn decode_tasks_sync_plan_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::tasks::SyncPlanInput>("tasks.sync_plan", Mode::Command, v, |i| {
-        OperationInput::Tasks(ops::tasks::Input::SyncPlan(i))
-    })
+fn decode_tasks_sync_plan_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::tasks::SyncPlanInput>(
+        "tasks.sync_plan",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Tasks(ops::tasks::Input::SyncPlan(i)),
+    )
 }
-fn decode_tasks_set_feature_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::tasks::SetFeatureInput>("tasks.set_feature", Mode::Command, v, |i| {
-        OperationInput::Tasks(ops::tasks::Input::SetFeature(i))
-    })
+fn decode_tasks_set_feature_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::tasks::SetFeatureInput>(
+        "tasks.set_feature",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Tasks(ops::tasks::Input::SetFeature(i)),
+    )
 }
-fn decode_workflows_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::workflows::ListInput>("workflows.list", Mode::Query, v, |i| {
-        OperationInput::Workflows(ops::workflows::Input::List(i))
-    })
+fn decode_workflows_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::workflows::ListInput>(
+        "workflows.list",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Workflows(ops::workflows::Input::List(i)),
+    )
 }
-fn decode_workflows_create_status_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_workflows_create_status_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::workflows::CreateStatusInput>(
         "workflows.create_status",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Workflows(ops::workflows::Input::CreateStatus(i)),
     )
 }
-fn decode_workflows_rename_status_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_workflows_rename_status_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::workflows::RenameStatusInput>(
         "workflows.rename_status",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Workflows(ops::workflows::Input::RenameStatus(i)),
     )
 }
-fn decode_workflows_order_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::workflows::OrderInput>("workflows.order", Mode::Command, v, |i| {
-        OperationInput::Workflows(ops::workflows::Input::Order(i))
-    })
+fn decode_workflows_order_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::workflows::OrderInput>(
+        "workflows.order",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Workflows(ops::workflows::Input::Order(i)),
+    )
 }
-fn decode_workflows_reassign_and_remove_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_workflows_reassign_and_remove_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::workflows::ReassignAndRemoveInput>(
         "workflows.reassign_and_remove",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Workflows(ops::workflows::Input::ReassignAndRemove(i)),
     )
 }
-fn decode_next_work_claim_project_queue_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_next_work_claim_project_queue_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::next_work::ClaimProjectQueueInput>(
         "next_work.claim_project_queue",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::NextWork(ops::next_work::Input::ClaimProjectQueue(i)),
     )
 }
-fn decode_next_work_claim_feature_task_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_next_work_claim_feature_task_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::next_work::ClaimFeatureTaskInput>(
         "next_work.claim_feature_task",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::NextWork(ops::next_work::Input::ClaimFeatureTask(i)),
     )
 }
-fn decode_next_work_inspect_claim_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_next_work_inspect_claim_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::next_work::InspectClaimInput>(
         "next_work.inspect_claim",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::NextWork(ops::next_work::Input::InspectClaim(i)),
     )
 }
-fn decode_next_work_release_claim_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_next_work_release_claim_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::next_work::ReleaseClaimInput>(
         "next_work.release_claim",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::NextWork(ops::next_work::Input::ReleaseClaim(i)),
     )
 }
-fn decode_runs_start_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::CommandRequest>(v, |i| {
+fn decode_runs_start_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::CommandRequest>(v, revision, |i| {
         OperationInput::Runs(ops::runs::Input::Start(i))
     })
 }
-fn decode_runs_pause_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::CommandRequest>(v, |i| {
+fn decode_runs_pause_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::CommandRequest>(v, revision, |i| {
         OperationInput::Runs(ops::runs::Input::Pause(i))
     })
 }
-fn decode_runs_continue_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::CommandRequest>(v, |i| {
+fn decode_runs_continue_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::CommandRequest>(v, revision, |i| {
         OperationInput::Runs(ops::runs::Input::Continue(i))
     })
 }
-fn decode_runs_redirect_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::runs::RedirectInput>("runs.redirect", Mode::Command, v, |i| {
-        OperationInput::Runs(ops::runs::Input::Redirect(i))
-    })
+fn decode_runs_redirect_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::runs::RedirectInput>(
+        "runs.redirect",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Runs(ops::runs::Input::Redirect(i)),
+    )
 }
-fn decode_runs_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::QueryRequest>(v, |i| {
+fn decode_runs_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::QueryRequest>(v, revision, |i| {
         OperationInput::Runs(ops::runs::Input::Inspect(i))
     })
 }
-fn decode_runs_stop_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::runs::StopInput>("runs.stop", Mode::Command, v, |i| {
+fn decode_runs_stop_command(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::runs::StopInput>("runs.stop", Mode::Command, revision, v, |i| {
         OperationInput::Runs(ops::runs::Input::Stop(i))
     })
 }
-fn decode_runs_eligibility_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::QueryRequest>(v, |i| {
+fn decode_runs_eligibility_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::QueryRequest>(v, revision, |i| {
         OperationInput::Runs(ops::runs::Input::Eligibility(i))
     })
 }
-fn decode_agents_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::agents::InspectInput>("agents.inspect", Mode::Query, v, |i| {
-        OperationInput::Agents(ops::agents::Input::Inspect(i))
-    })
+fn decode_agents_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::agents::InspectInput>(
+        "agents.inspect",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Agents(ops::agents::Input::Inspect(i)),
+    )
 }
-fn decode_agents_delegate_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::agents::DelegateInput>("agents.delegate", Mode::Command, v, |i| {
-        OperationInput::Agents(ops::agents::Input::Delegate(i))
-    })
+fn decode_agents_delegate_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::agents::DelegateInput>(
+        "agents.delegate",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Agents(ops::agents::Input::Delegate(i)),
+    )
 }
-fn decode_agents_messages_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::agents::MessagesInput>("agents.messages", Mode::Command, v, |i| {
-        OperationInput::Agents(ops::agents::Input::Messages(i))
-    })
+fn decode_agents_messages_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::agents::MessagesInput>(
+        "agents.messages",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Agents(ops::agents::Input::Messages(i)),
+    )
 }
-fn decode_agents_inbox_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::agents::InboxInput>("agents.inbox", Mode::Query, v, |i| {
+fn decode_agents_inbox_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::agents::InboxInput>("agents.inbox", Mode::Query, revision, v, |i| {
         OperationInput::Agents(ops::agents::Input::Inbox(i))
     })
 }
-fn decode_agents_acknowledge_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_agents_acknowledge_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::agents::AcknowledgeInput>(
         "agents.acknowledge",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Agents(ops::agents::Input::Acknowledge(i)),
     )
 }
-fn decode_agents_checkpoint_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::agents::CheckpointInput>("agents.checkpoint", Mode::Command, v, |i| {
-        OperationInput::Agents(ops::agents::Input::Checkpoint(i))
-    })
+fn decode_agents_checkpoint_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::agents::CheckpointInput>(
+        "agents.checkpoint",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Agents(ops::agents::Input::Checkpoint(i)),
+    )
 }
-fn decode_sessions_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::sessions::ListInput>("sessions.list", Mode::Query, v, |i| {
+fn decode_sessions_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::sessions::ListInput>("sessions.list", Mode::Query, revision, v, |i| {
         OperationInput::Sessions(ops::sessions::Input::List(i))
     })
 }
-fn decode_sessions_get_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::sessions::GetInput>("sessions.get", Mode::Query, v, |i| {
+fn decode_sessions_get_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::sessions::GetInput>("sessions.get", Mode::Query, revision, v, |i| {
         OperationInput::Sessions(ops::sessions::Input::Get(i))
     })
 }
-fn decode_sessions_transcript_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::provider::SessionQueryRequest>(v, |i| {
+fn decode_sessions_transcript_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::provider::SessionQueryRequest>(v, revision, |i| {
         OperationInput::Sessions(ops::sessions::Input::Transcript(i))
     })
 }
-fn decode_sessions_briefing_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::sessions::BriefingInput>("sessions.briefing", Mode::Query, v, |i| {
-        OperationInput::Sessions(ops::sessions::Input::Briefing(i))
-    })
+fn decode_sessions_briefing_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::sessions::BriefingInput>(
+        "sessions.briefing",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Sessions(ops::sessions::Input::Briefing(i)),
+    )
 }
-fn decode_sessions_append_message_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::provider::SessionCommandRequest>(v, |i| {
+fn decode_sessions_append_message_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::provider::SessionCommandRequest>(v, revision, |i| {
         OperationInput::Sessions(ops::sessions::Input::AppendMessage(i))
     })
 }
-fn decode_sessions_context_sources_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_sessions_context_sources_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::sessions::ContextSourcesInput>(
         "sessions.context_sources",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Sessions(ops::sessions::Input::ContextSources(i)),
     )
 }
-fn decode_sessions_start_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::sessions::StartInput>("sessions.start", Mode::Command, v, |i| {
-        OperationInput::Sessions(ops::sessions::Input::Start(i))
-    })
+fn decode_sessions_start_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::sessions::StartInput>(
+        "sessions.start",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Sessions(ops::sessions::Input::Start(i)),
+    )
 }
-fn decode_sessions_end_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::sessions::EndInput>("sessions.end", Mode::Command, v, |i| {
+fn decode_sessions_end_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::sessions::EndInput>("sessions.end", Mode::Command, revision, v, |i| {
         OperationInput::Sessions(ops::sessions::Input::End(i))
     })
 }
-fn decode_ui_current_screen_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::ui::CurrentScreenInput>("ui.current_screen", Mode::Query, v, |i| {
-        OperationInput::Ui(ops::ui::Input::CurrentScreen(i))
-    })
+fn decode_ui_current_screen_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::ui::CurrentScreenInput>(
+        "ui.current_screen",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Ui(ops::ui::Input::CurrentScreen(i)),
+    )
 }
-fn decode_history_events_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::QueryRequest>(v, |i| {
+fn decode_history_events_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::QueryRequest>(v, revision, |i| {
         OperationInput::History(ops::history::Input::Events(i))
     })
 }
-fn decode_history_work_lineage_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_history_work_lineage_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::history::WorkLineageInput>(
         "history.work_lineage",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::History(ops::history::Input::WorkLineage(i)),
     )
 }
-fn decode_history_git_links_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::history::GitLinksInput>("history.git_links", Mode::Query, v, |i| {
-        OperationInput::History(ops::history::Input::GitLinks(i))
-    })
+fn decode_history_git_links_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::history::GitLinksInput>(
+        "history.git_links",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::History(ops::history::Input::GitLinks(i)),
+    )
 }
-fn decode_history_evidence_links_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_history_evidence_links_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::history::EvidenceLinksInput>(
         "history.evidence_links",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::History(ops::history::Input::EvidenceLinks(i)),
     )
 }
-fn decode_history_operation_status_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::QueryRequest>(v, |i| {
+fn decode_history_operation_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::QueryRequest>(v, revision, |i| {
         OperationInput::History(ops::history::Input::OperationStatus(i))
     })
 }
-fn decode_history_tool_usage_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::history::ToolUsageInput>("history.tool_usage", Mode::Query, v, |i| {
-        OperationInput::History(ops::history::Input::ToolUsage(i))
-    })
+fn decode_history_tool_usage_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::history::ToolUsageInput>(
+        "history.tool_usage",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::History(ops::history::Input::ToolUsage(i)),
+    )
 }
-fn decode_history_command_receipt_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::QueryRequest>(v, |i| {
+fn decode_history_command_receipt_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::QueryRequest>(v, revision, |i| {
         OperationInput::History(ops::history::Input::CommandReceipt(i))
     })
 }
-fn decode_code_search_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_search_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Search(i))
     })
 }
-fn decode_code_architecture_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_architecture_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Architecture(i))
     })
 }
-fn decode_code_dependency_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_dependency_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Dependency(i))
     })
 }
-fn decode_code_impact_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_impact_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Impact(i))
     })
 }
-fn decode_code_source_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_source_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Source(i))
     })
 }
-fn decode_code_traverse_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_traverse_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Traverse(i))
     })
 }
-fn decode_code_graph_scope_status_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_graph_scope_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::GraphScopeStatus(i))
     })
 }
-fn decode_code_overview_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_overview_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Overview(i))
     })
 }
-fn decode_code_nodes_by_file_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_nodes_by_file_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::NodesByFile(i))
     })
 }
-fn decode_code_node_detail_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_node_detail_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::NodeDetail(i))
     })
 }
-fn decode_code_set_trust_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::IndexCommandRequest>(v, |i| {
+fn decode_code_set_trust_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::IndexCommandRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::SetTrust(i))
     })
 }
-fn decode_code_file_impact_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_file_impact_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::FileImpact(i))
     })
 }
-fn decode_code_graph_schema_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_graph_schema_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::GraphSchema(i))
     })
 }
-fn decode_code_call_path_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_call_path_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::CallPath(i))
     })
 }
-fn decode_code_data_lineage_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_data_lineage_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::DataLineage(i))
     })
 }
-fn decode_code_consumers_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_consumers_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Consumers(i))
     })
 }
-fn decode_code_publishers_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_publishers_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Publishers(i))
     })
 }
-fn decode_code_snippet_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_snippet_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::Snippet(i))
     })
 }
-fn decode_code_repository_dependencies_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, |i| {
+fn decode_code_repository_dependencies_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GraphReadRequest>(v, revision, |i| {
         OperationInput::Code(ops::code::Input::RepositoryDependencies(i))
     })
 }
-fn decode_indexing_discover_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::indexing::DiscoverInput>("indexing.discover", Mode::Query, v, |i| {
-        OperationInput::Indexing(ops::indexing::Input::Discover(i))
-    })
+fn decode_indexing_discover_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::indexing::DiscoverInput>(
+        "indexing.discover",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Indexing(ops::indexing::Input::Discover(i)),
+    )
 }
-fn decode_indexing_index_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::indexing::IndexInput>("indexing.index", Mode::Command, v, |i| {
-        OperationInput::Indexing(ops::indexing::Input::Index(i))
-    })
+fn decode_indexing_index_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::indexing::IndexInput>(
+        "indexing.index",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Indexing(ops::indexing::Input::Index(i)),
+    )
 }
-fn decode_indexing_reindex_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::indexing::ReindexInput>("indexing.reindex", Mode::Command, v, |i| {
-        OperationInput::Indexing(ops::indexing::Input::Reindex(i))
-    })
+fn decode_indexing_reindex_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::indexing::ReindexInput>(
+        "indexing.reindex",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Indexing(ops::indexing::Input::Reindex(i)),
+    )
 }
-fn decode_indexing_refresh_overlay_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::IndexCommandRequest>(v, |i| {
+fn decode_indexing_refresh_overlay_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::IndexCommandRequest>(v, revision, |i| {
         OperationInput::Indexing(ops::indexing::Input::RefreshOverlay(i))
     })
 }
-fn decode_indexing_retire_view_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_indexing_retire_view_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::indexing::RetireViewInput>(
         "indexing.retire_view",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Indexing(ops::indexing::Input::RetireView(i)),
     )
 }
-fn decode_indexing_cancel_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::IndexCommandRequest>(v, |i| {
+fn decode_indexing_cancel_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::IndexCommandRequest>(v, revision, |i| {
         OperationInput::Indexing(ops::indexing::Input::Cancel(i))
     })
 }
-fn decode_indexing_status_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::indexing::StatusInput>("indexing.status", Mode::Query, v, |i| {
-        OperationInput::Indexing(ops::indexing::Input::Status(i))
-    })
+fn decode_indexing_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::indexing::StatusInput>(
+        "indexing.status",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Indexing(ops::indexing::Input::Status(i)),
+    )
 }
-fn decode_indexing_runs_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::indexing::RunsInput>("indexing.runs", Mode::Query, v, |i| {
+fn decode_indexing_runs_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::indexing::RunsInput>("indexing.runs", Mode::Query, revision, v, |i| {
         OperationInput::Indexing(ops::indexing::Input::Runs(i))
     })
 }
-fn decode_indexing_configure_sources_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_indexing_configure_sources_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::indexing::ConfigureSourcesInput>(
         "indexing.configure_sources",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Indexing(ops::indexing::Input::ConfigureSources(i)),
     )
 }
-fn decode_analysis_health_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::analysis::HealthInput>("analysis.health", Mode::Query, v, |i| {
-        OperationInput::Analysis(ops::analysis::Input::Health(i))
-    })
+fn decode_analysis_health_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::analysis::HealthInput>(
+        "analysis.health",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Analysis(ops::analysis::Input::Health(i)),
+    )
 }
-fn decode_analysis_cross_repo_links_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_cross_repo_links_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::CrossRepoLinksInput>(
         "analysis.cross_repo_links",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::CrossRepoLinks(i)),
     )
 }
-fn decode_analysis_community_analysis_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_community_analysis_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::CommunityAnalysisInput>(
         "analysis.community_analysis",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::CommunityAnalysis(i)),
     )
 }
-fn decode_analysis_status_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::analysis::StatusInput>("analysis.status", Mode::Query, v, |i| {
-        OperationInput::Analysis(ops::analysis::Input::Status(i))
-    })
+fn decode_analysis_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::analysis::StatusInput>(
+        "analysis.status",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Analysis(ops::analysis::Input::Status(i)),
+    )
 }
-fn decode_analysis_clusters_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::analysis::ClustersInput>("analysis.clusters", Mode::Query, v, |i| {
-        OperationInput::Analysis(ops::analysis::Input::Clusters(i))
-    })
+fn decode_analysis_clusters_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::analysis::ClustersInput>(
+        "analysis.clusters",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Analysis(ops::analysis::Input::Clusters(i)),
+    )
 }
-fn decode_analysis_cluster_detail_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_cluster_detail_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::ClusterDetailInput>(
         "analysis.cluster_detail",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::ClusterDetail(i)),
     )
 }
-fn decode_analysis_link_and_detect_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_link_and_detect_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::LinkAndDetectInput>(
         "analysis.link_and_detect",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::LinkAndDetect(i)),
     )
 }
-fn decode_analysis_process_batch_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_process_batch_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::ProcessBatchInput>(
         "analysis.process_batch",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::ProcessBatch(i)),
     )
 }
-fn decode_analysis_security_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::analysis::SecurityInput>("analysis.security", Mode::Query, v, |i| {
-        OperationInput::Analysis(ops::analysis::Input::Security(i))
-    })
+fn decode_analysis_security_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::analysis::SecurityInput>(
+        "analysis.security",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Analysis(ops::analysis::Input::Security(i)),
+    )
 }
-fn decode_analysis_metrics_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::analysis::MetricsInput>("analysis.metrics", Mode::Query, v, |i| {
-        OperationInput::Analysis(ops::analysis::Input::Metrics(i))
-    })
+fn decode_analysis_metrics_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::analysis::MetricsInput>(
+        "analysis.metrics",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Analysis(ops::analysis::Input::Metrics(i)),
+    )
 }
-fn decode_analysis_hotspots_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::analysis::HotspotsInput>("analysis.hotspots", Mode::Query, v, |i| {
-        OperationInput::Analysis(ops::analysis::Input::Hotspots(i))
-    })
+fn decode_analysis_hotspots_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::analysis::HotspotsInput>(
+        "analysis.hotspots",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Analysis(ops::analysis::Input::Hotspots(i)),
+    )
 }
-fn decode_analysis_reanalyze_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_reanalyze_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::ReanalyzeInput>(
         "analysis.reanalyze",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::Reanalyze(i)),
     )
 }
-fn decode_analysis_synthesize_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_synthesize_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::SynthesizeInput>(
         "analysis.synthesize",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::Synthesize(i)),
     )
 }
-fn decode_analysis_fleet_health_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_fleet_health_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::FleetHealthInput>(
         "analysis.fleet_health",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::FleetHealth(i)),
     )
 }
-fn decode_analysis_archival_candidates_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_archival_candidates_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::ArchivalCandidatesInput>(
         "analysis.archival_candidates",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::ArchivalCandidates(i)),
     )
 }
-fn decode_analysis_file_hotspot_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_analysis_file_hotspot_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::analysis::FileHotspotInput>(
         "analysis.file_hotspot",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Analysis(ops::analysis::Input::FileHotspot(i)),
     )
 }
-fn decode_schemas_connections_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_schemas_connections_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::schemas::ConnectionsInput>(
         "schemas.connections",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Schemas(ops::schemas::Input::Connections(i)),
     )
 }
-fn decode_schemas_objects_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::schemas::ObjectsInput>("schemas.objects", Mode::Query, v, |i| {
-        OperationInput::Schemas(ops::schemas::Input::Objects(i))
-    })
+fn decode_schemas_objects_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::schemas::ObjectsInput>(
+        "schemas.objects",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Schemas(ops::schemas::Input::Objects(i)),
+    )
 }
-fn decode_schemas_relationships_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_schemas_relationships_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::schemas::RelationshipsInput>(
         "schemas.relationships",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Schemas(ops::schemas::Input::Relationships(i)),
     )
 }
-fn decode_schemas_index_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::schemas::IndexInput>("schemas.index", Mode::Command, v, |i| {
-        OperationInput::Schemas(ops::schemas::Input::Index(i))
-    })
+fn decode_schemas_index_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::schemas::IndexInput>(
+        "schemas.index",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Schemas(ops::schemas::Input::Index(i)),
+    )
 }
-fn decode_schemas_refresh_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::schemas::RefreshInput>("schemas.refresh", Mode::Command, v, |i| {
-        OperationInput::Schemas(ops::schemas::Input::Refresh(i))
-    })
+fn decode_schemas_refresh_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::schemas::RefreshInput>(
+        "schemas.refresh",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Schemas(ops::schemas::Input::Refresh(i)),
+    )
 }
-fn decode_schemas_remove_index_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_schemas_remove_index_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::schemas::RemoveIndexInput>(
         "schemas.remove_index",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Schemas(ops::schemas::Input::RemoveIndex(i)),
     )
 }
-fn decode_schemas_configure_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::schemas::ConfigureInput>("schemas.configure", Mode::Command, v, |i| {
-        OperationInput::Schemas(ops::schemas::Input::Configure(i))
-    })
+fn decode_schemas_configure_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::schemas::ConfigureInput>(
+        "schemas.configure",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Schemas(ops::schemas::Input::Configure(i)),
+    )
 }
-fn decode_database_read_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::database::ReadInput>("database.read", Mode::Query, v, |i| {
+fn decode_database_read_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::database::ReadInput>("database.read", Mode::Query, revision, v, |i| {
         OperationInput::Database(ops::database::Input::Read(i))
     })
 }
-fn decode_database_execute_write_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_database_execute_write_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::database::ExecuteWriteInput>(
         "database.execute_write",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Database(ops::database::Input::ExecuteWrite(i)),
     )
 }
-fn decode_database_apply_migration_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_database_apply_migration_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::database::ApplyMigrationInput>(
         "database.apply_migration",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Database(ops::database::Input::ApplyMigration(i)),
     )
 }
-fn decode_database_direct_schema_change_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_database_direct_schema_change_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::database::DirectSchemaChangeInput>(
         "database.direct_schema_change",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Database(ops::database::Input::DirectSchemaChange(i)),
     )
 }
 fn decode_database_configure_sensitive_columns_command(
     v: Value,
+    revision: SchemaRevision,
 ) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::database::ConfigureSensitiveColumnsInput>(
         "database.configure_sensitive_columns",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Database(ops::database::Input::ConfigureSensitiveColumns(i)),
     )
 }
-fn decode_knowledge_search_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::SearchInput>("knowledge.search", Mode::Query, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Search(i))
-    })
+fn decode_knowledge_search_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::SearchInput>(
+        "knowledge.search",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Search(i)),
+    )
 }
-fn decode_knowledge_read_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::ReadInput>("knowledge.read", Mode::Query, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Read(i))
-    })
+fn decode_knowledge_read_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::ReadInput>(
+        "knowledge.read",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Read(i)),
+    )
 }
-fn decode_knowledge_record_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::RecordInput>("knowledge.record", Mode::Command, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Record(i))
-    })
+fn decode_knowledge_record_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::RecordInput>(
+        "knowledge.record",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Record(i)),
+    )
 }
-fn decode_knowledge_revise_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::ReviseInput>("knowledge.revise", Mode::Command, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Revise(i))
-    })
+fn decode_knowledge_revise_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::ReviseInput>(
+        "knowledge.revise",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Revise(i)),
+    )
 }
-fn decode_knowledge_relate_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::RelateInput>("knowledge.relate", Mode::Command, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Relate(i))
-    })
+fn decode_knowledge_relate_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::RelateInput>(
+        "knowledge.relate",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Relate(i)),
+    )
 }
-fn decode_knowledge_tag_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::TagInput>("knowledge.tag", Mode::Command, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Tag(i))
-    })
+fn decode_knowledge_tag_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::TagInput>(
+        "knowledge.tag",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Tag(i)),
+    )
 }
-fn decode_knowledge_verify_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::VerifyInput>("knowledge.verify", Mode::Command, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Verify(i))
-    })
+fn decode_knowledge_verify_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::VerifyInput>(
+        "knowledge.verify",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Verify(i)),
+    )
 }
-fn decode_knowledge_retract_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::RetractInput>("knowledge.retract", Mode::Command, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Retract(i))
-    })
+fn decode_knowledge_retract_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::RetractInput>(
+        "knowledge.retract",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Retract(i)),
+    )
 }
-fn decode_knowledge_scope_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::ScopeInput>("knowledge.scope", Mode::Command, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Scope(i))
-    })
+fn decode_knowledge_scope_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::ScopeInput>(
+        "knowledge.scope",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Scope(i)),
+    )
 }
-fn decode_knowledge_diagnostics_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_diagnostics_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::DiagnosticsInput>(
         "knowledge.diagnostics",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::Diagnostics(i)),
     )
 }
-fn decode_knowledge_delete_by_source_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_delete_by_source_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::DeleteBySourceInput>(
         "knowledge.delete_by_source",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::DeleteBySource(i)),
     )
 }
-fn decode_knowledge_delete_selected_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_delete_selected_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::DeleteSelectedInput>(
         "knowledge.delete_selected",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::DeleteSelected(i)),
     )
 }
-fn decode_knowledge_write_status_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_write_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::WriteStatusInput>(
         "knowledge.write_status",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::WriteStatus(i)),
     )
 }
-fn decode_knowledge_subgraph_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::SubgraphInput>("knowledge.subgraph", Mode::Query, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Subgraph(i))
-    })
+fn decode_knowledge_subgraph_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::SubgraphInput>(
+        "knowledge.subgraph",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Subgraph(i)),
+    )
 }
-fn decode_knowledge_entity_bundle_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_entity_bundle_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::EntityBundleInput>(
         "knowledge.entity_bundle",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::EntityBundle(i)),
     )
 }
-fn decode_knowledge_entity_graph_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_entity_graph_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::EntityGraphInput>(
         "knowledge.entity_graph",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::EntityGraph(i)),
     )
 }
-fn decode_knowledge_claim_bundle_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_claim_bundle_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::ClaimBundleInput>(
         "knowledge.claim_bundle",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::ClaimBundle(i)),
     )
 }
-fn decode_knowledge_expand_frontier_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_expand_frontier_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::ExpandFrontierInput>(
         "knowledge.expand_frontier",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::ExpandFrontier(i)),
     )
 }
-fn decode_knowledge_render_summary_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_render_summary_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::RenderSummaryInput>(
         "knowledge.render_summary",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::RenderSummary(i)),
     )
 }
-fn decode_knowledge_query_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::QueryInput>("knowledge.query", Mode::Query, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Query(i))
-    })
+fn decode_knowledge_query_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::QueryInput>(
+        "knowledge.query",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Query(i)),
+    )
 }
-fn decode_knowledge_import_user_data_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_import_user_data_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::ImportUserDataInput>(
         "knowledge.import_user_data",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::ImportUserData(i)),
     )
 }
-fn decode_knowledge_promote_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::knowledge::PromoteInput>("knowledge.promote", Mode::Command, v, |i| {
-        OperationInput::Knowledge(ops::knowledge::Input::Promote(i))
-    })
+fn decode_knowledge_promote_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::knowledge::PromoteInput>(
+        "knowledge.promote",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Knowledge(ops::knowledge::Input::Promote(i)),
+    )
 }
-fn decode_knowledge_challenge_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_challenge_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::ChallengeInput>(
         "knowledge.challenge",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::Challenge(i)),
     )
 }
-fn decode_knowledge_tagged_lessons_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_knowledge_tagged_lessons_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::knowledge::TaggedLessonsInput>(
         "knowledge.tagged_lessons",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Knowledge(ops::knowledge::Input::TaggedLessons(i)),
     )
 }
-fn decode_dreaming_run_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::dreaming::RunInput>("dreaming.run", Mode::Command, v, |i| {
+fn decode_dreaming_run_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::dreaming::RunInput>("dreaming.run", Mode::Command, revision, v, |i| {
         OperationInput::Dreaming(ops::dreaming::Input::Run(i))
     })
 }
-fn decode_dreaming_runs_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::dreaming::RunsInput>("dreaming.runs", Mode::Query, v, |i| {
+fn decode_dreaming_runs_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::dreaming::RunsInput>("dreaming.runs", Mode::Query, revision, v, |i| {
         OperationInput::Dreaming(ops::dreaming::Input::Runs(i))
     })
 }
-fn decode_dreaming_report_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::dreaming::ReportInput>("dreaming.report", Mode::Query, v, |i| {
-        OperationInput::Dreaming(ops::dreaming::Input::Report(i))
-    })
+fn decode_dreaming_report_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::dreaming::ReportInput>(
+        "dreaming.report",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Dreaming(ops::dreaming::Input::Report(i)),
+    )
 }
-fn decode_dreaming_settings_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_dreaming_settings_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::dreaming::SettingsQueryInput>(
         "dreaming.settings",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Dreaming(ops::dreaming::Input::SettingsQuery(i)),
     )
 }
-fn decode_dreaming_settings_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_dreaming_settings_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::dreaming::SettingsCommandInput>(
         "dreaming.settings",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Dreaming(ops::dreaming::Input::SettingsCommand(i)),
     )
 }
-fn decode_dreaming_instructions_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_dreaming_instructions_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::dreaming::InstructionsQueryInput>(
         "dreaming.instructions",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Dreaming(ops::dreaming::Input::InstructionsQuery(i)),
     )
 }
-fn decode_dreaming_instructions_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_dreaming_instructions_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::dreaming::InstructionsCommandInput>(
         "dreaming.instructions",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Dreaming(ops::dreaming::Input::InstructionsCommand(i)),
     )
 }
-fn decode_dreaming_propose_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::dreaming::ProposeInput>("dreaming.propose", Mode::Command, v, |i| {
-        OperationInput::Dreaming(ops::dreaming::Input::Propose(i))
-    })
+fn decode_dreaming_propose_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::dreaming::ProposeInput>(
+        "dreaming.propose",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Dreaming(ops::dreaming::Input::Propose(i)),
+    )
 }
-fn decode_dreaming_revert_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::dreaming::RevertInput>("dreaming.revert", Mode::Command, v, |i| {
-        OperationInput::Dreaming(ops::dreaming::Input::Revert(i))
-    })
+fn decode_dreaming_revert_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::dreaming::RevertInput>(
+        "dreaming.revert",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Dreaming(ops::dreaming::Input::Revert(i)),
+    )
 }
-fn decode_dreaming_review_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::dreaming::ReviewInput>("dreaming.review", Mode::Command, v, |i| {
-        OperationInput::Dreaming(ops::dreaming::Input::Review(i))
-    })
+fn decode_dreaming_review_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::dreaming::ReviewInput>(
+        "dreaming.review",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Dreaming(ops::dreaming::Input::Review(i)),
+    )
 }
-fn decode_documents_import_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::documents::ImportInput>("documents.import", Mode::Command, v, |i| {
-        OperationInput::Documents(ops::documents::Input::Import(i))
-    })
+fn decode_documents_import_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::documents::ImportInput>(
+        "documents.import",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Documents(ops::documents::Input::Import(i)),
+    )
 }
-fn decode_documents_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::documents::ListInput>("documents.list", Mode::Query, v, |i| {
-        OperationInput::Documents(ops::documents::Input::List(i))
-    })
+fn decode_documents_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::documents::ListInput>(
+        "documents.list",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Documents(ops::documents::Input::List(i)),
+    )
 }
-fn decode_documents_read_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, |i| {
+fn decode_documents_read_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, revision, |i| {
         OperationInput::Documents(ops::documents::Input::Read(i))
     })
 }
-fn decode_documents_search_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::RetrievalRequest>(v, |i| {
+fn decode_documents_search_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::RetrievalRequest>(v, revision, |i| {
         OperationInput::Documents(ops::documents::Input::Search(i))
     })
 }
-fn decode_documents_share_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, |i| {
+fn decode_documents_share_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, revision, |i| {
         OperationInput::Documents(ops::documents::Input::Share(i))
     })
 }
-fn decode_documents_move_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, |i| {
+fn decode_documents_move_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, revision, |i| {
         OperationInput::Documents(ops::documents::Input::Move(i))
     })
 }
-fn decode_documents_index_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::documents::IndexInput>("documents.index", Mode::Command, v, |i| {
-        OperationInput::Documents(ops::documents::Input::Index(i))
-    })
+fn decode_documents_index_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::documents::IndexInput>(
+        "documents.index",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Documents(ops::documents::Input::Index(i)),
+    )
 }
-fn decode_documents_retry_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::documents::RetryInput>("documents.retry", Mode::Command, v, |i| {
-        OperationInput::Documents(ops::documents::Input::Retry(i))
-    })
+fn decode_documents_retry_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::documents::RetryInput>(
+        "documents.retry",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Documents(ops::documents::Input::Retry(i)),
+    )
 }
-fn decode_documents_disable_retrieval_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, |i| {
+fn decode_documents_disable_retrieval_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, revision, |i| {
         OperationInput::Documents(ops::documents::Input::DisableRetrieval(i))
     })
 }
-fn decode_documents_remove_index_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, |i| {
+fn decode_documents_remove_index_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, revision, |i| {
         OperationInput::Documents(ops::documents::Input::RemoveIndex(i))
     })
 }
-fn decode_artifacts_save_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, |i| {
+fn decode_artifacts_save_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, revision, |i| {
         OperationInput::Artifacts(ops::artifacts::Input::Save(i))
     })
 }
-fn decode_artifacts_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, |i| {
+fn decode_artifacts_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, revision, |i| {
         OperationInput::Artifacts(ops::artifacts::Input::List(i))
     })
 }
-fn decode_artifacts_read_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, |i| {
+fn decode_artifacts_read_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, revision, |i| {
         OperationInput::Artifacts(ops::artifacts::Input::Read(i))
     })
 }
-fn decode_artifacts_preview_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, |i| {
+fn decode_artifacts_preview_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, revision, |i| {
         OperationInput::Artifacts(ops::artifacts::Input::Preview(i))
     })
 }
-fn decode_artifacts_export_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, |i| {
+fn decode_artifacts_export_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactQueryRequest>(v, revision, |i| {
         OperationInput::Artifacts(ops::artifacts::Input::Export(i))
     })
 }
-fn decode_artifacts_reference_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, |i| {
+fn decode_artifacts_reference_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactCommandRequest>(v, revision, |i| {
         OperationInput::Artifacts(ops::artifacts::Input::Reference(i))
     })
 }
-fn decode_artifacts_delete_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ArtifactDeletionRequest>(v, |i| {
+fn decode_artifacts_delete_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ArtifactDeletionRequest>(v, revision, |i| {
         OperationInput::Artifacts(ops::artifacts::Input::Delete(i))
     })
 }
-fn decode_conventions_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::conventions::ListInput>("conventions.list", Mode::Query, v, |i| {
-        OperationInput::Conventions(ops::conventions::Input::List(i))
-    })
+fn decode_conventions_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::conventions::ListInput>(
+        "conventions.list",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Conventions(ops::conventions::Input::List(i)),
+    )
 }
-fn decode_conventions_read_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::conventions::ReadInput>("conventions.read", Mode::Query, v, |i| {
-        OperationInput::Conventions(ops::conventions::Input::Read(i))
-    })
+fn decode_conventions_read_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::conventions::ReadInput>(
+        "conventions.read",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Conventions(ops::conventions::Input::Read(i)),
+    )
 }
-fn decode_conventions_edit_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::conventions::EditInput>("conventions.edit", Mode::Command, v, |i| {
-        OperationInput::Conventions(ops::conventions::Input::Edit(i))
-    })
+fn decode_conventions_edit_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::conventions::EditInput>(
+        "conventions.edit",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Conventions(ops::conventions::Input::Edit(i)),
+    )
 }
-fn decode_conventions_version_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_conventions_version_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::conventions::VersionInput>(
         "conventions.version",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Conventions(ops::conventions::Input::Version(i)),
     )
 }
-fn decode_conventions_applicability_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_conventions_applicability_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::conventions::ApplicabilityInput>(
         "conventions.applicability",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Conventions(ops::conventions::Input::Applicability(i)),
     )
 }
-fn decode_conventions_retire_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_conventions_retire_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::conventions::RetireInput>(
         "conventions.retire",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Conventions(ops::conventions::Input::Retire(i)),
     )
 }
-fn decode_conventions_index_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::conventions::IndexInput>("conventions.index", Mode::Command, v, |i| {
-        OperationInput::Conventions(ops::conventions::Input::Index(i))
-    })
+fn decode_conventions_index_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::conventions::IndexInput>(
+        "conventions.index",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Conventions(ops::conventions::Input::Index(i)),
+    )
 }
-fn decode_conventions_import_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_conventions_import_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::conventions::ImportInput>(
         "conventions.import",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Conventions(ops::conventions::Input::Import(i)),
     )
 }
-fn decode_conventions_delete_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_conventions_delete_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::conventions::DeleteInput>(
         "conventions.delete",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Conventions(ops::conventions::Input::Delete(i)),
     )
 }
-fn decode_conventions_move_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::conventions::MoveInput>("conventions.move", Mode::Command, v, |i| {
-        OperationInput::Conventions(ops::conventions::Input::Move(i))
-    })
+fn decode_conventions_move_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::conventions::MoveInput>(
+        "conventions.move",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Conventions(ops::conventions::Input::Move(i)),
+    )
 }
-fn decode_conventions_resources_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_conventions_resources_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::conventions::ResourcesInput>(
         "conventions.resources",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Conventions(ops::conventions::Input::Resources(i)),
     )
 }
-fn decode_conventions_delete_resource_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_conventions_delete_resource_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::conventions::DeleteResourceInput>(
         "conventions.delete_resource",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Conventions(ops::conventions::Input::DeleteResource(i)),
     )
 }
-fn decode_conventions_search_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::conventions::SearchInput>("conventions.search", Mode::Query, v, |i| {
-        OperationInput::Conventions(ops::conventions::Input::Search(i))
-    })
+fn decode_conventions_search_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::conventions::SearchInput>(
+        "conventions.search",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Conventions(ops::conventions::Input::Search(i)),
+    )
 }
-fn decode_skills_discover_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::skills::DiscoverInput>("skills.discover", Mode::Query, v, |i| {
-        OperationInput::Skills(ops::skills::Input::Discover(i))
-    })
+fn decode_skills_discover_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::skills::DiscoverInput>(
+        "skills.discover",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Skills(ops::skills::Input::Discover(i)),
+    )
 }
-fn decode_skills_read_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::skills::ReadInput>("skills.read", Mode::Query, v, |i| {
+fn decode_skills_read_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::skills::ReadInput>("skills.read", Mode::Query, revision, v, |i| {
         OperationInput::Skills(ops::skills::Input::Read(i))
     })
 }
-fn decode_skills_resources_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::skills::ResourcesInput>("skills.resources", Mode::Query, v, |i| {
-        OperationInput::Skills(ops::skills::Input::Resources(i))
-    })
+fn decode_skills_resources_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::skills::ResourcesInput>(
+        "skills.resources",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Skills(ops::skills::Input::Resources(i)),
+    )
 }
-fn decode_skills_draft_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::skills::DraftInput>("skills.draft", Mode::Command, v, |i| {
+fn decode_skills_draft_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::skills::DraftInput>("skills.draft", Mode::Command, revision, v, |i| {
         OperationInput::Skills(ops::skills::Input::Draft(i))
     })
 }
-fn decode_skills_propose_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::skills::ProposeInput>("skills.propose", Mode::Command, v, |i| {
-        OperationInput::Skills(ops::skills::Input::Propose(i))
-    })
+fn decode_skills_propose_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::skills::ProposeInput>(
+        "skills.propose",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Skills(ops::skills::Input::Propose(i)),
+    )
 }
-fn decode_skills_history_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::skills::HistoryInput>("skills.history", Mode::Query, v, |i| {
-        OperationInput::Skills(ops::skills::Input::History(i))
-    })
+fn decode_skills_history_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::skills::HistoryInput>(
+        "skills.history",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Skills(ops::skills::Input::History(i)),
+    )
 }
-fn decode_skills_rollback_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::skills::RollbackInput>("skills.rollback", Mode::Command, v, |i| {
-        OperationInput::Skills(ops::skills::Input::Rollback(i))
-    })
+fn decode_skills_rollback_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::skills::RollbackInput>(
+        "skills.rollback",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Skills(ops::skills::Input::Rollback(i)),
+    )
 }
-fn decode_roles_read_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::roles::ReadInput>("roles.read", Mode::Query, v, |i| {
+fn decode_roles_read_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::roles::ReadInput>("roles.read", Mode::Query, revision, v, |i| {
         OperationInput::Roles(ops::roles::Input::Read(i))
     })
 }
-fn decode_roles_draft_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::roles::DraftInput>("roles.draft", Mode::Command, v, |i| {
+fn decode_roles_draft_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::roles::DraftInput>("roles.draft", Mode::Command, revision, v, |i| {
         OperationInput::Roles(ops::roles::Input::Draft(i))
     })
 }
-fn decode_roles_propose_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::roles::ProposeInput>("roles.propose", Mode::Command, v, |i| {
-        OperationInput::Roles(ops::roles::Input::Propose(i))
-    })
+fn decode_roles_propose_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::roles::ProposeInput>(
+        "roles.propose",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Roles(ops::roles::Input::Propose(i)),
+    )
 }
-fn decode_roles_history_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::roles::HistoryInput>("roles.history", Mode::Query, v, |i| {
+fn decode_roles_history_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::roles::HistoryInput>("roles.history", Mode::Query, revision, v, |i| {
         OperationInput::Roles(ops::roles::Input::History(i))
     })
 }
-fn decode_roles_rollback_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::roles::RollbackInput>("roles.rollback", Mode::Command, v, |i| {
-        OperationInput::Roles(ops::roles::Input::Rollback(i))
-    })
+fn decode_roles_rollback_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::roles::RollbackInput>(
+        "roles.rollback",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Roles(ops::roles::Input::Rollback(i)),
+    )
 }
-fn decode_approvals_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::approvals::ListInput>("approvals.list", Mode::Query, v, |i| {
-        OperationInput::Approvals(ops::approvals::Input::List(i))
-    })
+fn decode_approvals_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::approvals::ListInput>(
+        "approvals.list",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Approvals(ops::approvals::Input::List(i)),
+    )
 }
-fn decode_approvals_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::approvals::InspectInput>("approvals.inspect", Mode::Query, v, |i| {
-        OperationInput::Approvals(ops::approvals::Input::Inspect(i))
-    })
+fn decode_approvals_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::approvals::InspectInput>(
+        "approvals.inspect",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Approvals(ops::approvals::Input::Inspect(i)),
+    )
 }
-fn decode_approvals_propose_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::approvals::ProposeInput>("approvals.propose", Mode::Command, v, |i| {
-        OperationInput::Approvals(ops::approvals::Input::Propose(i))
-    })
+fn decode_approvals_propose_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::approvals::ProposeInput>(
+        "approvals.propose",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Approvals(ops::approvals::Input::Propose(i)),
+    )
 }
-fn decode_approvals_record_human_decision_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_approvals_record_human_decision_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::approvals::RecordHumanDecisionInput>(
         "approvals.record_human_decision",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Approvals(ops::approvals::Input::RecordHumanDecision(i)),
     )
 }
-fn decode_notifications_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::notifications::ListInput>("notifications.list", Mode::Query, v, |i| {
-        OperationInput::Notifications(ops::notifications::Input::List(i))
-    })
+fn decode_notifications_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::notifications::ListInput>(
+        "notifications.list",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Notifications(ops::notifications::Input::List(i)),
+    )
 }
-fn decode_notifications_read_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::notifications::ReadInput>("notifications.read", Mode::Query, v, |i| {
-        OperationInput::Notifications(ops::notifications::Input::Read(i))
-    })
+fn decode_notifications_read_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::notifications::ReadInput>(
+        "notifications.read",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Notifications(ops::notifications::Input::Read(i)),
+    )
 }
-fn decode_notifications_acknowledge_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_notifications_acknowledge_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::notifications::AcknowledgeInput>(
         "notifications.acknowledge",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Notifications(ops::notifications::Input::Acknowledge(i)),
     )
 }
-fn decode_notifications_settings_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_notifications_settings_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::notifications::SettingsQueryInput>(
         "notifications.settings",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Notifications(ops::notifications::Input::SettingsQuery(i)),
     )
 }
-fn decode_notifications_settings_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_notifications_settings_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::notifications::SettingsCommandInput>(
         "notifications.settings",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Notifications(ops::notifications::Input::SettingsCommand(i)),
     )
 }
-fn decode_git_worktree_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::git::WorktreeInput>("git.worktree", Mode::Command, v, |i| {
+fn decode_git_worktree_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::git::WorktreeInput>("git.worktree", Mode::Command, revision, v, |i| {
         OperationInput::Git(ops::git::Input::Worktree(i))
     })
 }
-fn decode_git_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::git::InspectInput>("git.inspect", Mode::Query, v, |i| {
+fn decode_git_inspect_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::git::InspectInput>("git.inspect", Mode::Query, revision, v, |i| {
         OperationInput::Git(ops::git::Input::Inspect(i))
     })
 }
-fn decode_git_diff_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::git::DiffInput>("git.diff", Mode::Query, v, |i| {
+fn decode_git_diff_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::git::DiffInput>("git.diff", Mode::Query, revision, v, |i| {
         OperationInput::Git(ops::git::Input::Diff(i))
     })
 }
-fn decode_git_commit_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, |i| {
+fn decode_git_commit_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, revision, |i| {
         OperationInput::Git(ops::git::Input::Commit(i))
     })
 }
-fn decode_git_push_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, |i| {
+fn decode_git_push_command(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, revision, |i| {
         OperationInput::Git(ops::git::Input::Push(i))
     })
 }
-fn decode_git_pull_request_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, |i| {
+fn decode_git_pull_request_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, revision, |i| {
         OperationInput::Git(ops::git::Input::PullRequest(i))
     })
 }
-fn decode_git_integrate_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, |i| {
+fn decode_git_integrate_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, revision, |i| {
         OperationInput::Git(ops::git::Input::Integrate(i))
     })
 }
-fn decode_git_cleanup_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, |i| {
+fn decode_git_cleanup_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::GitCommandRequest>(v, revision, |i| {
         OperationInput::Git(ops::git::Input::Cleanup(i))
     })
 }
-fn decode_reviews_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::reviews::ListInput>("reviews.list", Mode::Query, v, |i| {
+fn decode_reviews_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::reviews::ListInput>("reviews.list", Mode::Query, revision, v, |i| {
         OperationInput::Reviews(ops::reviews::Input::List(i))
     })
 }
-fn decode_reviews_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::reviews::InspectInput>("reviews.inspect", Mode::Query, v, |i| {
-        OperationInput::Reviews(ops::reviews::Input::Inspect(i))
-    })
+fn decode_reviews_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::reviews::InspectInput>(
+        "reviews.inspect",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Reviews(ops::reviews::Input::Inspect(i)),
+    )
 }
-fn decode_reviews_request_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::reviews::RequestInput>("reviews.request", Mode::Command, v, |i| {
-        OperationInput::Reviews(ops::reviews::Input::Request(i))
-    })
+fn decode_reviews_request_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::reviews::RequestInput>(
+        "reviews.request",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Reviews(ops::reviews::Input::Request(i)),
+    )
 }
-fn decode_reviews_findings_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::reviews::FindingsInput>("reviews.findings", Mode::Query, v, |i| {
-        OperationInput::Reviews(ops::reviews::Input::Findings(i))
-    })
+fn decode_reviews_findings_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::reviews::FindingsInput>(
+        "reviews.findings",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Reviews(ops::reviews::Input::Findings(i)),
+    )
 }
-fn decode_reviews_respond_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::reviews::RespondInput>("reviews.respond", Mode::Command, v, |i| {
-        OperationInput::Reviews(ops::reviews::Input::Respond(i))
-    })
+fn decode_reviews_respond_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::reviews::RespondInput>(
+        "reviews.respond",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Reviews(ops::reviews::Input::Respond(i)),
+    )
 }
-fn decode_reviews_adjudicate_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_reviews_adjudicate_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::reviews::AdjudicateInput>(
         "reviews.adjudicate",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Reviews(ops::reviews::Input::Adjudicate(i)),
     )
 }
-fn decode_reviews_readiness_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::reviews::ReadinessInput>("reviews.readiness", Mode::Query, v, |i| {
-        OperationInput::Reviews(ops::reviews::Input::Readiness(i))
-    })
+fn decode_reviews_readiness_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::reviews::ReadinessInput>(
+        "reviews.readiness",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Reviews(ops::reviews::Input::Readiness(i)),
+    )
 }
-fn decode_releases_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::releases::InspectInput>("releases.inspect", Mode::Query, v, |i| {
-        OperationInput::Releases(ops::releases::Input::Inspect(i))
-    })
+fn decode_releases_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::releases::InspectInput>(
+        "releases.inspect",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Releases(ops::releases::Input::Inspect(i)),
+    )
 }
-fn decode_releases_prepare_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ReleaseCommandRequest>(v, |i| {
+fn decode_releases_prepare_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ReleaseCommandRequest>(v, revision, |i| {
         OperationInput::Releases(ops::releases::Input::Prepare(i))
     })
 }
-fn decode_releases_publish_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ReleaseCommandRequest>(v, |i| {
+fn decode_releases_publish_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ReleaseCommandRequest>(v, revision, |i| {
         OperationInput::Releases(ops::releases::Input::Publish(i))
     })
 }
-fn decode_releases_deploy_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::data::ReleaseCommandRequest>(v, |i| {
+fn decode_releases_deploy_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::data::ReleaseCommandRequest>(v, revision, |i| {
         OperationInput::Releases(ops::releases::Input::Deploy(i))
     })
 }
-fn decode_github_account_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::github::AccountQueryInput>("github.account", Mode::Query, v, |i| {
-        OperationInput::Github(ops::github::Input::AccountQuery(i))
-    })
+fn decode_github_account_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::github::AccountQueryInput>(
+        "github.account",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Github(ops::github::Input::AccountQuery(i)),
+    )
 }
-fn decode_github_account_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_github_account_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::github::AccountCommandInput>(
         "github.account",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Github(ops::github::Input::AccountCommand(i)),
     )
 }
-fn decode_github_repositories_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_github_repositories_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::github::RepositoriesInput>(
         "github.repositories",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Github(ops::github::Input::Repositories(i)),
     )
 }
-fn decode_github_poll_status_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::github::PollStatusInput>("github.poll_status", Mode::Query, v, |i| {
-        OperationInput::Github(ops::github::Input::PollStatus(i))
-    })
+fn decode_github_poll_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::github::PollStatusInput>(
+        "github.poll_status",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Github(ops::github::Input::PollStatus(i)),
+    )
 }
-fn decode_github_issue_sync_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::github::IssueSyncInput>("github.issue_sync", Mode::Command, v, |i| {
-        OperationInput::Github(ops::github::Input::IssueSync(i))
-    })
+fn decode_github_issue_sync_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::github::IssueSyncInput>(
+        "github.issue_sync",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Github(ops::github::Input::IssueSync(i)),
+    )
 }
-fn decode_github_checks_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::github::ChecksInput>("github.checks", Mode::Query, v, |i| {
+fn decode_github_checks_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::github::ChecksInput>("github.checks", Mode::Query, revision, v, |i| {
         OperationInput::Github(ops::github::Input::Checks(i))
     })
 }
-fn decode_github_reviews_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::github::ReviewsInput>("github.reviews", Mode::Query, v, |i| {
-        OperationInput::Github(ops::github::Input::Reviews(i))
-    })
+fn decode_github_reviews_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::github::ReviewsInput>(
+        "github.reviews",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Github(ops::github::Input::Reviews(i)),
+    )
 }
-fn decode_resources_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::resources::ListInput>("resources.list", Mode::Query, v, |i| {
-        OperationInput::Resources(ops::resources::Input::List(i))
-    })
+fn decode_resources_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::resources::ListInput>(
+        "resources.list",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Resources(ops::resources::Input::List(i)),
+    )
 }
-fn decode_resources_acquire_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::resources::AcquireInput>("resources.acquire", Mode::Command, v, |i| {
-        OperationInput::Resources(ops::resources::Input::Acquire(i))
-    })
+fn decode_resources_acquire_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::resources::AcquireInput>(
+        "resources.acquire",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Resources(ops::resources::Input::Acquire(i)),
+    )
 }
-fn decode_resources_renew_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::resources::RenewInput>("resources.renew", Mode::Command, v, |i| {
-        OperationInput::Resources(ops::resources::Input::Renew(i))
-    })
+fn decode_resources_renew_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::resources::RenewInput>(
+        "resources.renew",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Resources(ops::resources::Input::Renew(i)),
+    )
 }
-fn decode_resources_release_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::resources::ReleaseInput>("resources.release", Mode::Command, v, |i| {
-        OperationInput::Resources(ops::resources::Input::Release(i))
-    })
+fn decode_resources_release_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::resources::ReleaseInput>(
+        "resources.release",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Resources(ops::resources::Input::Release(i)),
+    )
 }
-fn decode_resources_holders_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::resources::HoldersInput>("resources.holders", Mode::Query, v, |i| {
-        OperationInput::Resources(ops::resources::Input::Holders(i))
-    })
+fn decode_resources_holders_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::resources::HoldersInput>(
+        "resources.holders",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Resources(ops::resources::Input::Holders(i)),
+    )
 }
-fn decode_resources_waiters_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::resources::WaitersInput>("resources.waiters", Mode::Query, v, |i| {
-        OperationInput::Resources(ops::resources::Input::Waiters(i))
-    })
+fn decode_resources_waiters_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::resources::WaitersInput>(
+        "resources.waiters",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Resources(ops::resources::Input::Waiters(i)),
+    )
 }
-fn decode_browser_sessions_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_browser_sessions_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::browser::SessionsQueryInput>(
         "browser.sessions",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Browser(ops::browser::Input::SessionsQuery(i)),
     )
 }
-fn decode_browser_sessions_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_browser_sessions_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::browser::SessionsCommandInput>(
         "browser.sessions",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Browser(ops::browser::Input::SessionsCommand(i)),
     )
 }
-fn decode_browser_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::browser::InspectInput>("browser.inspect", Mode::Query, v, |i| {
-        OperationInput::Browser(ops::browser::Input::Inspect(i))
-    })
+fn decode_browser_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::browser::InspectInput>(
+        "browser.inspect",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Browser(ops::browser::Input::Inspect(i)),
+    )
 }
-fn decode_browser_navigate_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::browser::NavigateInput>("browser.navigate", Mode::Command, v, |i| {
-        OperationInput::Browser(ops::browser::Input::Navigate(i))
-    })
+fn decode_browser_navigate_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::browser::NavigateInput>(
+        "browser.navigate",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Browser(ops::browser::Input::Navigate(i)),
+    )
 }
-fn decode_browser_input_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::browser::InputInput>("browser.input", Mode::Command, v, |i| {
-        OperationInput::Browser(ops::browser::Input::Input(i))
-    })
+fn decode_browser_input_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::browser::InputInput>(
+        "browser.input",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Browser(ops::browser::Input::Input(i)),
+    )
 }
-fn decode_browser_upload_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::browser::UploadInput>("browser.upload", Mode::Command, v, |i| {
-        OperationInput::Browser(ops::browser::Input::Upload(i))
-    })
+fn decode_browser_upload_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::browser::UploadInput>(
+        "browser.upload",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Browser(ops::browser::Input::Upload(i)),
+    )
 }
-fn decode_browser_screenshot_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::browser::ScreenshotInput>("browser.screenshot", Mode::Query, v, |i| {
-        OperationInput::Browser(ops::browser::Input::Screenshot(i))
-    })
+fn decode_browser_screenshot_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::browser::ScreenshotInput>(
+        "browser.screenshot",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Browser(ops::browser::Input::Screenshot(i)),
+    )
 }
-fn decode_browser_console_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::browser::ConsoleInput>("browser.console", Mode::Query, v, |i| {
-        OperationInput::Browser(ops::browser::Input::Console(i))
-    })
+fn decode_browser_console_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::browser::ConsoleInput>(
+        "browser.console",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Browser(ops::browser::Input::Console(i)),
+    )
 }
-fn decode_browser_network_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::browser::NetworkInput>("browser.network", Mode::Query, v, |i| {
-        OperationInput::Browser(ops::browser::Input::Network(i))
-    })
+fn decode_browser_network_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::browser::NetworkInput>(
+        "browser.network",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Browser(ops::browser::Input::Network(i)),
+    )
 }
-fn decode_desktop_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::desktop::InspectInput>("desktop.inspect", Mode::Query, v, |i| {
-        OperationInput::Desktop(ops::desktop::Input::Inspect(i))
-    })
+fn decode_desktop_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::desktop::InspectInput>(
+        "desktop.inspect",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Desktop(ops::desktop::Input::Inspect(i)),
+    )
 }
-fn decode_desktop_capture_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::desktop::CaptureInput>("desktop.capture", Mode::Query, v, |i| {
-        OperationInput::Desktop(ops::desktop::Input::Capture(i))
-    })
+fn decode_desktop_capture_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::desktop::CaptureInput>(
+        "desktop.capture",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Desktop(ops::desktop::Input::Capture(i)),
+    )
 }
-fn decode_desktop_request_control_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_desktop_request_control_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::desktop::RequestControlInput>(
         "desktop.request_control",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Desktop(ops::desktop::Input::RequestControl(i)),
     )
 }
-fn decode_desktop_input_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::desktop::InputInput>("desktop.input", Mode::Command, v, |i| {
-        OperationInput::Desktop(ops::desktop::Input::Input(i))
-    })
+fn decode_desktop_input_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::desktop::InputInput>(
+        "desktop.input",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Desktop(ops::desktop::Input::Input(i)),
+    )
 }
-fn decode_desktop_release_control_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_desktop_release_control_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::desktop::ReleaseControlInput>(
         "desktop.release_control",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Desktop(ops::desktop::Input::ReleaseControl(i)),
     )
 }
-fn decode_process_execute_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::process::ExecuteInput>("process.execute", Mode::Command, v, |i| {
-        OperationInput::Process(ops::process::Input::Execute(i))
-    })
+fn decode_process_execute_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::process::ExecuteInput>(
+        "process.execute",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Process(ops::process::Input::Execute(i)),
+    )
 }
-fn decode_process_output_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::process::OutputInput>("process.output", Mode::Query, v, |i| {
-        OperationInput::Process(ops::process::Input::Output(i))
-    })
+fn decode_process_output_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::process::OutputInput>(
+        "process.output",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Process(ops::process::Input::Output(i)),
+    )
 }
-fn decode_process_cancel_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::process::CancelInput>("process.cancel", Mode::Command, v, |i| {
-        OperationInput::Process(ops::process::Input::Cancel(i))
-    })
+fn decode_process_cancel_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::process::CancelInput>(
+        "process.cancel",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Process(ops::process::Input::Cancel(i)),
+    )
 }
 fn decode_process_install_project_dependencies_command(
     v: Value,
+    revision: SchemaRevision,
 ) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::process::InstallProjectDependenciesInput>(
         "process.install_project_dependencies",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Process(ops::process::Input::InstallProjectDependencies(i)),
     )
 }
-fn decode_process_request_system_install_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_process_request_system_install_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::process::RequestSystemInstallInput>(
         "process.request_system_install",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Process(ops::process::Input::RequestSystemInstall(i)),
     )
 }
-fn decode_web_search_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::web::SearchInput>("web.search", Mode::Query, v, |i| {
+fn decode_web_search_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::web::SearchInput>("web.search", Mode::Query, revision, v, |i| {
         OperationInput::Web(ops::web::Input::Search(i))
     })
 }
-fn decode_web_fetch_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::web::FetchInput>("web.fetch", Mode::Query, v, |i| {
+fn decode_web_fetch_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::web::FetchInput>("web.fetch", Mode::Query, revision, v, |i| {
         OperationInput::Web(ops::web::Input::Fetch(i))
     })
 }
-fn decode_containers_capabilities_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_containers_capabilities_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::containers::CapabilitiesInput>(
         "containers.capabilities",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Containers(ops::containers::Input::Capabilities(i)),
     )
 }
-fn decode_containers_build_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::containers::BuildInput>("containers.build", Mode::Command, v, |i| {
-        OperationInput::Containers(ops::containers::Input::Build(i))
-    })
+fn decode_containers_build_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::containers::BuildInput>(
+        "containers.build",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Containers(ops::containers::Input::Build(i)),
+    )
 }
-fn decode_containers_pull_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::containers::PullInput>("containers.pull", Mode::Command, v, |i| {
-        OperationInput::Containers(ops::containers::Input::Pull(i))
-    })
+fn decode_containers_pull_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::containers::PullInput>(
+        "containers.pull",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Containers(ops::containers::Input::Pull(i)),
+    )
 }
-fn decode_containers_create_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::containers::CreateInput>("containers.create", Mode::Command, v, |i| {
-        OperationInput::Containers(ops::containers::Input::Create(i))
-    })
+fn decode_containers_create_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::containers::CreateInput>(
+        "containers.create",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Containers(ops::containers::Input::Create(i)),
+    )
 }
-fn decode_containers_start_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::containers::StartInput>("containers.start", Mode::Command, v, |i| {
-        OperationInput::Containers(ops::containers::Input::Start(i))
-    })
+fn decode_containers_start_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::containers::StartInput>(
+        "containers.start",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Containers(ops::containers::Input::Start(i)),
+    )
 }
-fn decode_containers_exec_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::containers::ExecInput>("containers.exec", Mode::Command, v, |i| {
-        OperationInput::Containers(ops::containers::Input::Exec(i))
-    })
+fn decode_containers_exec_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::containers::ExecInput>(
+        "containers.exec",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Containers(ops::containers::Input::Exec(i)),
+    )
 }
-fn decode_containers_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::containers::InspectInput>("containers.inspect", Mode::Query, v, |i| {
-        OperationInput::Containers(ops::containers::Input::Inspect(i))
-    })
+fn decode_containers_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::containers::InspectInput>(
+        "containers.inspect",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Containers(ops::containers::Input::Inspect(i)),
+    )
 }
-fn decode_containers_logs_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::containers::LogsInput>("containers.logs", Mode::Query, v, |i| {
-        OperationInput::Containers(ops::containers::Input::Logs(i))
-    })
+fn decode_containers_logs_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::containers::LogsInput>(
+        "containers.logs",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Containers(ops::containers::Input::Logs(i)),
+    )
 }
-fn decode_containers_stop_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::containers::StopInput>("containers.stop", Mode::Command, v, |i| {
-        OperationInput::Containers(ops::containers::Input::Stop(i))
-    })
+fn decode_containers_stop_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::containers::StopInput>(
+        "containers.stop",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Containers(ops::containers::Input::Stop(i)),
+    )
 }
-fn decode_jobs_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::jobs::ListInput>("jobs.list", Mode::Query, v, |i| {
+fn decode_jobs_list_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::jobs::ListInput>("jobs.list", Mode::Query, revision, v, |i| {
         OperationInput::Jobs(ops::jobs::Input::List(i))
     })
 }
-fn decode_jobs_create_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::jobs::CreateInput>("jobs.create", Mode::Command, v, |i| {
+fn decode_jobs_create_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::jobs::CreateInput>("jobs.create", Mode::Command, revision, v, |i| {
         OperationInput::Jobs(ops::jobs::Input::Create(i))
     })
 }
-fn decode_jobs_edit_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::jobs::EditInput>("jobs.edit", Mode::Command, v, |i| {
+fn decode_jobs_edit_command(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::jobs::EditInput>("jobs.edit", Mode::Command, revision, v, |i| {
         OperationInput::Jobs(ops::jobs::Input::Edit(i))
     })
 }
-fn decode_jobs_enable_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::jobs::EnableInput>("jobs.enable", Mode::Command, v, |i| {
+fn decode_jobs_enable_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::jobs::EnableInput>("jobs.enable", Mode::Command, revision, v, |i| {
         OperationInput::Jobs(ops::jobs::Input::Enable(i))
     })
 }
-fn decode_jobs_run_now_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::jobs::RunNowInput>("jobs.run_now", Mode::Command, v, |i| {
+fn decode_jobs_run_now_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::jobs::RunNowInput>("jobs.run_now", Mode::Command, revision, v, |i| {
         OperationInput::Jobs(ops::jobs::Input::RunNow(i))
     })
 }
-fn decode_jobs_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::jobs::InspectInput>("jobs.inspect", Mode::Query, v, |i| {
+fn decode_jobs_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::jobs::InspectInput>("jobs.inspect", Mode::Query, revision, v, |i| {
         OperationInput::Jobs(ops::jobs::Input::Inspect(i))
     })
 }
-fn decode_jobs_cancel_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::jobs::CancelInput>("jobs.cancel", Mode::Command, v, |i| {
+fn decode_jobs_cancel_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::jobs::CancelInput>("jobs.cancel", Mode::Command, revision, v, |i| {
         OperationInput::Jobs(ops::jobs::Input::Cancel(i))
     })
 }
-fn decode_jobs_delete_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::jobs::DeleteInput>("jobs.delete", Mode::Command, v, |i| {
+fn decode_jobs_delete_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::jobs::DeleteInput>("jobs.delete", Mode::Command, revision, v, |i| {
         OperationInput::Jobs(ops::jobs::Input::Delete(i))
     })
 }
-fn decode_jobs_disable_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::jobs::DisableInput>("jobs.disable", Mode::Command, v, |i| {
+fn decode_jobs_disable_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::jobs::DisableInput>("jobs.disable", Mode::Command, revision, v, |i| {
         OperationInput::Jobs(ops::jobs::Input::Disable(i))
     })
 }
-fn decode_settings_read_effective_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_settings_read_effective_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::settings::ReadEffectiveInput>(
         "settings.read_effective",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Settings(ops::settings::Input::ReadEffective(i)),
     )
 }
-fn decode_settings_validate_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::settings::ValidateInput>("settings.validate", Mode::Query, v, |i| {
-        OperationInput::Settings(ops::settings::Input::Validate(i))
-    })
+fn decode_settings_validate_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::settings::ValidateInput>(
+        "settings.validate",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Settings(ops::settings::Input::Validate(i)),
+    )
 }
-fn decode_settings_save_revision_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_settings_save_revision_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::settings::SaveRevisionInput>(
         "settings.save_revision",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Settings(ops::settings::Input::SaveRevision(i)),
     )
 }
-fn decode_settings_explain_source_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_settings_explain_source_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::settings::ExplainSourceInput>(
         "settings.explain_source",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Settings(ops::settings::Input::ExplainSource(i)),
     )
 }
-fn decode_router_catalog_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::router::CatalogInput>("router.catalog", Mode::Query, v, |i| {
-        OperationInput::Router(ops::router::Input::Catalog(i))
-    })
+fn decode_router_catalog_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::router::CatalogInput>(
+        "router.catalog",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Router(ops::router::Input::Catalog(i)),
+    )
 }
-fn decode_router_connections_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::router::ConnectionsInput>("router.connections", Mode::Query, v, |i| {
-        OperationInput::Router(ops::router::Input::Connections(i))
-    })
+fn decode_router_connections_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::router::ConnectionsInput>(
+        "router.connections",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Router(ops::router::Input::Connections(i)),
+    )
 }
-fn decode_router_route_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::router::RouteInput>("router.route", Mode::Command, v, |i| {
+fn decode_router_route_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::router::RouteInput>("router.route", Mode::Command, revision, v, |i| {
         OperationInput::Router(ops::router::Input::Route(i))
     })
 }
-fn decode_router_pin_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::router::PinInput>("router.pin", Mode::Command, v, |i| {
+fn decode_router_pin_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::router::PinInput>("router.pin", Mode::Command, revision, v, |i| {
         OperationInput::Router(ops::router::Input::Pin(i))
     })
 }
-fn decode_router_availability_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_router_availability_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::router::AvailabilityInput>(
         "router.availability",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Router(ops::router::Input::Availability(i)),
     )
 }
-fn decode_router_usage_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::router::UsageInput>("router.usage", Mode::Query, v, |i| {
+fn decode_router_usage_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::router::UsageInput>("router.usage", Mode::Query, revision, v, |i| {
         OperationInput::Router(ops::router::Input::Usage(i))
     })
 }
-fn decode_router_request_status_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_router_request_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::router::RequestStatusInput>(
         "router.request_status",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Router(ops::router::Input::RequestStatus(i)),
     )
 }
-fn decode_router_price_status_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_router_price_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::router::PriceStatusInput>(
         "router.price_status",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Router(ops::router::Input::PriceStatus(i)),
     )
 }
-fn decode_router_price_refresh_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_router_price_refresh_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::router::PriceRefreshInput>(
         "router.price_refresh",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Router(ops::router::Input::PriceRefresh(i)),
     )
 }
-fn decode_router_price_override_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_router_price_override_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::router::PriceOverrideInput>(
         "router.price_override",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Router(ops::router::Input::PriceOverride(i)),
     )
 }
-fn decode_router_configure_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::router::ConfigureInput>("router.configure", Mode::Command, v, |i| {
-        OperationInput::Router(ops::router::Input::Configure(i))
-    })
+fn decode_router_configure_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::router::ConfigureInput>(
+        "router.configure",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Router(ops::router::Input::Configure(i)),
+    )
 }
-fn decode_router_decision_models_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_router_decision_models_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::router::DecisionModelsInput>(
         "router.decision_models",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Router(ops::router::Input::DecisionModels(i)),
     )
 }
-fn decode_router_decide_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::router::DecideInput>("router.decide", Mode::Command, v, |i| {
-        OperationInput::Router(ops::router::Input::Decide(i))
-    })
+fn decode_router_decide_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::router::DecideInput>(
+        "router.decide",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Router(ops::router::Input::Decide(i)),
+    )
 }
-fn decode_mcp_servers_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp::ServersInput>("mcp.servers", Mode::Query, v, |i| {
+fn decode_mcp_servers_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp::ServersInput>("mcp.servers", Mode::Query, revision, v, |i| {
         OperationInput::Mcp(ops::mcp::Input::Servers(i))
     })
 }
-fn decode_mcp_configure_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp::ConfigureInput>("mcp.configure", Mode::Command, v, |i| {
-        OperationInput::Mcp(ops::mcp::Input::Configure(i))
-    })
+fn decode_mcp_configure_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp::ConfigureInput>(
+        "mcp.configure",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Mcp(ops::mcp::Input::Configure(i)),
+    )
 }
-fn decode_mcp_connect_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp::ConnectInput>("mcp.connect", Mode::Command, v, |i| {
+fn decode_mcp_connect_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp::ConnectInput>("mcp.connect", Mode::Command, revision, v, |i| {
         OperationInput::Mcp(ops::mcp::Input::Connect(i))
     })
 }
-fn decode_mcp_discover_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp::DiscoverInput>("mcp.discover", Mode::Command, v, |i| {
+fn decode_mcp_discover_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp::DiscoverInput>("mcp.discover", Mode::Command, revision, v, |i| {
         OperationInput::Mcp(ops::mcp::Input::Discover(i))
     })
 }
-fn decode_mcp_select_tools_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp::SelectToolsInput>("mcp.select_tools", Mode::Command, v, |i| {
-        OperationInput::Mcp(ops::mcp::Input::SelectTools(i))
-    })
+fn decode_mcp_select_tools_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp::SelectToolsInput>(
+        "mcp.select_tools",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Mcp(ops::mcp::Input::SelectTools(i)),
+    )
 }
-fn decode_mcp_resources_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp::ResourcesInput>("mcp.resources", Mode::Query, v, |i| {
+fn decode_mcp_resources_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp::ResourcesInput>("mcp.resources", Mode::Query, revision, v, |i| {
         OperationInput::Mcp(ops::mcp::Input::Resources(i))
     })
 }
-fn decode_mcp_prompts_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp::PromptsInput>("mcp.prompts", Mode::Query, v, |i| {
+fn decode_mcp_prompts_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp::PromptsInput>("mcp.prompts", Mode::Query, revision, v, |i| {
         OperationInput::Mcp(ops::mcp::Input::Prompts(i))
     })
 }
-fn decode_mcp_capabilities_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp::CapabilitiesInput>("mcp.capabilities", Mode::Query, v, |i| {
-        OperationInput::Mcp(ops::mcp::Input::Capabilities(i))
-    })
+fn decode_mcp_capabilities_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp::CapabilitiesInput>(
+        "mcp.capabilities",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Mcp(ops::mcp::Input::Capabilities(i)),
+    )
 }
-fn decode_addons_catalog_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::addons::CatalogInput>("addons.catalog", Mode::Query, v, |i| {
-        OperationInput::Addons(ops::addons::Input::Catalog(i))
-    })
+fn decode_addons_catalog_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::addons::CatalogInput>(
+        "addons.catalog",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Addons(ops::addons::Input::Catalog(i)),
+    )
 }
-fn decode_addons_install_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, |i| {
+fn decode_addons_install_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, revision, |i| {
         OperationInput::Addons(ops::addons::Input::Install(i))
     })
 }
-fn decode_addons_configure_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::addons::ConfigureInput>("addons.configure", Mode::Command, v, |i| {
-        OperationInput::Addons(ops::addons::Input::Configure(i))
-    })
+fn decode_addons_configure_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::addons::ConfigureInput>(
+        "addons.configure",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Addons(ops::addons::Input::Configure(i)),
+    )
 }
-fn decode_addons_enable_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, |i| {
+fn decode_addons_enable_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, revision, |i| {
         OperationInput::Addons(ops::addons::Input::Enable(i))
     })
 }
-fn decode_addons_disable_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, |i| {
+fn decode_addons_disable_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, revision, |i| {
         OperationInput::Addons(ops::addons::Input::Disable(i))
     })
 }
-fn decode_addons_update_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, |i| {
+fn decode_addons_update_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, revision, |i| {
         OperationInput::Addons(ops::addons::Input::Update(i))
     })
 }
-fn decode_addons_propose_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::addons::ProposeInput>("addons.propose", Mode::Command, v, |i| {
-        OperationInput::Addons(ops::addons::Input::Propose(i))
-    })
+fn decode_addons_propose_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::addons::ProposeInput>(
+        "addons.propose",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Addons(ops::addons::Input::Propose(i)),
+    )
 }
-fn decode_addons_logs_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::addons::LogsInput>("addons.logs", Mode::Query, v, |i| {
+fn decode_addons_logs_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::addons::LogsInput>("addons.logs", Mode::Query, revision, v, |i| {
         OperationInput::Addons(ops::addons::Input::Logs(i))
     })
 }
-fn decode_addons_rollback_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, |i| {
+fn decode_addons_rollback_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, revision, |i| {
         OperationInput::Addons(ops::addons::Input::Rollback(i))
     })
 }
-fn decode_addons_uninstall_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, |i| {
+fn decode_addons_uninstall_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_specialized::<crate::protocol::addons::AddonCommandRequest>(v, revision, |i| {
         OperationInput::Addons(ops::addons::Input::Uninstall(i))
     })
 }
-fn decode_help_search_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::help::SearchInput>("help.search", Mode::Query, v, |i| {
+fn decode_help_search_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::help::SearchInput>("help.search", Mode::Query, revision, v, |i| {
         OperationInput::Help(ops::help::Input::Search(i))
     })
 }
-fn decode_help_read_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::help::ReadInput>("help.read", Mode::Query, v, |i| {
+fn decode_help_read_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::help::ReadInput>("help.read", Mode::Query, revision, v, |i| {
         OperationInput::Help(ops::help::Input::Read(i))
     })
 }
-fn decode_help_topic_for_screen_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_help_topic_for_screen_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::help::TopicForScreenInput>(
         "help.topic_for_screen",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Help(ops::help::Input::TopicForScreen(i)),
     )
 }
-fn decode_help_package_guides_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_help_package_guides_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::help::PackageGuidesInput>(
         "help.package_guides",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Help(ops::help::Input::PackageGuides(i)),
     )
 }
-fn decode_help_generate_capability_docs_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_help_generate_capability_docs_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::help::GenerateCapabilityDocsInput>(
         "help.generate_capability_docs",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Help(ops::help::Input::GenerateCapabilityDocs(i)),
     )
 }
-fn decode_workspace_diagnostics_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_workspace_diagnostics_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::workspace::DiagnosticsInput>(
         "workspace.diagnostics",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Workspace(ops::workspace::Input::Diagnostics(i)),
     )
 }
-fn decode_workspace_backup_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::workspace::BackupInput>("workspace.backup", Mode::Command, v, |i| {
-        OperationInput::Workspace(ops::workspace::Input::Backup(i))
-    })
+fn decode_workspace_backup_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::workspace::BackupInput>(
+        "workspace.backup",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Workspace(ops::workspace::Input::Backup(i)),
+    )
 }
-fn decode_workspace_restore_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::workspace::RestoreInput>("workspace.restore", Mode::Command, v, |i| {
-        OperationInput::Workspace(ops::workspace::Input::Restore(i))
-    })
+fn decode_workspace_restore_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::workspace::RestoreInput>(
+        "workspace.restore",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Workspace(ops::workspace::Input::Restore(i)),
+    )
 }
-fn decode_workspace_migrate_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::workspace::MigrateInput>("workspace.migrate", Mode::Command, v, |i| {
-        OperationInput::Workspace(ops::workspace::Input::Migrate(i))
-    })
+fn decode_workspace_migrate_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::workspace::MigrateInput>(
+        "workspace.migrate",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Workspace(ops::workspace::Input::Migrate(i)),
+    )
 }
-fn decode_workspace_update_status_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_workspace_update_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::workspace::UpdateStatusInput>(
         "workspace.update_status",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Workspace(ops::workspace::Input::UpdateStatus(i)),
     )
 }
-fn decode_workspace_approve_install_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_workspace_approve_install_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::workspace::ApproveInstallInput>(
         "workspace.approve_install",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Workspace(ops::workspace::Input::ApproveInstall(i)),
     )
 }
-fn decode_workspace_logs_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::workspace::LogsInput>("workspace.logs", Mode::Query, v, |i| {
-        OperationInput::Workspace(ops::workspace::Input::Logs(i))
-    })
+fn decode_workspace_logs_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::workspace::LogsInput>(
+        "workspace.logs",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Workspace(ops::workspace::Input::Logs(i)),
+    )
 }
-fn decode_workspace_record_diagnostic_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_workspace_record_diagnostic_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::workspace::RecordDiagnosticInput>(
         "workspace.record_diagnostic",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Workspace(ops::workspace::Input::RecordDiagnostic(i)),
     )
 }
-fn decode_repositories_list_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::repositories::ListInput>("repositories.list", Mode::Query, v, |i| {
-        OperationInput::Repositories(ops::repositories::Input::List(i))
-    })
+fn decode_repositories_list_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::repositories::ListInput>(
+        "repositories.list",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Repositories(ops::repositories::Input::List(i)),
+    )
 }
-fn decode_repositories_get_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::repositories::GetInput>("repositories.get", Mode::Query, v, |i| {
-        OperationInput::Repositories(ops::repositories::Input::Get(i))
-    })
+fn decode_repositories_get_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::repositories::GetInput>(
+        "repositories.get",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Repositories(ops::repositories::Input::Get(i)),
+    )
 }
-fn decode_repositories_nodes_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::repositories::NodesInput>("repositories.nodes", Mode::Query, v, |i| {
-        OperationInput::Repositories(ops::repositories::Input::Nodes(i))
-    })
+fn decode_repositories_nodes_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::repositories::NodesInput>(
+        "repositories.nodes",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Repositories(ops::repositories::Input::Nodes(i)),
+    )
 }
-fn decode_repositories_remove_index_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_repositories_remove_index_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::repositories::RemoveIndexInput>(
         "repositories.remove_index",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Repositories(ops::repositories::Input::RemoveIndex(i)),
     )
 }
-fn decode_repositories_readme_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_repositories_readme_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::repositories::ReadmeInput>(
         "repositories.readme",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Repositories(ops::repositories::Input::Readme(i)),
     )
 }
-fn decode_repositories_summary_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_repositories_summary_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::repositories::SummaryInput>(
         "repositories.summary",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Repositories(ops::repositories::Input::Summary(i)),
     )
 }
-fn decode_repositories_search_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_repositories_search_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::repositories::SearchInput>(
         "repositories.search",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Repositories(ops::repositories::Input::Search(i)),
     )
 }
-fn decode_queue_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::queue::InspectInput>("queue.inspect", Mode::Query, v, |i| {
+fn decode_queue_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::queue::InspectInput>("queue.inspect", Mode::Query, revision, v, |i| {
         OperationInput::Queue(ops::queue::Input::Inspect(i))
     })
 }
-fn decode_queue_resolve_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::queue::ResolveInput>("queue.resolve", Mode::Command, v, |i| {
-        OperationInput::Queue(ops::queue::Input::Resolve(i))
-    })
+fn decode_queue_resolve_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::queue::ResolveInput>(
+        "queue.resolve",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Queue(ops::queue::Input::Resolve(i)),
+    )
 }
-fn decode_queue_retry_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::queue::RetryInput>("queue.retry", Mode::Command, v, |i| {
+fn decode_queue_retry_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::queue::RetryInput>("queue.retry", Mode::Command, revision, v, |i| {
         OperationInput::Queue(ops::queue::Input::Retry(i))
     })
 }
-fn decode_queue_consumer_status_query(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_queue_consumer_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::queue::ConsumerStatusInput>(
         "queue.consumer_status",
         Mode::Query,
+        revision,
         v,
         |i| OperationInput::Queue(ops::queue::Input::ConsumerStatus(i)),
     )
 }
-fn decode_queue_reconcile_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::queue::ReconcileInput>("queue.reconcile", Mode::Command, v, |i| {
-        OperationInput::Queue(ops::queue::Input::Reconcile(i))
-    })
+fn decode_queue_reconcile_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::queue::ReconcileInput>(
+        "queue.reconcile",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Queue(ops::queue::Input::Reconcile(i)),
+    )
 }
-fn decode_imports_preview_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::imports::PreviewInput>("imports.preview", Mode::Query, v, |i| {
-        OperationInput::Imports(ops::imports::Input::Preview(i))
-    })
+fn decode_imports_preview_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::imports::PreviewInput>(
+        "imports.preview",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Imports(ops::imports::Input::Preview(i)),
+    )
 }
-fn decode_imports_configure_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::imports::ConfigureInput>("imports.configure", Mode::Command, v, |i| {
-        OperationInput::Imports(ops::imports::Input::Configure(i))
-    })
+fn decode_imports_configure_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::imports::ConfigureInput>(
+        "imports.configure",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Imports(ops::imports::Input::Configure(i)),
+    )
 }
-fn decode_imports_apply_command(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::imports::ApplyInput>("imports.apply", Mode::Command, v, |i| {
-        OperationInput::Imports(ops::imports::Input::Apply(i))
-    })
+fn decode_imports_apply_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::imports::ApplyInput>(
+        "imports.apply",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Imports(ops::imports::Input::Apply(i)),
+    )
 }
-fn decode_imports_runs_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::imports::RunsInput>("imports.runs", Mode::Query, v, |i| {
+fn decode_imports_runs_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::imports::RunsInput>("imports.runs", Mode::Query, revision, v, |i| {
         OperationInput::Imports(ops::imports::Input::Runs(i))
     })
 }
-fn decode_imports_inspect_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::imports::InspectInput>("imports.inspect", Mode::Query, v, |i| {
-        OperationInput::Imports(ops::imports::Input::Inspect(i))
-    })
+fn decode_imports_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::imports::InspectInput>(
+        "imports.inspect",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Imports(ops::imports::Input::Inspect(i)),
+    )
 }
-fn decode_maintenance_prune_diagnostics_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_maintenance_prune_diagnostics_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::maintenance::PruneDiagnosticsInput>(
         "maintenance.prune_diagnostics",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Maintenance(ops::maintenance::Input::PruneDiagnostics(i)),
     )
 }
-fn decode_maintenance_prune_index_runs_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_maintenance_prune_index_runs_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::maintenance::PruneIndexRunsInput>(
         "maintenance.prune_index_runs",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Maintenance(ops::maintenance::Input::PruneIndexRuns(i)),
     )
 }
-fn decode_maintenance_prune_messages_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_maintenance_prune_messages_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::maintenance::PruneMessagesInput>(
         "maintenance.prune_messages",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Maintenance(ops::maintenance::Input::PruneMessages(i)),
     )
 }
-fn decode_maintenance_prune_sessions_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_maintenance_prune_sessions_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::maintenance::PruneSessionsInput>(
         "maintenance.prune_sessions",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::Maintenance(ops::maintenance::Input::PruneSessions(i)),
     )
 }
-fn decode_repository_docs_generate_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_repository_docs_generate_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::repository_docs::GenerateInput>(
         "repository_docs.generate",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::RepositoryDocs(ops::repository_docs::Input::Generate(i)),
     )
 }
-fn decode_mcp_server_status_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp_server::StatusInput>("mcp_server.status", Mode::Query, v, |i| {
-        OperationInput::McpServer(ops::mcp_server::Input::Status(i))
-    })
+fn decode_mcp_server_status_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp_server::StatusInput>(
+        "mcp_server.status",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::McpServer(ops::mcp_server::Input::Status(i)),
+    )
 }
-fn decode_mcp_server_configure_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_mcp_server_configure_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::mcp_server::ConfigureInput>(
         "mcp_server.configure",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::McpServer(ops::mcp_server::Input::Configure(i)),
     )
 }
-fn decode_mcp_server_clients_query(v: Value) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::mcp_server::ClientsInput>("mcp_server.clients", Mode::Query, v, |i| {
-        OperationInput::McpServer(ops::mcp_server::Input::Clients(i))
-    })
+fn decode_mcp_server_clients_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::mcp_server::ClientsInput>(
+        "mcp_server.clients",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::McpServer(ops::mcp_server::Input::Clients(i)),
+    )
 }
-fn decode_mcp_server_set_client_access_command(v: Value) -> Result<Decoded, AdmissionError> {
+fn decode_mcp_server_set_client_access_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::mcp_server::SetClientAccessInput>(
         "mcp_server.set_client_access",
         Mode::Command,
+        revision,
         v,
         |i| OperationInput::McpServer(ops::mcp_server::Input::SetClientAccess(i)),
     )
