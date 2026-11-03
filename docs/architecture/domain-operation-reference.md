@@ -124,14 +124,14 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `sessions.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`closed`: `?bool` | `Page<SessionRecord>` |
-| `sessions.get` | **Query**<br>`sessionId`: `Id` | `SessionRecord` |
+| `sessions.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`closed`: `?bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<SessionRecord>` |
+| `sessions.get` | **Query**<br>`sessionId`: `Id`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `SessionRecord` |
 | `sessions.transcript` | **Query**<br>[Existing input schema](contracts/session-query-request.schema.json)<br>None | `TranscriptPage` |
 | `sessions.briefing` | **Query**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`item`: `?RootId`<br>`paths`: `?PathSet`<br>`budgetTokens`: `?TokenBudget`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ContextSource>` |
-| `sessions.append_message` | **Command**<br>[Existing input schema](contracts/session-command-request.schema.json)<br>None | `SessionRecord` |
+| `sessions.append_message` | **Command**<br>[Existing input schema](contracts/session-command-request.schema.json)<br>None<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/session-command-request.schema.json)) | `SessionRecord` |
 | `sessions.context_sources` | **Query**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`page`: `PageRequest` | `Page<ContextSource>` |
-| `sessions.start` | **Command**<br>`scope`: `DataScope`<br>`rootId`: `?RootId`<br>`title`: `Label` | `SessionRecord` |
-| `sessions.end` | **Command**<br>`sessionId`: `Id`<br>`expectedRevision`: `Revision` | `SessionRecord` |
+| `sessions.start` | **Command**<br>`scope`: `DataScope`<br>`rootId`: `?RootId`<br>`title`: `Label`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `SessionRecord` |
+| `sessions.end` | **Command**<br>`sessionId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `SessionRecord` |
 
 ### Ui
 
@@ -1074,6 +1074,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `rootId` | `?RootId` |
 | `contextEpoch` | `Counter` |
 | `closed` | `bool` |
+| `createdAtMs` | `?Counter` · *revision 2+* |
+| `lastActivityMs` | `?Counter` · *revision 2+* |
 
 ### ContextSource
 

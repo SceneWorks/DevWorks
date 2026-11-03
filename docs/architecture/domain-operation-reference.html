@@ -384,12 +384,12 @@
 </thead>
 <tbody><tr>
 <td><code>sessions.list</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>page</code>: <code>PageRequest</code><br><code>closed</code>: <code>?bool</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>page</code>: <code>PageRequest</code><br><code>closed</code>: <code>?bool</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;SessionRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>sessions.get</code></td>
-<td><strong>Query</strong><br><code>sessionId</code>: <code>Id</code></td>
+<td><strong>Query</strong><br><code>sessionId</code>: <code>Id</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>SessionRecord</code></td>
 </tr>
 <tr>
@@ -404,7 +404,7 @@
 </tr>
 <tr>
 <td><code>sessions.append_message</code></td>
-<td><strong>Command</strong><br><a href="contracts/session-command-request.schema.json">Existing input schema</a><br>None</td>
+<td><strong>Command</strong><br><a href="contracts/session-command-request.schema.json">Existing input schema</a><br>None<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/session-command-request.schema.json">revision 2 input</a>)</td>
 <td><code>SessionRecord</code></td>
 </tr>
 <tr>
@@ -414,12 +414,12 @@
 </tr>
 <tr>
 <td><code>sessions.start</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>rootId</code>: <code>?RootId</code><br><code>title</code>: <code>Label</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>rootId</code>: <code>?RootId</code><br><code>title</code>: <code>Label</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>SessionRecord</code></td>
 </tr>
 <tr>
 <td><code>sessions.end</code></td>
-<td><strong>Command</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code></td>
+<td><strong>Command</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>SessionRecord</code></td>
 </tr>
 </tbody></table>
@@ -3084,6 +3084,14 @@
 <tr>
 <td><code>closed</code></td>
 <td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>createdAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>lastActivityMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="contextsource">ContextSource</h3>
