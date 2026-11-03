@@ -164,11 +164,12 @@ pub fn is_secret_ref(s: &str) -> bool {
         && !looks_like_credential(opaque)
 }
 
-/// Mints the reference the secret store returns for an opaque stored-secret id, or `None` when
-/// the id cannot form a valid reference.
-pub fn secret_ref(opaque_id: &str) -> Option<String> {
-    let reference = format!("{SECRET_REF_PREFIX}{opaque_id}");
-    is_secret_ref(&reference).then_some(reference)
+/// Mints the reference the secret store returns for a stored secret, from its 128-bit opaque
+/// id. The id is written as 32 lowercase hexadecimal digits: that alphabet has no separator and
+/// no uppercase letter, so no credential prefix (`AKIA`, `ghp_`, `sk-`, ...) can ever appear and
+/// every minted reference passes [`is_secret_ref`].
+pub fn mint_secret_ref(opaque_id: u128) -> String {
+    format!("{SECRET_REF_PREFIX}{opaque_id:032x}")
 }
 
 /// Syntactic directory validation. Availability is a separate, advisory runtime check.

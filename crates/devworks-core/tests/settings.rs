@@ -10,7 +10,7 @@ use devworks_core::settings::catalog::{
 };
 use devworks_core::settings::service::OPERATIONS;
 use devworks_core::settings::validate::{
-    SECRET_REF_PREFIX, check_directory, check_value, codes, looks_like_credential, secret_ref,
+    SECRET_REF_PREFIX, check_directory, check_value, codes, looks_like_credential, mint_secret_ref,
 };
 use devworks_core::settings::view::{Health, SettingsView, Source, Status, ViewError};
 use serde_json::{Value, json};
@@ -141,10 +141,25 @@ fn values_are_validated_by_type_and_credentials_are_refused() {
         );
     }
     assert!(check_value(secret, &json!({"secretRef": "dwsecret-0123456789abcdef"})).is_empty());
+    // Every minted reference is valid, including ids whose hex would look like a token in
+    // another alphabet; a sweep over bit patterns covers the whole digit range.
     assert_eq!(
-        secret_ref("0123456789abcdef").as_deref(),
-        Some("dwsecret-0123456789abcdef")
+        mint_secret_ref(0),
+        format!("{SECRET_REF_PREFIX}{}", "0".repeat(32))
     );
+    for shift in 0..128 {
+        for id in [
+            1u128 << shift,
+            u128::MAX >> shift,
+            0xA41A_u128 << (shift % 112),
+        ] {
+            let minted = mint_secret_ref(id);
+            assert!(
+                check_value(secret, &json!({ "secretRef": minted })).is_empty(),
+                "{minted}"
+            );
+        }
+    }
     // A raw token in the reference field, a token wrapped in the reference shape, references
     // that are not host-minted and a minted id that is itself credential-shaped are all refused.
     let github = format!("ghp_{}", "A1b2C3d4".repeat(5));
@@ -162,7 +177,6 @@ fn values_are_validated_by_type_and_credentials_are_refused() {
             "{reference}"
         );
     }
-    assert_eq!(secret_ref("AKIAIOSFODNN7EXAMPLE"), None);
     let token = format!("sk-{}", "x".repeat(40));
     assert!(looks_like_credential(&format!("use \"{token}\" please")));
     assert!(looks_like_credential(

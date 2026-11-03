@@ -20,6 +20,7 @@
 //! Cancellation: the invocation carries the claim's cancellation epoch. A delivery whose epoch
 //! rose (or whose cancellation is otherwise requested) refuses a new commit with
 //! [`CommitRefusal::Cancelled`] and nothing is written; the dispatcher settles it `Cancelled`.
+//! Both decide with the same rule, `cancellation_applies`.
 //!
 //! Replay: an identical commit for an already processed `(package, subscription, event)` returns
 //! the original receipt, checkpoint, state revision and operation IDs without writing; a changed
@@ -32,7 +33,7 @@ use devworks_core::jcs;
 use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::{
     NewEvent, NewOperation, NewQueueEntry, ProcessingRecord, QueueEntry, QueueFence, QueueRead,
-    QueueState, Settlement, StorageError, WriteTransaction,
+    QueueState, Settlement, StorageError, WriteTransaction, cancellation_applies,
 };
 use devworks_core::protocol::{EventId, Id, OperationId};
 use devworks_extension_protocol::package::{EventCommit, PackageRequest, RpcResult, RpcVersion};
@@ -215,7 +216,10 @@ pub fn commit_event(
     {
         return Ok(CommitOutcome::Refused(CommitRefusal::StaleInvocation));
     }
-    if delivery.cancellation_epoch != inv.cancellation_epoch || delivery.cancel_requested {
+    // The dispatcher's rule: a request applies unless the operation may have dispatched.
+    let requested =
+        delivery.cancellation_epoch != inv.cancellation_epoch || delivery.cancel_requested;
+    if requested && cancellation_applies(&*tx.operations(), &delivery)? {
         return Ok(CommitOutcome::Refused(CommitRefusal::Cancelled));
     }
     let partition = delivery.partition.clone();

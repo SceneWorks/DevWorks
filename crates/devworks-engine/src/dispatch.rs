@@ -26,7 +26,12 @@
 //!   transaction; the handler commits later through a transactional commit path that checks the
 //!   claim fence and cancellation epoch (`package::commit_event`). A cancellation request is
 //!   observed at each renewal or wakeup and signalled to the handler; a commit after it is
-//!   refused, and the dispatcher settles the delivery `Cancelled`.
+//!   refused, and the dispatcher settles the delivery `Cancelled`. Dispatcher shutdown signals
+//!   the handler the same way. A handler that ignores the signal gets its consumer's stop grace
+//!   (store clock); past it the dispatcher stops supervising and renewing it, and the claim's
+//!   lease expires into ordinary recovery (which honours a cancellation request). Such a
+//!   consumer never carries operations: an operation-bearing delivery fails visibly instead,
+//!   so nothing it handles can be possibly dispatched.
 //!
 //! **Cancellation** is cooperative and durable. A request against a claimed delivery raises its
 //! epoch and sets a marker the store keeps through holds, retries, requeues and claim recovery.
@@ -53,7 +58,7 @@ use devworks_core::ports::Clock;
 use devworks_core::ports::storage::{
     ApplicationStore, AttemptBinding, DeliveryFilter, DeliveryKey, EventRecord, OperationRecord,
     QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
-    WriteTransaction, cancellable_before_dispatch, possibly_dispatched,
+    WriteTransaction, cancellation_applies, possibly_dispatched,
 };
 use devworks_core::protocol::{Id, OperationId, OperationState};
 use serde_json::{Value, json};
@@ -191,6 +196,8 @@ pub trait AsyncDeliveryHandler: Send + Sync {
 /// Decides whether root-scoped work recovered from an earlier boot may continue automatically
 /// (for example: its root is not paused or held and its recovery class allows automatic
 /// continuation). Filled by the root-control layer; it runs inside the dispatcher's transaction.
+/// Held work is re-examined only after boot recovery or a [`Wakeup::wake`], one bounded page per
+/// consumer per pass, so the root-control layer wakes the dispatcher when eligibility changes.
 pub trait RootEligibility: Send + Sync {
     fn may_resume(
         &self,
@@ -210,6 +217,10 @@ pub struct Consumer {
     /// Confirms which root-scoped work recovered from an earlier boot may resume. `None` (the
     /// safe default) leaves it held until an operator retries it.
     pub eligibility: Option<Arc<dyn RootEligibility>>,
+    /// Cooperative grace (store-clock ms) an asynchronous handler gets after it is asked to stop
+    /// (a cancellation request or dispatcher shutdown). Past it the dispatcher stops supervising
+    /// the handler and renewing its lease. 5 000 ms matches the architecture's shutdown grace.
+    pub stop_grace_ms: i64,
     pub retry: RetryPolicy,
 }
 
@@ -267,16 +278,33 @@ pub struct TickReport {
 }
 
 /// Best-effort, coalescing post-commit wakeup. It also prompts running asynchronous handlers'
-/// supervisors to renew their lease and look for a cancellation request now.
+/// supervisors to renew their lease and look for a cancellation request now, and has the next
+/// pass re-examine held root-scoped work from the start.
 #[derive(Clone)]
 pub struct Wakeup {
     pass: Arc<Notify>,
     changed: Arc<Notify>,
+    resume: Arc<ResumeScan>,
 }
 impl Wakeup {
     pub fn wake(&self) {
+        self.resume.restart();
         self.pass.notify_one();
         self.changed.notify_waiters();
+    }
+}
+
+/// When held root-scoped work is examined: after boot recovery or a wakeup, continuing from a
+/// per-consumer cursor while pages remain. A restart invalidates the cursors.
+struct ResumeScan {
+    due: AtomicBool,
+    generation: AtomicU64,
+    cursors: Mutex<(u64, HashMap<String, Id>)>,
+}
+impl ResumeScan {
+    fn restart(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.due.store(true, Ordering::SeqCst);
     }
 }
 
@@ -288,6 +316,7 @@ struct Inner {
     permits: Arc<Semaphore>,
     wake: Arc<Notify>,
     changed: Arc<Notify>,
+    resume: Arc<ResumeScan>,
     status: watch::Sender<u64>,
     in_flight: Mutex<HashMap<Id, QueueFence>>,
     last_tick: Mutex<Option<(Instant, i64)>>,
@@ -338,6 +367,9 @@ impl Dispatcher {
             if c.retry.max_attempts <= 0 || c.retry.base_delay_ms < 0 {
                 return Err(invalid("retry policy bounds"));
             }
+            if c.stop_grace_ms < 0 {
+                return Err(invalid("stop grace must be non-negative"));
+            }
             if c.async_handler.is_some() && c.effect.is_some() {
                 return Err(invalid(
                     "an asynchronous consumer commits through its own path, not an effect executor",
@@ -354,6 +386,11 @@ impl Dispatcher {
                 cfg,
                 wake: Arc::new(Notify::new()),
                 changed: Arc::new(Notify::new()),
+                resume: Arc::new(ResumeScan {
+                    due: AtomicBool::new(true),
+                    generation: AtomicU64::new(0),
+                    cursors: Mutex::new((0, HashMap::new())),
+                }),
                 status,
                 in_flight: Mutex::new(HashMap::new()),
                 last_tick: Mutex::new(None),
@@ -370,6 +407,7 @@ impl Dispatcher {
         Wakeup {
             pass: self.inner.wake.clone(),
             changed: self.inner.changed.clone(),
+            resume: self.inner.resume.clone(),
         }
     }
 
@@ -392,10 +430,12 @@ impl Dispatcher {
         self.inner.passes.load(Ordering::SeqCst)
     }
 
-    /// Stops admission; in-flight deliveries finish (see [`Dispatcher::idle`]).
+    /// Stops admission; in-flight deliveries finish (see [`Dispatcher::idle`]). Running
+    /// asynchronous handlers are asked to stop and get their consumer's stop grace.
     pub fn stop(&self) {
         self.inner.stopping.store(true, Ordering::SeqCst);
         self.inner.wake.notify_one();
+        self.inner.changed.notify_waiters();
     }
 
     /// Boot recovery, run before any claim of this boot: interrupted operations are classified
@@ -430,6 +470,8 @@ impl Dispatcher {
             }
         }
         self.inner.recovered.store(true, Ordering::SeqCst);
+        // Recovery may have held root-scoped work: examine it from the start.
+        self.inner.resume.restart();
         self.notify_status();
         Ok(report)
     }
@@ -550,47 +592,76 @@ impl Dispatcher {
     }
 
     /// Requeues held root-scoped work recovered from an earlier boot once each consumer's
-    /// [`RootEligibility`] confirms it, one bounded page per transaction. Work whose operation
-    /// may have dispatched stays held for reconciliation whatever the port says.
+    /// [`RootEligibility`] confirms it. It runs only after boot recovery or a wakeup, examines
+    /// one bounded page per consumer per pass (continuing from a cursor on later passes while
+    /// pages remain), and counts only the work that became ready: a requeue that settles a
+    /// cancelled delivery is not a resumption. Work whose operation may have dispatched stays
+    /// held for reconciliation whatever the port says.
     async fn resume_eligible(&self) -> Result<usize, StorageError> {
+        let scan = &self.inner.resume;
+        if !scan.due.swap(false, Ordering::SeqCst) {
+            return Ok(0);
+        }
+        let generation = scan.generation.load(Ordering::SeqCst);
+        let mut cursors = {
+            let mut c = scan.cursors.lock().unwrap_or_else(|p| p.into_inner());
+            if c.0 != generation {
+                *c = (generation, HashMap::new());
+            }
+            c.1.clone()
+        };
         let batch = self.inner.cfg.recovery_batch;
         let mut resumed = 0;
+        let mut unfinished = false;
         for consumer in &self.inner.consumers {
             let Some(port) = consumer.eligibility.clone() else {
                 continue;
             };
-            let mut after: Option<Id> = None;
-            loop {
-                let (name, port, from) = (consumer.name.clone(), port.clone(), after.clone());
-                let (n, last, more) = store::write(&self.inner.store, move |tx| {
-                    let page = tx
-                        .queue()
-                        .awaiting_eligibility(&name, from.as_ref(), batch)?;
-                    let more = page.len() == usize::from(batch);
-                    let mut n = 0;
-                    for e in &page {
-                        if let Some(op) = &e.operation_id
-                            && tx
-                                .operations()
-                                .operation(op)?
-                                .is_some_and(|o| possibly_dispatched(o.state))
-                        {
-                            continue;
-                        }
-                        if port.may_resume(tx, e)? {
-                            tx.queue().requeue(&e.id, 0)?;
-                            n += 1;
-                        }
+            let (name, from) = (consumer.name.clone(), cursors.get(&consumer.name).cloned());
+            let (n, last, more) = store::write(&self.inner.store, move |tx| {
+                let page = tx
+                    .queue()
+                    .awaiting_eligibility(&name, from.as_ref(), batch)?;
+                let more = page.len() == usize::from(batch);
+                let mut n = 0;
+                for e in &page {
+                    if let Some(op) = &e.operation_id
+                        && tx
+                            .operations()
+                            .operation(op)?
+                            .is_some_and(|o| possibly_dispatched(o.state))
+                    {
+                        continue;
                     }
-                    Ok((n, page.last().map(|e| e.id.clone()), more))
-                })
-                .await?;
-                resumed += n;
-                if !more {
-                    break;
+                    if port.may_resume(tx, e)?
+                        && tx.queue().requeue(&e.id, 0)?.state == QueueState::Ready
+                    {
+                        n += 1;
+                    }
                 }
-                after = last;
+                Ok((n, page.last().map(|e| e.id.clone()), more))
+            })
+            .await?;
+            resumed += n;
+            match (more, last) {
+                (true, Some(last)) => {
+                    cursors.insert(consumer.name.clone(), last);
+                    unfinished = true;
+                }
+                _ => {
+                    cursors.remove(&consumer.name);
+                }
             }
+        }
+        {
+            let mut c = scan.cursors.lock().unwrap_or_else(|p| p.into_inner());
+            // A restart meanwhile invalidated these cursors; the next pass starts over.
+            if c.0 == generation {
+                c.1 = cursors;
+            }
+        }
+        if unfinished {
+            scan.due.store(true, Ordering::SeqCst);
         }
         if resumed > 0 {
             self.notify_status();
@@ -807,6 +878,35 @@ impl Dispatcher {
             if let Some(step) = cancelled(tx, &c, &e)? {
                 return Ok(Err(step));
             }
+            // An asynchronous handler commits through its own path: it cannot dispatch, record
+            // or reconcile an operation, so an operation-bearing delivery cannot be honoured. It
+            // fails visibly (its undispatched operation fails before dispatch) instead.
+            if let Some(op_id) = &e.operation_id {
+                let fence = e
+                    .fence()
+                    .ok_or_else(|| invalid("claimed entry without fence"))?;
+                if let Some(op) = tx.operations().operation(op_id)?
+                    && matches!(
+                        op.state,
+                        OperationState::IntentRecorded | OperationState::RetryPending
+                    )
+                {
+                    tx.operations().transition(
+                        &op.id,
+                        op.revision,
+                        None,
+                        OperationState::Failed,
+                        None,
+                    )?;
+                }
+                let after = store::fail_terminal(
+                    tx,
+                    &e,
+                    &fence,
+                    "an asynchronous consumer cannot carry an operation",
+                )?;
+                return Ok(Err(Step::Settled(after.state)));
+            }
             let event = tx
                 .history()
                 .event(&e.event_id)?
@@ -830,23 +930,45 @@ impl Dispatcher {
         });
         let lease = self.inner.cfg.lease_ms;
         let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
+        let grace = consumer.stop_grace_ms;
+        let grace_wait = Duration::from_millis(u64::try_from(grace.max(1)).unwrap_or(1));
+        // Store-clock time at which the handler was asked to stop.
+        let mut asked_at: Option<i64> = None;
         let outcome = loop {
-            // Polled in order: a wakeup, the renewal timer, then the handler.
-            let check = first(self.inner.changed.notified(), tokio::time::sleep(every));
+            // Polled in order: a wakeup (or stop), the renewal/grace timer, then the handler.
+            let wait = if asked_at.is_some() {
+                every.min(grace_wait)
+            } else {
+                every
+            };
+            let check = first(self.inner.changed.notified(), tokio::time::sleep(wait));
             if let Either::Right(outcome) = first(check, &mut running).await {
-                break outcome;
+                break Some(outcome);
+            }
+            let now = self.inner.clock.now_ms().get();
+            if asked_at.is_some_and(|at| now.saturating_sub(at) >= grace) {
+                // The handler ignored the request past its grace: stop supervising and renewing
+                // it. Its claim's lease expires into normal recovery, which honours a requested
+                // cancellation; a late commit is refused as stale.
+                break None;
             }
             let (id, f) = (claimed.id.clone(), fence.clone());
-            let asked = store::write(&self.inner.store, move |tx| {
+            let cancel_requested = store::write(&self.inner.store, move |tx| {
                 let e = tx.queue().renew(&id, &f, lease)?;
                 Ok(e.cancellation_epoch != epoch || e.cancel_requested)
             })
             .await;
             // A lost lease needs no signal: the handler's commit is refused as stale.
-            if matches!(asked, Ok(true)) {
+            let stopping = self.inner.stopping.load(Ordering::SeqCst);
+            if asked_at.is_none() && (stopping || matches!(cancel_requested, Ok(true))) {
                 let _ = signal.send(true);
+                asked_at = Some(now);
             }
             self.notify_status();
+        };
+        let Some(outcome) = outcome else {
+            drop(running);
+            return Ok(Step::Lost);
         };
         let policy = consumer.retry;
         store::write(&self.inner.store, move |tx| {
@@ -1150,14 +1272,8 @@ fn cancelled(
     if e.cancellation_epoch == claimed.cancellation_epoch && !e.cancel_requested {
         return Ok(None);
     }
-    if let Some(op_id) = &e.operation_id {
-        let state = tx.operations().operation(op_id)?.map(|o| o.state);
-        let undispatched = state.is_some_and(|s| {
-            cancellable_before_dispatch(s) || s == OperationState::CancelledBeforeDispatch
-        });
-        if !undispatched {
-            return Ok(None);
-        }
+    if !cancellation_applies(&*tx.operations(), e)? {
+        return Ok(None);
     }
     let fence = e
         .fence()

@@ -658,6 +658,21 @@ pub fn cancellable_before_dispatch(state: OperationState) -> bool {
     use OperationState::*;
     matches!(state, IntentRecorded | RetryPending | Preflighted)
 }
+/// The one rule for whether a requested cancellation applies to `entry`: it has no operation,
+/// or its operation has certainly not dispatched (or was already cancelled before dispatch, an
+/// idempotent no-op). Otherwise the effect may have run or has an outcome, and it is reconciled
+/// instead. The store, the dispatcher and the package commit path all decide with this.
+pub fn cancellation_applies(
+    operations: &dyn OperationRead,
+    entry: &QueueEntry,
+) -> Result<bool, StorageError> {
+    let Some(op) = &entry.operation_id else {
+        return Ok(true);
+    };
+    Ok(operations.operation(op)?.is_some_and(|o| {
+        cancellable_before_dispatch(o.state) || o.state == OperationState::CancelledBeforeDispatch
+    }))
+}
 
 pub trait OperationRead {
     fn operation(&self, id: &OperationId) -> Result<Option<OperationRecord>, StorageError>;
@@ -958,7 +973,8 @@ pub trait DurableQueue: QueueRead {
     /// epoch of a claimed one and records the request durably so its owner stops cooperatively
     /// and settles it as cancelled. A held entry whose operation may have dispatched only records
     /// the request: what happened must be reconciled first. An entry whose operation already has
-    /// an outcome (`ObservedComplete`, `Failed`, `CancelledBeforeDispatch`) is refused.
+    /// an outcome (`ObservedComplete`, `Failed`) is refused; one already cancelled before
+    /// dispatch is settled `Cancelled` without touching the operation ([`cancellation_applies`]).
     fn cancel(&mut self, id: &Id) -> Result<QueueEntry, StorageError>;
     /// Returns stale claims to `Ready` (new generation) when redelivery is safe, or holds them in
     /// `Reconciling` when their operation may already have dispatched. A claim whose cancellation

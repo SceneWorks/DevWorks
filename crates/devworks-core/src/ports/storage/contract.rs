@@ -39,6 +39,8 @@ macro_rules! store_contract_tests {
             actor_registry, operation_lifecycle_and_fencing, interrupted_work_after_restart,
             queue_claims_and_fencing, queue_retry_terminal_and_cancel,
             queue_partitions_progress_and_dependents, partition_checkpoint_stays_contiguous,
+            partition_checkpoint_is_a_settled_sequence,
+            cancel_is_idempotent_for_an_operation_cancelled_before_dispatch,
             queue_holds_dismissal_and_reassert,
             queue_inspection_order_and_paging, package_handler_ledger,
             refused_decisions_persist_only_receipt_and_history,
@@ -1582,6 +1584,92 @@ pub fn partition_checkpoint_stays_contiguous(h: &mut dyn StoreHarness) {
     })
     .unwrap();
     assert_eq!(below_unsettled(&*s), third.event_sequence);
+}
+
+/// The partition checkpoint is always the sequence of a settled delivery of the partition. With
+/// an earlier delivery settled, unrelated events interleaved in the global sequence and the head
+/// claimed by an invocation that read the checkpoint, cancelling a delivery behind the head
+/// leaves exactly the checkpoint that invocation read; settling the head then advances it over
+/// the cancelled one.
+pub fn partition_checkpoint_is_a_settled_sequence(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let (first, head, behind) = write(&*s, |tx| {
+        let first = enqueue_in(tx, "ord", Some("p"), None)?;
+        event(tx, "elsewhere", "Unrelated")?;
+        event(tx, "elsewhere", "Unrelated")?;
+        let head = enqueue_in(tx, "ord", Some("p"), None)?;
+        event(tx, "elsewhere", "Unrelated")?;
+        let behind = enqueue_in(tx, "ord", Some("p"), None)?;
+        Ok((first, head, behind))
+    })
+    .unwrap();
+    assert!(
+        head.event_sequence > first.event_sequence + 1,
+        "interleaved"
+    );
+    let checkpoint = |s: &dyn ApplicationStore| read(s, |r| r.queue().checkpoint("ord", Some("p")));
+    let settle_head = |s: &dyn ApplicationStore| {
+        let c = claim(s, "ord", "w", 60_000, 10).unwrap().remove(0);
+        let (cid, f) = (c.id.clone(), c.fence().unwrap());
+        write(s, move |tx| {
+            tx.queue().settle(&cid, &f, Settlement::Completed)
+        })
+        .unwrap();
+        c
+    };
+    assert_eq!(settle_head(&*s).id, first.id);
+    assert_eq!(checkpoint(&*s), first.event_sequence);
+    // The head is claimed by an invocation that read the checkpoint.
+    let claimed = claim(&*s, "ord", "w", 60_000, 10).unwrap().remove(0);
+    assert_eq!(claimed.id, head.id);
+    let read_by_invocation = checkpoint(&*s);
+    let bid = behind.id.clone();
+    write(&*s, move |tx| tx.queue().cancel(&bid)).unwrap();
+    assert_eq!(
+        checkpoint(&*s),
+        read_by_invocation,
+        "the checkpoint the head's invocation read must stay valid"
+    );
+    let (hid, f) = (head.id.clone(), claimed.fence().unwrap());
+    write(&*s, move |tx| {
+        tx.queue().settle(&hid, &f, Settlement::Completed)
+    })
+    .unwrap();
+    assert_eq!(checkpoint(&*s), behind.event_sequence);
+}
+
+/// Cancelling a queued delivery whose operation was already cancelled before dispatch is an
+/// idempotent settlement, as in the dispatcher, not a refusal; an established outcome is refused.
+pub fn cancel_is_idempotent_for_an_operation_cancelled_before_dispatch(h: &mut dyn StoreHarness) {
+    let s = h.open();
+    let (cancelled_op, completed_op) = write(&*s, |tx| {
+        let a = intent(tx)?;
+        let ea = enqueue(tx, "ops", 0, 0, Some(a.id.clone()))?;
+        tx.operations().transition(
+            &a.id,
+            a.revision,
+            None,
+            OperationState::CancelledBeforeDispatch,
+            None,
+        )?;
+        let b = intent(tx)?;
+        let eb = enqueue(tx, "ops", 0, 0, Some(b.id.clone()))?;
+        tx.operations()
+            .transition(&b.id, b.revision, None, OperationState::Failed, None)?;
+        Ok((ea, eb))
+    })
+    .unwrap();
+    let id = cancelled_op.id.clone();
+    let after = write(&*s, move |tx| tx.queue().cancel(&id)).unwrap();
+    assert_eq!(after.state, QueueState::Cancelled);
+    let id = completed_op.id.clone();
+    assert!(write(&*s, move |tx| tx.queue().cancel(&id)).is_err());
+    assert_eq!(
+        read(&*s, |r| r.queue().entry(&completed_op.id))
+            .unwrap()
+            .state,
+        QueueState::Ready
+    );
 }
 
 /// Failed deliveries are dismissed only by explicit acknowledgment; an explicit requeue restarts

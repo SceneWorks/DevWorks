@@ -228,6 +228,7 @@ pub fn consumer(name: &str, handler: Arc<dyn DeliveryHandler>) -> Consumer {
         effect: None,
         async_handler: None,
         eligibility: None,
+        stop_grace_ms: 5_000,
         retry: RetryPolicy {
             base_delay_ms: 100,
             max_delay_ms: 10_000,

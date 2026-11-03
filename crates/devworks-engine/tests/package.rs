@@ -731,3 +731,217 @@ fn an_async_handler_observes_cancellation_and_cannot_commit_after_it() {
     );
     assert_eq!(entry(&*s, &e.id).state, QueueState::Cancelled);
 }
+
+/// A package process that sees the stop signal and ignores it: it never returns. Dropping its
+/// future (the dispatcher giving up on it) is recorded.
+struct Ignoring {
+    started: tokio::sync::Notify,
+    saw_signal: tokio::sync::Notify,
+    dropped: Arc<AtomicBool>,
+}
+struct DropFlag(Arc<AtomicBool>);
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+struct IgnoringProcess(Arc<Ignoring>);
+impl AsyncDeliveryHandler for IgnoringProcess {
+    fn start(&self, delivery: AsyncDelivery) -> AsyncFuture {
+        let me = self.0.clone();
+        Box::pin(async move {
+            let _flag = DropFlag(me.dropped.clone());
+            me.started.notify_one();
+            let mut signal = delivery.cancelled.clone();
+            while !*signal.borrow() {
+                if signal.changed().await.is_err() {
+                    break;
+                }
+            }
+            me.saw_signal.notify_one();
+            std::future::pending::<AsyncOutcome>().await
+        })
+    }
+}
+fn ignoring() -> Arc<Ignoring> {
+    Arc::new(Ignoring {
+        started: tokio::sync::Notify::new(),
+        saw_signal: tokio::sync::Notify::new(),
+        dropped: Arc::new(AtomicBool::new(false)),
+    })
+}
+
+/// A handler that ignores a cancellation keeps its claim only for the stop grace, measured on
+/// the store clock: before it the lease is still renewed, after it the dispatcher stops
+/// supervising and renewing, and the expired claim is recovered as `Cancelled`.
+#[test]
+fn an_async_handler_ignoring_cancellation_gets_a_bounded_grace() {
+    let h = Harness::new();
+    let s = h.open();
+    activate(&*s);
+    let e = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
+    let pkg = ignoring();
+    let mut c = consumer(CONSUMER, Recorder::ok());
+    c.async_handler = Some(Arc::new(IgnoringProcess(pkg.clone())));
+    let d = dispatcher_with(&h, s.clone(), vec![c], |c| c.wake_jump_ms = i64::MAX);
+    let rt = runtime();
+    rt.block_on(within("ignoring cancellation", async {
+        assert_eq!(d.tick().await.unwrap().claimed, 1);
+        pkg.started.notified().await;
+        let qid = e.id.clone();
+        write(&*s, move |tx| tx.queue().cancel(&qid)).unwrap();
+        d.wakeup().wake();
+        pkg.saw_signal.notified().await;
+        let asked_at = h.now();
+        // Inside the grace the supervisor still renews the lease.
+        h.advance(4_000);
+        let mut status = d.subscribe();
+        d.wakeup().wake();
+        let want = h.now() + 30_000;
+        while entry(&*s, &e.id).lease_until_ms != Some(want) {
+            status.changed().await.unwrap();
+        }
+        assert_eq!(d.in_flight(), 1);
+        // At the grace it gives up: the handler is dropped and the delivery leaves flight.
+        h.advance(asked_at + 5_000 - h.now());
+        d.wakeup().wake();
+        d.idle().await;
+    }));
+    assert!(
+        pkg.dropped.load(Ordering::SeqCst),
+        "handler still supervised"
+    );
+    let still = entry(&*s, &e.id);
+    assert_eq!(still.state, QueueState::Claimed);
+    let lease = still.lease_until_ms.unwrap();
+    // Nothing renews it any more; once it expires, recovery honours the cancellation.
+    h.advance(lease - h.now() + 1);
+    let report = rt.block_on(d.tick()).unwrap();
+    assert_eq!(report.recovered.cancelled, std::slice::from_ref(&e.id));
+    assert_eq!(entry(&*s, &e.id).state, QueueState::Cancelled);
+    let c = counts(&*s, &e);
+    assert_eq!((c.state_revision, c.processed), (1, false));
+}
+
+/// Dispatcher shutdown asks a running asynchronous handler to stop and bounds it by the same
+/// grace: an ignoring handler is dropped and its unrenewed claim is later recovered for
+/// redelivery (no cancellation was requested).
+#[test]
+fn dispatcher_stop_bounds_an_ignoring_async_handler() {
+    let h = Harness::new();
+    let s = h.open();
+    activate(&*s);
+    let e = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
+    let pkg = ignoring();
+    let mut c = consumer(CONSUMER, Recorder::ok());
+    c.async_handler = Some(Arc::new(IgnoringProcess(pkg.clone())));
+    let d = dispatcher_with(&h, s.clone(), vec![c], |c| c.wake_jump_ms = i64::MAX);
+    let rt = runtime();
+    rt.block_on(within("ignoring shutdown", async {
+        assert_eq!(d.tick().await.unwrap().claimed, 1);
+        pkg.started.notified().await;
+        d.stop();
+        pkg.saw_signal.notified().await;
+        h.advance(5_000);
+        d.wakeup().wake();
+        d.idle().await;
+    }));
+    assert!(pkg.dropped.load(Ordering::SeqCst));
+    let still = entry(&*s, &e.id);
+    assert_eq!(still.state, QueueState::Claimed);
+    h.advance(still.lease_until_ms.unwrap() - h.now() + 1);
+    let recovered = write(&*s, |tx| {
+        tx.queue().recover_claims(ClaimRecovery::Expired, 10)
+    })
+    .unwrap();
+    assert_eq!(recovered.requeued, std::slice::from_ref(&e.id));
+}
+
+/// An asynchronous consumer cannot honour an operation (it never dispatches, records or
+/// reconciles one): such a delivery fails visibly and its operation fails before dispatch,
+/// without the handler ever starting.
+#[test]
+fn an_async_consumer_refuses_operation_bearing_deliveries() {
+    let h = Harness::new();
+    let s = h.open();
+    activate(&*s);
+    let e = write(&*s, |tx| {
+        let op = intent(tx)?;
+        enqueue_tx(tx, CONSUMER, None, Some(op), json!({}))
+    })
+    .unwrap();
+    let pkg = ignoring();
+    let mut c = consumer(CONSUMER, Recorder::ok());
+    c.async_handler = Some(Arc::new(IgnoringProcess(pkg.clone())));
+    let d = dispatcher(&h, s.clone(), vec![c]);
+    runtime()
+        .block_on(within("operation-bearing", d.run_until_idle()))
+        .unwrap();
+    let failed = entry(&*s, &e.id);
+    assert_eq!(failed.state, QueueState::Failed);
+    assert_eq!(
+        failed.last_error.as_deref(),
+        Some("an asynchronous consumer cannot carry an operation")
+    );
+    let op = e.operation_id.clone().unwrap();
+    assert_eq!(
+        read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+        devworks_core::protocol::OperationState::Failed
+    );
+    assert!(
+        !pkg.dropped.load(Ordering::SeqCst),
+        "the handler was started"
+    );
+}
+
+/// The invocation of a partition's head reads the checkpoint (an earlier settled delivery, with
+/// unrelated events interleaved in the global sequence); a delivery behind it is cancelled while
+/// it runs. Its commit still succeeds and then reports the advanced checkpoint.
+#[test]
+fn a_head_commit_survives_a_cancel_behind_it() {
+    let h = Harness::new();
+    let s = h.open();
+    activate(&*s);
+    let first = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
+    write(&*s, |tx| event(tx, "Unrelated")).unwrap();
+    let head = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
+    write(&*s, |tx| event(tx, "Unrelated")).unwrap();
+    let behind = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
+    let claim = |s: &Arc<dyn ApplicationStore>| {
+        write(&**s, |tx| {
+            tx.queue().claim_ready(&ClaimRequest {
+                consumer: CONSUMER.into(),
+                owner: id("host-invoker"),
+                lease_ms: 60_000,
+                limit: 10,
+            })
+        })
+        .unwrap()
+        .remove(0)
+    };
+    let c1 = claim(&s);
+    assert_eq!(c1.id, first.id);
+    let (id1, f1) = (c1.id.clone(), c1.fence().unwrap());
+    write(&*s, move |tx| {
+        tx.queue().settle(&id1, &f1, Settlement::Completed)
+    })
+    .unwrap();
+    let claimed = claim(&s);
+    assert_eq!(claimed.id, head.id);
+    let event = read(&*s, |r| r.history().event(&head.event_id)).unwrap();
+    let d = Delivery {
+        entry: claimed,
+        event,
+    };
+    let expected = read(&*s, |r| expected_checkpoint(r.queue(), &d.entry));
+    assert_eq!(expected, first.event_sequence);
+    let bid = behind.id.clone();
+    write(&*s, move |tx| tx.queue().cancel(&bid)).unwrap();
+    let commit = commit_for("s", &d, expected, 1, "state-2");
+    let inv = invocation("s", &d, s.info().host_actor.clone());
+    let outcome = write(&*s, move |tx| commit_event(tx, &inv, &commit)).unwrap();
+    let CommitOutcome::Accepted(RpcResult::EventCommitAccepted { checkpoint, .. }) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(String::from(checkpoint), behind.event_sequence.to_string());
+}

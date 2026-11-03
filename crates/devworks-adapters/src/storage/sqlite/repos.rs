@@ -1490,29 +1490,27 @@ impl Unit<'_> {
     /// settlements and keeps the highest settled sequence; an ordered partition's row is its
     /// contiguous checkpoint. A delivery behind the partition's head can be settled first (an
     /// operator cancels a queued delivery), so the checkpoint is recomputed as the settled prefix:
-    /// it never passes the lowest unsettled delivery of the partition.
+    /// the highest settled event sequence below the lowest unsettled delivery of the partition
+    /// (or the highest settled one when nothing is unsettled). It is always the sequence of a
+    /// settled delivery of this partition, never a sequence in between, so a checkpoint an
+    /// in-flight invocation read stays valid while deliveries behind it settle.
     fn settled(&self, e: &QueueEntry) -> Result<(), StorageError> {
         db(stmt(self.conn,
             "INSERT INTO consumer_progress(consumer,partition_key,applied_seq,revision) VALUES(?1,'',?2,1) ON CONFLICT(consumer,partition_key) DO UPDATE SET applied_seq=max(applied_seq,excluded.applied_seq),revision=revision+1",
         )?
         .execute(params![e.consumer, e.event_sequence]))?;
         if let Some(p) = e.partition.as_deref() {
-            let (lowest_unsettled, highest_settled): (Option<i64>, Option<i64>) = db(stmt(
+            let prefix: Option<i64> = db(stmt(
                 self.conn,
                 &format!(
-                    "SELECT (SELECT min(event_seq) FROM queue_entries WHERE consumer=?1 AND partition_key=?2 AND state NOT IN {SETTLED}),(SELECT max(event_seq) FROM queue_entries WHERE consumer=?1 AND partition_key=?2 AND state IN {SETTLED})"
+                    "SELECT max(event_seq) FROM queue_entries WHERE consumer=?1 AND partition_key=?2 AND state IN {SETTLED} AND event_seq<coalesce((SELECT min(event_seq) FROM queue_entries WHERE consumer=?1 AND partition_key=?2 AND state NOT IN {SETTLED}),9223372036854775807)"
                 ),
             )?
-            .query_row(params![e.consumer, p], |r| Ok((r.get(0)?, r.get(1)?))))?;
-            let settled = highest_settled.unwrap_or(0);
-            let prefix = match lowest_unsettled {
-                Some(low) => settled.min(low - 1),
-                None => settled,
-            };
+            .query_row(params![e.consumer, p], |r| r.get(0)))?;
             db(stmt(self.conn,
                 "INSERT INTO consumer_progress(consumer,partition_key,applied_seq,revision) VALUES(?1,?2,?3,1) ON CONFLICT(consumer,partition_key) DO UPDATE SET applied_seq=max(applied_seq,excluded.applied_seq),revision=revision+1",
             )?
-            .execute(params![e.consumer, p, prefix.max(0)]))?;
+            .execute(params![e.consumer, p, prefix.unwrap_or(0)]))?;
         }
         Ok(())
     }
@@ -1555,17 +1553,7 @@ impl Unit<'_> {
     /// operation, or it has certainly not dispatched. An established outcome (`ObservedComplete`,
     /// `Failed`) must still be recorded by redelivery, so the request cannot apply to it.
     fn cancel_applies(&self, e: &QueueEntry) -> Result<bool, StorageError> {
-        if !e.cancel_requested {
-            return Ok(false);
-        }
-        Ok(match &e.operation_id {
-            None => true,
-            Some(op) => {
-                let state = self.load_op(op)?.state;
-                cancellable_before_dispatch(state)
-                    || state == OperationState::CancelledBeforeDispatch
-            }
-        })
+        Ok(e.cancel_requested && cancellation_applies(self, e)?)
     }
     /// Settles an unclaimed or claimed delivery `Cancelled` with its undispatched operation.
     fn settle_cancelled(
@@ -1863,7 +1851,9 @@ impl DurableQueue for Unit<'_> {
             // The effect may have happened: record the request; reconciliation decides.
             QueueState::Reconciling if op_state.is_some_and(possibly_dispatched) => request(self),
             QueueState::Ready | QueueState::Reconciling => {
-                if op_state.is_some_and(|s| !cancellable_before_dispatch(s)) {
+                // The same rule as the dispatcher: an operation already cancelled before
+                // dispatch is an idempotent no-op, an established outcome is refused.
+                if !cancellation_applies(self, &e)? {
                     return Err(invalid(
                         "the delivery's operation already has an outcome; it cannot be cancelled",
                     ));

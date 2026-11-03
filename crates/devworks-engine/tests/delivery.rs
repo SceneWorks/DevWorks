@@ -1157,13 +1157,25 @@ fn observing_unknown_outcomes_walks_every_page() {
 }
 
 /// The root-control layer's view of which roots are held.
-struct Roots(Mutex<HashSet<String>>);
+struct Roots(Mutex<HashSet<String>>, std::sync::atomic::AtomicUsize);
+impl Roots {
+    fn new(held: &[&str]) -> Arc<Self> {
+        Arc::new(Self(
+            Mutex::new(held.iter().map(|r| (*r).to_owned()).collect()),
+            Default::default(),
+        ))
+    }
+    fn asked(&self) -> usize {
+        self.1.load(Ordering::SeqCst)
+    }
+}
 impl devworks_engine::RootEligibility for Roots {
     fn may_resume(
         &self,
         _: &mut dyn WriteTransaction,
         e: &QueueEntry,
     ) -> Result<bool, StorageError> {
+        self.1.fetch_add(1, Ordering::SeqCst);
         let root = e.root_id.as_ref().expect("root-scoped").0.as_str();
         Ok(!self.0.lock().unwrap().contains(root))
     }
@@ -1227,16 +1239,25 @@ fn root_scoped_work_of_an_earlier_boot_waits_for_root_eligibility() {
     assert_eq!(recorder.seen().len(), 1);
 
     // With the root-control layer's port: not while the root is held, then once released.
-    let roots = Arc::new(Roots(Mutex::new(HashSet::from(["root-a".to_owned()]))));
+    let roots = Roots::new(&["root-a"]);
     let mut c = consumer("work", recorder.clone());
     c.eligibility = Some(roots.clone());
     let d = dispatcher(&h, s.clone(), vec![c]);
     rt.block_on(d.run_until_idle()).unwrap();
     assert_eq!(entry(&*s, &rooted.id).state, QueueState::Reconciling);
     assert_eq!(recorder.seen().len(), 1, "held root work was dispatched");
+    // Held work is examined once; later passes do not rescan it until a wakeup.
+    assert_eq!(roots.asked(), 1);
+    for _ in 0..3 {
+        assert_eq!(rt.block_on(d.tick()).unwrap().resumed, 0);
+    }
+    assert_eq!(roots.asked(), 1, "held work rescanned without a wakeup");
+    // The root-control layer releases the root and wakes the dispatcher.
     roots.0.lock().unwrap().clear();
+    d.wakeup().wake();
     let report = rt.block_on(d.tick()).unwrap();
     assert_eq!(report.resumed, 1);
+    assert_eq!(roots.asked(), 2);
     rt.block_on(async {
         d.idle().await;
         d.run_until_idle().await.unwrap();
@@ -1332,4 +1353,127 @@ fn a_cancel_requested_before_a_crash_is_honoured_by_recovery() {
         OperationState::CancelledBeforeDispatch
     );
     assert_eq!((fx.executed(), recorder.seen().len()), (0, 0));
+}
+
+/// Root-scoped claim of a dead process, for consumer `work`, optionally behind an operation that
+/// was dispatched and whose cancellation was requested before the crash.
+fn stranded_root_work(
+    h: &Harness,
+    s: &Arc<dyn ApplicationStore>,
+    root: &str,
+    dispatched_and_cancelled: bool,
+) -> QueueEntry {
+    seed_root(h, root);
+    let root = root.to_owned();
+    let e = write(&**s, move |tx| {
+        let op = if dispatched_and_cancelled {
+            Some(intent(tx)?)
+        } else {
+            None
+        };
+        let event_id = event(tx, "Changed")?;
+        let rid = tx.new_id(IdKind::QueueEntry);
+        tx.queue().enqueue(NewQueueEntry {
+            id: rid,
+            consumer: "work".into(),
+            event_id,
+            root_id: Some(devworks_core::protocol::RootId(id(&root))),
+            operation_id: op,
+            partition: None,
+            priority: 0,
+            ready_at_ms: 0,
+            payload: json!({}),
+        })
+    })
+    .unwrap();
+    let ghost = ClaimRequest {
+        consumer: "work".into(),
+        owner: id("ghost"),
+        lease_ms: 3_600_000,
+        limit: 10,
+    };
+    let claimed = write(&**s, move |tx| tx.queue().claim_ready(&ghost)).unwrap();
+    let c = claimed.into_iter().find(|c| c.id == e.id).unwrap();
+    if dispatched_and_cancelled {
+        let (op, eid) = (e.operation_id.clone().unwrap(), e.id.clone());
+        let generation = c.generation;
+        write(&**s, move |tx| {
+            let rec = tx.operations().operation(&op)?.unwrap();
+            let a = tx.operations().begin_attempt(
+                &op,
+                rec.revision,
+                AttemptBinding {
+                    owner_generation: Some(generation),
+                    ..AttemptBinding::default()
+                },
+            )?;
+            tx.operations().transition(
+                &op,
+                rec.revision + 1,
+                Some(&a.fence()),
+                OperationState::Dispatching,
+                None,
+            )?;
+            tx.queue().cancel(&eid)
+        })
+        .unwrap();
+    }
+    e
+}
+
+/// Only requeues that leave work ready count as resumed: a held delivery whose cancellation
+/// was requested settles `Cancelled` when its root is confirmed. The scan is bounded to one page
+/// per consumer per pass and continues from its cursor on the next pass without a wakeup.
+#[test]
+fn resumed_counts_only_work_that_became_ready() {
+    let h = Harness::new();
+    let s = h.open();
+    let plain = stranded_root_work(&h, &s, "root-a", false);
+    let cancelled = stranded_root_work(&h, &s, "root-b", true);
+    drop(s);
+    let s = h.open();
+    let roots = Roots::new(&[]);
+    let recorder = Recorder::ok();
+    let mut c = consumer("work", recorder.clone());
+    c.eligibility = Some(roots.clone());
+    let d = dispatcher_with(&h, s.clone(), vec![c], |c| c.recovery_batch = 1);
+    let rt = runtime();
+    rt.block_on(d.recover()).unwrap();
+    // The restart left the dispatched operation's outcome unknown; it is observed not applied.
+    let op = cancelled.operation_id.clone().unwrap();
+    assert_eq!(
+        read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+        OperationState::OutcomeUnknown
+    );
+    let o = op.clone();
+    write(&*s, move |tx| {
+        let rec = tx.operations().operation(&o)?.unwrap();
+        tx.operations()
+            .transition(&o, rec.revision, None, OperationState::RetryPending, None)
+    })
+    .unwrap();
+    for e in [&plain, &cancelled] {
+        let held = entry(&*s, &e.id);
+        assert_eq!(
+            (held.state, held.awaiting_eligibility),
+            (QueueState::Reconciling, true)
+        );
+    }
+    // One page (one entry) per pass: two passes examine both, then nothing more is scanned.
+    let first = rt.block_on(d.tick()).unwrap().resumed;
+    let second = rt.block_on(d.tick()).unwrap().resumed;
+    let third = rt.block_on(d.tick()).unwrap().resumed;
+    assert_eq!(first + second + third, 1, "only the ready requeue counts");
+    assert_eq!(roots.asked(), 2);
+    rt.block_on(within("resumed_counts", async {
+        d.idle().await;
+        d.run_until_idle().await.unwrap();
+    }));
+    assert_eq!(entry(&*s, &plain.id).state, QueueState::Completed);
+    assert_eq!(entry(&*s, &cancelled.id).state, QueueState::Cancelled);
+    assert_eq!(
+        read(&*s, |r| r.operations().operation(&op)).unwrap().state,
+        OperationState::CancelledBeforeDispatch
+    );
+    assert_eq!(recorder.seen().len(), 1);
 }
