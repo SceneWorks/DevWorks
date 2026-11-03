@@ -105,6 +105,7 @@ impl StoreHarness for Harness {
     }
 }
 
+mod authority;
 mod settings;
 
 mod contract {
@@ -384,9 +385,14 @@ fn migration_three_upgrades_existing_deliveries() {
     let report = s.compatibility().unwrap();
     assert!(report.store_schema_version >= 3 && report.minimum_writer >= 3);
     drop(s);
-    // An older build may still read the upgraded store but not write it.
-    let old = SqliteStore::open_with(h.config(), &through(2)).unwrap();
-    assert!(matches!(old.info().access, AccessMode::ReadOnly { .. }));
+    // A build older than the store's reader floor may not even read it: from migration 5 an
+    // older reader would misreport the `mcp_client` actor kind as corruption. (A build between
+    // the reader and writer floors reads but does not write; see the floor test.)
+    match SqliteStore::open_with(h.config(), &through(2)) {
+        Err(StorageError::IncompatibleSchema(_)) => {}
+        Ok(old) => panic!("an older build opened the store: {:?}", old.info().access),
+        Err(other) => panic!("{other}"),
+    }
 }
 
 #[test]
@@ -552,6 +558,16 @@ fn shipped_migrations_increase_and_settings_apply_on_top() {
         report.minimum_writer, highest_floor,
         "the store keeps the highest declared writer floor"
     );
+    let authority = MIGRATIONS
+        .iter()
+        .find(|m| m.version == 5)
+        .expect("authority migration");
+    assert_eq!(
+        authority.checksum(),
+        MIGRATION_0005_SHA256,
+        "an applied migration was edited"
+    );
+    assert_eq!(authority.minimum_writer, 5);
     assert!(report.migrations.iter().any(|m| m.version == 4));
     drop(s);
     assert_eq!(version_and_ledger(&h, "configuration_proposals").0, 1);
@@ -973,12 +989,11 @@ fn start(key: &str) -> String {
 }
 fn ctx(s: &SqliteStore) -> InvocationContext {
     let info = s.info();
-    InvocationContext::new(
+    devworks_core::context::HostIngress::new(s).context(
         ActorId(Id::new("user-a").unwrap()),
         PrincipalKind::Human,
         Id::new("inv").unwrap(),
         Id::new("ui-main").unwrap(),
-        info.store_id,
         Counter::new(info.restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     )

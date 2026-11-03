@@ -58,7 +58,20 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_writer: 3,
         sql: include_str!("migrations/0004_settings.sql"),
     },
+    // Additive tables. Writers older than 5 would ignore principal revocation and authority
+    // grants, so they may not write; the floor also stays at or above every earlier floor.
+    // Readers older than 5 treat the `mcp_client` actor kind as corrupt, so they may not read
+    // either: older builds open such a store read-refused instead of misreporting corruption.
+    Migration {
+        version: 5,
+        minimum_reader: 5,
+        minimum_writer: 5,
+        sql: include_str!("migrations/0005_authority.sql"),
+    },
 ];
+/// Recorded checksum of migration 5; a test fails if the shipped text changes.
+pub const MIGRATION_0005_SHA256: &str =
+    "3b8c62996c4506f42eb45c0e76db77d4a7160135090c48f533eaec821e48372f";
 /// Recorded checksum of migration 4; a test fails if the shipped text changes.
 pub const MIGRATION_0004_SHA256: &str =
     "15188a10f9c8f49ffde96563e636ccda2116024a7e6bda1e3e01096e25d7bad9";

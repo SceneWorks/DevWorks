@@ -75,8 +75,10 @@ pub const OPERATIONS: [&str; 4] = [
 ];
 
 /// Host-resolved role of an agent invocation (from its assignment/session records), never from
-/// request fields. Role enforcement proper is the authority item; settings only needs to know
-/// whether the principal is a read-only role.
+/// request fields. The production implementation is [`crate::authority::HostRoles`] (the
+/// principal's current host binding); role enforcement for every operation happens earlier in
+/// [`crate::authority::HostAuthority`]. Settings only needs to know whether the principal is a
+/// read-only role; `None` means the role is unresolved and every settings write fails closed.
 pub trait PrincipalRoles: Send + Sync {
     fn role(&self, ctx: &InvocationContext) -> Option<AgentRole>;
 }
@@ -339,7 +341,9 @@ fn writer(
             Some(role) if role.read_only() => Err(denied("read_only_role")),
             Some(_) => Ok(Writer::Propose),
         },
-        PrincipalKind::Package | PrincipalKind::Schedule => Err(denied("settings_write")),
+        PrincipalKind::Package | PrincipalKind::McpClient | PrincipalKind::Schedule => {
+            Err(denied("settings_write"))
+        }
     }
 }
 
@@ -422,7 +426,10 @@ pub fn stage_proposal(
             Some(role) if role.read_only() => return Err(denied("read_only_role")),
             Some(_) => {}
         },
-        PrincipalKind::Package | PrincipalKind::Schedule | PrincipalKind::Host => {
+        PrincipalKind::Package
+        | PrincipalKind::McpClient
+        | PrincipalKind::Schedule
+        | PrincipalKind::Host => {
             return Err(denied("settings_proposal"));
         }
     }

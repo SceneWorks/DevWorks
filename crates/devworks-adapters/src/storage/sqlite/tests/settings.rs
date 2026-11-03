@@ -123,12 +123,11 @@ impl Fixture {
             PrincipalKind::Agent
         };
         let info = self.store.info();
-        InvocationContext::new(
+        devworks_core::context::HostIngress::new(&self.store).context(
             ActorId(id(actor)),
             kind,
             id("invocation-1"),
             id("ui-main"),
-            info.store_id,
             Counter::new(info.restore_epoch).unwrap(),
             Revision::new(1).unwrap(),
         )

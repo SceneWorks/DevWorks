@@ -16,29 +16,34 @@
 //!    `CommandStatusUnknown`, resolved by resubmitting the same command/key (receipt lookup).
 //!
 //! Malformed, unsupported and denied requests stop before the store, so they never mint durable
-//! work or a receipt record. Because lookup and decision run in one serialized transaction, a
+//! work or a receipt record. A command refused by authority policy records one attributed
+//! `AuthorityDenied` history event (keyed by the rejection's correlation ID) so its typed reason
+//! is visible; a refused query carries the reason in its fault (`authority:<DenialReason>`). Because lookup and decision run in one serialized transaction, a
 //! duplicate that loses a race finds the winner's receipt and its handler never runs.
 use crate::admission::{self, AdmissionError, CallerKey, Refusal, Selection};
-use crate::context::{InvocationContext, ReceiptIdentity};
+use crate::authority::AuthorityCapability;
+use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
-    ActorRegistry, CommandLedger, CommandLedgerRead, ConfigurationRepository, DurableQueue,
-    EventFilter, EventPage, EventRecord, GrantLedger, HistoryLog, HistoryRead, LedgerEntry,
-    NewEvent, OperationJournal, PackageHandlerLedger, ReadOptions, RevisionConflict, Savepoint,
-    StorageError, StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
+    ActorRegistry, AuthorityGrant, AuthorityLedger, AuthorityRead, CommandLedger,
+    CommandLedgerRead, ConfigurationRepository, DurableQueue, EventFilter, EventPage, EventRecord,
+    GrantLedger, GrantRead, GrantRecord, HistoryLog, HistoryRead, LedgerEntry, NewAuthorityGrant,
+    NewEvent, NewGrant, NewPrincipalBinding, OperationJournal, PackageHandlerLedger,
+    PrincipalBinding, ReadOptions, RegisteredRepository, RevisionConflict, Savepoint, StorageError,
+    StoreInfo, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, CommandHandler, Decided,
-    HandlerFailure, IdKind, IdSource, QueryHandler, StoredReceipt,
+    GrantUse, HandlerFailure, IdKind, IdSource, QueryHandler, StoredReceipt,
 };
 use crate::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, validate_command_reply,
 };
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
-    CONTRACT, Check, CommandId, CommandReply, CorrelationId, DomainErrorCode, DomainFault, EventId,
-    Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
+    ActorId, CONTRACT, Check, CommandId, CommandReply, CorrelationId, DomainErrorCode, DomainFault,
+    EventId, Id, Protocol, QueryId, Receipt, Rejection, RequestKey, RetryAdvice, Revision,
 };
 use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor};
 use serde_json::json;
@@ -193,15 +198,28 @@ impl Gateway<'_> {
             effect: decoded.effect,
             action: decoded.action,
             input: &decoded.input,
+            fingerprint: &decoded.fingerprint,
         };
-        if let Err(denial) = self.authority.authorize(ctx, &request) {
-            let code = match denial {
-                AuthorityDenial::PermissionDenied => DomainErrorCode::PermissionDenied,
-                AuthorityDenial::InvalidTarget => DomainErrorCode::InvalidArgument,
-                AuthorityDenial::NotFound => DomainErrorCode::NotFound,
-            };
-            return Ok(self.query_fault(query_id, code, RetryAdvice::Never));
-        }
+        let authorization = match self.authority.authorize(ctx, &request) {
+            Ok(a) => a,
+            Err(denial) => {
+                let code = match denial {
+                    AuthorityDenial::PermissionDenied | AuthorityDenial::Policy(_) => {
+                        DomainErrorCode::PermissionDenied
+                    }
+                    AuthorityDenial::InvalidTarget => DomainErrorCode::InvalidArgument,
+                    AuthorityDenial::NotFound => DomainErrorCode::NotFound,
+                };
+                let mut reply = self.query_fault(query_id, code, RetryAdvice::Never);
+                if let (AuthorityDenial::Policy(reason), DomainQueryReply::Rejected { fault, .. }) =
+                    (denial, &mut reply)
+                {
+                    // The typed reason travels in the fault: `authority:<DenialReason>`.
+                    fault.target_kind = Some(BoundedText(denial_target(reason)));
+                }
+                return Ok(reply);
+            }
+        };
         let admitted = AdmittedQuery {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
@@ -217,6 +235,22 @@ impl Gateway<'_> {
             }
             Ok(Some((handler.query(ctx, &admitted, snapshot), stamp)))
         });
+        // Publication point: authority that was revoked or narrowed while the answer was being
+        // prepared denies the output. Checked on a fresh snapshot, after the answer exists.
+        if matches!(answered, Ok(Some((Ok(_), _))))
+            && (!authorization.fences().is_empty() || !authorization.authority_grants().is_empty())
+        {
+            let holds = read_snapshot(self.store, &ReadOptions::default(), |s| {
+                crate::authority::authorization_holds(s, &authorization)
+            });
+            if !matches!(holds, Ok(true)) {
+                return Ok(self.query_fault(
+                    admitted.query_id,
+                    DomainErrorCode::PermissionDenied,
+                    RetryAdvice::Never,
+                ));
+            }
+        }
         let reply = match answered {
             Err(e) => {
                 let (code, retry) = storage_fault(&e);
@@ -311,17 +345,28 @@ impl Gateway<'_> {
             effect: decoded.effect,
             action: decoded.action,
             input: &decoded.input,
+            fingerprint: &decoded.fingerprint,
         };
         let authorization = match self.authority.authorize(ctx, &request) {
             Ok(a) => a,
             Err(denial) => {
                 let code = match denial {
-                    AuthorityDenial::PermissionDenied | AuthorityDenial::NotFound => {
-                        Rejection::PermissionDenied
-                    }
+                    AuthorityDenial::PermissionDenied
+                    | AuthorityDenial::NotFound
+                    | AuthorityDenial::Policy(_) => Rejection::PermissionDenied,
                     AuthorityDenial::InvalidTarget => Rejection::InvalidTarget,
                 };
-                return Ok(self.rejected(request_key, code, RetryAdvice::Never));
+                let correlation_id = self.correlation();
+                if let AuthorityDenial::Policy(reason) = denial {
+                    self.record_denial(ctx, decoded.descriptor.name, reason, &correlation_id);
+                }
+                return Ok(CommandReply::Rejected {
+                    protocol: Protocol::Draft1,
+                    request_key,
+                    code,
+                    retry: RetryAdvice::Never,
+                    correlation_id,
+                });
             }
         };
         let admitted = AdmittedCommand {
@@ -334,8 +379,22 @@ impl Gateway<'_> {
             action: decoded.action,
         };
         let owned_ctx = ctx.clone();
+        // Only a command that entered as the user (or the host itself) may write authority
+        // records through the seams, and only as that principal.
+        let ingress = matches!(
+            ctx.principal_kind(),
+            PrincipalKind::Human | PrincipalKind::Host
+        )
+        .then(|| ctx.principal().clone());
         let outcome = run_write(self.store, options, move |tx| {
-            unit_of_work(tx, &owned_ctx, &admitted, &authorization, &*handler)
+            unit_of_work(
+                tx,
+                &owned_ctx,
+                &admitted,
+                &authorization,
+                ingress,
+                &*handler,
+            )
         });
         let reply = match outcome {
             Ok(Unit::Recorded(receipt)) => CommandReply::Recorded {
@@ -461,10 +520,70 @@ impl Gateway<'_> {
             return Ok(reply);
         }
         Err(GatewayFailure::Unaddressable {
-            error: refusal.error,
+            error: refusal.error.redacted(),
             correlation_id: self.correlation(),
         })
     }
+
+    /// Records one attributed `AuthorityDenied` history event for a command refused by policy, so
+    /// its typed reason and rationale are visible (looked up by the rejection's correlation ID).
+    /// It is not a receipt and mints no work. A principal the store does not know cannot be
+    /// attributed and is not recorded; a recording failure never changes the rejection.
+    fn record_denial(
+        &self,
+        ctx: &InvocationContext,
+        operation: &'static str,
+        reason: crate::authority::DenialReason,
+        correlation_id: &CorrelationId,
+    ) {
+        let (ctx, correlation) = (ctx.clone(), correlation_id.0.as_str().to_owned());
+        let _ = run_write(self.store, WriteOptions::default(), move |tx| {
+            if &tx.store().store_id != ctx.store_id()
+                || tx.actors().actor_kind(ctx.principal())?.is_none()
+            {
+                return Ok(());
+            }
+            let sources: Vec<&str> = ctx.authority_sources().iter().map(Id::as_str).collect();
+            let payload = json!({
+                "operation": operation,
+                "reason": reason.as_str(),
+                "rationale": reason.rationale(),
+                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "projectId": ctx.project_id().map(|p| p.0.as_str()),
+                "rootId": ctx.root_id().map(|r| r.0.as_str()),
+                "authoritySources": sources,
+            });
+            let event = |tx: &mut dyn WriteTransaction, lineage: bool| NewEvent {
+                id: EventId(tx.new_id(IdKind::Event)),
+                actor: ctx.principal().clone(),
+                project_id: lineage.then(|| ctx.project_id().cloned()).flatten(),
+                root_id: lineage.then(|| ctx.root_id().cloned()).flatten(),
+                operation_id: None,
+                aggregate_kind: crate::authority::service::DENIAL_AGGREGATE.into(),
+                aggregate_id: correlation.clone(),
+                aggregate_revision: 1,
+                kind: "AuthorityDenied".into(),
+                payload: payload.clone(),
+            };
+            // Attach it to the work history when the lineage resolves; otherwise keep it
+            // unattached rather than lose it.
+            let savepoint = tx.savepoint()?;
+            let with_lineage = event(tx, true);
+            if tx.history().append(with_lineage).is_err() {
+                tx.rollback_to(savepoint)?;
+                let plain = event(tx, false);
+                tx.history().append(plain)?;
+            } else {
+                tx.release(savepoint)?;
+            }
+            Ok(())
+        });
+    }
+}
+
+/// Fault target kind of a policy denial: `authority:<DenialReason>`.
+pub fn denial_target(reason: crate::authority::DenialReason) -> String {
+    format!("authority:{}", reason.as_str())
 }
 
 fn storage_fault(e: &StorageError) -> (DomainErrorCode, RetryAdvice) {
@@ -491,6 +610,7 @@ fn unit_of_work(
     ctx: &InvocationContext,
     command: &AdmittedCommand,
     authorization: &Authorization,
+    ingress: Option<ActorId>,
     handler: &dyn CommandHandler,
 ) -> Result<Unit, StorageError> {
     let store = tx.store();
@@ -501,6 +621,12 @@ fn unit_of_work(
     }
     if tx.actors().actor_kind(ctx.principal())?.is_none() {
         // Receipts and history are attributed to a host-registered principal.
+        return Ok(Unit::Denied);
+    }
+    if !crate::authority::fences_hold(tx, authorization.fences())? {
+        // Authority changed after it was resolved (revoked or re-bound principal, narrowed
+        // policy). Checked before the receipt lookup, so a revoked caller is denied rather
+        // than handed an old receipt.
         return Ok(Unit::Denied);
     }
 
@@ -536,6 +662,8 @@ fn unit_of_work(
             hold_incompatible(tx, ctx, command, &contract)?;
             return Ok(Unit::IncompatibleRecord);
         }
+        // Authority that can only replay never reaches a new decision.
+        None if authorization.is_replay_only() => return Ok(Unit::Denied),
         None => {}
     }
 
@@ -543,13 +671,23 @@ fn unit_of_work(
     // view of the transaction that cannot record receipts or command history (ARCH-02). Any
     // savepoint it leaves open is discarded when this outer savepoint is unwound.
     let savepoint = tx.savepoint()?;
-    let outcome = handler.decide(ctx, command, &mut HandlerTx::new(tx));
+    let outcome = handler.decide(ctx, command, &mut HandlerTx::new(tx, ingress));
     let decided = match outcome {
-        Ok(decided) => {
+        Ok(mut decided) => {
             if let Err(e) = check_decision(command, &decided) {
                 tx.rollback_to(savepoint)?;
                 return Ok(Unit::Contract(e));
             }
+            // Receipts are persisted and returned: secrets are redacted first, so the reply and
+            // any replay carry the same redacted decision. One that cannot be redacted is
+            // refused with every write undone, never stored unredacted.
+            decided.decision = match crate::authority::redact::redact_decision(decided.decision) {
+                Ok(d) => d,
+                Err(e) => {
+                    tx.rollback_to(savepoint)?;
+                    return Ok(Unit::Contract(e));
+                }
+            };
             if matches!(decided.decision, DomainDecision::Refused { .. }) {
                 // Receipt-only decisions do not mutate work (step 5): every write the use case
                 // made is undone and only the receipt and its CommandDecided history remain.
@@ -563,8 +701,17 @@ fn unit_of_work(
                     ));
                 }
             } else {
-                for grant in authorization.grants() {
-                    match tx.grants().consume(grant, ctx.principal()) {
+                let resume = authorization.grants().iter().map(|g| (false, g));
+                let host = authorization.authority_grants().iter().map(|g| (true, g));
+                for (authority, grant) in resume.chain(host) {
+                    let spent = if authority {
+                        tx.authority()
+                            .consume_grant(grant, ctx.principal())
+                            .map(|_| ())
+                    } else {
+                        tx.grants().consume(grant, ctx.principal()).map(|_| ())
+                    };
+                    match spent {
                         Ok(_) => {}
                         Err(
                             StorageError::ScopeDenied
@@ -620,13 +767,14 @@ fn unit_of_work(
     })?;
     let committed_sequence = Revision::new(sequence)
         .map_err(|_| StorageError::InvalidRecord("non-positive committed sequence".into()))?;
+    let decision = decided.decision;
     let receipt = Receipt {
         command_id,
         committed_sequence,
         accepted_at_ms,
         request_digest: command.fingerprint.as_str().to_owned(),
         operation_id: decided.operation_id,
-        decision: decided.decision,
+        decision,
     };
     tx.receipts().record(
         &command.identity,
@@ -643,11 +791,13 @@ fn unit_of_work(
 
 /// History kinds only the gateway may write.
 fn gateway_owned(event: &NewEvent) -> bool {
-    matches!(event.aggregate_kind.as_str(), "command" | "command_receipt")
-        || matches!(
-            event.kind.as_str(),
-            "CommandDecided" | "ReceiptIncompatible"
-        )
+    matches!(
+        event.aggregate_kind.as_str(),
+        "command" | "command_receipt" | "authority_denial"
+    ) || matches!(
+        event.kind.as_str(),
+        "CommandDecided" | "ReceiptIncompatible" | "AuthorityDenied"
+    )
 }
 
 /// The transaction a use case decides against: every repository of the unit of work except the
@@ -655,11 +805,15 @@ fn gateway_owned(event: &NewEvent) -> bool {
 struct HandlerTx<'a> {
     inner: RefCell<&'a mut dyn WriteTransaction>,
     info: StoreInfo,
+    /// The principal of a user- or host-ingress command; authority writes are allowed only for
+    /// it, and never for a command an agent, package, MCP client or schedule submitted.
+    ingress: Option<ActorId>,
 }
 impl<'a> HandlerTx<'a> {
-    fn new(inner: &'a mut dyn WriteTransaction) -> Self {
+    fn new(inner: &'a mut dyn WriteTransaction, ingress: Option<ActorId>) -> Self {
         let info = inner.store().clone();
         Self {
+            ingress,
             inner: RefCell::new(inner),
             info,
         }
@@ -667,6 +821,64 @@ impl<'a> HandlerTx<'a> {
 }
 fn ledger_owned() -> StorageError {
     StorageError::InvalidRecord("command receipts are recorded only by the gateway".into())
+}
+fn authority_owned() -> StorageError {
+    StorageError::InvalidRecord(
+        "authority records are written only through the authority seams".into(),
+    )
+}
+impl GrantRead for HandlerTx<'_> {
+    fn grant(&self, id: &Id) -> Result<Option<GrantRecord>, StorageError> {
+        self.inner.borrow_mut().grants().grant(id)
+    }
+}
+impl GrantLedger for HandlerTx<'_> {
+    fn issue(&mut self, _: NewGrant) -> Result<GrantRecord, StorageError> {
+        Err(authority_owned())
+    }
+    fn consume(&mut self, _: &GrantUse, _: &ActorId) -> Result<GrantRecord, StorageError> {
+        Err(authority_owned())
+    }
+}
+impl AuthorityRead for HandlerTx<'_> {
+    fn principal(&self, actor: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
+        self.inner.borrow_mut().authority().principal(actor)
+    }
+    fn authority_grant(&self, id: &Id) -> Result<Option<AuthorityGrant>, StorageError> {
+        self.inner.borrow_mut().authority().authority_grant(id)
+    }
+    fn registered_repositories(&self) -> Result<Vec<RegisteredRepository>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .authority()
+            .registered_repositories()
+    }
+}
+impl AuthorityLedger for HandlerTx<'_> {
+    fn bind_principal(
+        &mut self,
+        _: NewPrincipalBinding,
+        _: Option<i64>,
+    ) -> Result<PrincipalBinding, StorageError> {
+        Err(authority_owned())
+    }
+    fn revoke_principal(&mut self, _: &ActorId, _: i64) -> Result<PrincipalBinding, StorageError> {
+        Err(authority_owned())
+    }
+    fn issue_grant(&mut self, _: NewAuthorityGrant) -> Result<AuthorityGrant, StorageError> {
+        Err(authority_owned())
+    }
+    fn revoke_grant(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &ActorId,
+    ) -> Result<AuthorityGrant, StorageError> {
+        Err(authority_owned())
+    }
+    fn consume_grant(&mut self, _: &GrantUse, _: &ActorId) -> Result<AuthorityGrant, StorageError> {
+        Err(authority_owned())
+    }
 }
 impl CommandLedgerRead for HandlerTx<'_> {
     fn lookup(&self, _: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError> {
@@ -738,14 +950,40 @@ impl WriteTransaction for HandlerTx<'_> {
     fn queue(&mut self) -> &mut dyn DurableQueue {
         self.inner.get_mut().queue()
     }
+    // Grant and authority reads pass through; their writes are refused here and reach the
+    // store only through the authority seams (which hold the capability) or the gateway's own
+    // consumption step, which runs on the unwrapped transaction.
     fn grants(&mut self) -> &mut dyn GrantLedger {
-        self.inner.get_mut().grants()
+        self
+    }
+    fn grant_writes(
+        &mut self,
+        capability: &AuthorityCapability,
+        actor: &ActorId,
+    ) -> Result<&mut dyn GrantLedger, StorageError> {
+        if self.ingress.as_ref() != Some(actor) {
+            return Err(authority_owned());
+        }
+        self.inner.get_mut().grant_writes(capability, actor)
     }
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger {
         self.inner.get_mut().packages()
     }
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self.inner.get_mut().configuration()
+    }
+    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+        self
+    }
+    fn authority_writes(
+        &mut self,
+        capability: &AuthorityCapability,
+        actor: &ActorId,
+    ) -> Result<&mut dyn AuthorityLedger, StorageError> {
+        if self.ingress.as_ref() != Some(actor) {
+            return Err(authority_owned());
+        }
+        self.inner.get_mut().authority_writes(capability, actor)
     }
 }
 

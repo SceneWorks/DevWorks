@@ -171,6 +171,21 @@ impl AgentRole {
     pub fn read_only(self) -> bool {
         matches!(self, Self::CodeReviewer)
     }
+    /// Stable record name of the role (host authority bindings).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkspaceCoordinator => "workspaceCoordinator",
+            Self::FeatureCoordinator => "featureCoordinator",
+            Self::IssueCoordinator => "issueCoordinator",
+            Self::Worker => "worker",
+            Self::CodeReviewer => "codeReviewer",
+            Self::Dreaming => "dreaming",
+            Self::Scheduled => "scheduled",
+        }
+    }
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.as_str() == name)
+    }
     pub fn instructions_key(self) -> &'static str {
         match self {
             Self::WorkspaceCoordinator => "roles.workspaceCoordinator.instructions",
@@ -399,6 +414,16 @@ fn build() -> Vec<SettingDescriptor> {
             ValueKind::Bool,
             true,
             NextSafeStep
+        ),
+        setting!(
+            "safety.accessProfile",
+            "Agent access",
+            "Full access, the initial default, lets agents use their selected tools with your ordinary user rights; it is not an OS sandbox. Project scope keeps brokered work inside registered repositories and task worktrees and refuses native shell, package and MCP execution unless you grant a bounded exception, because no confined launcher is qualified. Reviewer restrictions, approvals, main-branch protection and the destructive-operation guard apply in both.",
+            Safety,
+            INHERITED,
+            ValueKind::Choice(&["full", "projectScope"]),
+            "full",
+            Immediate
         ),
         setting!(
             "safety.reviewersReadOnly",

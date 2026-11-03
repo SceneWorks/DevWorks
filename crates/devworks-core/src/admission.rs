@@ -59,6 +59,22 @@ pub enum AdmissionError {
     Rule(String),
     Fingerprint(String),
 }
+impl AdmissionError {
+    /// The same error with credential-shaped content in its caller-derived text redacted. The
+    /// gateway returns only redacted admission errors.
+    pub fn redacted(self) -> Self {
+        let r = |s: String| crate::authority::redact::Redactor::new().redact_text(&s);
+        match self {
+            Self::UnsupportedProtocol(s) => Self::UnsupportedProtocol(r(s)),
+            Self::UnknownOperation(s) => Self::UnknownOperation(r(s)),
+            Self::InvalidEnvelope(s) => Self::InvalidEnvelope(r(s)),
+            Self::Decode(s) => Self::Decode(r(s)),
+            Self::Rule(s) => Self::Rule(r(s)),
+            Self::Fingerprint(s) => Self::Fingerprint(r(s)),
+            other => other,
+        }
+    }
+}
 impl fmt::Display for AdmissionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

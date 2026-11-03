@@ -48,7 +48,8 @@
 //! operational subset every command already needs: receipts, history, the operation journal,
 //! the durable queue/outbox (with ordered partitions and consumer progress), package event-handler
 //! state and processing receipts, grants and actor/store identity, plus the scoped configuration
-//! repository ([`ConfigurationRepository`]).
+//! repository ([`ConfigurationRepository`]) and the host authority ledger ([`AuthorityLedger`]).
+use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
 use crate::ports::{GrantUse, IdKind, StoredReceipt};
@@ -63,7 +64,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
+mod authority;
 mod configuration;
+pub use authority::*;
 pub use configuration::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -139,10 +142,12 @@ pub enum StorageError {
     CommitUnknown,
 }
 impl StorageError {
+    /// Diagnostics are adapter text: credential-shaped content is redacted before it can be
+    /// logged or surfaced.
     pub fn unavailable(cause: Unavailable, diagnostic: impl Into<String>) -> Self {
         Self::StorageUnavailable {
             cause,
-            diagnostic: diagnostic.into(),
+            diagnostic: crate::authority::redact::Redactor::new().redact_text(&diagnostic.into()),
         }
     }
     pub fn conflict(
@@ -180,8 +185,8 @@ impl fmt::Display for StorageError {
             Self::CursorExpired => f.write_str("cursor expired"),
             Self::LeaseLost { kind, id } => write!(f, "{kind} {id}: ownership lost"),
             Self::Duplicate { kind, id } => write!(f, "{kind} {id} already exists"),
-            Self::InvalidRecord(e) => write!(f, "invalid record: {e}"),
-            Self::IncompatibleSchema(e) => write!(f, "incompatible schema: {e}"),
+            Self::InvalidRecord(e) => write!(f, "invalid record: {}", redacted(e)),
+            Self::IncompatibleSchema(e) => write!(f, "incompatible schema: {}", redacted(e)),
             Self::StorageUnavailable { cause, diagnostic } => {
                 write!(f, "storage unavailable ({cause:?}): {diagnostic}")
             }
@@ -190,6 +195,9 @@ impl fmt::Display for StorageError {
     }
 }
 impl std::error::Error for StorageError {}
+fn redacted(text: &str) -> String {
+    crate::authority::redact::Redactor::new().redact_text(text)
+}
 
 // ---------------------------------------------------------------------------------------------
 // Admission options and the transaction owner
@@ -409,6 +417,30 @@ pub trait WriteTransaction {
     fn grants(&mut self) -> &mut dyn GrantLedger;
     fn packages(&mut self) -> &mut dyn PackageHandlerLedger;
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository;
+    /// The authority ledger. Inside a use case (the gateway's handler view) only its reads are
+    /// served; its writes are refused there and happen through [`Self::authority_writes`].
+    fn authority(&mut self) -> &mut dyn AuthorityLedger;
+    /// Authority-ledger writes for the `crate::authority` seams, which alone can present the
+    /// capability, on behalf of `actor`. On the store's own transaction (host code holding the
+    /// store) this is the ledger. The gateway's handler view allows it only for the principal of
+    /// a user- or host-ingress command, so a use case running for an agent, package, MCP client
+    /// or schedule can never write authority, whatever context it constructs or wraps.
+    fn authority_writes(
+        &mut self,
+        _: &AuthorityCapability,
+        _actor: &ActorId,
+    ) -> Result<&mut dyn AuthorityLedger, StorageError> {
+        Ok(self.authority())
+    }
+    /// Resume-grant ledger writes for the `crate::authority` seams, under the same rule as
+    /// [`Self::authority_writes`]; the handler view of [`Self::grants`] refuses writes.
+    fn grant_writes(
+        &mut self,
+        _: &AuthorityCapability,
+        _actor: &ActorId,
+    ) -> Result<&mut dyn GrantLedger, StorageError> {
+        Ok(self.grants())
+    }
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -443,6 +475,7 @@ pub trait ReadSnapshot {
     fn grants(&self) -> &dyn GrantRead;
     fn packages(&self) -> &dyn PackageHandlerRead;
     fn configuration(&self) -> &dyn ConfigurationRead;
+    fn authority(&self) -> &dyn AuthorityRead;
 }
 
 // ---------------------------------------------------------------------------------------------

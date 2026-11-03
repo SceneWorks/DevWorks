@@ -128,15 +128,17 @@ pub(crate) fn principal_name(k: PrincipalKind) -> &'static str {
         PrincipalKind::Human => "human",
         PrincipalKind::Agent => "agent",
         PrincipalKind::Package => "package",
+        PrincipalKind::McpClient => "mcp_client",
         PrincipalKind::Schedule => "schedule",
         PrincipalKind::Host => "host",
     }
 }
-fn parse_principal(s: &str) -> Result<PrincipalKind, StorageError> {
+pub(crate) fn parse_principal(s: &str) -> Result<PrincipalKind, StorageError> {
     Ok(match s {
         "human" => PrincipalKind::Human,
         "agent" => PrincipalKind::Agent,
         "package" => PrincipalKind::Package,
+        "mcp_client" => PrincipalKind::McpClient,
         "schedule" => PrincipalKind::Schedule,
         "host" => PrincipalKind::Host,
         other => return Err(corrupt(format!("unknown actor kind {other}"))),
@@ -163,7 +165,10 @@ pub(crate) fn stamp(conn: &Connection) -> Result<SnapshotStamp, StorageError> {
     })
 }
 
-fn actor_kind(conn: &Connection, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError> {
+pub(crate) fn actor_kind(
+    conn: &Connection,
+    actor: &ActorId,
+) -> Result<Option<PrincipalKind>, StorageError> {
     let kind: Option<String> = db(stmt(conn, "SELECT kind FROM actors WHERE id=?1")?
         .query_row([actor.0.as_str()], |r| r.get(0))
         .optional())?;
@@ -969,6 +974,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn configuration(&self) -> &dyn ConfigurationRead {
         self
     }
+    fn authority(&self) -> &dyn AuthorityRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1161,6 +1169,9 @@ impl WriteTransaction for Unit<'_> {
     fn configuration(&mut self) -> &mut dyn ConfigurationRepository {
         self
     }
+    fn authority(&mut self) -> &mut dyn AuthorityLedger {
+        self
+    }
 }
 
 impl ActorRegistry for Unit<'_> {
@@ -1286,7 +1297,9 @@ impl HistoryLog for Unit<'_> {
             e.aggregate_revision,
             e.kind,
             self.now,
-            text(&e.payload)
+            // History is persisted and exported: credential-shaped content in free text is
+            // redacted before it is written.
+            text(&devworks_core::authority::redact::Redactor::new().redact_json(&e.payload))
         ]))?;
         Ok(self.conn.last_insert_rowid())
     }

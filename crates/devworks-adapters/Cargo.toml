@@ -19,3 +19,8 @@ tokio = { version = "=1.54.1", default-features = false, features = ["sync"] }
 
 [dev-dependencies]
 devworks-core = { path = "../devworks-core", features = ["contract-suite"] }
+
+# Descriptor-relative no-follow filesystem calls (openat, fstatat, unlinkat) for verified reads
+# and destructive steps. Already in the lockfile; Windows uses std handle flags only.
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
