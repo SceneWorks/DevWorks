@@ -28797,6 +28797,210 @@
       },
       "passed": true,
       "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-router.configure-connection-constraints",
+      "normalized": {
+        "body": {
+          "action": {
+            "connectionId": "or",
+            "enabled": false,
+            "endpoint": "https://openrouter.ai/api/v1",
+            "kind": "Connection",
+            "name": "OpenRouter",
+            "openRouter": {
+              "allowedModels": [
+                "anthropic/*"
+              ],
+              "costTier": "low",
+              "excludedModels": [
+                "openai/gpt-4o"
+              ],
+              "provider": {
+                "allowFallbacks": false,
+                "dataCollection": "deny",
+                "enforceDistillableText": true,
+                "ignore": [
+                  "deepinfra"
+                ],
+                "maxPrice": {
+                  "completion": "15",
+                  "image": "0.002",
+                  "prompt": "3",
+                  "request": "0.01"
+                },
+                "only": [
+                  "anthropic"
+                ],
+                "order": [
+                  "anthropic"
+                ],
+                "preferredMaxLatency": {
+                  "p90": 2.5
+                },
+                "preferredMinThroughput": {
+                  "p50": 50.0
+                },
+                "quantizations": [
+                  "fp8",
+                  "bf16"
+                ],
+                "requireParameters": true,
+                "sort": {
+                  "by": "price",
+                  "partition": "none"
+                },
+                "zdr": true
+              }
+            },
+            "profile": "OpenRouterChat"
+          },
+          "kind": "router.configure"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-configure-connection-enabled",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "unknown variant `maybe`, expected `allow` or `deny`",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-configure-unknown-data-collection",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "invalid Money",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-configure-negative-max-price",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "a revision-gated member is omitted, never null",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-configure-null-enabled",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-router.connections-constraints",
+      "normalized": {
+        "kind": "router.connections",
+        "value": {
+          "hasMore": false,
+          "items": [
+            {
+              "accessExpiresAtMs": "99",
+              "checkedAtMs": "10",
+              "credentialRevision": "2",
+              "discoveredAtMs": "9",
+              "discoveredModelCount": "1",
+              "discoveredModelIds": [
+                "gpt-6-luna"
+              ],
+              "enabled": false,
+              "endpoint": "https://api.example.invalid",
+              "healthy": true,
+              "id": "id-a",
+              "lifecycle": "Authorizing",
+              "name": "fixture",
+              "openRouter": {
+                "allowedModels": [
+                  "anthropic/*"
+                ],
+                "costTier": "low",
+                "excludedModels": [
+                  "openai/gpt-4o"
+                ],
+                "provider": {
+                  "allowFallbacks": false,
+                  "dataCollection": "deny",
+                  "enforceDistillableText": true,
+                  "ignore": [
+                    "deepinfra"
+                  ],
+                  "maxPrice": {
+                    "completion": "15",
+                    "image": "0.002",
+                    "prompt": "3",
+                    "request": "0.01"
+                  },
+                  "only": [
+                    "anthropic"
+                  ],
+                  "order": [
+                    "anthropic"
+                  ],
+                  "preferredMaxLatency": {
+                    "p90": 2.5
+                  },
+                  "preferredMinThroughput": {
+                    "p50": 50.0
+                  },
+                  "quantizations": [
+                    "fp8",
+                    "bf16"
+                  ],
+                  "requireParameters": true,
+                  "sort": {
+                    "by": "price",
+                    "partition": "none"
+                  },
+                  "zdr": true
+                }
+              },
+              "profile": "OpenAiResponses",
+              "revision": "1",
+              "signIn": {
+                "expiresAtMs": "100",
+                "flowId": "flow-a",
+                "method": "DeviceCode",
+                "userCode": "ABCD-EFGH",
+                "verificationUrl": "https://auth.example.invalid/codex/device"
+              },
+              "state": "Enabled",
+              "stateReason": "Waiting for the device code",
+              "subscriptionRiskAccepted": false
+            }
+          ]
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-result-connections-enabled",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
     }
   ],
   "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"

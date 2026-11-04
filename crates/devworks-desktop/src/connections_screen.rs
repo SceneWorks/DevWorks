@@ -9,10 +9,13 @@
 //! intake (the OS secret store, or memory for a pasted code) by the request that publishes it, and
 //! the field is cleared at once. The Claude subscription shows the exact risk notice and can only
 //! be enabled by accepting it.
+use crate::backend::SecretStoreStatus;
 use crate::widgets::{self, Tone, chip};
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::Id;
-use devworks_core::protocol::records::{ConnectionRecord, RouteModel};
+use devworks_core::protocol::records::{
+    ConnectionRecord, OpenRouterConstraints, OpenRouterProviderRouting, RouteModel,
+};
 use devworks_core::services::router::connections::profiles::{
     Auth, PROFILES, Profile, RISK_NOTICE, profile, risk_notice_sha256,
 };
@@ -24,6 +27,10 @@ use std::collections::BTreeMap;
 pub const ADD_LABEL: &str = "Add connection";
 /// Efforts a catalog model may declare (never `Default`, which is the provider's own).
 pub const EFFORTS: [&str; 6] = ["Minimal", "Low", "Medium", "High", "XHigh", "Max"];
+/// The OpenRouter auto-router cost tiers (`""` is OpenRouter's default).
+pub const COST_TIERS: [&str; 6] = ["", "low", "medium", "high", "xhigh", "max"];
+/// The accessible label of the session-only fallback button.
+pub const SESSION_ONLY_LABEL: &str = "Keep credentials for this session only";
 
 /// What the panel asks the shell to do.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +61,13 @@ struct Edit {
     code: String,
     notice_read: bool,
     open: bool,
+    /// OpenRouter constraints: comma-separated model patterns, the cost tier index into
+    /// [`COST_TIERS`] and the provider-routing object as JSON.
+    allowed: String,
+    excluded: String,
+    cost_tier: usize,
+    provider: String,
+    constraints_error: Option<String>,
 }
 
 /// One catalog row's editable fields.
@@ -83,8 +97,9 @@ pub struct ConnectionsPanel {
     pub catalog_gathering: Vec<RouteModel>,
     pub last_load: Option<std::time::Instant>,
     pub sequence: u64,
-    /// The secret facility and whether it is session-only (from the host).
-    pub secret_store: Option<(String, bool)>,
+    /// The secret facility, whether it is session-only and whether it is refusing requests
+    /// (from the host).
+    pub secret_store: Option<SecretStoreStatus>,
     edits: BTreeMap<String, Edit>,
     models: BTreeMap<String, ModelEdit>,
     /// The stored values each draft started from (a draft equal to its base is untouched).
@@ -156,6 +171,18 @@ impl ConnectionsPanel {
             if !e.open {
                 e.name = r.name.0.clone();
                 e.endpoint = r.endpoint.as_ref().map(|u| u.0.clone()).unwrap_or_default();
+                let o = r.open_router.as_ref();
+                e.allowed = o.map(|o| joined(&o.allowed_models.0)).unwrap_or_default();
+                e.excluded = o.map(|o| joined(&o.excluded_models.0)).unwrap_or_default();
+                e.cost_tier = o
+                    .and_then(|o| o.cost_tier.as_ref())
+                    .and_then(|t| COST_TIERS.iter().position(|c| *c == wire(t)))
+                    .unwrap_or(0);
+                e.provider = o
+                    .and_then(|o| o.provider.as_ref())
+                    .and_then(|p| serde_json::to_string(p).ok())
+                    .unwrap_or_default();
+                e.constraints_error = None;
             }
         }
         self.edits
@@ -206,16 +233,16 @@ impl ConnectionsPanel {
             if widgets::secondary_button(ui, "Reload").clicked() {
                 actions.push(ConnectionAction::Reload);
             }
-            if let Some((name, session_only)) = &self.secret_store {
-                let text = if *session_only {
-                    format!("Credentials: {name} (this session only)")
+            if let Some(s) = &self.secret_store {
+                let text = if s.session_only {
+                    format!("Credentials: {} (this session only)", s.name)
                 } else {
-                    format!("Credentials: {name}")
+                    format!("Credentials: {}", s.name)
                 };
                 chip(
                     ui,
                     text,
-                    if *session_only {
+                    if s.session_only {
                         Tone::Attention
                     } else {
                         Tone::Neutral
@@ -228,6 +255,25 @@ impl ConnectionsPanel {
         });
         if let Some((tone, text)) = &self.message {
             chip(ui, text.clone(), *tone);
+        }
+        // The fallback follows the facility's own state (any path that hit it: staging a key,
+        // a sign-in, a refresh), never the wording of a message.
+        if let Some(s) = &self.secret_store
+            && !s.session_only
+            && let Some(why) = &s.unavailable
+        {
+            chip(
+                ui,
+                format!("The secret store is unavailable: {why}"),
+                Tone::Bad,
+            );
+            if ui
+                .button(SESSION_ONLY_LABEL)
+                .on_hover_text("Nothing is written to disk; you sign in again after a restart.")
+                .clicked()
+            {
+                actions.push(ConnectionAction::UseSessionOnly);
+            }
         }
         if let Some(e) = &self.error {
             chip(
@@ -292,6 +338,9 @@ impl ConnectionsPanel {
                 } else {
                     chip(ui, "API billing", Tone::Neutral);
                 }
+                if r.enabled == Some(false) {
+                    chip(ui, "Turned off: not used for routing", Tone::Attention);
+                }
             });
             if let Some(e) = &r.endpoint {
                 widgets::caption(ui, format!("Endpoint: {}", e.0));
@@ -345,19 +394,19 @@ impl ConnectionsPanel {
             let Some(p) = p else {
                 return;
             };
-            // The Claude subscription: the exact notice, and nothing works until it is accepted.
+            // The Claude subscription: the exact notice. Until it is accepted nothing reaches
+            // the provider (sign-in, test, refresh); local edits, turning the connection off,
+            // removing it and deleting its credential stay available.
+            let gated = p.risk_gated && !r.subscription_risk_accepted;
             if p.risk_gated {
                 self.risk_ui(ui, r, &id, &revision, actions);
-                if !r.subscription_risk_accepted {
-                    return;
-                }
             }
-            if let Some(ch) = &r.sign_in {
+            if !gated && let Some(ch) = &r.sign_in {
                 self.challenge_ui(ui, r, &id, ch, actions);
             }
             ui.horizontal_wrapped(|ui| {
                 match p.auth {
-                    Auth::DeviceCode | Auth::AuthorizationCode if r.sign_in.is_none() => {
+                    Auth::DeviceCode | Auth::AuthorizationCode if !gated && r.sign_in.is_none() => {
                         let label = if r.credential_ref.is_some() {
                             "Sign in again"
                         } else {
@@ -369,7 +418,7 @@ impl ConnectionsPanel {
                     }
                     _ => {}
                 }
-                if r.credential_ref.is_some() || !p.needs_credential() {
+                if !gated && (r.credential_ref.is_some() || !p.needs_credential()) {
                     if ui.button("Test connection").clicked() {
                         actions.push(sign_in(&id, "Inspect", None, "Testing the connection"));
                     }
@@ -389,6 +438,25 @@ impl ConnectionsPanel {
                     .clicked()
                 {
                     e.open = !e.open;
+                }
+                let enabled = r.enabled != Some(false);
+                if ui
+                    .button(if enabled { "Turn off" } else { "Turn on" })
+                    .clicked()
+                {
+                    actions.push(ConnectionAction::Configure {
+                        label: if enabled {
+                            "Turning the connection off".into()
+                        } else {
+                            "Turning the connection on".into()
+                        },
+                        action: json!({"kind": "Connection", "connectionId": id,
+                            "expectedRevision": revision, "name": r.name.0, "profile": p.name,
+                            "endpoint": r.endpoint.as_ref().map(|u| u.0.as_str()).unwrap_or(""),
+                            "enabled": !enabled}),
+                        key: None,
+                        code: None,
+                    });
                 }
                 if ui.button("Remove connection").clicked() {
                     actions.push(ConnectionAction::Configure {
@@ -543,18 +611,79 @@ impl ConnectionsPanel {
             };
             field(ui, shown, &format!("{} key", r.name.0), &mut e.key, true);
         }
+        let open_router = p.name == "OpenRouterChat";
+        if open_router {
+            ui.label(RichText::new("OpenRouter constraints").strong());
+            field(
+                ui,
+                "Allowed models (patterns, comma separated; empty allows all)",
+                &format!("{} allowed models", r.name.0),
+                &mut e.allowed,
+                false,
+            );
+            field(
+                ui,
+                "Excluded models (patterns, comma separated)",
+                &format!("{} excluded models", r.name.0),
+                &mut e.excluded,
+                false,
+            );
+            let shown = match COST_TIERS[e.cost_tier.min(COST_TIERS.len() - 1)] {
+                "" => "OpenRouter default",
+                t => t,
+            };
+            egui::ComboBox::from_label("Auto-router cost tier")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for (i, t) in COST_TIERS.iter().enumerate() {
+                        let label = if t.is_empty() {
+                            "OpenRouter default"
+                        } else {
+                            t
+                        };
+                        ui.selectable_value(&mut e.cost_tier, i, label);
+                    }
+                });
+            ui.label("Provider routing (OpenRouter provider object, JSON)");
+            let provider = ui.add(
+                egui::TextEdit::multiline(&mut e.provider)
+                    .desired_rows(3)
+                    .hint_text(r#"{"order": ["anthropic"], "allowFallbacks": false}"#),
+            );
+            named(
+                provider,
+                egui::Role::MultilineTextInput,
+                format!("{} provider routing", r.name.0),
+            );
+            if let Some(err) = &e.constraints_error {
+                chip(ui, err.clone(), Tone::Bad);
+            }
+        }
         widgets::caption(
             ui,
             "Changing the endpoint's host drops the stored credential: a key is never sent to \
              another origin.",
         );
         if ui.button("Save connection").clicked() {
+            let mut action = json!({"kind": "Connection", "connectionId": id,
+                "expectedRevision": revision, "name": e.name.trim(), "profile": p.name,
+                "endpoint": e.endpoint.trim()});
+            if open_router {
+                match constraints_of_edit(e) {
+                    Ok(c) => {
+                        action["openRouter"] = c;
+                        e.constraints_error = None;
+                    }
+                    Err(err) => {
+                        e.constraints_error = Some(err);
+                        return;
+                    }
+                }
+            }
             let key = (!e.key.trim().is_empty()).then(|| Secret::new(std::mem::take(&mut e.key)));
             actions.push(ConnectionAction::Configure {
                 label: "Saving the connection".into(),
-                action: json!({"kind": "Connection", "connectionId": id,
-                    "expectedRevision": revision, "name": e.name.trim(), "profile": p.name,
-                    "endpoint": e.endpoint.trim()}),
+                action,
                 key,
                 code: None,
             });
@@ -623,17 +752,6 @@ impl ConnectionsPanel {
                 key,
                 code: None,
             });
-        }
-        if let Some((_, false)) = &self.secret_store
-            && let Some((tone, text)) = &self.message
-            && *tone == Tone::Bad
-            && text.contains("secret store")
-            && ui
-                .button("Keep credentials for this session only")
-                .on_hover_text("Nothing is written to disk; you sign in again after a restart.")
-                .clicked()
-        {
-            actions.push(ConnectionAction::UseSessionOnly);
         }
     }
 
@@ -813,6 +931,37 @@ fn field(ui: &mut Ui, shown: &str, accessible: &str, text: &mut String, password
         let accessible = accessible.to_owned();
         r.widget_info(move || egui::WidgetInfo::labeled(egui::Role::TextInput, true, &accessible));
     });
+}
+
+fn joined(l: &[devworks_core::protocol::support::Text]) -> String {
+    l.iter()
+        .map(|t| t.0.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The `openRouter` member an editor's constraint fields describe (all of them: an empty set
+/// clears the stored constraints), validated against the wire types before it is sent.
+fn constraints_of_edit(e: &Edit) -> Result<Value, String> {
+    let list = |s: &str| -> Vec<String> {
+        s.split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    let mut c = json!({"allowedModels": list(&e.allowed), "excludedModels": list(&e.excluded)});
+    if let Some(t) = COST_TIERS.get(e.cost_tier).filter(|t| !t.is_empty()) {
+        c["costTier"] = json!(t);
+    }
+    if !e.provider.trim().is_empty() {
+        let provider: OpenRouterProviderRouting = serde_json::from_str(e.provider.trim())
+            .map_err(|err| format!("The provider routing is not valid: {err}"))?;
+        c["provider"] = serde_json::to_value(provider).map_err(|err| err.to_string())?;
+    }
+    serde_json::from_value::<OpenRouterConstraints>(c.clone())
+        .map_err(|err| format!("The OpenRouter constraints are not valid: {err}"))?;
+    Ok(c)
 }
 
 fn sign_in(id: &str, action: &str, flow: Option<&Id>, label: &str) -> ConnectionAction {

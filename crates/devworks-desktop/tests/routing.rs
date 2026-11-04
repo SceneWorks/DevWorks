@@ -35,6 +35,8 @@ impl ConnectionDirectory for Connected {
             profile: profile.into(),
             state: ConnectionState::Connected,
             discovered: None,
+            allowed: Vec::new(),
+            excluded: Vec::new(),
         })
         .collect())
     }

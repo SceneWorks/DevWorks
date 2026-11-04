@@ -57,6 +57,8 @@ impl Directory {
             profile: profile.into(),
             state,
             discovered: discovered.map(|d| d.iter().map(|s| (*s).to_owned()).collect()),
+            allowed: Vec::new(),
+            excluded: Vec::new(),
         });
     }
     fn clear(&self) {

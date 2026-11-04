@@ -60,9 +60,9 @@ use crate::ports::secrets::{
     SecretValue, reference_handle,
 };
 use crate::ports::storage::{
-    ApplicationStore, NewEvent, ReadOptions, ReadSnapshot, RouterRead, StorageError,
-    StoredConnection, StoredDecisionModel, StoredRiskAcceptance, StoredRouteModel, WriteOptions,
-    WriteTransaction, read_snapshot, run_write,
+    ApplicationStore, DiscoveredModel, NewEvent, ReadOptions, ReadSnapshot, RouterRead,
+    StorageError, StoredConnection, StoredDecisionModel, StoredRiskAcceptance, StoredRouteModel,
+    WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -71,7 +71,8 @@ use crate::ports::{
 use crate::protocol::provider::Digest;
 use crate::protocol::records::{
     AccountAction, ConnectionLifecycle, ConnectionRecord, DecisionModel, EndpointKind, ItemState,
-    MutationSummary, RouteModel, RouterConfigAction, SignInChallenge, SignInMethod, TierName,
+    MutationSummary, OpenRouterConstraints, OpenRouterPercentiles, RouteModel, RouterConfigAction,
+    SignInChallenge, SignInMethod, TierName,
 };
 use crate::protocol::results::{DomainCommandReply, DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page, Url};
@@ -172,6 +173,8 @@ struct Live {
     ambiguous: BTreeMap<String, u32>,
     ticking: bool,
     last_reconcile_ms: Option<i64>,
+    /// Why the secret store last refused (locked, missing, denied); cleared by its next success.
+    secret_unavailable: Option<String>,
 }
 
 /// What a transport receives for one request (DW-19).
@@ -201,6 +204,9 @@ pub struct Access {
     pub endpoint: String,
     pub credential_revision: i64,
     pub credential: AccessCredential,
+    /// The OpenRouter constraints of the same read, for the transport to send with each
+    /// request ([`open_router_request_fields`]).
+    pub open_router: Option<OpenRouterConstraints>,
 }
 /// Why no credential is available. Never carries a secret.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -365,6 +371,8 @@ fn connection_payload(c: &StoredConnection) -> Value {
         "credentialRevision": c.credential_revision,
         "lifecycle": c.lifecycle,
         "subscriptionRiskAccepted": c.risk.is_some(),
+        "enabled": c.enabled,
+        "openRouter": c.open_router.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()),
     })
 }
 
@@ -404,10 +412,7 @@ enum Prep {
         outcome: Exchange,
     },
     /// Refresh / Inspect: the connection test run against the credential revision it saw.
-    Check {
-        credential_revision: i64,
-        outcome: Result<Discovery, ListFailure>,
-    },
+    Check(Checked),
     /// The handles `settle` resolves: `retire` are the target connection's current handle
     /// (deleted once nothing references it), `staged` the submitted API key (unstaged once
     /// published).
@@ -421,6 +426,209 @@ enum Exchange {
     },
     Pending,
     Failed(DomainErrorCode, String),
+}
+
+/// What a connection test was sent with: the credential revision, profile and endpoint of the
+/// one read its request was built from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CheckBasis {
+    credential_revision: i64,
+    profile: String,
+    endpoint: String,
+}
+impl CheckBasis {
+    fn of(c: &StoredConnection) -> Self {
+        Self {
+            credential_revision: c.credential_revision,
+            profile: c.profile.clone(),
+            endpoint: c.endpoint.clone(),
+        }
+    }
+    fn from_access(a: &Access) -> Self {
+        Self {
+            credential_revision: a.credential_revision,
+            profile: a.profile.clone(),
+            endpoint: a.endpoint.clone(),
+        }
+    }
+    fn matches(&self, c: &StoredConnection) -> bool {
+        self.credential_revision == c.credential_revision
+            && self.profile == c.profile
+            && self.endpoint == c.endpoint
+    }
+}
+/// A connection test's outcome, labelled with what it was sent with.
+struct Checked {
+    basis: CheckBasis,
+    outcome: Result<Discovery, ListFailure>,
+}
+
+/// The stored OpenRouter constraints of a connection.
+fn constraints_of(c: &StoredConnection) -> Option<OpenRouterConstraints> {
+    c.open_router
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+}
+
+/// The router's view of `c` with its model constraints (the state is filled in by the caller).
+fn status_filter(c: &StoredConnection) -> ConnectionStatus {
+    let (allowed, excluded) = constraints_of(c).map_or((Vec::new(), Vec::new()), |o| {
+        (
+            o.allowed_models.0.into_iter().map(|m| m.0).collect(),
+            o.excluded_models.0.into_iter().map(|m| m.0).collect(),
+        )
+    });
+    ConnectionStatus {
+        id: c.id.clone(),
+        profile: c.profile.clone(),
+        state: ConnectionState::Connected,
+        discovered: c
+            .discovered
+            .as_ref()
+            .map(|d| d.iter().map(|m| m.id.clone()).collect()),
+        allowed,
+        excluded,
+    }
+}
+
+/// The members an OpenRouter Chat Completions request carries for `constraints` (for the
+/// transport, DW-19): the `provider` routing object (OpenRouter's snake_case wire names) and,
+/// for the automatic route, the auto-router plugin with the allowed/excluded model patterns and
+/// cost tier (reference `OpenRouterRequest.Translate`).
+pub fn open_router_request_fields(
+    constraints: &OpenRouterConstraints,
+    upstream_model: &str,
+) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    if upstream_model == select::OPEN_ROUTER_AUTO_UPSTREAM {
+        let mut plugin = json!({"id": "auto-router"});
+        if let Some(t) = &constraints.cost_tier {
+            plugin["cost_tier"] = json!(wire(t));
+        }
+        if !constraints.allowed_models.0.is_empty() {
+            plugin["allowed_models"] = json!(
+                constraints
+                    .allowed_models
+                    .0
+                    .iter()
+                    .map(|m| &m.0)
+                    .collect::<Vec<_>>()
+            );
+        }
+        if !constraints.excluded_models.0.is_empty() {
+            plugin["excluded_models"] = json!(
+                constraints
+                    .excluded_models
+                    .0
+                    .iter()
+                    .map(|m| &m.0)
+                    .collect::<Vec<_>>()
+            );
+        }
+        out.insert("plugins".into(), json!([plugin]));
+    }
+    if let Some(p) = &constraints.provider {
+        let mut provider = serde_json::Map::new();
+        let labels = |l: &crate::protocol::support::Items<crate::protocol::support::Label>| {
+            json!(l.0.iter().map(|x| &x.0).collect::<Vec<_>>())
+        };
+        if let Some(v) = &p.order {
+            provider.insert("order".into(), labels(v));
+        }
+        if let Some(v) = p.allow_fallbacks {
+            provider.insert("allow_fallbacks".into(), json!(v));
+        }
+        if let Some(v) = p.require_parameters {
+            provider.insert("require_parameters".into(), json!(v));
+        }
+        if let Some(v) = &p.data_collection {
+            provider.insert("data_collection".into(), json!(wire(v)));
+        }
+        if let Some(v) = p.zdr {
+            provider.insert("zdr".into(), json!(v));
+        }
+        if let Some(v) = p.enforce_distillable_text {
+            provider.insert("enforce_distillable_text".into(), json!(v));
+        }
+        if let Some(v) = &p.only {
+            provider.insert("only".into(), labels(v));
+        }
+        if let Some(v) = &p.ignore {
+            provider.insert("ignore".into(), labels(v));
+        }
+        if let Some(v) = &p.quantizations {
+            provider.insert(
+                "quantizations".into(),
+                json!(v.0.iter().map(wire).collect::<Vec<_>>()),
+            );
+        }
+        if let Some(s) = &p.sort {
+            let mut sort = json!({"by": wire(&s.by)});
+            if let Some(part) = &s.partition {
+                sort["partition"] = json!(wire(part));
+            }
+            provider.insert("sort".into(), sort);
+        }
+        let percentiles =
+            |q: &OpenRouterPercentiles| serde_json::to_value(q).unwrap_or(Value::Null);
+        if let Some(v) = &p.preferred_min_throughput {
+            provider.insert("preferred_min_throughput".into(), percentiles(v));
+        }
+        if let Some(v) = &p.preferred_max_latency {
+            provider.insert("preferred_max_latency".into(), percentiles(v));
+        }
+        if let Some(m) = &p.max_price {
+            // USD amounts; OpenRouter takes numbers.
+            let mut price = serde_json::Map::new();
+            for (k, v) in [
+                ("prompt", &m.prompt),
+                ("completion", &m.completion),
+                ("request", &m.request),
+                ("image", &m.image),
+            ] {
+                if let Some(v) = v
+                    && let Ok(n) = v.0.parse::<f64>()
+                {
+                    price.insert(k.into(), json!(n));
+                }
+            }
+            provider.insert("max_price".into(), Value::Object(price));
+        }
+        if !provider.is_empty() {
+            out.insert("provider".into(), Value::Object(provider));
+        }
+    }
+    out
+}
+
+/// Validates constraints a user configured: non-empty patterns without whitespace, positive
+/// throughput and latency preferences.
+fn check_constraints(o: &OpenRouterConstraints) -> Result<(), &'static str> {
+    for m in o.allowed_models.0.iter().chain(o.excluded_models.0.iter()) {
+        if m.0.trim().is_empty() || m.0.chars().any(char::is_whitespace) {
+            return Err("open_router_model_pattern");
+        }
+    }
+    if let Some(p) = &o.provider {
+        for q in [&p.preferred_min_throughput, &p.preferred_max_latency]
+            .into_iter()
+            .flatten()
+        {
+            let v = serde_json::to_value(q).unwrap_or(Value::Null);
+            let positive = v.as_object().is_some_and(|m| {
+                !m.is_empty() && m.values().all(|x| x.as_f64().is_some_and(|n| n > 0.0))
+            });
+            if !positive {
+                return Err("open_router_preference");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The stored (canonical JSON) form of constraints.
+fn canonical_constraints(o: &OpenRouterConstraints) -> Result<String, Failure> {
+    serde_json::to_string(o).map_err(|_| invalid("open_router"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -458,6 +666,38 @@ impl ConnectionService {
     /// The secret facility in use (its name is shown in Settings).
     pub fn secret_store_name(&self) -> &'static str {
         self.secrets.name()
+    }
+    /// Why the secret store refused its last request, if it did (locked, missing or denied):
+    /// a structured state every path (staging, sign-in exchange, refresh, background sign-in,
+    /// resolution) records, so Settings can offer the session-only fallback without reading
+    /// any message text. Cleared by the next successful secret-store request.
+    pub fn secret_store_unavailable(&self) -> Option<String> {
+        self.live().secret_unavailable.clone()
+    }
+    /// Records the availability a secret-store result shows.
+    fn noted<T>(&self, r: Result<T, SecretError>) -> Result<T, SecretError> {
+        let mut live = self.live();
+        match &r {
+            Ok(_) => live.secret_unavailable = None,
+            Err(SecretError::Unavailable(why)) => live.secret_unavailable = Some(why.clone()),
+            Err(SecretError::Denied) => {
+                live.secret_unavailable = Some("access to the secret store was denied".into())
+            }
+            Err(_) => {}
+        }
+        r
+    }
+
+    /// Writes `tokens` as an internal (subscription-token) staged handle, exactly as a sign-in
+    /// exchange stages them. A test seam: it lets a test prove such a handle can never be
+    /// published as an API key.
+    #[cfg(any(test, feature = "contract-suite"))]
+    pub fn stage_tokens_for_test(
+        &self,
+        principal: &ActorId,
+        tokens: Tokens,
+    ) -> Result<Id, SecretError> {
+        self.write_handle(principal, false, &Credential::OAuth(tokens))
     }
 
     fn now(&self) -> i64 {
@@ -524,10 +764,10 @@ impl ConnectionService {
                 created_at_ms: self.now(),
             },
         );
-        if let Err(e) = self
-            .secrets
-            .put(&self.key(&handle), &credential.to_secret())
-        {
+        if let Err(e) = self.noted(
+            self.secrets
+                .put(&self.key(&handle), &credential.to_secret()),
+        ) {
             self.live().staged.remove(handle.as_str());
             return Err(e);
         }
@@ -558,8 +798,7 @@ impl ConnectionService {
         bytes.iter_mut().for_each(|b| *b = 0);
         let handle = reference_handle(&reference)
             .ok_or_else(|| SecretError::Failed("unrepresentable reference".into()))?;
-        self.secrets
-            .put(&self.key(&handle), &Secret::new(trimmed))?;
+        self.noted(self.secrets.put(&self.key(&handle), &Secret::new(trimmed)))?;
         Ok(reference)
     }
 
@@ -597,6 +836,12 @@ impl ConnectionService {
         restore_epoch: i64,
         now: i64,
     ) -> (ConnectionState, Option<String>) {
+        if !c.enabled {
+            return (
+                ConnectionState::Disabled,
+                Some("the connection is turned off".into()),
+            );
+        }
         let Some(p) = profile(&c.profile) else {
             return (
                 ConnectionState::Disabled,
@@ -724,6 +969,8 @@ impl ConnectionService {
             discovered_model_ids: ids.map(BoundedList),
             access_expires_at_ms: c.access_expires_at_ms.map(counter),
             sign_in,
+            enabled: Some(c.enabled),
+            open_router: constraints_of(c),
         })
     }
 
@@ -748,19 +995,22 @@ impl ConnectionService {
         connection_id: &Id,
         rejected: Option<&Secret>,
     ) -> Result<Access, AccessError> {
-        self.access_with(connection_id, rejected, false)
+        self.access_with(connection_id, rejected, false, false)
     }
 
     /// Forces a token refresh (the `Refresh` action); API-key connections only re-read.
     pub fn refresh(&self, connection_id: &Id) -> Result<Access, AccessError> {
-        self.access_with(connection_id, None, true)
+        self.access_with(connection_id, None, true, false)
     }
 
+    /// `testing`: the user's own connection test or refresh of a connection they turned off
+    /// (never a routed request).
     fn access_with(
         &self,
         connection_id: &Id,
         rejected: Option<&Secret>,
         force: bool,
+        testing: bool,
     ) -> Result<Access, AccessError> {
         let restore = self.restore_epoch();
         let unavailable = |e: StorageError| AccessError::Unavailable(format!("{e:?}"));
@@ -772,12 +1022,17 @@ impl ConnectionService {
         if p.risk_gated && !risk_effective(&c, restore) {
             return Err(AccessError::Disabled);
         }
+        if !c.enabled && !testing {
+            return Err(AccessError::Disabled);
+        }
+        // Profile, destination and credential all come from this one read.
         let base = |credential| Access {
             connection_id: c.id.clone(),
             profile: c.profile.clone(),
             endpoint: c.endpoint.clone(),
             credential_revision: c.credential_revision,
             credential,
+            open_router: constraints_of(&c),
         };
         let Some(handle) = c.credential_ref.clone() else {
             return if p.needs_credential() {
@@ -818,7 +1073,7 @@ impl ConnectionService {
 
     /// Reads and parses a handle; a missing or unreadable secret requires reauthentication.
     fn load(&self, c: &StoredConnection, handle: &Id) -> Result<Credential, AccessError> {
-        match self.secrets.get(&self.key(handle)) {
+        match self.noted(self.secrets.get(&self.key(handle))) {
             Ok(Some(s)) => Credential::parse(&s).ok_or_else(|| {
                 self.mark(
                     c,
@@ -888,12 +1143,15 @@ impl ConnectionService {
                 "the stored credential is not a subscription token".into(),
             ));
         };
+        // Destination and credential come from this one read (`c`): a refreshed token is never
+        // sent to an endpoint read elsewhere.
         let base = |token: Secret, account: Option<String>, revision: i64| Access {
             connection_id: c.id.clone(),
             profile: c.profile.clone(),
             endpoint: c.endpoint.clone(),
             credential_revision: revision,
             credential: AccessCredential::Bearer { token, account },
+            open_router: constraints_of(&c),
         };
         if c.credential_revision != seen.credential_revision
             && !force
@@ -1045,7 +1303,7 @@ impl ConnectionService {
             let staged = self.live().staged.contains_key(h.as_str());
             if !refs.contains(h.as_str()) && !staged {
                 // Best effort: a leftover is an orphan the next reconcile removes.
-                let _ = self.secrets.delete(&self.key(h));
+                let _ = self.noted(self.secrets.delete(&self.key(h)));
             }
         }
     }
@@ -1054,7 +1312,7 @@ impl ConnectionService {
     /// intake has staged (expiring staged keys older than [`STAGED_TTL_MS`]). Never reads a value.
     pub fn reconcile(&self) -> Result<usize, SecretError> {
         let now = self.now();
-        let listed = self.secrets.list(&self.namespace())?;
+        let listed = self.noted(self.secrets.list(&self.namespace()))?;
         let refs = self
             .read(|s| referenced(s.router()))
             .map_err(|e| SecretError::Failed(format!("{e:?}")))?;
@@ -1080,7 +1338,7 @@ impl ConnectionService {
             if still.contains(h.as_str()) {
                 continue;
             }
-            if self.secrets.delete(&self.key(&h))? {
+            if self.noted(self.secrets.delete(&self.key(&h)))? {
                 removed += 1;
             }
         }
@@ -1088,29 +1346,35 @@ impl ConnectionService {
         Ok(removed)
     }
 
-    /// The discovery credential of `c` (refreshing an OAuth token when needed).
-    fn check(&self, c: &StoredConnection, force_refresh: bool) -> Result<Discovery, ListFailure> {
-        let access = if force_refresh {
-            self.refresh(&c.id)
-        } else {
-            self.access(&c.id, None)
+    /// Tests `c` with an authenticated model list (refreshing an OAuth token when needed).
+    /// Every request is built from one [`Access`] snapshot: its profile, endpoint and secret
+    /// come from the same read, never the caller's `c`. The result is labelled with the
+    /// [`CheckBasis`] of the credential actually sent (including a refresh or the 401 retry),
+    /// so [`apply_check`] records it only for that exact credential and destination.
+    fn check(&self, c: &StoredConnection, force_refresh: bool) -> Checked {
+        // No credential was sent: the basis is the configuration the refusal was decided on.
+        let unsent = |outcome| Checked {
+            basis: CheckBasis::of(c),
+            outcome,
         };
+        let access = self.access_with(&c.id, None, force_refresh, true);
         let access = match access {
             Ok(a) => a,
-            Err(AccessError::Unavailable(why)) => return Err(ListFailure::Unreachable(why)),
-            Err(AccessError::NotFound) => return Err(ListFailure::Malformed("connection")),
-            Err(AccessError::Disabled) => {
-                return Err(ListFailure::Unreachable(
-                    "the subscription risk notice is not accepted".into(),
-                ));
+            Err(AccessError::Unavailable(why)) => {
+                return unsent(Err(ListFailure::Unreachable(why)));
             }
-            Err(AccessError::Disconnected) => return Err(ListFailure::Unauthorized(401)),
-            Err(AccessError::ReauthenticationRequired(_)) => {
-                return Err(ListFailure::Unauthorized(401));
+            Err(AccessError::NotFound) => return unsent(Err(ListFailure::Malformed("connection"))),
+            Err(AccessError::Disabled) => {
+                return unsent(Err(ListFailure::Unreachable(
+                    "the subscription risk notice is not accepted".into(),
+                )));
+            }
+            Err(AccessError::Disconnected) | Err(AccessError::ReauthenticationRequired(_)) => {
+                return unsent(Err(ListFailure::Unauthorized(401)));
             }
         };
         let run = |a: &Access| {
-            let auth = match (&a.credential, c.profile.as_str()) {
+            let auth = match (&a.credential, a.profile.as_str()) {
                 (AccessCredential::None, _) => discovery::Auth::None,
                 (AccessCredential::ApiKey(k), "AnthropicMessages") => {
                     discovery::Auth::AnthropicKey(k)
@@ -1123,9 +1387,19 @@ impl ConnectionService {
                     discovery::Auth::ClaudeSubscription(token)
                 }
             };
-            discovery::list(&*self.http, &self.endpoints, &c.profile, &c.endpoint, &auth)
+            Checked {
+                basis: CheckBasis::from_access(a),
+                outcome: discovery::list(
+                    &*self.http,
+                    &self.endpoints,
+                    &a.profile,
+                    &a.endpoint,
+                    &auth,
+                ),
+            }
         };
-        match run(&access) {
+        let first = run(&access);
+        match &first.outcome {
             // The access token may have been revoked before its expiry; one forced refresh
             // decides (reference `CodexModelList`).
             Err(ListFailure::Unauthorized(_))
@@ -1135,26 +1409,25 @@ impl ConnectionService {
                     AccessCredential::Bearer { token, .. } => token.clone(),
                     _ => unreachable!("matched a bearer credential"),
                 };
-                match self.access(&c.id, Some(&rejected)) {
+                match self.access_with(&c.id, Some(&rejected), false, true) {
                     Ok(again) => run(&again),
-                    Err(AccessError::Unavailable(why)) => Err(ListFailure::Unreachable(why)),
-                    Err(_) => Err(ListFailure::Unauthorized(401)),
+                    Err(AccessError::Unavailable(why)) => Checked {
+                        basis: first.basis,
+                        outcome: Err(ListFailure::Unreachable(why)),
+                    },
+                    Err(_) => first,
                 }
             }
-            other => other,
+            _ => first,
         }
     }
 
     /// Tests a connection and records the outcome as the host (periodic checks).
     fn check_as_host(&self, c: &StoredConnection) -> Result<(), StorageError> {
-        let outcome = self.check(c, false);
-        let (id, seen, host) = (
-            c.id.clone(),
-            c.credential_revision,
-            self.store.info().host_actor,
-        );
+        let checked = self.check(c, false);
+        let (id, host) = (c.id.clone(), self.store.info().host_actor);
         run_write(&*self.store, WriteOptions::default(), move |tx| {
-            apply_check(tx, &host, &id, seen, &outcome).map(|_| ())
+            apply_check(tx, &host, &id, &checked).map(|_| ())
         })
     }
 
@@ -1448,6 +1721,8 @@ impl ConnectionService {
                 profile: kind,
                 endpoint,
                 credential_ref,
+                enabled,
+                open_router,
             } => self.configure_connection(
                 tx,
                 &actor,
@@ -1458,6 +1733,8 @@ impl ConnectionService {
                     profile: &wire(kind),
                     endpoint: &endpoint.0,
                     credential_ref: credential_ref.as_ref(),
+                    enabled: *enabled,
+                    open_router: open_router.as_ref(),
                 },
             ),
             RouterConfigAction::Model {
@@ -1516,6 +1793,20 @@ impl ConnectionService {
     ) -> Result<DomainDecision, Failure> {
         let p = profile(e.profile).ok_or_else(|| invalid("profile"))?;
         profiles::check_endpoint(p, e.endpoint).map_err(invalid)?;
+        // OpenRouter constraints belong to an OpenRouter connection only; an empty set clears
+        // them. They are stored in canonical form so an equal resend changes nothing.
+        let constraints = match e.open_router {
+            Some(_) if p.name != "OpenRouterChat" => return Err(invalid("open_router")),
+            Some(o) => {
+                check_constraints(o).map_err(invalid)?;
+                let empty = o.allowed_models.0.is_empty()
+                    && o.excluded_models.0.is_empty()
+                    && o.cost_tier.is_none()
+                    && o.provider.is_none();
+                Some((!empty).then(|| canonical_constraints(o)).transpose()?)
+            }
+            None => None,
+        };
         let now = tx.now_ms();
         let restore = tx.store().restore_epoch;
         let current = match (e.id, e.expected) {
@@ -1580,6 +1871,8 @@ impl ConnectionService {
                 name: e.name.to_owned(),
                 profile: p.name.to_owned(),
                 endpoint: e.endpoint.to_owned(),
+                enabled: true,
+                open_router: None,
                 credential_ref: None,
                 credential_revision: 0,
                 credential_epoch: None,
@@ -1623,6 +1916,22 @@ impl ConnectionService {
         if profile_changed {
             next.account_digest = None;
         }
+        if let Some(enabled) = e.enabled {
+            next.enabled = enabled;
+        }
+        if let Some(o) = constraints {
+            next.open_router = o;
+        } else if p.name != "OpenRouterChat" {
+            next.open_router = None;
+        }
+        let constraints_changed = current
+            .as_ref()
+            .is_some_and(|c| c.open_router != next.open_router);
+        if constraints_changed {
+            // Discovery is filtered by the constraints it was made under; list again.
+            next.discovered = None;
+            next.discovered_at_ms = None;
+        }
         let mut credential_changed = false;
         if let Some(r) = &staged {
             next.credential_ref = Some(r.clone());
@@ -1649,7 +1958,9 @@ impl ConnectionService {
             let same = c.name == next.name
                 && c.profile == next.profile
                 && c.endpoint == next.endpoint
-                && c.credential_ref == next.credential_ref;
+                && c.credential_ref == next.credential_ref
+                && c.enabled == next.enabled
+                && c.open_router == next.open_router;
             if same {
                 return Ok(unchanged(&c.id, c.revision));
             }
@@ -1802,13 +2113,11 @@ impl ConnectionService {
                 ))
             }
             AccountAction::Refresh | AccountAction::Inspect => match prep {
-                Some(Prep::Check {
-                    credential_revision,
-                    outcome,
-                }) => {
+                Some(Prep::Check(checked)) => {
                     // A recorded test (passed or failed: its result is new information) is
-                    // applied; one whose credential changed while it ran records nothing.
-                    let recorded = apply_check(tx, actor, &c.id, *credential_revision, outcome)?;
+                    // applied; one whose credential or destination changed meanwhile records
+                    // nothing.
+                    let recorded = apply_check(tx, actor, &c.id, checked)?;
                     let after = tx
                         .router()
                         .connection(&c.id)?
@@ -2031,15 +2340,8 @@ impl ConnectionService {
                     AccountAction::Refresh | AccountAction::Inspect => {
                         let force = matches!(action, AccountAction::Refresh)
                             && profile(&c.profile).is_some_and(Profile::oauth);
-                        let outcome = self.check(&c, force);
-                        // The credential the check ran with (a refresh may have rotated it).
-                        let seen = self
-                            .read(|s| s.router().connection(&c.id))?
-                            .map_or(c.credential_revision, |n| n.credential_revision);
-                        Ok(Some(Prep::Check {
-                            credential_revision: seen,
-                            outcome,
-                        }))
+                        // Labelled with the credential the request actually carried.
+                        Ok(Some(Prep::Check(self.check(&c, force))))
                     }
                 }
             }
@@ -2254,6 +2556,10 @@ struct ConnectionEdit<'a> {
     profile: &'a str,
     endpoint: &'a str,
     credential_ref: Option<&'a Id>,
+    /// `None` keeps the stored value.
+    enabled: Option<bool>,
+    /// `None` keeps the stored constraints.
+    open_router: Option<&'a OpenRouterConstraints>,
 }
 
 /// Exchanged tokens to publish for a sign-in.
@@ -2349,21 +2655,30 @@ fn apply_check(
     tx: &mut dyn WriteTransaction,
     actor: &ActorId,
     id: &Id,
-    seen_credential: i64,
-    outcome: &Result<Discovery, ListFailure>,
+    checked: &Checked,
 ) -> Result<bool, StorageError> {
     let Some(c) = tx.router().connection(id)? else {
         return Ok(false);
     };
-    if c.credential_revision != seen_credential {
+    // Recorded only for the exact credential and destination the request was sent with.
+    if !checked.basis.matches(&c) {
         return Ok(false);
     }
+    let outcome = &checked.outcome;
     let now = tx.now_ms();
     let mut next = c.clone();
     next.checked_at_ms = Some(now);
     match outcome {
         Ok(d) => {
-            let mut models = d.models.clone();
+            // The connection's constraints apply to discovery: an excluded model is not
+            // listed as offered.
+            let filter = status_filter(&c);
+            let mut models: Vec<DiscoveredModel> = d
+                .models
+                .iter()
+                .filter(|m| filter.permits(&m.id))
+                .cloned()
+                .collect();
             models.sort_by(|a, b| a.id.cmp(&b.id));
             models.dedup_by(|a, b| a.id == b.id);
             next.discovered = Some(models);
@@ -2752,7 +3067,7 @@ const SETTING_SECRET_PREFIX: &str = "dwsecret-";
 impl SecretResolver for ConnectionService {
     fn resolve(&self, reference: &SecretRef) -> Result<SecretValue, SecretUnavailable> {
         let handle = reference_handle(reference).ok_or(SecretUnavailable::NotFound)?;
-        match self.secrets.get(&self.key(&handle)) {
+        match self.noted(self.secrets.get(&self.key(&handle))) {
             Ok(Some(s)) => Ok(SecretValue::new(s.expose())),
             Ok(None) => Err(SecretUnavailable::NotFound),
             Err(SecretError::Unavailable(_)) | Err(SecretError::Denied) => {
@@ -2774,13 +3089,8 @@ impl ConnectionDirectory for ConnectionService {
             .map(|c| {
                 let (state, _) = self.effective(c, &live, restore, now);
                 ConnectionStatus {
-                    id: c.id.clone(),
-                    profile: c.profile.clone(),
                     state,
-                    discovered: c
-                        .discovered
-                        .as_ref()
-                        .map(|d| d.iter().map(|m| m.id.clone()).collect()),
+                    ..status_filter(c)
                 }
             })
             .collect())

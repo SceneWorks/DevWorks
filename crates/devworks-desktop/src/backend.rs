@@ -62,15 +62,32 @@ pub trait Backend: Send + Sync {
     fn stage_setting_secret(&self, _value: Secret) -> Result<String, String> {
         Err("credential entry is not available".into())
     }
-    /// The secret facility in use and whether credentials are kept for this session only.
-    fn secret_store(&self) -> (String, bool) {
-        ("unavailable".into(), false)
+    /// The secret facility in use, whether credentials are kept for this session only, and
+    /// whether it refused its last request (structured, never parsed from a message).
+    fn secret_store(&self) -> SecretStoreStatus {
+        SecretStoreStatus {
+            name: "unavailable".into(),
+            session_only: false,
+            unavailable: None,
+        }
     }
     /// The user's explicit choice to keep credentials in memory for this session only (when
     /// the OS facility is unavailable). Never a silent plaintext disk fallback.
     fn use_session_only_secrets(&self) -> Result<(), String> {
         Err("session-only credentials are not available".into())
     }
+}
+
+/// The secret facility as Settings shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SecretStoreStatus {
+    /// The facility's name (for example "macOS Keychain").
+    pub name: String,
+    /// Credentials are kept in memory for this session only.
+    pub session_only: bool,
+    /// Why the facility refused its last request (locked, missing or denied), until a request
+    /// succeeds: staging a key, a sign-in exchange, a refresh or a credential read.
+    pub unavailable: Option<String>,
 }
 
 /// Who is waiting for a reply. Equal slots supersede each other.

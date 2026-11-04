@@ -1951,6 +1951,78 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `contextTokens` | `?PositiveCounter` · *revision 2+* |
 | `connectionId` | `?Id` · *revision 2+* |
 
+### OpenRouterDataCollection
+
+`allow`, `deny`.
+
+### OpenRouterQuantization
+
+`int4`, `int8`, `fp4`, `mxfp4`, `nvfp4`, `fp6`, `fp8`, `mxfp8`, `fp16`, `bf16`, `fp32`, `unknown`.
+
+### OpenRouterSortBy
+
+`price`, `throughput`, `latency`.
+
+### OpenRouterPartition
+
+`model`, `none`.
+
+### OpenRouterCostTier
+
+`low`, `medium`, `high`, `xhigh`, `max`.
+
+### OpenRouterSort
+
+| Field | Type |
+| --- | --- |
+| `by` | `OpenRouterSortBy` |
+| `partition` | `?OpenRouterPartition` |
+
+### OpenRouterPercentiles
+
+| Field | Type |
+| --- | --- |
+| `p50` | `?Finite` |
+| `p75` | `?Finite` |
+| `p90` | `?Finite` |
+| `p99` | `?Finite` |
+
+### OpenRouterMaxPrice
+
+| Field | Type |
+| --- | --- |
+| `prompt` | `?Money` |
+| `completion` | `?Money` |
+| `request` | `?Money` |
+| `image` | `?Money` |
+
+### OpenRouterProviderRouting
+
+| Field | Type |
+| --- | --- |
+| `order` | `?Items<Label>` |
+| `allowFallbacks` | `?bool` |
+| `requireParameters` | `?bool` |
+| `dataCollection` | `?OpenRouterDataCollection` |
+| `zdr` | `?bool` |
+| `enforceDistillableText` | `?bool` |
+| `only` | `?Items<Label>` |
+| `ignore` | `?Items<Label>` |
+| `quantizations` | `?Items<OpenRouterQuantization>` |
+| `sort` | `?OpenRouterSort` |
+| `preferredMinThroughput` | `?OpenRouterPercentiles` |
+| `preferredMaxLatency` | `?OpenRouterPercentiles` |
+| `maxPrice` | `?OpenRouterMaxPrice` |
+
+### OpenRouterConstraints
+
+| Field | Type |
+| --- | --- |
+| `allowedModels` | `Items<Text>` |
+| `excludedModels` | `Items<Text>` |
+| `costTier` | `?OpenRouterCostTier` |
+| `provider` | `?OpenRouterProviderRouting` |
+
 ### ConnectionLifecycle
 
 `Disconnected`, `Authorizing`, `Connected`, `Refreshing`, `ReauthenticationRequired`, `Unavailable`, `Disabled`.
@@ -1993,6 +2065,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `discoveredModelIds` | `?Items<Text>` · *revision 2+* |
 | `accessExpiresAtMs` | `?Counter` · *revision 2+* |
 | `signIn` | `?SignInChallenge` · *revision 2+* |
+| `enabled` | `?bool` · *revision 2+* |
+| `openRouter` | `?OpenRouterConstraints` · *revision 2+* |
 
 ### RouteChoice
 
@@ -2386,7 +2460,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 
 | Kind | Fields |
 | --- | --- |
-| `Connection` | `connectionId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`profile`: `EndpointKind`<br>`endpoint`: `Url`<br>`credentialRef`: `?Id` |
+| `Connection` | `connectionId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`profile`: `EndpointKind`<br>`endpoint`: `Url`<br>`credentialRef`: `?Id`<br>`enabled`: `?bool`<br>`openRouter`: `?OpenRouterConstraints` |
 | `Model` | `model`: `RouteModel`<br>`expectedRevision`: `?Revision` |
 | `Tier` | `tier`: `TierName`<br>`expectedRevision`: `Revision`<br>`memberIds`: `Items<Id>` |
 | `DecisionModel` | `model`: `DecisionModel`<br>`expectedRevision`: `?Revision` |

@@ -55,6 +55,50 @@ pub struct ConnectionStatus {
     /// Upstream model IDs of its last successful discovery; `None` before the first, when an
     /// explicitly configured model may be used with its declared capabilities.
     pub discovered: Option<BTreeSet<String>>,
+    /// Upstream model patterns this connection may serve (`*` matches any run of characters);
+    /// empty allows every model.
+    pub allowed: Vec<String>,
+    /// Upstream model patterns this connection must never serve.
+    pub excluded: Vec<String>,
+}
+impl ConnectionStatus {
+    /// Whether the connection's model constraints let it serve `upstream`. OpenRouter's
+    /// automatic route is constrained by the same lists inside OpenRouter (they are sent with
+    /// its requests), so it is always served.
+    pub fn permits(&self, upstream: &str) -> bool {
+        if upstream == "openrouter/auto" {
+            return true;
+        }
+        (self.allowed.is_empty() || self.allowed.iter().any(|p| glob(p, upstream)))
+            && !self.excluded.iter().any(|p| glob(p, upstream))
+    }
+}
+
+/// A model pattern: `*` matches any run of characters; everything else matches itself,
+/// ignoring ASCII case.
+pub fn glob(pattern: &str, text: &str) -> bool {
+    let (p, t) = (pattern.to_ascii_lowercase(), text.to_ascii_lowercase());
+    let parts: Vec<&str> = p.split('*').collect();
+    if parts.len() == 1 {
+        return p == t;
+    }
+    let mut rest = t.as_str();
+    for (i, part) in parts.iter().enumerate() {
+        if i == 0 {
+            match rest.strip_prefix(part) {
+                Some(r) => rest = r,
+                None => return false,
+            }
+        } else if i == parts.len() - 1 {
+            return rest.ends_with(part);
+        } else {
+            match rest.find(part) {
+                Some(at) => rest = &rest[at + part.len()..],
+                None => return false,
+            }
+        }
+    }
+    true
 }
 
 /// The connections the router may route through.

@@ -294,6 +294,7 @@ pub fn effort_label(e: &EffortName) -> String {
 pub fn reason(code: &str) -> &'static str {
     match code {
         "NoConnection" => "no provider connection (add one in Settings)",
+        "NotAllowed" => "excluded by its connection's model constraints",
         "CredentialsRequired" => "sign-in required",
         "ConnectionUnavailable" => "provider temporarily unavailable",
         "ConnectionDisabled" => "connection disabled",

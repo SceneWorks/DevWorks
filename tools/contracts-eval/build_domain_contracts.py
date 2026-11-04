@@ -39,7 +39,7 @@ def record_attrs(d):
  return ''.join(a+'\n' for a in out)
 def tokens(t):return set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*',t))
 # Members introduced in a later operation schema revision ("since") and the types that carry one.
-RC={n for n,d in TYPES.items() if d.get('since')}
+RC={n for n,d in TYPES.items() if d.get('since') or d.get('variantSince')}
 while True:
  grown=set(RC)
  for n,d in TYPES.items():
@@ -69,13 +69,15 @@ for name,d in TYPES.items():
   lines += [ATTR+f'pub enum {name} {{',*['    '+pascal(v)+',' if v[0].isupper() else '    #[serde(rename = "'+v+'")] '+pascal(v)+',' for v in d['values']],'}',f'impl Check for {name} {{fn check(&self)->Result<(),String>{{Ok(())}}}}','']
  else:
   lines += [TAG+f'pub enum {name} {{']
-  for v,fs in d['variants'].items(): lines += ['    '+v+' {',enumfields(fs),'    },']
+  vs=d.get('variantSince',{})
+  for v,fs in d['variants'].items(): lines += ['    '+v+' {',enumfields(fs,vs.get(v)),'    },']
   lines += ['}',f'impl Check for {name} {{fn check(&self)->Result<(),String>{{match self {{']
   for v,fs in d['variants'].items():
    lines += [f' Self::{v} {{'+','.join(fs)+'} => {',checkfields(fs,'','    '),' },']
   lines += ['} Ok(()) }}','']
   if name in RC:
-   arms=[f' Self::{v} {{'+','.join(n for n,t in fs.items() if tokens(t)&RC)+',..} => {'+''.join(retain({n:t for n,t in fs.items() if tokens(t)&RC},{},''))+'},' for v,fs in d['variants'].items() if any(tokens(t)&RC for t in fs.values())]
+   gated=lambda v,fs:{n:t for n,t in fs.items() if tokens(t)&RC or n in vs.get(v,{})}
+   arms=[f' Self::{v} {{'+','.join(gated(v,fs))+',..} => {'+''.join(retain(gated(v,fs),vs.get(v,{}),'','*'))+'},' for v,fs in d['variants'].items() if gated(v,fs)]
    lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{match self {{',*arms,*([' _ => {}'] if len(arms)<len(d['variants']) else []),'}}}','']
 
 def included(d,mode): return d['mode'] in [mode,'Hybrid']

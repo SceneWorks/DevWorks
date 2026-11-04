@@ -6718,5 +6718,54 @@
     "raw": "{\"kind\":\"router.configure\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
     "typedValid": true,
     "schemaValid": true
+  },
+  {
+    "id": "r2-input-router.configure-connection-constraints",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"router.configure\",\"action\":{\"kind\":\"Connection\",\"connectionId\":\"or\",\"name\":\"OpenRouter\",\"profile\":\"OpenRouterChat\",\"endpoint\":\"https://openrouter.ai/api/v1\",\"enabled\":false,\"openRouter\":{\"allowedModels\":[\"anthropic/*\"],\"excludedModels\":[\"openai/gpt-4o\"],\"costTier\":\"low\",\"provider\":{\"order\":[\"anthropic\"],\"allowFallbacks\":false,\"requireParameters\":true,\"dataCollection\":\"deny\",\"zdr\":true,\"enforceDistillableText\":true,\"only\":[\"anthropic\"],\"ignore\":[\"deepinfra\"],\"quantizations\":[\"fp8\",\"bf16\"],\"sort\":{\"by\":\"price\",\"partition\":\"none\"},\"preferredMinThroughput\":{\"p50\":50.0},\"preferredMaxLatency\":{\"p90\":2.5},\"maxPrice\":{\"prompt\":\"3\",\"completion\":\"15\",\"request\":\"0.01\",\"image\":\"0.002\"}}}}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-configure-connection-enabled",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"router.configure\",\"action\":{\"kind\":\"Connection\",\"connectionId\":\"or\",\"name\":\"OpenRouter\",\"profile\":\"OpenRouterChat\",\"endpoint\":\"https://openrouter.ai/api/v1\",\"enabled\":false,\"openRouter\":{\"allowedModels\":[\"anthropic/*\"],\"excludedModels\":[\"openai/gpt-4o\"],\"costTier\":\"low\",\"provider\":{\"order\":[\"anthropic\"],\"allowFallbacks\":false,\"requireParameters\":true,\"dataCollection\":\"deny\",\"zdr\":true,\"enforceDistillableText\":true,\"only\":[\"anthropic\"],\"ignore\":[\"deepinfra\"],\"quantizations\":[\"fp8\",\"bf16\"],\"sort\":{\"by\":\"price\",\"partition\":\"none\"},\"preferredMinThroughput\":{\"p50\":50.0},\"preferredMaxLatency\":{\"p90\":2.5},\"maxPrice\":{\"prompt\":\"3\",\"completion\":\"15\",\"request\":\"0.01\",\"image\":\"0.002\"}}}}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-configure-unknown-data-collection",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"router.configure\",\"action\":{\"kind\":\"Connection\",\"connectionId\":\"or\",\"name\":\"OpenRouter\",\"profile\":\"OpenRouterChat\",\"endpoint\":\"https://openrouter.ai/api/v1\",\"enabled\":false,\"openRouter\":{\"allowedModels\":[\"anthropic/*\"],\"excludedModels\":[\"openai/gpt-4o\"],\"costTier\":\"low\",\"provider\":{\"dataCollection\":\"maybe\"}}}},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-configure-negative-max-price",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"router.configure\",\"action\":{\"kind\":\"Connection\",\"connectionId\":\"or\",\"name\":\"OpenRouter\",\"profile\":\"OpenRouterChat\",\"endpoint\":\"https://openrouter.ai/api/v1\",\"enabled\":false,\"openRouter\":{\"allowedModels\":[\"anthropic/*\"],\"excludedModels\":[\"openai/gpt-4o\"],\"costTier\":\"low\",\"provider\":{\"maxPrice\":{\"prompt\":\"-1\"}}}}},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-configure-null-enabled",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"router.configure\",\"action\":{\"kind\":\"Connection\",\"connectionId\":\"or\",\"name\":\"OpenRouter\",\"profile\":\"OpenRouterChat\",\"endpoint\":\"https://openrouter.ai/api/v1\",\"enabled\":null,\"openRouter\":{\"allowedModels\":[\"anthropic/*\"],\"excludedModels\":[\"openai/gpt-4o\"],\"costTier\":\"low\",\"provider\":{\"order\":[\"anthropic\"],\"allowFallbacks\":false,\"requireParameters\":true,\"dataCollection\":\"deny\",\"zdr\":true,\"enforceDistillableText\":true,\"only\":[\"anthropic\"],\"ignore\":[\"deepinfra\"],\"quantizations\":[\"fp8\",\"bf16\"],\"sort\":{\"by\":\"price\",\"partition\":\"none\"},\"preferredMinThroughput\":{\"p50\":50.0},\"preferredMaxLatency\":{\"p90\":2.5},\"maxPrice\":{\"prompt\":\"3\",\"completion\":\"15\",\"request\":\"0.01\",\"image\":\"0.002\"}}}}},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-router.connections-constraints",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.connections\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"profile\":\"OpenAiResponses\",\"state\":\"Enabled\",\"subscriptionRiskAccepted\":false,\"endpoint\":\"https://api.example.invalid\",\"lifecycle\":\"Authorizing\",\"stateReason\":\"Waiting for the device code\",\"credentialRevision\":\"2\",\"healthy\":true,\"checkedAtMs\":\"10\",\"discoveredAtMs\":\"9\",\"discoveredModelCount\":\"1\",\"discoveredModelIds\":[\"gpt-6-luna\"],\"accessExpiresAtMs\":\"99\",\"signIn\":{\"flowId\":\"flow-a\",\"method\":\"DeviceCode\",\"userCode\":\"ABCD-EFGH\",\"verificationUrl\":\"https://auth.example.invalid/codex/device\",\"expiresAtMs\":\"100\"},\"enabled\":false,\"openRouter\":{\"allowedModels\":[\"anthropic/*\"],\"excludedModels\":[\"openai/gpt-4o\"],\"costTier\":\"low\",\"provider\":{\"order\":[\"anthropic\"],\"allowFallbacks\":false,\"requireParameters\":true,\"dataCollection\":\"deny\",\"zdr\":true,\"enforceDistillableText\":true,\"only\":[\"anthropic\"],\"ignore\":[\"deepinfra\"],\"quantizations\":[\"fp8\",\"bf16\"],\"sort\":{\"by\":\"price\",\"partition\":\"none\"},\"preferredMinThroughput\":{\"p50\":50.0},\"preferredMaxLatency\":{\"p90\":2.5},\"maxPrice\":{\"prompt\":\"3\",\"completion\":\"15\",\"request\":\"0.01\",\"image\":\"0.002\"}}}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-connections-enabled",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"router.connections\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"profile\":\"OpenAiResponses\",\"state\":\"Enabled\",\"subscriptionRiskAccepted\":false,\"enabled\":true}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

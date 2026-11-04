@@ -172,7 +172,14 @@ def revisioned_types():
             if d['kind'] != 'record':
                 fail(f'{name}: only records may gate members by schema revision')
             check_since(name, d['fields'], d['since'])
-    out = {n for n, d in TYPES.items() if d.get('since')}
+        if 'variantSince' in d:
+            if d['kind'] != 'union':
+                fail(f'{name}: only unions gate variant members by schema revision')
+            for v, since in d['variantSince'].items():
+                if v not in d['variants']:
+                    fail(f'{name}: unknown variant {v} in variantSince')
+                check_since(f'{name}::{v}', d['variants'][v], since)
+    out = {n for n, d in TYPES.items() if d.get('since') or d.get('variantSince')}
     while True:
         grown = set(out)
         for name, d in TYPES.items():
@@ -185,16 +192,24 @@ def revisioned_types():
         out = grown
 
 
-def revisioned(name, fs, since, rc, union_variants=None):
+def revisioned(name, fs, since, rc, union_variants=None, variant_since=None):
     """`Revisioned` impl: clear members introduced after the revision, recurse into others."""
     head = f'impl Revisioned for {name} {{\n    fn retain_revision(&mut self, revision: u32) {{'
     if union_variants is not None:
         arms = []
         for v, vfs in union_variants.items():
-            inner = [n for n, t in vfs.items() if tokens(t) & rc]
+            vs = (variant_since or {}).get(v, {})
+            inner = [n for n, t in vfs.items() if n in vs or tokens(t) & rc]
             if inner:
-                calls = ' '.join(f'{n}.retain_revision(revision);' for n in inner)
-                arms.append(f'            Self::{v} {{ {", ".join(inner)}, .. }} => {{ {calls} }}')
+                calls = []
+                for n in inner:
+                    if n in vs:
+                        keep = (f' else {{ {n}.retain_revision(revision); }}'
+                                if tokens(vfs[n]) & rc else '')
+                        calls.append(f'if revision < {vs[n]} {{ *{n} = None; }}{keep}')
+                    else:
+                        calls.append(f'{n}.retain_revision(revision);')
+                arms.append(f'            Self::{v} {{ {", ".join(inner)}, .. }} => {{ {" ".join(calls)} }}')
         if not arms:
             return f'impl Revisioned for {name} {{\n    fn retain_revision(&mut self, _: u32) {{}}\n}}'
         if len(arms) == 1 and len(union_variants) > 1:
@@ -260,14 +275,15 @@ def gen_records():
                     f'impl Check for {name} {{', '    fn check(&self) -> Result<(), String> {', '        Ok(())', '    }', '}', '']
         else:
             out += [TAGGED + f'pub enum {name} {{']
+            vsince = d.get('variantSince', {})
             for v, fs in d['variants'].items():
-                out += [f'    {v} {{', fields(fs, '        ', pub=False), '    },']
+                out += [f'    {v} {{', fields(fs, '        ', pub=False, since=vsince.get(v)), '    },']
             out += ['}', f'impl Check for {name} {{', '    fn check(&self) -> Result<(), String> {', '        match self {']
             for v, fs in d['variants'].items():
                 out += [f'            Self::{v} {{ {", ".join(fs)} }} => {{', checks(fs, '', '                '), '            }']
             out += ['        }', '        Ok(())', '    }', '}', '']
             if name in RC:
-                out += [revisioned(name, {}, {}, RC, d['variants']), '']
+                out += [revisioned(name, {}, {}, RC, d['variants'], d.get('variantSince', {})), '']
     return '\n'.join(out) + '\n'
 
 
@@ -350,6 +366,8 @@ def type_since(name, seen=None):
         return set()
     seen.add(name)
     out = set(d.get('since', {}).values())
+    for since in d.get('variantSince', {}).values():
+        out |= set(since.values())
     members = (d['fields'].values() if d['kind'] == 'record'
                else [t for fs in d['variants'].values() for t in fs.values()] if d['kind'] == 'union' else [])
     for t in members:

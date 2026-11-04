@@ -25,6 +25,14 @@ CREATE TABLE router_connections (
         length(endpoint) BETWEEN 8 AND 4096
         AND (endpoint GLOB 'https://?*' OR endpoint GLOB 'http://?*')
     ),
+    -- A disabled connection keeps its credential and is never routed through.
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    -- OpenRouter constraints: allowed/excluded model patterns, the auto-router cost tier and
+    -- the provider-routing object sent with its requests (OpenRouterChat only).
+    open_router_json TEXT CHECK (
+        open_router_json IS NULL
+        OR (json_valid(open_router_json) AND json_type(open_router_json) = 'object')
+    ),
     -- One handle belongs to one connection at most.
     credential_ref TEXT UNIQUE CHECK (
         credential_ref IS NULL OR (
@@ -63,7 +71,8 @@ CREATE TABLE router_connections (
     ),
     -- Only the Claude subscription profile carries a risk acceptance.
     CHECK (risk_notice_sha256 IS NULL OR profile = 'ClaudeSubscriptionMessages'),
-    CHECK ((credential_ref IS NULL) = (credential_epoch IS NULL))
+    CHECK ((credential_ref IS NULL) = (credential_epoch IS NULL)),
+    CHECK (open_router_json IS NULL OR profile = 'OpenRouterChat')
 ) STRICT;
 
 -- SystemOne decision models: their own model IDs, never conversational catalog models or tier

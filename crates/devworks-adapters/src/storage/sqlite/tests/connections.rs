@@ -22,9 +22,11 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::router::InferenceRouter;
+use devworks_core::services::router::connections::auth::Tokens;
 use devworks_core::services::router::connections::profiles::{AuthEndpoints, risk_notice_sha256};
 use devworks_core::services::router::connections::{
-    AccessCredential, AccessError, ConnectionService,
+    AccessCredential, AccessError, ConnectionService, DISCOVERY_INTERVAL_MS,
+    open_router_request_fields,
 };
 use devworks_core::settings::catalog::AgentRole;
 use serde_json::{Value, json};
@@ -47,8 +49,14 @@ type Route = (Method, String, VecDeque<(u16, String, bool)>);
 struct FakeHttp {
     routes: Mutex<Vec<Route>>,
     seen: Mutex<Vec<HttpRequest>>,
+    /// Runs once, while the first request to its URL prefix is in flight (a concurrent change).
+    during: Mutex<Option<During>>,
 }
+type During = (String, Box<dyn FnOnce() + Send>);
 impl FakeHttp {
+    fn during(&self, prefix: &str, f: impl FnOnce() + Send + 'static) {
+        *self.during.lock().unwrap() = Some((prefix.to_owned(), Box::new(f)));
+    }
     fn on(&self, method: Method, prefix: &str, status: u16, body: Value) {
         let mut routes = self.routes.lock().unwrap();
         let entry = (status, body.to_string(), false);
@@ -83,6 +91,16 @@ impl FakeHttp {
 impl HttpTransport for FakeHttp {
     fn send(&self, r: &HttpRequest) -> Result<HttpResponse, HttpError> {
         self.seen.lock().unwrap().push(r.clone());
+        let hook = {
+            let mut during = self.during.lock().unwrap();
+            match during.as_ref() {
+                Some((prefix, _)) if r.url.starts_with(prefix.as_str()) => during.take(),
+                _ => None,
+            }
+        };
+        if let Some((_, f)) = hook {
+            f();
+        }
         let mut routes = self.routes.lock().unwrap();
         let Some((_, _, queue)) = routes
             .iter_mut()
@@ -124,6 +142,7 @@ const ANTHROPIC: &str = "https://api.anthropic.test";
 const CLAUDE_TOKEN: &str = "https://console.anthropic.test/v1/oauth/token";
 const CODEX_ISSUER: &str = "https://auth.openai.test";
 const CODEX_API: &str = "https://chatgpt.test/backend-api/codex";
+const OPENROUTER: &str = "https://openrouter.test/api/v1";
 
 struct Cx {
     h: Harness,
@@ -1353,12 +1372,30 @@ fn an_unavailable_secret_store_keeps_credentials_unavailable_not_lost() {
         "https://openrouter.test/api/v1",
         Some(&key),
     );
+    assert_eq!(cx.svc.secret_store_unavailable(), None);
+    cx.secrets.set_unavailable(Some("locked"));
+    // A credential read (a routed request, a test, a refresh) records the facility's state,
+    // structured, for Settings to offer the session-only fallback.
+    assert!(matches!(
+        cx.svc.access(&id("or"), None),
+        Err(AccessError::Unavailable(_))
+    ));
+    assert_eq!(cx.svc.secret_store_unavailable().as_deref(), Some("locked"));
+    cx.secrets.set_unavailable(None);
+    assert!(cx.svc.access(&id("or"), None).is_ok());
+    assert_eq!(
+        cx.svc.secret_store_unavailable(),
+        None,
+        "a success clears it"
+    );
+    // Staging a key records it too.
     cx.secrets.set_unavailable(Some("locked"));
     assert!(
         cx.svc
             .stage_api_key(&actor("user-a"), Secret::new("sk-y"))
             .is_err()
     );
+    assert_eq!(cx.svc.secret_store_unavailable().as_deref(), Some("locked"));
     assert!(matches!(
         cx.svc.access(&id("or"), None),
         Err(AccessError::Unavailable(_))
@@ -1462,4 +1499,424 @@ fn migration_17_is_additive_and_corrects_only_unedited_seed_efforts() {
     assert_eq!(sol.efforts, ["Low", "Medium", "High", "XHigh"]);
     assert_eq!(opus.connection_id, None);
     let _: &SqliteStore = &cx.store;
+}
+
+/// A catalog model of the OpenRouter profile.
+fn open_router_model(cx: &Cx, model: &str, upstream: &str) {
+    let m = json!({"id": model, "displayName": model, "endpointProfile": "OpenRouterChat",
+        "upstreamModelId": upstream, "enabled": true, "tierMemberships": [],
+        "efforts": [], "imageInput": false, "tools": true, "revision": "1"});
+    assert!(summary(cx.configure(json!({"kind": "Model", "model": m}))).2);
+}
+fn edit_connection(
+    cx: &Cx,
+    connection: &str,
+    profile: &str,
+    endpoint: &str,
+    extra: Value,
+) -> DomainCommandReply {
+    let c = cx.connection(connection);
+    let mut action = json!({"kind": "Connection", "connectionId": connection,
+        "expectedRevision": c.revision.get().to_string(), "name": c.name.0,
+        "profile": profile, "endpoint": endpoint});
+    for (k, v) in extra.as_object().unwrap() {
+        action[k] = v.clone();
+    }
+    cx.configure(action)
+}
+
+#[test]
+fn open_router_constraints_filter_discovery_and_routing_and_travel_with_each_request() {
+    let cx = Cx::new();
+    let key = cx.stage("sk-or");
+    cx.add("or", "OpenRouterChat", OPENROUTER, Some(&key));
+    let c = cx.connection("or");
+    assert_eq!(c.enabled, Some(true));
+    assert!(c.open_router.is_none());
+    open_router_model(&cx, "or-opus", "anthropic/claude-opus-5-5");
+    open_router_model(&cx, "or-haiku", "anthropic/claude-haiku-5-5");
+    open_router_model(&cx, "or-llama", "meta/llama-5");
+    assert!(cx.availability("or-haiku").available);
+
+    let constraints = json!({
+        "allowedModels": ["anthropic/*", "openrouter/*"],
+        "excludedModels": ["anthropic/claude-haiku*"],
+        "costTier": "low",
+        "provider": {"order": ["anthropic", "google-vertex"], "allowFallbacks": false,
+            "requireParameters": true, "dataCollection": "deny", "zdr": true,
+            "enforceDistillableText": false, "only": ["anthropic"], "ignore": ["deepinfra"],
+            "quantizations": ["fp8", "bf16"], "sort": {"by": "price", "partition": "model"},
+            "preferredMinThroughput": {"p90": 50.0}, "preferredMaxLatency": {"p50": 1.5},
+            "maxPrice": {"prompt": "1.5", "completion": "10"}}});
+    assert!(
+        summary(edit_connection(
+            &cx,
+            "or",
+            "OpenRouterChat",
+            OPENROUTER,
+            json!({"openRouter": constraints})
+        ))
+        .2
+    );
+    let c = cx.connection("or");
+    let stored = c
+        .open_router
+        .as_ref()
+        .expect("revision 2 reports the constraints");
+    assert_eq!(serde_json::to_value(stored).unwrap(), constraints);
+    // An equal resend changes nothing.
+    assert!(
+        !summary(edit_connection(
+            &cx,
+            "or",
+            "OpenRouterChat",
+            OPENROUTER,
+            json!({"openRouter": constraints})
+        ))
+        .2
+    );
+
+    // Routing: an excluded or not-allowed model is ineligible, and says why.
+    assert!(cx.availability("or-opus").available);
+    for blocked in ["or-haiku", "or-llama"] {
+        let a = cx.availability(blocked);
+        assert!(!a.available);
+        assert!(codes(&a).contains(&"NotAllowed"), "{blocked}: {a:?}");
+    }
+
+    // Discovery: excluded models are not listed as offered.
+    cx.http.on(
+        Method::Get,
+        &format!("{OPENROUTER}/models"),
+        200,
+        json!({"data": [
+        {"id": "anthropic/claude-opus-5-5"}, {"id": "anthropic/claude-haiku-5-5"},
+        {"id": "meta/llama-5"}, {"id": "openrouter/auto"}]}),
+    );
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "or", "action": "Inspect"})));
+    let c = cx.connection("or");
+    let ids: Vec<&str> = c
+        .discovered_model_ids
+        .as_ref()
+        .unwrap()
+        .0
+        .iter()
+        .map(|t| t.0.as_str())
+        .collect();
+    assert_eq!(ids, ["anthropic/claude-opus-5-5", "openrouter/auto"]);
+
+    // The transport receives them with every request's credential (one read), as OpenRouter's
+    // own wire members.
+    let a = cx.svc.access(&id("or"), None).unwrap();
+    let o = a
+        .open_router
+        .expect("the constraints travel with the credential");
+    assert_eq!(
+        Value::Object(open_router_request_fields(&o, "anthropic/claude-opus-5-5")),
+        json!({
+        "provider": {"order": ["anthropic", "google-vertex"], "allow_fallbacks": false,
+            "require_parameters": true, "data_collection": "deny", "zdr": true,
+            "enforce_distillable_text": false, "only": ["anthropic"], "ignore": ["deepinfra"],
+            "quantizations": ["fp8", "bf16"], "sort": {"by": "price", "partition": "model"},
+            "preferred_min_throughput": {"p90": 50.0}, "preferred_max_latency": {"p50": 1.5},
+            "max_price": {"prompt": 1.5, "completion": 10.0}}})
+    );
+    let auto = open_router_request_fields(&o, "openrouter/auto");
+    assert_eq!(
+        auto["plugins"],
+        json!([{"id": "auto-router", "cost_tier": "low",
+        "allowed_models": ["anthropic/*", "openrouter/*"],
+        "excluded_models": ["anthropic/claude-haiku*"]}])
+    );
+
+    // Only an OpenRouter connection takes them; patterns are checked.
+    let anthropic = cx.stage("sk-ant");
+    cx.add(
+        "anthropic",
+        "AnthropicMessages",
+        ANTHROPIC,
+        Some(&anthropic),
+    );
+    let f = refused(edit_connection(
+        &cx,
+        "anthropic",
+        "AnthropicMessages",
+        ANTHROPIC,
+        json!({"openRouter": {"allowedModels": [], "excludedModels": []}}),
+    ));
+    assert_eq!(f.code, DomainErrorCode::InvalidArgument);
+    let f = refused(edit_connection(
+        &cx,
+        "or",
+        "OpenRouterChat",
+        OPENROUTER,
+        json!({"openRouter": {"allowedModels": ["anthropic /x"], "excludedModels": []}}),
+    ));
+    assert_eq!(f.code, DomainErrorCode::InvalidArgument);
+
+    // An empty set clears them. The filtered list is dropped with them (it was made under the
+    // old constraints), so the excluded model is eligible again until the next discovery.
+    assert!(
+        summary(edit_connection(
+            &cx,
+            "or",
+            "OpenRouterChat",
+            OPENROUTER,
+            json!({"openRouter": {"allowedModels": [], "excludedModels": []}})
+        ))
+        .2
+    );
+    let c = cx.connection("or");
+    assert!(c.open_router.is_none());
+    assert!(c.discovered_model_ids.is_none());
+    let a = cx.availability("or-haiku");
+    assert!(a.available, "{a:?}");
+}
+
+#[test]
+fn a_turned_off_connection_keeps_its_credential_and_is_never_routed_through() {
+    let cx = Cx::new();
+    let key = cx.stage("sk-ant-off");
+    cx.add("anthropic", "AnthropicMessages", ANTHROPIC, Some(&key));
+    let model = json!({"id": "opus-api", "displayName": "Opus (API)",
+        "endpointProfile": "AnthropicMessages", "upstreamModelId": "claude-opus-5-5",
+        "enabled": true, "tierMemberships": [], "efforts": ["Low", "High"],
+        "imageInput": true, "tools": true, "revision": "1"});
+    assert!(summary(cx.configure(json!({"kind": "Model", "model": model}))).2);
+    assert!(cx.availability("opus-api").available);
+
+    assert!(
+        summary(edit_connection(
+            &cx,
+            "anthropic",
+            "AnthropicMessages",
+            ANTHROPIC,
+            json!({"enabled": false})
+        ))
+        .2
+    );
+    let c = cx.connection("anthropic");
+    assert_eq!(c.enabled, Some(false));
+    assert!(is(lifecycle(&c), "Disabled"));
+    assert_eq!(
+        c.state_reason.as_ref().map(|r| r.0.as_str()),
+        Some("the connection is turned off")
+    );
+    // The credential is kept.
+    assert_eq!(c.credential_ref.as_ref(), Some(&key));
+    assert!(cx.secret(&key).is_some());
+    // Never routed through, and the router says so.
+    let a = cx.availability("opus-api");
+    assert!(!a.available);
+    assert!(codes(&a).contains(&"ConnectionDisabled"), "{a:?}");
+    assert_eq!(
+        cx.svc.access(&id("anthropic"), None).err(),
+        Some(AccessError::Disabled)
+    );
+    // An edit that does not name it keeps it off.
+    summary(edit_connection(
+        &cx,
+        "anthropic",
+        "AnthropicMessages",
+        ANTHROPIC,
+        json!({"name": "Anthropic API"}),
+    ));
+    assert_eq!(cx.connection("anthropic").enabled, Some(false));
+    // Turned on again: routable with the same credential.
+    assert!(
+        summary(edit_connection(
+            &cx,
+            "anthropic",
+            "AnthropicMessages",
+            ANTHROPIC,
+            json!({"enabled": true})
+        ))
+        .2
+    );
+    let c = cx.connection("anthropic");
+    assert_eq!(c.enabled, Some(true));
+    assert_eq!(c.credential_ref.as_ref(), Some(&key));
+    assert!(cx.availability("opus-api").available);
+    assert!(cx.svc.access(&id("anthropic"), None).is_ok());
+}
+
+#[test]
+fn a_staged_subscription_token_is_never_published_as_an_api_key() {
+    let cx = Cx::new();
+    // Exactly the handle a sign-in exchange stages for its tokens.
+    let handle = cx
+        .svc
+        .stage_tokens_for_test(
+            &actor("user-a"),
+            Tokens {
+                access: Secret::new("at-internal"),
+                refresh: Secret::new("rt-internal"),
+                expires_at_ms: cx.now() + 3_600_000,
+                account: None,
+            },
+        )
+        .unwrap();
+    // Staged by the same principal, offered to an API-key profile: still not a key.
+    let f = refused(
+        cx.configure(json!({"kind": "Connection", "connectionId": "or",
+        "name": "OpenRouter", "profile": "OpenRouterChat", "endpoint": OPENROUTER,
+        "credentialRef": handle.as_str()})),
+    );
+    assert_eq!(f.code, DomainErrorCode::NotFound);
+    assert!(cx.read(|r| r.router().connection(&id("or"))).is_none());
+}
+
+#[test]
+fn a_periodic_check_sends_each_credential_only_to_the_endpoint_read_with_it() {
+    let cx = Cx::new();
+    let a_key = cx.stage("sk-a");
+    let b_old = cx.stage("sk-b-old");
+    cx.add(
+        "a-or",
+        "OpenRouterChat",
+        "https://a.openrouter.test/api/v1",
+        Some(&a_key),
+    );
+    cx.add(
+        "b-or",
+        "OpenRouterChat",
+        "https://b.openrouter.test/api/v1",
+        Some(&b_old),
+    );
+    for host in ["a", "b", "c"] {
+        cx.http.on(
+            Method::Get,
+            &format!("https://{host}.openrouter.test/api/v1/models"),
+            200,
+            json!({"data": [{"id": format!("x/{host}")}]}),
+        );
+    }
+    cx.advance(DISCOVERY_INTERVAL_MS + 1);
+    let b_new = cx.stage("sk-b-new");
+    let a_new = cx.stage("sk-a-new");
+    // The tick reads both rows, then checks them one by one. While a-or's request is in flight
+    // a-or gets a new key and b-or moves to another origin with a new key (concurrent
+    // configures).
+    let store = cx.store.clone();
+    let moved = b_new.clone();
+    cx.http.during("https://a.openrouter.test", move || {
+        run_write(&*store, WriteOptions::default(), move |tx| {
+            let mut a = tx.router().connection(&id("a-or"))?.unwrap();
+            let expected = a.revision;
+            a.credential_ref = Some(a_new);
+            a.credential_revision += 1;
+            tx.router().put_connection(&a, Some(expected))?;
+            let mut c = tx.router().connection(&id("b-or"))?.unwrap();
+            let expected = c.revision;
+            c.endpoint = "https://c.openrouter.test/api/v1".into();
+            c.credential_ref = Some(moved);
+            c.credential_revision += 1;
+            tx.router().put_connection(&c, Some(expected))?;
+            Ok(())
+        })
+        .unwrap();
+    });
+    cx.svc.tick();
+    // b-or's check was built from one read: the new key went to the new origin only.
+    assert!(
+        cx.http.requests("https://b.openrouter.test").is_empty(),
+        "nothing is sent to the endpoint the stale row named"
+    );
+    let sent = cx.http.requests("https://c.openrouter.test");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(header(&sent[0], "authorization"), Some("Bearer sk-b-new"));
+    // And the result is recorded against the credential it was made with.
+    let c = cx.connection("b-or");
+    assert_eq!(c.credential_revision.as_ref().map(Counter::get), Some(2));
+    assert_eq!(c.healthy, Some(true));
+    let ids: Vec<&str> = c
+        .discovered_model_ids
+        .as_ref()
+        .unwrap()
+        .0
+        .iter()
+        .map(|t| t.0.as_str())
+        .collect();
+    assert_eq!(ids, ["x/c"]);
+    // a-or's answer was for the key it replaced: not recorded for the new one.
+    let a = cx.connection("a-or");
+    assert_eq!(a.credential_revision.as_ref().map(Counter::get), Some(2));
+    assert!(a.healthy.is_none() && a.checked_at_ms.is_none(), "{a:?}");
+}
+
+#[test]
+fn a_refresh_records_the_models_listed_with_the_refreshed_token() {
+    let cx = Cx::new();
+    cx.add("codex", "CodexSubscriptionResponses", CODEX_API, None);
+    cx.http.on(
+        Method::Post,
+        &format!("{CODEX_ISSUER}/api/accounts/deviceauth/usercode"),
+        200,
+        json!({"device_auth_id": "dev-1", "user_code": "ABCD-EFGH", "interval": "5"}),
+    );
+    summary(
+        cx.configure(json!({"kind": "SignIn", "connectionId": "codex", "action": "BeginSignIn"})),
+    );
+    let poll = format!("{CODEX_ISSUER}/api/accounts/deviceauth/token");
+    cx.http.on(
+        Method::Post,
+        &poll,
+        200,
+        json!({"authorization_code": "auth-1", "code_verifier": "ver-1"}),
+    );
+    let id_token = jwt(json!({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-9"}}));
+    let token = format!("{CODEX_ISSUER}/oauth/token");
+    cx.http.on(
+        Method::Post,
+        &token,
+        200,
+        json!({"access_token": "codex-at",
+        "refresh_token": "codex-rt", "id_token": id_token, "expires_in": 3600}),
+    );
+    cx.http.on(
+        Method::Get,
+        &format!("{CODEX_API}/models"),
+        200,
+        json!({"models": [{"slug": "gpt-6-luna"}]}),
+    );
+    cx.advance(5_000);
+    cx.svc.tick();
+    let c = cx.connection("codex");
+    assert!(is(lifecycle(&c), "Connected"), "{c:?}");
+    assert_eq!(c.credential_revision.as_ref().map(Counter::get), Some(1));
+    assert_eq!(c.discovered_model_ids.as_ref().map(|i| i.0.len()), Some(1));
+
+    // Refresh: a forced token refresh (a new credential revision), then the list with it.
+    cx.http.on(
+        Method::Post,
+        &token,
+        200,
+        json!({"access_token": "codex-at-2",
+        "refresh_token": "codex-rt-2", "id_token": id_token, "expires_in": 3600}),
+    );
+    cx.http.reset(
+        Method::Get,
+        &format!("{CODEX_API}/models"),
+        200,
+        json!({"models": [{"slug": "gpt-6-luna"}, {"slug": "gpt-6.1-sol"}]}),
+    );
+    assert!(
+        summary(
+            cx.configure(json!({"kind": "SignIn", "connectionId": "codex",
+        "action": "Refresh"}))
+        )
+        .2
+    );
+    let lists = cx.http.requests(&format!("{CODEX_API}/models"));
+    assert_eq!(
+        header(lists.last().unwrap(), "authorization"),
+        Some("Bearer codex-at-2")
+    );
+    let c = cx.connection("codex");
+    assert_eq!(c.credential_revision.as_ref().map(Counter::get), Some(2));
+    assert_eq!(
+        c.discovered_model_ids.as_ref().map(|i| i.0.len()),
+        Some(2),
+        "the list made with the refreshed token is recorded for it"
+    );
 }

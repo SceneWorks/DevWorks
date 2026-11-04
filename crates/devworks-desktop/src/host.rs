@@ -627,14 +627,16 @@ impl Backend for DesktopBackend {
                 }
             })
     }
-    fn secret_store(&self) -> (String, bool) {
-        (
-            self.host.connections.secret_store_name().to_owned(),
-            self.host
+    fn secret_store(&self) -> crate::backend::SecretStoreStatus {
+        crate::backend::SecretStoreStatus {
+            name: self.host.connections.secret_store_name().to_owned(),
+            session_only: self
+                .host
                 .switchable
                 .as_ref()
                 .is_some_and(|s| s.is_session_only()),
-        )
+            unavailable: self.host.connections.secret_store_unavailable(),
+        }
     }
     fn use_session_only_secrets(&self) -> Result<(), String> {
         match &self.host.switchable {

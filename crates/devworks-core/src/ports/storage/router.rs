@@ -158,6 +158,10 @@ pub struct StoredConnection {
     pub profile: String,
     /// The inference base URL.
     pub endpoint: String,
+    /// Turned on by the user; a disabled connection keeps its credential and is never routed.
+    pub enabled: bool,
+    /// Canonical JSON of the wire `OpenRouterConstraints` (`OpenRouterChat` connections only).
+    pub open_router: Option<String>,
     pub credential_ref: Option<Id>,
     /// Advances with every credential publish, rotation or removal; 0 before the first.
     pub credential_revision: i64,

@@ -3654,6 +3654,247 @@ impl Revisioned for RouteModel {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterDataCollection {
+    #[serde(rename = "allow")]
+    Allow,
+    #[serde(rename = "deny")]
+    Deny,
+}
+impl Check for OpenRouterDataCollection {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterQuantization {
+    #[serde(rename = "int4")]
+    Int4,
+    #[serde(rename = "int8")]
+    Int8,
+    #[serde(rename = "fp4")]
+    Fp4,
+    #[serde(rename = "mxfp4")]
+    Mxfp4,
+    #[serde(rename = "nvfp4")]
+    Nvfp4,
+    #[serde(rename = "fp6")]
+    Fp6,
+    #[serde(rename = "fp8")]
+    Fp8,
+    #[serde(rename = "mxfp8")]
+    Mxfp8,
+    #[serde(rename = "fp16")]
+    Fp16,
+    #[serde(rename = "bf16")]
+    Bf16,
+    #[serde(rename = "fp32")]
+    Fp32,
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+impl Check for OpenRouterQuantization {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterSortBy {
+    #[serde(rename = "price")]
+    Price,
+    #[serde(rename = "throughput")]
+    Throughput,
+    #[serde(rename = "latency")]
+    Latency,
+}
+impl Check for OpenRouterSortBy {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterPartition {
+    #[serde(rename = "model")]
+    Model,
+    #[serde(rename = "none")]
+    None,
+}
+impl Check for OpenRouterPartition {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterCostTier {
+    #[serde(rename = "low")]
+    Low,
+    #[serde(rename = "medium")]
+    Medium,
+    #[serde(rename = "high")]
+    High,
+    #[serde(rename = "xhigh")]
+    Xhigh,
+    #[serde(rename = "max")]
+    Max,
+}
+impl Check for OpenRouterCostTier {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterSort {
+    pub by: OpenRouterSortBy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<OpenRouterPartition>,
+}
+impl Check for OpenRouterSort {
+    fn check(&self) -> Result<(), String> {
+        self.by.check()?;
+        self.partition.check()?;
+        super::domain_rules::record(
+            "OpenRouterSort",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterPercentiles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p50: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p75: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p90: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p99: Option<Finite>,
+}
+impl Check for OpenRouterPercentiles {
+    fn check(&self) -> Result<(), String> {
+        self.p50.check()?;
+        self.p75.check()?;
+        self.p90.check()?;
+        self.p99.check()?;
+        super::domain_rules::record(
+            "OpenRouterPercentiles",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterMaxPrice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<Money>,
+}
+impl Check for OpenRouterMaxPrice {
+    fn check(&self) -> Result<(), String> {
+        self.prompt.check()?;
+        self.completion.check()?;
+        self.request.check()?;
+        self.image.check()?;
+        super::domain_rules::record(
+            "OpenRouterMaxPrice",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterProviderRouting {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<Items<Label>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_fallbacks: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_parameters: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_collection: Option<OpenRouterDataCollection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zdr: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforce_distillable_text: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only: Option<Items<Label>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignore: Option<Items<Label>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantizations: Option<Items<OpenRouterQuantization>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<OpenRouterSort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_min_throughput: Option<OpenRouterPercentiles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_max_latency: Option<OpenRouterPercentiles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_price: Option<OpenRouterMaxPrice>,
+}
+impl Check for OpenRouterProviderRouting {
+    fn check(&self) -> Result<(), String> {
+        self.order.check()?;
+        self.allow_fallbacks.check()?;
+        self.require_parameters.check()?;
+        self.data_collection.check()?;
+        self.zdr.check()?;
+        self.enforce_distillable_text.check()?;
+        self.only.check()?;
+        self.ignore.check()?;
+        self.quantizations.check()?;
+        self.sort.check()?;
+        self.preferred_min_throughput.check()?;
+        self.preferred_max_latency.check()?;
+        self.max_price.check()?;
+        super::domain_rules::record(
+            "OpenRouterProviderRouting",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterConstraints {
+    pub allowed_models: Items<Text>,
+    pub excluded_models: Items<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_tier: Option<OpenRouterCostTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<OpenRouterProviderRouting>,
+}
+impl Check for OpenRouterConstraints {
+    fn check(&self) -> Result<(), String> {
+        self.allowed_models.check()?;
+        self.excluded_models.check()?;
+        self.cost_tier.check()?;
+        self.provider.check()?;
+        super::domain_rules::record(
+            "OpenRouterConstraints",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum ConnectionLifecycle {
     Disconnected,
     Authorizing,
@@ -3799,6 +4040,20 @@ pub struct ConnectionRecord {
     )]
     #[schemars(with = "SignInChallenge", extend("x-since" = 2))]
     pub sign_in: Option<SignInChallenge>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub enabled: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OpenRouterConstraints", extend("x-since" = 2))]
+    pub open_router: Option<OpenRouterConstraints>,
 }
 impl Check for ConnectionRecord {
     fn check(&self) -> Result<(), String> {
@@ -3821,6 +4076,8 @@ impl Check for ConnectionRecord {
         self.discovered_model_ids.check()?;
         self.access_expires_at_ms.check()?;
         self.sign_in.check()?;
+        self.enabled.check()?;
+        self.open_router.check()?;
         super::domain_rules::record(
             "ConnectionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -3863,6 +4120,12 @@ impl Revisioned for ConnectionRecord {
         }
         if revision < 2 {
             self.sign_in = None;
+        }
+        if revision < 2 {
+            self.enabled = None;
+        }
+        if revision < 2 {
+            self.open_router = None;
         }
     }
 }
@@ -5170,6 +5433,20 @@ pub enum RouterConfigAction {
         endpoint: Url,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         credential_ref: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 2))]
+        enabled: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "OpenRouterConstraints", extend("x-since" = 2))]
+        open_router: Option<OpenRouterConstraints>,
     },
     Model {
         model: RouteModel,
@@ -5213,6 +5490,8 @@ impl Check for RouterConfigAction {
                 profile,
                 endpoint,
                 credential_ref,
+                enabled,
+                open_router,
             } => {
                 connection_id.check()?;
                 expected_revision.check()?;
@@ -5220,6 +5499,8 @@ impl Check for RouterConfigAction {
                 profile.check()?;
                 endpoint.check()?;
                 credential_ref.check()?;
+                enabled.check()?;
+                open_router.check()?;
             }
             Self::Model {
                 model,
@@ -5279,6 +5560,18 @@ impl Check for RouterConfigAction {
 impl Revisioned for RouterConfigAction {
     fn retain_revision(&mut self, revision: u32) {
         match self {
+            Self::Connection {
+                enabled,
+                open_router,
+                ..
+            } => {
+                if revision < 2 {
+                    *enabled = None;
+                }
+                if revision < 2 {
+                    *open_router = None;
+                }
+            }
             Self::Model { model, .. } => {
                 model.retain_revision(revision);
             }

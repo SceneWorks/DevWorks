@@ -100,6 +100,8 @@ pub enum Block {
     ContextTooSmall,
     /// No connection serves the model's endpoint profile.
     NoConnection,
+    /// Its connections' model constraints (allowed/excluded lists) exclude it.
+    NotAllowed,
     /// Its connections need a sign-in (disconnected, authorizing or rejected).
     CredentialsRequired,
     /// Its connections are temporarily unavailable or refreshing.
@@ -122,6 +124,7 @@ impl Block {
             Self::ContextUnknown => "ContextUnknown",
             Self::ContextTooSmall => "ContextTooSmall",
             Self::NoConnection => "NoConnection",
+            Self::NotAllowed => "NotAllowed",
             Self::CredentialsRequired => "CredentialsRequired",
             Self::ConnectionUnavailable => "ConnectionUnavailable",
             Self::ConnectionDisabled => "ConnectionDisabled",
@@ -140,6 +143,7 @@ impl Block {
                 | Self::ToolsUnsupported
                 | Self::ContextUnknown
                 | Self::ContextTooSmall
+                | Self::NotAllowed
         )
     }
     pub fn is_credentials(&self) -> bool {
@@ -245,6 +249,15 @@ fn connection_for(
         .collect();
     if serving.is_empty() {
         return Err(Block::NoConnection);
+    }
+    // A connection's allowed/excluded model constraints are never routed around: a model they
+    // exclude everywhere is ineligible, whatever the connections' state.
+    let serving: Vec<&ConnectionStatus> = serving
+        .into_iter()
+        .filter(|c| c.permits(&model.upstream_model_id))
+        .collect();
+    if serving.is_empty() {
+        return Err(Block::NotAllowed);
     }
     let lists = |c: &ConnectionStatus| {
         c.discovered
@@ -402,6 +415,8 @@ mod tests {
             profile: "CompatibleChat".into(),
             state: ConnectionState::Connected,
             discovered: discovered.map(|d| d.iter().map(|s| (*s).to_owned()).collect()),
+            allowed: Vec::new(),
+            excluded: Vec::new(),
         }]
     }
 

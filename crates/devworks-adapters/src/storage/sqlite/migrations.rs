@@ -226,7 +226,7 @@ pub const MIGRATION_0014_SHA256: &str =
     "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
-    "dc16286000b9a90054e7f1fb87e1049890f2d543666006216592995848a53c09";
+    "6c896920e5b811223b5529f4cd41e4555c1bd95e4c8a6c681734ad01234cbd55";
 /// Recorded checksum of migration 13; a test fails if the shipped text changes.
 pub const MIGRATION_0013_SHA256: &str =
     "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";
