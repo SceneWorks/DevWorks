@@ -145,6 +145,8 @@ pub const COUNTS_COMPONENT: &str = "knowledge.counts";
 pub const WRITES_COMPONENT: &str = "knowledge.writes";
 pub const PREVIEW_COMPONENT: &str = "knowledge.preview";
 pub const IMPORT_COMPONENT: &str = "knowledge.import";
+/// A lesson a previewed deletion restores (one diagnostic each).
+pub const RESTORE_COMPONENT: &str = "knowledge.restore";
 /// Most claims (then entities) one delete-by-source transaction tombstones. A larger source is
 /// deleted whole, as a durable job of such batches (each one checkpoint, the source fenced
 /// read-only meanwhile), because one transaction for it would hold the single writer too long:
@@ -1014,12 +1016,21 @@ impl KnowledgeService {
                 "DeleteBySource",
                 &format!(
                     "Deleting source {} at scope revision {exact_revision} tombstones {} claims, \
-                     {} entities and {} evidence records{}. Confirm with this diagnostic's id as \
-                     previewDigest.",
+                     {} entities and {} evidence records{}{}. Confirm with this diagnostic's id \
+                     as previewDigest.",
                     source.as_str(),
                     plan.claims,
                     plan.entities,
                     plan.evidence,
+                    if plan.restored.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            ", and restores {} lessons merged into a deleted lesson as \
+                             independent lessons (each listed in {RESTORE_COMPONENT})",
+                            plan.restored.len()
+                        )
+                    },
                     if plan.claims > DELETION_BATCH {
                         " in batches (the source is read-only until the last one; \
                          knowledge.write_status reports progress)"
@@ -1028,6 +1039,20 @@ impl KnowledgeService {
                     }
                 ),
             ));
+            for (lesson, from) in &plan.restored {
+                items.push(diagnostic(
+                    &format!("restore-{}", lesson.as_str()),
+                    Severity::Info,
+                    RESTORE_COMPONENT,
+                    "RestoresLesson",
+                    &format!(
+                        "Lesson {} is merged into {}, which the deletion removes: it becomes an \
+                         independent lesson again with the source events its merge carried.",
+                        lesson.as_str(),
+                        from.as_str()
+                    ),
+                ));
+            }
         }
         if let Some(source) = &i.import_source {
             let Some(schema) = &i.import_schema else {

@@ -133,6 +133,10 @@ pub struct ClaimBody {
     /// own (the user acted on it, or a carrying merge became permanent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lesson_prior_rule: Option<PriorRule>,
+    /// The stored rule state (`Candidate` or `Proposed`) a lesson took effect from by
+    /// recurrence: what losing that recurrence restores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lesson_prior_state: Option<String>,
     /// The last lifecycle reason (retraction, deletion).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -671,6 +675,21 @@ pub trait KnowledgeRepository: KnowledgeRead {
         deleted: &Id,
         into: &Id,
         live: &[Id],
+    ) -> Result<i64, StorageError>;
+    /// Moves back to `from` every event its merge into `into` carried, wherever later merges
+    /// took it: each event whose chain of holders (its merge path, then the lesson holding it)
+    /// has `from` right below `into` returns to `from` with the path below `from` (a deleted
+    /// merge target restores the lessons merged into it). Returns how many moved.
+    fn restore_merged_lesson_events(&mut self, from: &Id, into: &Id) -> Result<i64, StorageError>;
+    /// Gives `into` (an active lesson) the events it lacks that a lesson merged into it still
+    /// holds (a copy that stayed behind because `into` had the event, which has since left).
+    /// `below` lists each lesson merged into `into`, nearest first, as the chain of lessons its
+    /// merge passed through (itself first, `into`'s direct merge last); a moved event's path
+    /// gains that chain. Returns how many moved.
+    fn refill_knowledge_lesson_events(
+        &mut self,
+        into: &Id,
+        below: &[Vec<Id>],
     ) -> Result<i64, StorageError>;
     /// Inserts a challenge, or replaces one that is `Open` (a resolution); a resolved one is
     /// [`StorageError::InvalidRecord`].

@@ -769,6 +769,7 @@ fn build_claim(
         lesson_effect: None,
         lesson_reason: None,
         lesson_prior_rule: None,
+        lesson_prior_state: None,
         reason: None,
     };
     let lesson = if entry == "Lesson" {
@@ -792,6 +793,7 @@ fn build_claim(
                 body.lesson_effect = p.body.lesson_effect.clone();
                 body.lesson_reason = p.body.lesson_reason.clone();
                 body.lesson_prior_rule = p.body.lesson_prior_rule.clone();
+                body.lesson_prior_state = p.body.lesson_prior_state.clone();
                 Some(stored)
             }
             None => {
@@ -876,7 +878,9 @@ fn take_effect_if_due(w: &mut Writer<'_>, c: StoredClaim) -> Result<StoredClaim,
     }
     let mut next = c.clone();
     if let Some(l) = next.lesson.as_mut() {
-        l.rule_state = "Effective".into();
+        // The state it takes effect from is what losing the recurrence restores.
+        next.body.lesson_prior_state =
+            Some(std::mem::replace(&mut l.rule_state, "Effective".into()));
         l.effective_at_ms = Some(w.now);
     }
     next.body.lesson_effect = Some("Recurrence".into());
@@ -1406,10 +1410,6 @@ fn relate(
             // another lesson, the events it holds are there, and unmerging it comes first.
             require_active(&into)?;
             let moved = w.k().unmerge_knowledge_lesson_events(&from.id)?;
-            let mut restored = from.clone();
-            restored.lifecycle = "Active".into();
-            restored.body.superseded_by = None;
-            let restored = w.put_claim(restored, Some(from.revision), "Unmerged")?;
             let now = w.now;
             let merge = w.k().remove_live_knowledge_relation(
                 &scoped.exact,
@@ -1430,16 +1430,10 @@ fn relate(
                 }
                 None => (Vec::new(), Vec::new()),
             };
+            let restored = reinstate(&mut w, &from, "Unmerged")?;
             // An event the leaving lesson took back that a remaining merge also brought (its
             // copy stayed with that lesson, since the target held one) returns to the target.
-            let remaining = merges_into(&mut w, &into.id)?;
-            for r in &remaining {
-                w.k()
-                    .merge_knowledge_lesson_events(&r.subject_id, &into.id)?;
-            }
-            // A rule that took effect only by the merged events returns to candidate evidence.
-            let events = w.k().knowledge_lesson_event_count(&into.id)?;
-            let threshold = w.threshold(&into.scope)?;
+            refill(&mut w, &into.id)?;
             let mut target = into.clone();
             // What a remaining active merge into the target still owns stays with it.
             let (owned, owned_basis) = merge_owned(&mut w, &into.id)?;
@@ -1454,33 +1448,10 @@ fn relate(
                 .retain(|b| !added_basis.contains(b) || owned_basis.contains(b));
             // The user's effect a merge carried in stays while a remaining merge carries it too;
             // undoing the last one restores the rule the target had before.
-            if let Some(prior) = target.body.lesson_prior_rule.clone() {
-                let mut carried = false;
-                for r in &remaining {
-                    if let Some(c) = w.k().knowledge_claim(&r.subject_id)? {
-                        carried |= user_effect(&c).is_some();
-                    }
-                }
-                if !carried {
-                    if let Some(l) = target.lesson.as_mut()
-                        && l.rule_state == "Effective"
-                    {
-                        l.rule_state = prior.rule_state;
-                        l.effective_at_ms = prior.effective_at_ms;
-                        target.body.lesson_effect = prior.effect;
-                    }
-                    target.body.lesson_prior_rule = None;
-                }
-            }
-            if target.body.lesson_effect.as_deref() == Some("Recurrence")
-                && events < threshold
-                && let Some(l) = target.lesson.as_mut()
-                && l.rule_state == "Effective"
-            {
-                l.rule_state = "Candidate".into();
-                l.effective_at_ms = None;
-                target.body.lesson_effect = None;
-            }
+            restore_uncarried_rule(&mut w, &mut target)?;
+            // A rule that took effect only by the merged events returns to the state it took
+            // effect from.
+            lose_recurrence_if_due(&mut w, &mut target)?;
             if target != into {
                 let stored = w.put_claim(target, Some(into.revision), "Unmerged")?;
                 // A restored inferred rule whose events still reach the threshold is in effect.
@@ -1595,6 +1566,236 @@ fn merge_owned(w: &mut Writer<'_>, into: &Id) -> Result<Owned, StorageError> {
         owned.1.extend(r.added_basis);
     }
     Ok(owned)
+}
+
+/// The live `same_as` merge `lesson` is merged into, if any.
+fn merge_of(w: &mut Writer<'_>, lesson: &Id) -> Result<Option<StoredRelation>, StorageError> {
+    Ok(w.k()
+        .knowledge_relations_touching(std::slice::from_ref(lesson))?
+        .into_iter()
+        .find(|r| r.predicate == model::SAME_AS && r.subject_id == *lesson))
+}
+
+/// Gives an active lesson the events it lacks that a lesson merged into it (at any depth)
+/// still holds: a copy that stayed behind because the lesson had the event, which has since
+/// left with an unmerge or a restored lesson. The nearest merge's copy comes first.
+fn refill(w: &mut Writer<'_>, into: &Id) -> Result<(), Failure> {
+    let mut below: Vec<Vec<Id>> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut level: Vec<Vec<Id>> = vec![Vec::new()];
+    while !level.is_empty() {
+        let mut next = Vec::new();
+        for chain in level {
+            let holder = chain.first().unwrap_or(into).clone();
+            for r in merges_into(w, &holder)? {
+                if !seen.insert(r.subject_id.as_str().to_owned()) {
+                    continue;
+                }
+                let mut deeper = vec![r.subject_id];
+                deeper.extend(chain.iter().cloned());
+                next.push(deeper);
+            }
+        }
+        below.extend(next.iter().cloned());
+        level = next;
+    }
+    if !below.is_empty() {
+        w.k().refill_knowledge_lesson_events(into, &below)?;
+    }
+    Ok(())
+}
+
+/// The user's effect merges carried into a lesson stays while a live merge into it carries one
+/// still; once none does, the lesson's rule before the first carrying merge returns.
+fn restore_uncarried_rule(w: &mut Writer<'_>, target: &mut StoredClaim) -> Result<(), Failure> {
+    let Some(prior) = target.body.lesson_prior_rule.clone() else {
+        return Ok(());
+    };
+    for r in merges_into(w, &target.id)? {
+        if let Some(c) = w.k().knowledge_claim(&r.subject_id)?
+            && user_effect(&c).is_some()
+        {
+            return Ok(());
+        }
+    }
+    if let Some(l) = target.lesson.as_mut()
+        && l.rule_state == "Effective"
+    {
+        l.rule_state = prior.rule_state;
+        l.effective_at_ms = prior.effective_at_ms;
+        target.body.lesson_effect = prior.effect;
+    }
+    target.body.lesson_prior_rule = None;
+    Ok(())
+}
+
+/// A rule in effect only by recurrence whose distinct events fell below its scope's threshold
+/// returns to the state it took effect from (`Candidate` or `Proposed`).
+fn lose_recurrence_if_due(w: &mut Writer<'_>, target: &mut StoredClaim) -> Result<(), Failure> {
+    if target.body.lesson_effect.as_deref() != Some("Recurrence")
+        || target
+            .lesson
+            .as_ref()
+            .is_none_or(|l| l.rule_state != "Effective")
+    {
+        return Ok(());
+    }
+    let events = w.k().knowledge_lesson_event_count(&target.id)?;
+    if events >= w.threshold(&target.scope)? {
+        return Ok(());
+    }
+    if let Some(l) = target.lesson.as_mut() {
+        l.rule_state = target
+            .body
+            .lesson_prior_state
+            .take()
+            .unwrap_or_else(|| "Candidate".into());
+        l.effective_at_ms = None;
+    }
+    target.body.lesson_effect = None;
+    Ok(())
+}
+
+/// A merged lesson, its events back, becomes independent again as it was before the merge
+/// (merging needs an active lesson), its effect recounted: the user's rule stays in effect, and
+/// recurrence counts the events it holds now.
+fn reinstate(w: &mut Writer<'_>, from: &StoredClaim, change: &str) -> Result<StoredClaim, Failure> {
+    let mut restored = from.clone();
+    restored.lifecycle = "Active".into();
+    restored.body.superseded_by = None;
+    lose_recurrence_if_due(w, &mut restored)?;
+    let stored = w.put_claim(restored, Some(from.revision), change)?;
+    take_effect_if_due(w, stored)
+}
+
+/// Whether a deletion removes `c` as well.
+fn removes(gone: &DeletedClaims<'_>, c: &StoredClaim) -> bool {
+    match gone {
+        DeletedClaims::Ids(ids) => ids.contains(&c.id),
+        DeletedClaims::Source { scope, source } => {
+            c.scope == **scope && c.source.as_deref() == Some(*source)
+        }
+    }
+}
+
+/// One lesson a deletion restores: the merge it leaves, the lesson, and the deleted lesson it
+/// was merged into.
+pub(super) struct Restoration {
+    merge: StoredRelation,
+    pub lesson: StoredClaim,
+    from: Id,
+}
+
+/// The lessons deleting `deleted` restores as independent lessons: each merged into it (a live
+/// `same_as` merge, the lesson still superseded by it), or into a lesson merged into it that
+/// the deletion removes as well, that the deletion keeps.
+pub(super) fn restorable(
+    k: &dyn KnowledgeRead,
+    deleted: &Id,
+    gone: &DeletedClaims<'_>,
+) -> Result<Vec<Restoration>, StorageError> {
+    let mut out = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut level = vec![deleted.clone()];
+    while !level.is_empty() {
+        let mut next = Vec::new();
+        for node in level {
+            if !seen.insert(node.as_str().to_owned()) {
+                continue;
+            }
+            for r in k.knowledge_relations_touching(std::slice::from_ref(&node))? {
+                if r.predicate != model::SAME_AS || r.object_id != node {
+                    continue;
+                }
+                let Some(c) = k.knowledge_claim(&r.subject_id)? else {
+                    continue;
+                };
+                if c.lifecycle != "Superseded" || c.body.superseded_by.as_ref() != Some(&node) {
+                    continue;
+                }
+                if removes(gone, &c) {
+                    // Deleted too: what was merged into it is restored from it.
+                    next.push(c.id.clone());
+                } else {
+                    out.push(Restoration {
+                        merge: r,
+                        lesson: c,
+                        from: node.clone(),
+                    });
+                }
+            }
+        }
+        level = next;
+    }
+    Ok(out)
+}
+
+/// Deleting a merge target restores every lesson merged into it that the deletion keeps (only
+/// what was deleted goes): each gets back the events its merge carried, wherever later merges
+/// took them, and becomes independent with its effect recounted (its own citations and
+/// baselines never left it). What a deleted lesson held for them settles above it: its
+/// borrowed user effect, and each lesson its merge carried them into up to the active one,
+/// which is refilled and recounted (unless the deletion removes it too).
+fn restore_merged(
+    w: &mut Writer<'_>,
+    deleted: &StoredClaim,
+    gone: &DeletedClaims<'_>,
+) -> Result<(), Failure> {
+    let found = restorable(w.tx.knowledge(), &deleted.id, gone)?;
+    let now = w.now;
+    let mut above: Vec<Id> = Vec::new();
+    for r in found {
+        let moved = w.k().restore_merged_lesson_events(&r.lesson.id, &r.from)?;
+        if w.k().remove_knowledge_relation(&r.merge.id, now)? {
+            w.changes.push(WriteChange {
+                target_kind: "Relation".into(),
+                id: r.merge.id.clone(),
+                before: None,
+                after: None,
+            });
+        }
+        reinstate(w, &r.lesson, "Restored")?;
+        let message = format!(
+            "Lesson {} restored as an independent lesson: the lesson {} it was merged into is \
+             deleted ({moved} source events moved back).",
+            r.lesson.id.as_str(),
+            r.from.as_str()
+        );
+        w.note(Severity::Info, "restored", &message);
+        if !above.contains(&r.from) {
+            above.push(r.from);
+        }
+    }
+    for start in above {
+        let mut node = Some(start);
+        while let Some(id) = node.take() {
+            let Some(c) = w.k().knowledge_claim(&id)? else {
+                break;
+            };
+            let root = c.lifecycle == "Active";
+            if root && removes(gone, &c) {
+                // A deleted active lesson holds nothing for anyone after this.
+                break;
+            }
+            let mut next = c.clone();
+            restore_uncarried_rule(w, &mut next)?;
+            if root {
+                refill(w, &c.id)?;
+                lose_recurrence_if_due(w, &mut next)?;
+            } else if c.lifecycle == "Superseded" {
+                node = merge_of(w, &c.id)?.map(|r| r.object_id);
+            }
+            if next != c {
+                let stored = w.put_claim(next, Some(c.revision), "MergeSettled")?;
+                if root {
+                    take_effect_if_due(w, stored)?;
+                }
+            } else if root {
+                w.touch(&c.scope);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The effect of a rule the user stated or promoted that a lesson carries into a merge.
@@ -2246,8 +2447,16 @@ fn retained(snapshot: &Value) -> Value {
     v
 }
 
-fn tombstone_claim(w: &mut Writer<'_>, c: &StoredClaim) -> Result<(), Failure> {
-    // As it is now: settling another deletion of the same write may have changed it.
+fn tombstone_claim(
+    w: &mut Writer<'_>,
+    c: &StoredClaim,
+    gone: &DeletedClaims<'_>,
+) -> Result<(), Failure> {
+    // The lessons merged into it that the deletion keeps become independent again first.
+    let current = w.k().knowledge_claim(&c.id)?;
+    restore_merged(w, current.as_ref().unwrap_or(c), gone)?;
+    // As it is now: settling another deletion of the same write (or restoring the lessons
+    // merged into it) may have changed it.
     let current = w.k().knowledge_claim(&c.id)?;
     let c = current.as_ref().unwrap_or(c);
     let mut next = c.clone();
@@ -2305,6 +2514,9 @@ pub(super) struct DeletionPlan {
     pub claims: usize,
     pub entities: usize,
     pub evidence: usize,
+    /// The lessons merged into a removed lesson that it restores as independent lessons:
+    /// `(lesson, the removed lesson it was merged into)`, by lesson ID.
+    pub restored: Vec<(Id, Id)>,
     pub digest: String,
 }
 
@@ -2385,6 +2597,7 @@ pub(super) fn deletion_plan(
     let page_size = super::DELETION_BATCH as u16;
     let mut claims = 0;
     let mut orphans: BTreeMap<String, ()> = BTreeMap::new();
+    let mut restored: BTreeMap<String, (Id, Id, i64)> = BTreeMap::new();
     let mut after: Option<String> = None;
     loop {
         let page = k.knowledge_source_claims(scope, source, after.as_deref(), page_size)?;
@@ -2396,6 +2609,14 @@ pub(super) fn deletion_plan(
         );
         for e in orphaned_evidence(k, &page, &[], &gone)? {
             orphans.insert(e.id.as_str().to_owned(), ());
+        }
+        for c in &page {
+            for r in restorable(k, &c.id, &gone)? {
+                restored.insert(
+                    r.lesson.id.as_str().to_owned(),
+                    (r.lesson.id.clone(), r.from.clone(), r.lesson.revision),
+                );
+            }
         }
         if page.len() < page_size as usize {
             break;
@@ -2424,11 +2645,20 @@ pub(super) fn deletion_plan(
         }
     }
     parts.extend(orphans.keys().map(|id| format!("v:{id}")));
+    parts.extend(
+        restored
+            .iter()
+            .map(|(id, (_, from, revision))| format!("r:{id}@{revision}<{}", from.as_str())),
+    );
     Ok(DeletionPlan {
         digest: model::preview_digest(&parts),
         claims,
         entities,
         evidence: orphans.len(),
+        restored: restored
+            .into_values()
+            .map(|(lesson, from, _)| (lesson, from))
+            .collect(),
     })
 }
 
@@ -2462,7 +2692,7 @@ fn deletion_batch(
         .knowledge_source_claims(scope, source, None, size as u16)?;
     let evidence = orphaned_evidence(w.tx.knowledge(), &claims, &[], &gone)?;
     for c in &claims {
-        tombstone_claim(w, c)?;
+        tombstone_claim(w, c, &gone)?;
         out.claims += 1;
     }
     for e in &evidence {
@@ -2763,9 +2993,10 @@ fn delete_selected(
         }
     }
     let ids: Vec<Id> = selected.iter().map(|c| c.id.clone()).collect();
-    let evidence = orphaned_evidence(w.tx.knowledge(), &selected, &[], &DeletedClaims::Ids(&ids))?;
+    let gone = DeletedClaims::Ids(&ids);
+    let evidence = orphaned_evidence(w.tx.knowledge(), &selected, &[], &gone)?;
     for c in &selected {
-        tombstone_claim(&mut w, c)?;
+        tombstone_claim(&mut w, c, &gone)?;
     }
     for e in &evidence {
         purge_evidence(&mut w, e)?;

@@ -2000,6 +2000,16 @@ impl KnowledgeRepository for Unsupported {
     ) -> Result<i64, StorageError> {
         nope()
     }
+    fn restore_merged_lesson_events(&mut self, _: &Id, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn refill_knowledge_lesson_events(
+        &mut self,
+        _: &Id,
+        _: &[Vec<Id>],
+    ) -> Result<i64, StorageError> {
+        nope()
+    }
     fn put_knowledge_challenge(&mut self, _: &StoredChallenge) -> Result<(), StorageError> {
         nope()
     }

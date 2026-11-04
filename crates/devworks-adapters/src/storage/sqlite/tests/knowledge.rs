@@ -3636,3 +3636,289 @@ fn a_deleted_merges_shared_event_settles_while_its_target_is_itself_merged() {
     assert_eq!(rule(&fx, &a, &lb), effective("Recurrence", 3));
     assert_eq!((rule(&fx, &a, &la).2, rule(&fx, &a, &ld).2), (1, 1));
 }
+
+// Lesson lifecycle: what an automatic transition did, undoing it restores
+
+fn lifecycle(fx: &Fx, ctx: &InvocationContext, claim: &Id) -> String {
+    wire(
+        fx.claim(ctx, proj("project-a"), claim)
+            .lifecycle
+            .as_ref()
+            .unwrap(),
+    )
+}
+
+/// The event keys a lesson holds, as stored.
+fn event_keys(fx: &Fx, lesson: &Id) -> Vec<String> {
+    let l = lesson.clone();
+    let mut keys: Vec<String> = fx
+        .read(move |s| s.knowledge().knowledge_lesson_events(&l, 500))
+        .into_iter()
+        .map(|e| e.event_key)
+        .collect();
+    keys.sort();
+    keys
+}
+
+fn propose(fx: &Fx, ctx: &InvocationContext, lesson: &Id) {
+    let rev = fx.revision(lesson);
+    receipt(fx.cmd(
+        ctx,
+        "knowledge.promote",
+        json!({"claimId": lesson, "expectedRevision": rev.to_string(),
+        "destination": proj("project-a"), "action": "Propose"}),
+    ));
+}
+
+fn proposed(events: u64) -> (String, Option<String>, u64) {
+    ("Proposed".to_owned(), None, events)
+}
+
+#[test]
+fn a_proposed_rule_that_loses_its_recurrence_returns_to_proposed() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let la = lesson_in_a(&fx, &a, "A", "Agent", "ea");
+    let lb = lesson_in_a(&fx, &a, "B", "Agent", "eb1");
+    propose(&fx, &a, &lb);
+    recur_in_a(&fx, &a, &lb, "Agent", "eb2");
+    assert_eq!(rule(&fx, &a, &lb), proposed(2));
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    assert_eq!(rule(&fx, &a, &lb), effective("Recurrence", 3));
+    // A revision keeps what the rule took effect from.
+    let subject = {
+        let b = lb.clone();
+        fx.read(move |s| s.knowledge().knowledge_claim(&b))
+            .unwrap()
+            .subject_id
+    };
+    receipt(fx.cmd(
+        &a,
+        "knowledge.revise",
+        json!({"scope": proj("project-a"), "claimId": lb,
+        "expectedRevision": fx.revision(&lb).to_string(),
+        "replacement": with(draft("Lesson", "B, reworded"), json!({"subjectId": subject}))}),
+    ));
+    relate_in_a(&fx, &a, &la, "unmerge", &lb);
+    assert_eq!(rule(&fx, &a, &lb), proposed(2));
+    // It takes effect again, and loses it again, as often as its recurrence comes and goes.
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    assert_eq!(rule(&fx, &a, &lb), effective("Recurrence", 3));
+    relate_in_a(&fx, &a, &la, "unmerge", &lb);
+    assert_eq!(rule(&fx, &a, &lb), proposed(2));
+}
+
+#[test]
+fn a_proposed_rule_carried_by_a_merged_user_rule_returns_to_proposed() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let la = lesson_in_a(&fx, &user, "A", "Prompt", "p1");
+    let lb = lesson_in_a(&fx, &a, "B", "Agent", "eb1");
+    propose(&fx, &a, &lb);
+    relate_in_a(&fx, &user, &la, "same_as", &lb);
+    assert_eq!(rule(&fx, &a, &lb), effective("UserInstruction", 2));
+    relate_in_a(&fx, &user, &la, "unmerge", &lb);
+    assert_eq!(rule(&fx, &a, &lb), proposed(1));
+}
+
+#[test]
+fn deleting_a_merge_target_restores_the_lessons_merged_into_it() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.agent("agent-a", Some("project-a"));
+    // A cites `repo:merged` at c1 and is in effect by its own recurrence; C is the user's rule.
+    let (la, lb, _) = three_lessons(&fx, &a);
+    recur_in_a(&fx, &a, &la, "Agent", "ea2");
+    recur_in_a(&fx, &a, &la, "Agent", "ea3");
+    assert_eq!(rule(&fx, &a, &la), effective("Recurrence", 3));
+    let lc = lesson_in_a(&fx, &user, "C", "Prompt", "p1");
+    let a_events = event_keys(&fx, &la);
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    relate_in_a(&fx, &user, &lc, "same_as", &lb);
+    assert_eq!(rule(&fx, &a, &lb), effective("UserInstruction", 5));
+    delete_claim(&fx, &user, &lb);
+    assert_eq!(lifecycle(&fx, &a, &lb), "Deleted");
+    // Each merged lesson is independent again, with its own events (references intact) and
+    // its effect: the user's rule stays in effect, recurrence is recounted.
+    for l in [&la, &lc] {
+        let c = fx.claim(&a, proj("project-a"), l);
+        assert_eq!(wire(c.lifecycle.as_ref().unwrap()), "Active");
+        assert_eq!(c.superseded_by, None);
+    }
+    assert_eq!(event_keys(&fx, &la), a_events);
+    assert_eq!(rule(&fx, &a, &la), effective("Recurrence", 3));
+    assert_eq!(rule(&fx, &a, &lc), effective("UserInstruction", 1));
+    // A keeps its citation and its baseline: a newer revision of the source marks it stale.
+    assert_eq!(cited_snippets(&fx, &a, &la), vec!["merged evidence"]);
+    observe_merged_source(&fx);
+    assert_eq!(fx.claim(&a, proj("project-a"), &la).stale, Some(true));
+    // No merge is left to undo: A and C are lessons of their own.
+    relate_in_a(&fx, &a, &la, "same_as", &lc);
+    assert_eq!(rule(&fx, &a, &lc), effective("UserInstruction", 4));
+}
+
+#[test]
+fn deleting_a_merge_target_that_is_merged_on_restores_through_the_chain() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.agent("agent-a", Some("project-a"));
+    // E is merged into A, A into B, and B on into D, which takes effect by recurrence.
+    let le = lesson_in_a(&fx, &a, "E", "Agent", "ee");
+    let la = lesson_in_a(&fx, &a, "A", "Agent", "ea");
+    let lb = lesson_in_a(&fx, &a, "B", "Agent", "eb");
+    let ld = lesson_in_a(&fx, &a, "D", "Agent", "ed");
+    propose(&fx, &a, &ld);
+    relate_in_a(&fx, &a, &le, "same_as", &la);
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    relate_in_a(&fx, &a, &lb, "same_as", &ld);
+    assert_eq!(rule(&fx, &a, &ld), effective("Recurrence", 4));
+    delete_claim(&fx, &user, &lb);
+    // A is independent again with its own events and E's (E stays merged into A) ...
+    assert_eq!(lifecycle(&fx, &a, &la), "Active");
+    assert_eq!(rule(&fx, &a, &la).2, 2);
+    assert_eq!(lifecycle(&fx, &a, &le), "Superseded");
+    relate_in_a(&fx, &a, &le, "unmerge", &la);
+    assert_eq!((rule(&fx, &a, &la).2, rule(&fx, &a, &le).2), (1, 1));
+    // ... and D, which held them through B, keeps only its own and B's: its recurrence is
+    // recounted, back to the state it took effect from.
+    assert_eq!(rule(&fx, &a, &ld), proposed(2));
+}
+
+#[test]
+fn a_restored_user_rule_no_longer_keeps_the_lessons_above_in_effect() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let la = lesson_in_a(&fx, &user, "A", "Prompt", "p1");
+    let lb = lesson_in_a(&fx, &a, "B", "Agent", "eb");
+    let ld = lesson_in_a(&fx, &a, "D", "Agent", "ed");
+    relate_in_a(&fx, &user, &la, "same_as", &lb);
+    relate_in_a(&fx, &a, &lb, "same_as", &ld);
+    assert_eq!(rule(&fx, &a, &ld), effective("UserInstruction", 3));
+    // B carried only A's rule, and A is restored: D's own rule returns.
+    delete_claim(&fx, &user, &lb);
+    assert_eq!(rule(&fx, &a, &la), effective("UserInstruction", 1));
+    assert_eq!(rule(&fx, &a, &ld), ("Candidate".into(), None, 2));
+}
+
+#[test]
+fn a_restoration_refills_the_active_lesson_from_a_deeper_merges_copy() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.agent("agent-a", Some("project-a"));
+    // A and Y recurred in the same event. A's copy travels A→B→D→F; Y's stays with Y (D had
+    // the event when Y merged into D).
+    let la = lesson_in_a(&fx, &a, "A", "Agent", "shared");
+    let ly = lesson_in_a(&fx, &a, "Y", "Agent", "shared");
+    let lb = lesson_in_a(&fx, &a, "B", "Agent", "eb");
+    let ld = lesson_in_a(&fx, &a, "D", "Agent", "ed");
+    let lf = lesson_in_a(&fx, &a, "F", "Agent", "ef");
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    relate_in_a(&fx, &a, &lb, "same_as", &ld);
+    relate_in_a(&fx, &a, &ly, "same_as", &ld);
+    relate_in_a(&fx, &a, &ld, "same_as", &lf);
+    assert_eq!(rule(&fx, &a, &lf).2, 4);
+    delete_claim(&fx, &user, &lb);
+    // A takes its copy back; F gets Y's copy in its place (through D), so the event still
+    // counts once for F, and unwinding D then Y returns it to Y.
+    assert_eq!((rule(&fx, &a, &la).2, rule(&fx, &a, &lf).2), (1, 4));
+    relate_in_a(&fx, &a, &ld, "unmerge", &lf);
+    relate_in_a(&fx, &a, &ly, "unmerge", &ld);
+    assert_eq!(
+        (
+            rule(&fx, &a, &ly).2,
+            rule(&fx, &a, &ld).2,
+            rule(&fx, &a, &lf).2
+        ),
+        (1, 2, 1)
+    );
+}
+
+#[test]
+fn a_source_deletion_previews_and_restores_the_lessons_merged_into_its_lessons() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let lb = receipt(fx.record(
+        &a,
+        proj("project-a"),
+        json!({"entities": [{"clientId": "s", "label": "Rules", "entityType": "t",
+            "aliases": []}], "evidence": [], "claims": [
+            with(draft("Lesson", "from run 7"), json!({"source": "run-7",
+                "lesson": lesson_draft("Agent", Some("eb"), None)}))]}),
+    ))
+    .claim_ids
+    .0[0]
+        .clone();
+    let la = lesson_in_a(&fx, &a, "A", "Agent", "ea");
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    assert!(
+        preview_message(&fx, &user, "run-7").contains("restores 1 lessons"),
+        "{}",
+        preview_message(&fx, &user, "run-7")
+    );
+    let (d, _) = fx.diagnostics(
+        &user,
+        json!({"scope": proj("project-a"), "sourceId": "run-7"}),
+    );
+    let listed: Vec<String> = d
+        .iter()
+        .filter(|x| x.component.0 == "knowledge.restore")
+        .map(|x| x.message.0.clone())
+        .collect();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].contains(la.as_str()) && listed[0].contains(lb.as_str()));
+    delete_source(&fx, &user, "run-7");
+    assert_eq!(lifecycle(&fx, &a, &lb), "Deleted");
+    assert_eq!(lifecycle(&fx, &a, &la), "Active");
+    assert_eq!(rule(&fx, &a, &la).2, 1);
+    assert_eq!(event_keys(&fx, &la), vec!["Agent|ea".to_owned()]);
+}
+
+#[test]
+fn a_restored_lesson_recounts_its_recurrence_and_keeps_the_users_rule() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let la = lesson_in_a(&fx, &a, "A", "Agent", "ea1");
+    propose(&fx, &a, &la);
+    recur_in_a(&fx, &a, &la, "Agent", "ea2");
+    recur_in_a(&fx, &a, &la, "Agent", "ea3");
+    assert_eq!(rule(&fx, &a, &la), effective("Recurrence", 3));
+    let lc = lesson_in_a(&fx, &user, "C", "Prompt", "p1");
+    let lb = lesson_in_a(&fx, &a, "B", "Agent", "eb");
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    relate_in_a(&fx, &user, &lc, "same_as", &lb);
+    fx.set_threshold(5);
+    delete_claim(&fx, &user, &lb);
+    // Three events no longer reach the threshold: A is back to the state it took effect from.
+    assert_eq!(rule(&fx, &a, &la), proposed(3));
+    assert_eq!(rule(&fx, &a, &lc), effective("UserInstruction", 1));
+}
+
+#[test]
+fn deleting_a_merge_chain_together_restores_the_lesson_merged_into_it() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let la = lesson_in_a(&fx, &a, "A", "Agent", "ea");
+    let lb = lesson_in_a(&fx, &a, "B", "Agent", "eb");
+    let ld = lesson_in_a(&fx, &a, "D", "Agent", "ed");
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    relate_in_a(&fx, &a, &lb, "same_as", &ld);
+    // D goes first: A's event, held by D through B, returns to A before D's are purged.
+    summary(fx.cmd(
+        &user,
+        "knowledge.delete_selected",
+        json!({"scope": proj("project-a"), "claims": [
+            {"id": ld, "revision": fx.revision(&ld).to_string()},
+            {"id": lb, "revision": fx.revision(&lb).to_string()}]}),
+    ));
+    assert_eq!(lifecycle(&fx, &a, &la), "Active");
+    assert_eq!(event_keys(&fx, &la), vec!["Agent|ea".to_owned()]);
+    assert_eq!(
+        (lifecycle(&fx, &a, &lb), lifecycle(&fx, &a, &ld)),
+        ("Deleted".into(), "Deleted".into())
+    );
+}

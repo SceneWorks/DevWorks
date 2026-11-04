@@ -2160,6 +2160,82 @@ impl KnowledgeRepository for Unit<'_> {
         Ok(settled)
     }
 
+    fn restore_merged_lesson_events(&mut self, from: &Id, into: &Id) -> Result<i64, StorageError> {
+        // Candidates: every event whose merge path names `from` (it is on the way below
+        // `into`, or `into` holds it directly).
+        let held = rows(
+            self.conn,
+            "SELECT claim_id, event_key, merge_path FROM knowledge_lesson_events e WHERE \
+             EXISTS(SELECT 1 FROM json_each(e.merge_path) j WHERE j.value=?1)",
+            vec![Sql::Text(from.as_str().into())],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        )?;
+        let mut moved = 0;
+        for (holder, key, path) in held {
+            let mut chain: Vec<String> = serde_json::from_str(&path)
+                .map_err(|_| corrupt("stored lesson event merge path"))?;
+            chain.push(holder.clone());
+            let Some(at) = chain
+                .windows(2)
+                .position(|p| p[0] == from.as_str() && p[1] == into.as_str())
+            else {
+                continue;
+            };
+            let below = serde_json::to_string(&chain[..at]).map_err(|x| invalid(x.to_string()))?;
+            // One event counts once: a copy `from` holds already stays as it is.
+            moved += db(self.conn.execute(
+                "UPDATE knowledge_lesson_events SET claim_id=?3, merge_path=?4 WHERE \
+                 claim_id=?1 AND event_key=?2 AND NOT EXISTS(SELECT 1 FROM \
+                 knowledge_lesson_events WHERE claim_id=?3 AND event_key=?2)",
+                params![holder, key, from.as_str(), below],
+            ))? as i64;
+        }
+        Ok(moved)
+    }
+
+    fn refill_knowledge_lesson_events(
+        &mut self,
+        into: &Id,
+        below: &[Vec<Id>],
+    ) -> Result<i64, StorageError> {
+        let mut moved = 0;
+        for chain in below {
+            let Some(holder) = chain.first() else {
+                continue;
+            };
+            let via: Vec<&str> = chain.iter().map(Id::as_str).collect();
+            let held = rows(
+                self.conn,
+                "SELECT event_key, merge_path FROM knowledge_lesson_events WHERE claim_id=?1 \
+                 AND event_key NOT IN (SELECT event_key FROM knowledge_lesson_events WHERE \
+                 claim_id=?2)",
+                vec![
+                    Sql::Text(holder.as_str().into()),
+                    Sql::Text(into.as_str().into()),
+                ],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )?;
+            for (key, path) in held {
+                let mut next: Vec<String> = serde_json::from_str(&path)
+                    .map_err(|_| corrupt("stored lesson event merge path"))?;
+                next.extend(via.iter().map(|s| (*s).to_owned()));
+                let next = serde_json::to_string(&next).map_err(|x| invalid(x.to_string()))?;
+                moved += db(self.conn.execute(
+                    "UPDATE knowledge_lesson_events SET claim_id=?3, merge_path=?4 WHERE \
+                     claim_id=?1 AND event_key=?2",
+                    params![holder.as_str(), key, into.as_str(), next],
+                ))? as i64;
+            }
+        }
+        Ok(moved)
+    }
+
     fn remove_live_knowledge_relation(
         &mut self,
         scope: &KnowledgeScope,
