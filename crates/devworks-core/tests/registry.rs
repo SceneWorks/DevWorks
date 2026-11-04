@@ -295,6 +295,10 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "tasks.acceptance_evidence",
             "tasks.sync_plan",
             "tasks.set_feature",
+            // A prioritization's bounded placement.
+            "features.prioritize",
+            "issues.prioritize",
+            "tasks.prioritize",
         ])
     );
     // Revision 1 of the history pages is exactly the recorded Page; revision 2 adds the tail

@@ -71,14 +71,10 @@ pub fn work_record(outcome: QueryOutcome) -> Result<WorkRecord, Failure> {
     }
 }
 /// Operations whose result is not a work record negotiate only revision 1.
-const REVISION_ONE: [&str; 4] = [
-    "features.prioritize",
-    "issues.prioritize",
-    "tasks.prioritize",
-    "features.request_plan_approval",
-];
+const REVISION_ONE: [&str; 1] = ["features.request_plan_approval"];
 /// A work command frame (the same frame an agent tool submits): schema revision 2 where the
-/// result is a work record (readiness and queue revisions included), revision 1 otherwise.
+/// result is a work record (readiness and queue revisions included) or the request uses a
+/// revision-2 member (a prioritization's placement), revision 1 otherwise.
 pub fn work_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
     let frame = command_frame(backend, operation, body);
     if REVISION_ONE.contains(&operation) {

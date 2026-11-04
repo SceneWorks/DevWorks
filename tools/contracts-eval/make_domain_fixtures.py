@@ -491,6 +491,20 @@ case('reject-r1-features.edit-acceptance-evidence','domain-request',r1evidence,F
 r1edit=command_at('features.edit',None)
 r1edit['body']['changes']={'readiness':assess}
 case('reject-r1-features.edit-readiness','domain-request',r1edit,False,False)
+for op,ids in (('tasks.prioritize','orderedTaskIds'),('features.prioritize','orderedWorkIds'),('issues.prioritize','orderedWorkIds')):
+ placed=command_at(op)
+ placed['body'].pop(ids,None)
+ placed['body']['placement']={'workId':'work-b','anchorId':'work-a','side':'Before'}
+ case('r2-input-'+op+'-placement','domain-request.r2',placed)
+ both=command_at(op)
+ both['body'][ids]=['work-a']
+ both['body']['placement']={'workId':'work-b','anchorId':'work-a','side':'After'}
+ case('reject-r2-'+op+'-ordered-and-placement','domain-request.r2',both,False,False)
+ r1placed=command_at(op,None)
+ r1placed['body'].pop(ids,None)
+ r1placed['body']['placement']={'workId':'work-b','anchorId':'work-a','side':'Before'}
+ case('reject-r1-'+op+'-placement','domain-request',r1placed,False,False)
+ case('r2-result-'+op,'operation-result.r2',{'kind':op,'value':{'id':'project-a','revision':'2','changed':True}})
 bad=copy.deepcopy(edit);bad['body']['changes']['readiness']['findings'][0]['disposition']='Maybe'
 case('reject-r2-readiness-unknown-disposition','domain-request.r2',bad,False,False)
 readiness={'id':'assessment-a','revision':'1','planRevision':'2','planDigest':'b'*64,'reviewedPending':False,'freshness':'Stale','staleScopeKeys':['E1'],'ready':False,'summary':'assessed','findings':[finding],'assessedBy':'actor-a','assessedAtMs':'1793570000000'}

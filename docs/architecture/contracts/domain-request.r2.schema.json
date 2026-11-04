@@ -1550,6 +1550,25 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "kind",
+                "projectId",
+                "expectedQueueRevision",
+                "orderedWorkIds"
+              ]
+            },
+            {
+              "required": [
+                "kind",
+                "projectId",
+                "expectedQueueRevision",
+                "placement"
+              ],
+              "x-since": 2
+            }
+          ],
           "properties": {
             "expectedQueueRevision": {
               "$ref": "#/$defs/Revision"
@@ -1561,6 +1580,10 @@
             "orderedWorkIds": {
               "$ref": "#/$defs/List_Id_1_128"
             },
+            "placement": {
+              "$ref": "#/$defs/QueuePlacement",
+              "x-since": 2
+            },
             "projectId": {
               "$ref": "#/$defs/Id"
             }
@@ -1568,13 +1591,31 @@
           "required": [
             "kind",
             "projectId",
-            "expectedQueueRevision",
-            "orderedWorkIds"
+            "expectedQueueRevision"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "kind",
+                "projectId",
+                "expectedQueueRevision",
+                "orderedWorkIds"
+              ]
+            },
+            {
+              "required": [
+                "kind",
+                "projectId",
+                "expectedQueueRevision",
+                "placement"
+              ],
+              "x-since": 2
+            }
+          ],
           "properties": {
             "expectedQueueRevision": {
               "$ref": "#/$defs/Revision"
@@ -1586,6 +1627,10 @@
             "orderedWorkIds": {
               "$ref": "#/$defs/List_Id_1_128"
             },
+            "placement": {
+              "$ref": "#/$defs/QueuePlacement",
+              "x-since": 2
+            },
             "projectId": {
               "$ref": "#/$defs/Id"
             }
@@ -1593,8 +1638,7 @@
           "required": [
             "kind",
             "projectId",
-            "expectedQueueRevision",
-            "orderedWorkIds"
+            "expectedQueueRevision"
           ],
           "type": "object"
         },
@@ -6044,6 +6088,27 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "kind",
+                "projectId",
+                "expectedQueueRevision",
+                "priority",
+                "orderedTaskIds"
+              ]
+            },
+            {
+              "required": [
+                "kind",
+                "projectId",
+                "expectedQueueRevision",
+                "priority",
+                "placement"
+              ],
+              "x-since": 2
+            }
+          ],
           "properties": {
             "expectedQueueRevision": {
               "$ref": "#/$defs/Revision"
@@ -6065,6 +6130,10 @@
             "orderedTaskIds": {
               "$ref": "#/$defs/List_Id_1_128"
             },
+            "placement": {
+              "$ref": "#/$defs/QueuePlacement",
+              "x-since": 2
+            },
             "priority": {
               "format": "int32",
               "type": "integer"
@@ -6077,8 +6146,7 @@
             "kind",
             "projectId",
             "expectedQueueRevision",
-            "priority",
-            "orderedTaskIds"
+            "priority"
           ],
           "type": "object"
         },
@@ -11382,12 +11450,39 @@
       "pattern": "^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$",
       "type": "string"
     },
+    "QueuePlacement": {
+      "additionalProperties": false,
+      "properties": {
+        "anchorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "side": {
+          "$ref": "#/$defs/QueueSide"
+        },
+        "workId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "workId",
+        "anchorId",
+        "side"
+      ],
+      "type": "object"
+    },
     "QueueResolution": {
       "enum": [
         "Retry",
         "Reconcile",
         "AcknowledgePoison",
         "CancelBeforeDispatch"
+      ],
+      "type": "string"
+    },
+    "QueueSide": {
+      "enum": [
+        "Before",
+        "After"
       ],
       "type": "string"
     },

@@ -42,7 +42,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'features.dependencies', 'features.edit', 'issues.list', 'issues.get',
             'issues.create', 'issues.edit', 'tasks.list', 'tasks.get', 'tasks.create',
             'tasks.edit', 'tasks.move', 'tasks.assign', 'tasks.dependency_links',
-            'tasks.acceptance_evidence', 'tasks.sync_plan', 'tasks.set_feature'})
+            'tasks.acceptance_evidence', 'tasks.sync_plan', 'tasks.set_feature',
+            # A prioritization's bounded placement (one move, any bucket size).
+            'features.prioritize', 'issues.prioritize', 'tasks.prioritize'})
         self.assertEqual(carried['features.edit'], {2})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})

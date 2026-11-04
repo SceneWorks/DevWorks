@@ -726,3 +726,62 @@ fn activity_reads_to_the_newest_change_and_refresh_adds_newer_ones() {
     assert_eq!(after.len(), first.len() + 1);
     assert!(after.windows(2).all(|w| w[0] < w[1]));
 }
+
+#[test]
+fn an_adjacent_move_is_one_bounded_placement_whatever_the_bucket_size() {
+    use devworks_desktop::shell::work::adjacent_move;
+    let names: Vec<String> = (0..300).map(|n| format!("w{n}")).collect();
+    let bucket: Vec<&str> = names.iter().map(String::as_str).collect();
+    let up = adjacent_move(&bucket, 250, true).unwrap();
+    assert_eq!(
+        up,
+        json!({"workId": "w250", "anchorId": "w249", "side": "Before"})
+    );
+    let down = adjacent_move(&bucket, 250, false).unwrap();
+    assert_eq!(
+        down,
+        json!({"workId": "w250", "anchorId": "w251", "side": "After"})
+    );
+    assert!(adjacent_move(&bucket, 0, true).is_none());
+    assert!(adjacent_move(&bucket, 299, false).is_none());
+}
+
+#[test]
+fn show_its_history_opens_overviews_activity_for_that_item() {
+    let root = Root::new("show-history");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let backlog = default_status_id(&project.id, "backlog")
+        .as_str()
+        .to_owned();
+    let issue = command(
+        &*backend,
+        "issues.create",
+        json!({"projectId": pid, "title": "Crash", "description": "", "repositoryIds": [],
+            "statusId": backlog, "priority": 0}),
+    );
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    click_row(&mut h, "Crash  ·");
+    click(&mut h, Role::Button, "Show its history");
+    assert_eq!(h.state().route(), Route::Overview);
+    assert_eq!(
+        h.state().work.activity.item.as_deref(),
+        Some(issue.id.as_str())
+    );
+    assert_eq!(
+        h.state().memory().routes[&Route::Overview].tab,
+        1,
+        "the Activity tab"
+    );
+    assert!(has_text(&h, "full history"), "Activity is shown");
+}

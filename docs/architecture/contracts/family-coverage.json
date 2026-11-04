@@ -638,11 +638,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue.",
+          "semanticRules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
           "familyRules": "Features own their plan. One active approved plan plus at most one pending revision; no independent plan work item or user-facing version management. Draft edits/approval requests/rejection preserve the active plan and eligible execution. Exact human approval atomically replaces it; current authority/controls and affected task checks still apply.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1061,11 +1069,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue.",
+          "semanticRules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
           "familyRules": "Clear standalone issues may implement immediately under explicit Start. Remote publish/link preserves exact issue/repository identity and conflict observations.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1422,11 +1438,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order.",
+          "semanticRules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
           "familyRules": "ProjectTask belongs to one project and has an optional feature relationship. Standalone tasks are shown as issues and share the same stable work identity across task/issue entry points. Task/Issue wire tags cannot establish feature membership or execution authority. Feature-linked work stays in feature allocation; standalone work uses issue allocation/execution/usage/delivery. Assignment parentage is separate; no manual child-assignment Pause/Continue. Humans and agents share task priority and project-wide blocking-link operations. Cross-feature links do not change membership. Eligibility precedes descending priority and ascending queue rank; graph-cycle and current controls apply on every claim/dispatch.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

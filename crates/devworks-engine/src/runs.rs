@@ -413,23 +413,41 @@ impl RunSupervisor {
         grace: Duration,
     ) -> Result<OperationState, StorageError> {
         let (o, r) = (op.clone(), root.clone());
-        let (control, targets) = store::write(&self.store, move |tx| {
+        let (control, targets, linked) = store::write(&self.store, move |tx| {
             dispatch_stop_operation(tx, &o)?;
             let control = devworks_core::services::runs::control_of(tx.runs(), &r)?;
             let targets = stop_reconciliation_targets(tx.runs(), &r, &o)?;
-            Ok((control, targets))
+            // A feature's stop also covers its linked cards' retained launches and trees.
+            let mut linked = Vec::new();
+            for card in devworks_core::services::runs::stop_linked_roots(tx, &o)? {
+                let generation =
+                    devworks_core::services::runs::control_of(tx.runs(), &card)?.generation;
+                linked.push((card, generation));
+            }
+            Ok((control, targets, linked))
         })
         .await?;
         let superseded = stop_superseded(&control);
         self.signal_covered(root, control.stop_generation);
+        for (card, generation) in &linked {
+            self.signal_covered(card, *generation);
+        }
+        let linked_scopes: Vec<StopScope> = linked
+            .iter()
+            .map(|(card, _)| StopScope::Root(card.clone()))
+            .collect();
         let (processes, bound) = (self.processes.clone(), self.stop_bound);
         let results = match kill {
             // While the root still carries the stop: every owned tree of its scope.
-            Some(scope) if !superseded => {
-                tokio::task::spawn_blocking(move || processes.stop(&scope, grace, bound))
-                    .await
-                    .unwrap_or_default()
-            }
+            Some(scope) if !superseded => tokio::task::spawn_blocking(move || {
+                let mut out = processes.stop(&scope, grace, bound);
+                for s in &linked_scopes {
+                    out.extend(processes.stop(s, grace, bound));
+                }
+                out
+            })
+            .await
+            .unwrap_or_default(),
             // After a Continue: exactly the trees this stop holds for reconciliation, by
             // identity; the newer generation's trees are never touched.
             Some(_) => tokio::task::spawn_blocking(move || {

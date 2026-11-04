@@ -16644,6 +16644,10 @@
             }
           ]
         },
+        "pendingReadiness": {
+          "$ref": "#/$defs/ReadinessAssessment",
+          "x-since": 2
+        },
         "plan": {
           "anyOf": [
             {

@@ -19,7 +19,7 @@ use crate::ports::storage::{
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     AcceptanceCriterion, CriterionState, DetailLevel, FeaturePatch, HandoffRecord, MutationSummary,
-    PageRequest, TouchRef, WorkComment, WorkLink, WorkRecord,
+    PageRequest, QueuePlacement, QueueSide, TouchRef, WorkComment, WorkLink, WorkRecord,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
@@ -126,10 +126,13 @@ pub(crate) fn snapshot_record(
     w: &StoredWork,
     detail: Detail,
 ) -> Result<WorkRecord, StorageError> {
-    let readiness = if w.kind == FEATURE {
-        super::readiness::assessment(read.work(), w)?
+    let (readiness, pending_readiness) = if w.kind == FEATURE {
+        (
+            super::readiness::assessment(read.work(), w)?,
+            super::readiness::pending_assessment(read.work(), w)?,
+        )
     } else {
-        None
+        (None, None)
     };
     let live = live_execution(read, w)?;
     model::record(
@@ -138,6 +141,7 @@ pub(crate) fn snapshot_record(
         Extras {
             live_execution: live,
             readiness,
+            pending_readiness,
             detail,
         },
     )
@@ -148,10 +152,13 @@ pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<Work
         .runs()
         .live_activation(&RootId(w.id.clone()))?
         .map(|a| a.id);
-    let readiness = if w.kind == FEATURE {
-        super::readiness::assessment(tx.work(), w)?
+    let (readiness, pending_readiness) = if w.kind == FEATURE {
+        (
+            super::readiness::assessment(tx.work(), w)?,
+            super::readiness::pending_assessment(tx.work(), w)?,
+        )
     } else {
-        None
+        (None, None)
     };
     Ok(model::record(
         tx.work(),
@@ -159,6 +166,7 @@ pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<Work
         Extras {
             live_execution: live,
             readiness,
+            pending_readiness,
             detail: Detail::Summary,
         },
     )?)
@@ -1247,7 +1255,7 @@ impl WorkService {
         member: &dyn Fn(&StoredWork) -> bool,
         expected: i64,
         priority: Option<i32>,
-        ordered: &[Id],
+        order: Order<'_>,
     ) -> R<MutationSummary> {
         open_project(tx, ctx, project)?;
         let current = tx.work().queue_revision(project, queue)?;
@@ -1260,7 +1268,9 @@ impl WorkService {
                 current,
             ));
         }
-        id_set(ordered, "ordered_ids")?;
+        if let Order::Ids(ordered) = &order {
+            id_set(ordered, "ordered_ids")?;
+        }
         let mut items: Vec<StoredWork> = Vec::new();
         let selection = if queue == PROJECT_QUEUE {
             vec![WorkSelection::Features, WorkSelection::Standalone]
@@ -1289,6 +1299,16 @@ impl WorkService {
                 }
             }
         }
+        // A placement is the whole bucket in its current order with one item moved next to its
+        // anchor: the same reordering as a full ordered list, in one bounded request.
+        let placed: Vec<Id>;
+        let ordered: &[Id] = match &order {
+            Order::Ids(ids) => ids,
+            Order::Placement(m) => {
+                placed = placement_order(tx, project, &items, member, priority, m)?;
+                &placed
+            }
+        };
         let index: BTreeMap<&str, usize> = ordered
             .iter()
             .enumerate()
@@ -1373,7 +1393,15 @@ impl WorkService {
                 payload: json!({
                     "queue": queue,
                     "priority": priority,
-                    "orderedIds": ordered.iter().map(Id::as_str).collect::<Vec<_>>(),
+                    "orderedIds": match &order {
+                        Order::Ids(_) => json!(ordered.iter().map(Id::as_str).collect::<Vec<_>>()),
+                        Order::Placement(_) => serde_json::Value::Null,
+                    },
+                    "placement": match &order {
+                        Order::Placement(m) => json!({"workId": m.work_id.as_str(),
+                            "anchorId": m.anchor_id.as_str(), "side": format!("{:?}", m.side)}),
+                        Order::Ids(_) => serde_json::Value::Null,
+                    },
                     "principalKind": format!("{:?}", ctx.principal_kind()),
                 }),
             })?;
@@ -1423,7 +1451,7 @@ impl WorkService {
             &member,
             i.expected_queue_revision.get(),
             Some(i.priority),
-            &i.ordered_task_ids.0,
+            Order::of(i.ordered_task_ids.as_ref(), i.placement.as_ref())?,
         )?;
         Ok(Self::summary(
             m.changed,
@@ -1446,7 +1474,7 @@ impl WorkService {
             &member,
             i.expected_queue_revision.get(),
             None,
-            &i.ordered_work_ids.0,
+            Order::of(i.ordered_work_ids.as_ref(), i.placement.as_ref())?,
         )?;
         Ok(Self::summary(
             m.changed,
@@ -1469,7 +1497,7 @@ impl WorkService {
             &member,
             i.expected_queue_revision.get(),
             None,
-            &i.ordered_work_ids.0,
+            Order::of(i.ordered_work_ids.as_ref(), i.placement.as_ref())?,
         )?;
         Ok(Self::summary(
             m.changed,
@@ -1741,4 +1769,82 @@ fn add_comment(
         at_ms: tx.now_ms(),
     });
     Ok(())
+}
+
+/// How a prioritization orders its queue: a list of IDs placed first in their bucket, or one
+/// placement (schema revision 2) — exactly one of them.
+pub(crate) enum Order<'a> {
+    Ids(&'a [Id]),
+    Placement(&'a QueuePlacement),
+}
+impl<'a> Order<'a> {
+    fn of(
+        ids: Option<&'a BoundedList<Id, 1, 128>>,
+        placement: Option<&'a QueuePlacement>,
+    ) -> R<Self> {
+        match (ids, placement) {
+            (Some(ids), None) => Ok(Order::Ids(&ids.0)),
+            (None, Some(m)) => Ok(Order::Placement(m)),
+            _ => Err(invalid("placement", None)),
+        }
+    }
+}
+
+/// The bucket of a placement's anchor in its current queue order, with the moved item taken out
+/// and put immediately before or after the anchor. Both must be members of the queue; the
+/// anchor's priority is the bucket (a task prioritization names it: they must agree), and an
+/// item of another bucket moves into it only where its priority is set (tasks).
+fn placement_order(
+    tx: &mut dyn WriteTransaction,
+    project: &ProjectId,
+    items: &[StoredWork],
+    member: &dyn Fn(&StoredWork) -> bool,
+    priority: Option<i32>,
+    m: &QueuePlacement,
+) -> R<Vec<Id>> {
+    if m.work_id == m.anchor_id {
+        return Err(invalid("placement", Some(&m.work_id)));
+    }
+    let find = |tx: &mut dyn WriteTransaction, id: &Id| -> R<StoredWork> {
+        match items.iter().find(|w| &w.id == id) {
+            Some(w) if member(w) => Ok(w.clone()),
+            Some(w) => Err(conflict("queue_member", &w.id)),
+            None => match tx.work().work(id)? {
+                Some(w) if &w.project_id == project => Err(conflict("queue_member", id)),
+                _ => Err(not_found("work", id).into()),
+            },
+        }
+    };
+    let moved = find(tx, &m.work_id)?;
+    let anchor = find(tx, &m.anchor_id)?;
+    let bucket = anchor.priority;
+    if let Some(p) = priority
+        && i64::from(p) != bucket
+    {
+        return Err(conflict("priority_bucket", &m.anchor_id));
+    }
+    if priority.is_none() && moved.priority != bucket {
+        return Err(conflict("priority_bucket", &m.work_id));
+    }
+    let mut order: Vec<&StoredWork> = items
+        .iter()
+        .filter(|w| member(w) && w.priority == bucket && w.id != moved.id)
+        .collect();
+    order.sort_by(|a, b| {
+        a.manual_order
+            .cmp(&b.manual_order)
+            .then(a.created_at_ms.cmp(&b.created_at_ms))
+            .then(a.id.as_str().cmp(b.id.as_str()))
+    });
+    let at = order
+        .iter()
+        .position(|w| w.id == anchor.id)
+        .expect("the anchor is in its bucket");
+    let at = match m.side {
+        QueueSide::Before => at,
+        QueueSide::After => at + 1,
+    };
+    let mut ids: Vec<Id> = order.iter().map(|w| w.id.clone()).collect();
+    ids.insert(at, moved.id.clone());
+    Ok(ids)
 }

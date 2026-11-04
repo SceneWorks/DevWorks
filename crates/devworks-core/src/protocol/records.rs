@@ -776,6 +776,13 @@ pub struct WorkRecord {
     )]
     #[schemars(with = "Items<AcceptanceCriterion>", extend("x-since" = 2))]
     pub acceptance_tests: Option<Items<AcceptanceCriterion>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReadinessAssessment", extend("x-since" = 2))]
+    pub pending_readiness: Option<ReadinessAssessment>,
 }
 impl Check for WorkRecord {
     fn check(&self) -> Result<(), String> {
@@ -819,6 +826,7 @@ impl Check for WorkRecord {
         self.queue_revision.check()?;
         self.workflow_revision.check()?;
         self.acceptance_tests.check()?;
+        self.pending_readiness.check()?;
         crate::protocol::rules::record(
             "WorkRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -840,6 +848,9 @@ impl Revisioned for WorkRecord {
         }
         if revision < 2 {
             self.acceptance_tests = None;
+        }
+        if revision < 2 {
+            self.pending_readiness = None;
         }
     }
 }
@@ -6698,6 +6709,37 @@ impl Check for ReviewSourceEvidence {
             "ReviewSourceEvidence",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueuePlacement {
+    pub work_id: Id,
+    pub anchor_id: Id,
+    pub side: QueueSide,
+}
+impl Check for QueuePlacement {
+    fn check(&self) -> Result<(), String> {
+        self.work_id.check()?;
+        self.anchor_id.check()?;
+        self.side.check()?;
+        crate::protocol::rules::record(
+            "QueuePlacement",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum QueueSide {
+    Before,
+    After,
+}
+impl Check for QueueSide {
+    fn check(&self) -> Result<(), String> {
         Ok(())
     }
 }

@@ -196,7 +196,10 @@ pub fn verified(criteria: &[AcceptanceCriterion]) -> bool {
 pub struct Extras {
     /// The root's live activation (its execution ID), if it has one.
     pub live_execution: Option<Id>,
+    /// The assessment of the active plan (the readiness that gates work).
     pub readiness: Option<ReadinessAssessment>,
+    /// The assessment of the pending replacement draft (gates nothing until adopted).
+    pub pending_readiness: Option<ReadinessAssessment>,
     /// The detail page: comment/handoff offset, page size, cursor encoder.
     pub detail: Detail,
 }
@@ -374,6 +377,7 @@ pub fn record(
         manual_order: Counter::new(w.manual_order.max(0)).ok(),
         github_issue: None,
         readiness: extras.readiness,
+        pending_readiness: extras.pending_readiness,
         acceptance_tests: acceptance_tests.map(|t| BoundedList(t.into_iter().take(128).collect())),
         queue_revision: Some(rev(queue_revision)),
         workflow_revision: Some(rev(workflow_revision)),

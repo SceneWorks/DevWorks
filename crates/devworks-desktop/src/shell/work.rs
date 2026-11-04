@@ -431,14 +431,10 @@ enum Action {
     /// A work command on one item (`operation`, body).
     Command(String, &'static str, Value),
     Move(WorkRecord, String),
-    /// A queue order: operation, project, feature, priority, ordered IDs, expected revision.
-    Order(
-        &'static str,
-        Option<String>,
-        Option<i32>,
-        Vec<String>,
-        String,
-    ),
+    /// Opens Overview's Activity with one work item's changes.
+    ShowActivity(String),
+    /// A queue order: operation, feature, priority, placement, expected revision.
+    Order(&'static str, Option<String>, Option<i32>, Value, String),
     SavePlan(PlanForm),
     RequestApproval(WorkRecord),
     Inspect(String),
@@ -757,20 +753,18 @@ impl Shell {
                         self.work.moving.insert(id, status);
                     }
                 }
-                Action::Order(op, feature, priority, ids, expected) => {
+                Action::Order(op, feature, priority, placement, expected) => {
                     let Some(p) = self.work.of.clone() else {
                         continue;
                     };
-                    let mut body = json!({"projectId": p, "expectedQueueRevision": expected});
-                    match op {
-                        "tasks.prioritize" => {
-                            body["priority"] = json!(priority.unwrap_or(0));
-                            body["orderedTaskIds"] = json!(ids);
-                            if let Some(f) = &feature {
-                                body["featureId"] = json!(f);
-                            }
+                    // One bounded placement, whatever the bucket's size.
+                    let mut body = json!({"projectId": p, "expectedQueueRevision": expected,
+                        "placement": placement});
+                    if op == "tasks.prioritize" {
+                        body["priority"] = json!(priority.unwrap_or(0));
+                        if let Some(f) = &feature {
+                            body["featureId"] = json!(f);
                         }
-                        _ => body["orderedWorkIds"] = json!(ids),
                     }
                     let key = format!("{p}/{}", feature.unwrap_or_default());
                     self.command(Slot::WorkOrder(key), "Reordering work", op, move |be| {
@@ -778,6 +772,12 @@ impl Shell {
                     });
                 }
                 Action::SavePlan(form) => self.save_plan(form),
+                Action::ShowActivity(id) => {
+                    self.work.activity.item = Some(id);
+                    // Overview's second tab is Activity.
+                    self.routes.entry(Route::Overview).or_default().tab = 1;
+                    self.navigate(Route::Overview);
+                }
                 Action::RequestApproval(w) => {
                     let Some(pending) = w.pending_plan.clone() else {
                         continue;
@@ -2026,26 +2026,39 @@ fn create_form(ui: &mut Ui, work: &mut WorkUi, busy: bool, actions: &mut Vec<Act
     ui.add_space(8.0);
 }
 
+/// The placement moving `bucket[pos]` one step up (before its predecessor) or down (after its
+/// successor): one bounded request whatever the bucket's size (`None` at the bucket's edge).
+pub fn adjacent_move(bucket: &[&str], pos: usize, up: bool) -> Option<Value> {
+    let anchor = if up {
+        bucket.get(pos.checked_sub(1)?)?
+    } else {
+        bucket.get(pos + 1)?
+    };
+    Some(json!({"workId": bucket.get(pos)?, "anchorId": anchor,
+        "side": if up { "Before" } else { "After" }}))
+}
+
 /// Up/Down controls of one item among `bucket` (the items of its priority in queue order).
 fn order_controls(
     ui: &mut Ui,
     w: &WorkRecord,
     bucket: &[&WorkRecord],
     enabled: bool,
-    action: impl Fn(Vec<String>) -> Action,
+    action: impl Fn(Value) -> Action,
     actions: &mut Vec<Action>,
 ) {
     let pos = bucket.iter().position(|b| b.id == w.id).unwrap_or(0);
-    let mut ids: Vec<String> = bucket.iter().map(|b| b.id.as_str().to_owned()).collect();
+    let ids: Vec<&str> = bucket.iter().map(|b| b.id.as_str()).collect();
     let up = ui
         .add_enabled(enabled && pos > 0, egui::Button::new("Up").small())
         .on_hover_text(format!("Move {} up", w.title.0));
     up.widget_info(|| {
         egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Move {} up", w.title.0))
     });
-    if up.clicked() {
-        ids.swap(pos, pos - 1);
-        actions.push(action(ids.clone()));
+    if up.clicked()
+        && let Some(m) = adjacent_move(&ids, pos, true)
+    {
+        actions.push(action(m));
     }
     let down = ui
         .add_enabled(
@@ -2056,9 +2069,10 @@ fn order_controls(
     down.widget_info(|| {
         egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Move {} down", w.title.0))
     });
-    if down.clicked() {
-        ids.swap(pos, pos + 1);
-        actions.push(action(ids));
+    if down.clicked()
+        && let Some(m) = adjacent_move(&ids, pos, false)
+    {
+        actions.push(action(m));
     }
 }
 
@@ -2538,6 +2552,22 @@ fn feature_detail(
         plan_form(ui, work, f, project_repos, enabled, actions);
         ui.add_space(8.0);
         ui.label(RichText::new("Readiness").strong());
+        if let Some(p) = &f.pending_readiness {
+            let open = p
+                .findings
+                .0
+                .iter()
+                .filter(|x| x.blocking && matches!(x.state, FindingState::Open))
+                .count();
+            widgets::caption(
+                ui,
+                format!(
+                    "The pending draft (plan revision {}) is assessed by {}: {open} open blocking finding(s). It gates nothing until the draft is approved.",
+                    p.plan_revision.as_str(),
+                    p.assessed_by.0.as_str()
+                ),
+            );
+        }
         match &f.readiness {
             None => widgets::caption(ui, "No readiness assessment yet. The coordinator assesses readiness before implementation."),
             Some(r) => {
@@ -2615,7 +2645,7 @@ fn feature_detail(
         let tasks = work.cards.items.iter().filter(|c| c.parent_id.as_ref() == Some(&f.id)).count();
         widgets::caption(ui, format!("{tasks} task(s) on its board"));
         if ui.button("Show its activity").clicked() {
-            work.activity.item = Some(f.id.as_str().to_owned());
+            actions.push(Action::ShowActivity(f.id.as_str().to_owned()));
         }
     });
 }
@@ -3007,7 +3037,7 @@ fn card_detail(
         }
         ui.add_space(6.0);
         if ui.button("Show its history").clicked() {
-            work.activity.item = Some(w.id.as_str().to_owned());
+            actions.push(Action::ShowActivity(w.id.as_str().to_owned()));
         }
         let history: Vec<&Event> = work
             .activity

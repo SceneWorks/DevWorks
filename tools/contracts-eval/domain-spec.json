@@ -470,13 +470,15 @@
         "readiness": "?ReadinessAssessment",
         "queue_revision": "?Revision",
         "workflow_revision": "?Revision",
-        "acceptance_tests": "?Items<AcceptanceCriterion>"
+        "acceptance_tests": "?Items<AcceptanceCriterion>",
+        "pending_readiness": "?ReadinessAssessment"
       },
       "since": {
         "readiness": 2,
         "queue_revision": 2,
         "workflow_revision": 2,
-        "acceptance_tests": 2
+        "acceptance_tests": 2,
+        "pending_readiness": 2
       }
     },
     "ReadinessDisposition": {
@@ -2757,6 +2759,21 @@
         "findings_coverage": "Coverage",
         "evidence": "Items<ArtifactRef>"
       }
+    },
+    "QueuePlacement": {
+      "kind": "record",
+      "fields": {
+        "work_id": "Id",
+        "anchor_id": "Id",
+        "side": "QueueSide"
+      }
+    },
+    "QueueSide": {
+      "kind": "enum",
+      "values": [
+        "Before",
+        "After"
+      ]
     }
   },
   "operations": {
@@ -3041,12 +3058,20 @@
       "fields": {
         "project_id": "ProjectId",
         "expected_queue_revision": "Revision",
-        "ordered_work_ids": "NonEmpty<Id>"
+        "ordered_work_ids": "?NonEmpty<Id>",
+        "placement": "?QueuePlacement"
       },
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue."
+      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
+      "since": {
+        "placement": 2
+      },
+      "exactlyOne": [
+        "ordered_work_ids",
+        "placement"
+      ]
     },
     "issues.prioritize": {
       "operation": "issues.prioritize",
@@ -3054,12 +3079,20 @@
       "fields": {
         "project_id": "ProjectId",
         "expected_queue_revision": "Revision",
-        "ordered_work_ids": "NonEmpty<Id>"
+        "ordered_work_ids": "?NonEmpty<Id>",
+        "placement": "?QueuePlacement"
       },
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue."
+      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
+      "since": {
+        "placement": 2
+      },
+      "exactlyOne": [
+        "ordered_work_ids",
+        "placement"
+      ]
     },
     "features.edit_plan": {
       "operation": "features.edit_plan",
@@ -6729,12 +6762,20 @@
         "feature_id": "?RootId",
         "expected_queue_revision": "Revision",
         "priority": "i32",
-        "ordered_task_ids": "NonEmpty<Id>"
+        "ordered_task_ids": "?NonEmpty<Id>",
+        "placement": "?QueuePlacement"
       },
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order."
+      "rules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
+      "since": {
+        "placement": 2
+      },
+      "exactlyOne": [
+        "ordered_task_ids",
+        "placement"
+      ]
     },
     "tasks.set_feature": {
       "operation": "tasks.set_feature",
@@ -6996,6 +7037,18 @@
       2
     ],
     "tasks.set_feature": [
+      1,
+      2
+    ],
+    "tasks.prioritize": [
+      1,
+      2
+    ],
+    "features.prioritize": [
+      1,
+      2
+    ],
+    "issues.prioritize": [
       1,
       2
     ]

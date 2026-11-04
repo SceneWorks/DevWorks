@@ -774,6 +774,13 @@ pub struct WorkRecord {
     )]
     #[schemars(with = "Items<AcceptanceCriterion>", extend("x-since" = 2))]
     pub acceptance_tests: Option<Items<AcceptanceCriterion>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReadinessAssessment", extend("x-since" = 2))]
+    pub pending_readiness: Option<ReadinessAssessment>,
 }
 impl Check for WorkRecord {
     fn check(&self) -> Result<(), String> {
@@ -817,6 +824,7 @@ impl Check for WorkRecord {
         self.queue_revision.check()?;
         self.workflow_revision.check()?;
         self.acceptance_tests.check()?;
+        self.pending_readiness.check()?;
         super::domain_rules::record(
             "WorkRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -838,6 +846,9 @@ impl Revisioned for WorkRecord {
         }
         if revision < 2 {
             self.acceptance_tests = None;
+        }
+        if revision < 2 {
+            self.pending_readiness = None;
         }
     }
 }
@@ -6701,6 +6712,37 @@ impl Check for ReviewSourceEvidence {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueuePlacement {
+    pub work_id: Id,
+    pub anchor_id: Id,
+    pub side: QueueSide,
+}
+impl Check for QueuePlacement {
+    fn check(&self) -> Result<(), String> {
+        self.work_id.check()?;
+        self.anchor_id.check()?;
+        self.side.check()?;
+        super::domain_rules::record(
+            "QueuePlacement",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum QueueSide {
+    Before,
+    After,
+}
+impl Check for QueueSide {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -8863,16 +8905,36 @@ pub enum DomainCommand {
         changes: TaskPatch,
     },
     #[serde(rename = "features.prioritize")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "projectId", "expectedQueueRevision", "orderedWorkIds"]}, {"required": ["kind", "projectId", "expectedQueueRevision", "placement"], "x-since": 2}]))]
     FeaturesPrioritize {
         project_id: ProjectId,
         expected_queue_revision: Revision,
-        ordered_work_ids: NonEmpty<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "NonEmpty<Id>")]
+        ordered_work_ids: Option<NonEmpty<Id>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "QueuePlacement", extend("x-since" = 2))]
+        placement: Option<QueuePlacement>,
     },
     #[serde(rename = "issues.prioritize")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "projectId", "expectedQueueRevision", "orderedWorkIds"]}, {"required": ["kind", "projectId", "expectedQueueRevision", "placement"], "x-since": 2}]))]
     IssuesPrioritize {
         project_id: ProjectId,
         expected_queue_revision: Revision,
-        ordered_work_ids: NonEmpty<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "NonEmpty<Id>")]
+        ordered_work_ids: Option<NonEmpty<Id>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "QueuePlacement", extend("x-since" = 2))]
+        placement: Option<QueuePlacement>,
     },
     #[serde(rename = "features.edit_plan")]
     FeaturesEditPlan {
@@ -10019,13 +10081,23 @@ pub enum DomainCommand {
     #[serde(rename = "mcp_server.set_client_access")]
     McpServerSetClientAccess { action: McpClientAccessAction },
     #[serde(rename = "tasks.prioritize")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "projectId", "expectedQueueRevision", "priority", "orderedTaskIds"]}, {"required": ["kind", "projectId", "expectedQueueRevision", "priority", "placement"], "x-since": 2}]))]
     TasksPrioritize {
         project_id: ProjectId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feature_id: Option<RootId>,
         expected_queue_revision: Revision,
         priority: i32,
-        ordered_task_ids: NonEmpty<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "NonEmpty<Id>")]
+        ordered_task_ids: Option<NonEmpty<Id>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "QueuePlacement", extend("x-since" = 2))]
+        placement: Option<QueuePlacement>,
     },
     #[serde(rename = "tasks.set_feature")]
     TasksSetFeature {
@@ -10346,19 +10418,23 @@ impl Check for DomainCommand {
                 project_id,
                 expected_queue_revision,
                 ordered_work_ids,
+                placement,
             } => {
                 project_id.check()?;
                 expected_queue_revision.check()?;
                 ordered_work_ids.check()?;
+                placement.check()?;
             }
             Self::IssuesPrioritize {
                 project_id,
                 expected_queue_revision,
                 ordered_work_ids,
+                placement,
             } => {
                 project_id.check()?;
                 expected_queue_revision.check()?;
                 ordered_work_ids.check()?;
+                placement.check()?;
             }
             Self::FeaturesEditPlan {
                 feature_id,
@@ -11890,12 +11966,14 @@ impl Check for DomainCommand {
                 expected_queue_revision,
                 priority,
                 ordered_task_ids,
+                placement,
             } => {
                 project_id.check()?;
                 feature_id.check()?;
                 expected_queue_revision.check()?;
                 priority.check()?;
                 ordered_task_ids.check()?;
+                placement.check()?;
             }
             Self::TasksSetFeature {
                 task_id,
@@ -11931,6 +12009,16 @@ impl Revisioned for DomainCommand {
         match self {
             Self::FeaturesEdit { changes, .. } => {
                 changes.retain_revision(revision);
+            }
+            Self::FeaturesPrioritize { placement, .. } => {
+                if revision < 2 {
+                    *placement = None;
+                }
+            }
+            Self::IssuesPrioritize { placement, .. } => {
+                if revision < 2 {
+                    *placement = None;
+                }
             }
             Self::ResourcesAcquire {
                 purpose,
@@ -12010,6 +12098,11 @@ impl Revisioned for DomainCommand {
                 }
                 if revision < 2 {
                     *output = None;
+                }
+            }
+            Self::TasksPrioritize { placement, .. } => {
+                if revision < 2 {
+                    *placement = None;
                 }
             }
             _ => {}

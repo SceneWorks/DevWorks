@@ -234,6 +234,81 @@ pub(crate) fn controlled_root_tx(
     )
     .into())
 }
+/// The cards linked to `feature` that keep run controls of their own: a retained activation (an
+/// issue linked while its agent ran), its root-scoped deliveries and its process trees. The
+/// feature's Pause and Stop reach them, and the feature's stop settles only once they quiesced.
+pub(crate) fn linked_roots(
+    tx: &mut dyn WriteTransaction,
+    feature: &WorkRoot,
+) -> Result<Vec<WorkRoot>, StorageError> {
+    use crate::ports::storage::{WorkFilter, WorkPosition, WorkSelection};
+    if feature.kind != "feature" {
+        return Ok(Vec::new());
+    }
+    let filter = WorkFilter {
+        project: feature.project_id.clone(),
+        selection: WorkSelection::FeatureTasks(feature.id.0.clone()),
+        status_ids: Vec::new(),
+        repository_ids: Vec::new(),
+        text: None,
+    };
+    let mut out = Vec::new();
+    let mut after: Option<WorkPosition> = None;
+    loop {
+        let page = tx.work().works(&filter, after.as_ref(), 500)?;
+        let more = page.len() == 500;
+        after = page.last().map(WorkPosition::of);
+        for w in &page {
+            let id = RootId(w.id.clone());
+            if tx.runs().root_control(&id)?.is_some()
+                && let Some(r) = tx.sessions().work_root(&id)?
+            {
+                out.push(r);
+            }
+        }
+        if !more {
+            return Ok(out);
+        }
+    }
+}
+/// The linked roots a feature's stop operation covers (recorded when it was decided).
+pub fn stop_linked_roots(
+    tx: &mut dyn WriteTransaction,
+    op: &OperationId,
+) -> Result<Vec<RootId>, StorageError> {
+    Ok(tx
+        .operations()
+        .operation(op)?
+        .and_then(|o| o.payload.get("linkedRoots").cloned())
+        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|r| Id::new(r).ok().map(RootId))
+        .collect())
+}
+/// Why a linked card's retained activation may not keep running: its feature is paused or holds
+/// it at the root level, or the project is closed to work (the conditions its feature's
+/// controls impose; plan and readiness gates hold new dispatch only).
+pub(crate) fn inherited_hold(
+    runs: &dyn RunRead,
+    root: &WorkRoot,
+) -> Result<Option<String>, StorageError> {
+    if runs
+        .project_lifecycle(&root.project_id)?
+        .is_some_and(|l| closed_to_work(&l))
+    {
+        return Ok(Some("the project is archived or deleted".into()));
+    }
+    let (false, Some(f)) = (is_run_root(root), &root.parent_feature_id) else {
+        return Ok(None);
+    };
+    if control_of(runs, f)?.desired == DesiredExecution::Paused {
+        return Ok(Some("its feature is paused".into()));
+    }
+    Ok(active_blockers(runs, &BlockerFilter::RootLevel(f.clone()))?
+        .first()
+        .map(|b| format!("its feature is held: {}", b.reason)))
+}
 /// Whether a work item is a run root (a feature, or a task/issue without a feature).
 pub fn is_run_root(w: &WorkRoot) -> bool {
     w.kind == "feature" || w.parent_feature_id.is_none()
@@ -1350,6 +1425,17 @@ impl ControlService {
             json!({"clearsWith": "Continue", "stopCause": cause.as_str()}),
         )?;
         let activation = self.request_stop(tx, actor, root, cause)?;
+        // A linked card's retained activation is run under its feature's controls: the
+        // feature's Pause or Stop asks it to stop as well.
+        let mut linked = Vec::new();
+        for card in linked_roots(tx, root)? {
+            if let Some(a) = self.request_stop(tx, actor, &card, cause)? {
+                linked.push(
+                    json!({"rootId": card.id.0.as_str(), "executionId": a.id.as_str(),
+                    "phase": a.phase.as_str()}),
+                );
+            }
+        }
         record(
             tx,
             actor,
@@ -1367,6 +1453,7 @@ impl ControlService {
                     "executionId": a.id.as_str(),
                     "phase": a.phase.as_str(),
                 })),
+                "linkedActivations": linked,
             }),
         )?;
         Ok((after, hold))
@@ -1715,7 +1802,11 @@ impl ControlService {
                 && !control.reactivate
                 && paused_by_hold;
             let live = tx.runs().live_activation(&root.id)?;
-            let nothing_live = live.is_none() && !self.root_has_work(tx, &root.id)?;
+            let mut nothing_live = live.is_none() && !self.root_has_work(tx, &root.id)?;
+            for card in stop_linked_roots(tx, op)? {
+                nothing_live &= tx.runs().live_activation(&card)?.is_none()
+                    && !self.root_has_work(tx, &card)?;
+            }
             if intent && (!is_terminal(rec.state) || nothing_live) {
                 return Ok(Decided {
                     decision: DomainDecision::NoChange {
@@ -1810,7 +1901,10 @@ impl ControlService {
         {
             let op = op.clone();
             self.pause_root(tx, actor, root, control, cause, reason)?;
-            let cancelled = self.cancel_root_deliveries(tx, &root.id)?;
+            let mut cancelled = self.cancel_root_deliveries(tx, &root.id)?;
+            for card in stop_linked_roots(tx, &op)? {
+                cancelled.extend(self.cancel_root_deliveries(tx, &card)?);
+            }
             let after = control_of(tx.runs(), &root.id)?;
             record(
                 tx,
@@ -1830,8 +1924,18 @@ impl ControlService {
             return Ok((op, false));
         }
         let (mut after, hold) = self.pause_root(tx, actor, root, control, cause, reason)?;
-        let cancelled = self.cancel_root_deliveries(tx, &root.id)?;
+        let mut cancelled = self.cancel_root_deliveries(tx, &root.id)?;
         let live = tx.runs().live_activation(&root.id)?;
+        // The linked cards' retained work is stopped with the feature: their deliveries are
+        // cancelled, their trees stopped by the stop's execution, and the stop settles once
+        // they quiesced.
+        let linked = linked_roots(tx, root)?;
+        let mut linked_work = false;
+        for card in &linked {
+            cancelled.extend(self.cancel_root_deliveries(tx, &card.id)?);
+            linked_work |= tx.runs().live_activation(&card.id)?.is_some()
+                || self.root_has_work(tx, &card.id)?;
+        }
         let op = OperationId(tx.new_id(IdKind::Operation));
         tx.operations().record_intent(NewOperation {
             id: op.clone(),
@@ -1854,12 +1958,13 @@ impl ControlService {
                 "cause": cause.as_str(),
                 "holdId": hold.id.as_str(),
                 "executionId": live.as_ref().map(|a| a.id.as_str()),
+                "linkedRoots": linked.iter().map(|c| c.id.0.as_str()).collect::<Vec<_>>(),
             }),
         })?;
         let before = after.clone();
         after.stop_operation_id = Some(op.clone());
         save_control(tx, &before, &mut after)?;
-        let nothing_live = live.is_none() && !self.root_has_work(tx, &root.id)?;
+        let nothing_live = live.is_none() && !linked_work && !self.root_has_work(tx, &root.id)?;
         if nothing_live {
             recovery::complete_stop_operation(tx, &op, &[], "nothing of the root was running")?;
         }

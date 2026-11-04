@@ -1167,21 +1167,34 @@ fn readiness_is_bound_to_the_plan_and_invalidates_only_changed_units() {
         None,
         vec![finding("F1", "E2", vec![])],
     )));
-    let r = f.readiness.clone().expect("readiness at revision 2");
+    // The draft's assessment is its own generation: it gates nothing before adoption.
+    assert!(f.readiness.is_none(), "no active plan, no gating readiness");
+    let r = f
+        .pending_readiness
+        .clone()
+        .expect("pending readiness at revision 2");
     assert!(!r.ready, "an unapproved plan is never ready");
     assert!(r.reviewed_pending);
     // Revision 1 readers do not see the member.
-    assert!(fx.get("features.get", &f.id).unwrap().readiness.is_none());
+    assert!(
+        fx.get("features.get", &f.id)
+            .unwrap()
+            .pending_readiness
+            .is_none()
+    );
     assert!(
         fx.get_at("features.get", &f.id, Some(2))
             .unwrap()
-            .readiness
+            .pending_readiness
             .is_some()
     );
-    // Approval keeps the evidence (adopted content matches) and does not close the finding.
+    // Adoption promotes it: the evidence is kept (adopted content matches) and the finding stays
+    // open.
     let f = fx.approve(&f);
     let f = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+    assert!(f.pending_readiness.is_none());
     let r = f.readiness.clone().unwrap();
+    assert!(!r.reviewed_pending);
     assert!(matches!(
         r.freshness,
         devworks_core::protocol::records::ReadinessFreshness::Current
@@ -2661,4 +2674,146 @@ fn a_finding_made_blocking_on_an_unchanged_plan_needs_new_evidence() {
         .readiness
         .unwrap();
     assert!(!r.ready);
+}
+
+#[test]
+fn assessing_a_replacement_draft_leaves_the_active_plans_readiness_in_force_until_adoption() {
+    use devworks_core::services::runs::scope::Readiness;
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let f = fx.feature(&p, "Checkout", &[]);
+    let doc = fx.artifact(&p, 1);
+    let f = fx.plan(&f, &doc, &[("E1", "pay")]);
+    let f = fx.approve(&f);
+    let f = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+    let active = f.approval.clone().unwrap();
+    let assess =
+        |f: &WorkRecord, rev: &str, digest: String, expected: Option<&str>, findings: Value| {
+            let mut change = json!({"kind": "Assess", "planRevision": rev, "planDigest": digest,
+            "summary": "assessed", "findings": findings});
+            if let Some(e) = expected {
+                change["expectedAssessmentRevision"] = json!(e);
+            }
+            fx.command_at(
+                &fx.agent(),
+                "features.edit",
+                json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+                "changes": {"readiness": change}}),
+                Some(2),
+            )
+        };
+    // The active plan is assessed ready.
+    let f = work_of(applied(assess(
+        &f,
+        active.plan_revision.as_str(),
+        String::from(active.plan_digest.clone()),
+        None,
+        json!([]),
+    )));
+    assert!(f.readiness.as_ref().unwrap().ready);
+    let unit = |fx: &Fx| {
+        let (runs, fid) = (fx.runs.clone(), RootId(f.id.clone()));
+        fx.read(move |s| {
+            let w = s.sessions().work_root(&fid)?.unwrap();
+            runs.scope().plan(s.runs(), &w)
+        })
+        .unit(Some("E1"))
+        .unwrap()
+        .readiness
+        .clone()
+    };
+    assert!(unit(&fx).is_current());
+    // A replacement draft is assessed with a blocker of E1.
+    let f = fx.plan(&f, &doc, &[("E1", "pay by card")]);
+    let pending = f.pending_plan.clone().unwrap();
+    let r = fx
+        .get_at("features.get", &f.id, Some(2))
+        .unwrap()
+        .readiness
+        .unwrap();
+    let blocker = json!({"id": "F1", "disposition": "NeedsUserDecision", "blocking": true,
+        "prerequisite": false, "state": "Open", "requirementIds": ["E1"], "scopeKey": "E1",
+        "affectedWorkIds": [], "summary": "which card network",
+        "missing": "the card networks", "consequence": "payments may fail",
+        "attempts": ["read the docs"], "insufficiency": "a product choice",
+        "closureCondition": "the networks are named", "evidence": [],
+        "question": "Visa only?", "recommendation": "Visa and Mastercard",
+        "closureEvidence": []});
+    let f = work_of(applied(assess(
+        &f,
+        pending.revision.as_str(),
+        plan_digest(&pending.draft),
+        Some(r.revision.as_str()),
+        json!([blocker]),
+    )));
+    // The active plan's readiness is untouched: still ready, E1 still current.
+    assert!(f.readiness.as_ref().unwrap().ready, "{:?}", f.readiness);
+    assert!(!f.pending_readiness.as_ref().unwrap().ready);
+    assert!(
+        unit(&fx).is_current(),
+        "the draft's blocker gates nothing yet"
+    );
+    // Adopting the draft promotes its assessment: now the blocker holds E1.
+    fx.approve(&f);
+    assert!(
+        matches!(unit(&fx), Readiness::Blocked { .. }),
+        "{:?}",
+        unit(&fx)
+    );
+    let f = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+    assert!(f.pending_readiness.is_none());
+    assert!(!f.readiness.unwrap().ready);
+}
+
+#[test]
+fn a_placement_moves_one_card_in_a_bucket_larger_than_an_ordered_list_can_name() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let f = fx.feature(&p, "F", &[]);
+    let cards: Vec<WorkRecord> = (0..130)
+        .map(|n| fx.task(&fx.user(), &p, Some(&f), &format!("c{n:03}"), 1))
+        .collect();
+    let q = feature_queue(&f.id);
+    let place = |work: &WorkRecord, anchor: &WorkRecord, side: &str, at: Option<u32>| {
+        let body = json!({"projectId": p.0.as_str(), "featureId": f.id.as_str(),
+            "expectedQueueRevision": fx.queue(&p, &q).to_string(), "priority": 1,
+            "placement": {"workId": work.id.as_str(), "anchorId": anchor.id.as_str(),
+                "side": side}});
+        fx.command_at(&fx.agent(), "tasks.prioritize", body, at)
+    };
+    // The 130th card moves before the 129th: one bounded request.
+    applied(place(&cards[129], &cards[128], "Before", Some(2)));
+    let order = |fx: &Fx| {
+        let (all, _) = fx.list("tasks.list", &p, 200, None, None).unwrap();
+        ids(&all)
+    };
+    let now = order(&fx);
+    assert_eq!(&now[127..130], ["c127", "c129", "c128"]);
+    assert_eq!(
+        &now[..2],
+        ["c000", "c001"],
+        "the rest of the bucket keeps its order"
+    );
+    // And after the first card: it lands second.
+    applied(place(&cards[129], &cards[0], "After", Some(2)));
+    assert_eq!(&order(&fx)[..3], ["c000", "c129", "c001"]);
+    // Revision 1 does not carry the member; an anchor of another bucket is refused.
+    let r1 = place(&cards[1], &cards[0], "Before", None);
+    assert!(!matches!(r1, CommandReply::Recorded { .. }));
+    let other = fx.task(&fx.user(), &p, Some(&f), "high", 9);
+    assert_eq!(
+        kind_of(&refused(place(&cards[1], &other, "Before", Some(2)))),
+        "priority_bucket"
+    );
+    // Exactly one of ordered IDs and placement.
+    let both = json!({"projectId": p.0.as_str(), "featureId": f.id.as_str(),
+        "expectedQueueRevision": fx.queue(&p, &q).to_string(), "priority": 1,
+        "orderedTaskIds": [cards[0].id.as_str()],
+        "placement": {"workId": cards[1].id.as_str(), "anchorId": cards[0].id.as_str(),
+            "side": "Before"}});
+    let r = fx.command_at(&fx.agent(), "tasks.prioritize", both, Some(2));
+    assert!(
+        !matches!(r, CommandReply::Recorded { .. })
+            || matches!(recorded(r), DomainDecision::Refused { .. })
+    );
 }

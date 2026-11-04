@@ -64,8 +64,30 @@ pub struct Assessment {
     pub assessed_at_ms: i64,
 }
 impl Assessment {
+    /// The assessment of the feature's active plan in a stored readiness record: the only one
+    /// that gates work.
     pub fn of(v: &Value) -> Option<Self> {
-        serde_json::from_value(v.clone()).ok()
+        Slots::of(v).active
+    }
+}
+
+/// A feature's stored readiness: the assessment of its active plan and, apart from it, the
+/// assessment of its pending replacement draft. The pending one gates nothing and never changes
+/// the active one; adopting exactly the draft it reviewed promotes it. One revision covers both.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Slots {
+    #[serde(default)]
+    pub active: Option<Assessment>,
+    #[serde(default)]
+    pub pending: Option<Assessment>,
+}
+impl Slots {
+    pub fn of(v: &Value) -> Self {
+        serde_json::from_value(v.clone()).unwrap_or_default()
+    }
+    fn value(&self) -> Value {
+        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
     }
 }
 
@@ -98,7 +120,8 @@ fn stale_units(
         .collect()
 }
 
-/// The wire assessment of `feature` (with freshness against its active plan), if one exists.
+/// The wire assessment of `feature`'s active plan (with freshness against it), if one exists:
+/// the readiness that gates its work.
 pub fn assessment(
     read: &dyn WorkRead,
     feature: &StoredWork,
@@ -109,17 +132,55 @@ pub fn assessment(
     let Some(stored) = read.readiness(&feature.id)? else {
         return Ok(None);
     };
-    let Some(a) = Assessment::of(&stored.body) else {
+    let Some(a) = Slots::of(&stored.body).active else {
         return Ok(None);
     };
     let active = read
         .feature_plan(&feature.id)?
         .and_then(|s| active_of(s.approved.as_ref()));
-    let current = reference_units(read, &feature.id)?.unwrap_or_default();
+    let current = active
+        .as_ref()
+        .map(|a| plan_units(&a.draft))
+        .unwrap_or_default();
+    project(feature, &a, stored.revision, &current, active.is_some()).map(Some)
+}
+
+/// The wire assessment of `feature`'s pending replacement draft (with freshness against that
+/// draft), if one exists. It is never ready: it gates nothing until the draft is adopted.
+pub fn pending_assessment(
+    read: &dyn WorkRead,
+    feature: &StoredWork,
+) -> Result<Option<ReadinessAssessment>, StorageError> {
+    if feature.kind != FEATURE {
+        return Ok(None);
+    }
+    let Some(stored) = read.readiness(&feature.id)? else {
+        return Ok(None);
+    };
+    let Some(a) = Slots::of(&stored.body).pending else {
+        return Ok(None);
+    };
+    let current = read
+        .feature_plan(&feature.id)?
+        .and_then(|s| pending_of(s.pending.as_ref()))
+        .map(|p| plan_units(&p.draft))
+        .unwrap_or_default();
+    project(feature, &a, stored.revision, &current, false).map(Some)
+}
+
+/// The wire form of one assessment, fresh against `current` units; ready only when it can gate
+/// (`gates`), is fresh and holds no open blocking finding.
+fn project(
+    feature: &StoredWork,
+    a: &Assessment,
+    revision: i64,
+    current: &BTreeMap<String, String>,
+    gates: bool,
+) -> Result<ReadinessAssessment, StorageError> {
     let stale: Vec<Id> = if current.is_empty() {
         vec![feature.id.clone()]
     } else {
-        stale_units(&a.units, &current)
+        stale_units(&a.units, current)
             .into_iter()
             .map(|k| {
                 if k == FEATURE_UNIT {
@@ -131,10 +192,10 @@ pub fn assessment(
             .collect()
     };
     let fresh = stale.is_empty();
-    let ready = active.is_some() && fresh && !a.findings.iter().any(open_blocking);
-    Ok(Some(ReadinessAssessment {
+    let ready = gates && fresh && !a.findings.iter().any(open_blocking);
+    Ok(ReadinessAssessment {
         id: a.id.clone(),
-        revision: rev(stored.revision),
+        revision: rev(revision),
         plan_revision: rev(a.plan_revision),
         plan_digest: Digest::try_from(a.plan_digest.clone())
             .map_err(|_| StorageError::InvalidRecord("stored plan digest".into()))?,
@@ -150,7 +211,7 @@ pub fn assessment(
         findings: BoundedList(a.findings.iter().take(128).cloned().collect()),
         assessed_by: a.assessed_by.clone(),
         assessed_at_ms: counter(a.assessed_at_ms),
-    }))
+    })
 }
 
 /// The execution authority run control evaluates for a feature (its scope port): the active
@@ -402,7 +463,10 @@ pub(crate) fn apply_change(
     change: &ReadinessChange,
 ) -> R<()> {
     let stored = tx.work().readiness(&feature.id)?;
-    let previous = stored.as_ref().and_then(|s| Assessment::of(&s.body));
+    let slots = stored
+        .as_ref()
+        .map(|s| Slots::of(&s.body))
+        .unwrap_or_default();
     let current_rev = stored.as_ref().map(|s| s.revision);
     match change {
         ReadinessChange::Assess {
@@ -440,6 +504,13 @@ pub(crate) fn apply_change(
                 _ => return Err(conflict("plan_changed", &feature.id)),
             };
             debug_assert_eq!(digest_of_draft(&draft), digest);
+            // Each generation has its own assessment. A pending draft's first one starts from
+            // the active plan's: an open finding stays open in the replacement until it closes.
+            let previous = if reviewed_pending {
+                slots.pending.clone().or_else(|| slots.active.clone())
+            } else {
+                slots.active.clone()
+            };
             let requirements: BTreeSet<String> = draft
                 .requirements
                 .0
@@ -523,11 +594,17 @@ pub(crate) fn apply_change(
                 assessed_at_ms: tx.now_ms(),
             };
             let revision = current_rev.map_or(1, |r| r + 1);
+            let mut next = slots.clone();
+            if reviewed_pending {
+                next.pending = Some(body.clone());
+            } else {
+                next.active = Some(body.clone());
+            }
             tx.work().put_readiness(
                 &StoredReadiness {
                     feature_id: feature.id.clone(),
                     revision,
-                    body: serde_json::to_value(&body).unwrap_or_else(|_| json!({})),
+                    body: next.value(),
                 },
                 current_rev,
             )?;
@@ -557,7 +634,7 @@ pub(crate) fn apply_change(
             note,
             evidence,
         } => {
-            let (Some(stored), Some(mut body)) = (stored, previous) else {
+            let Some(stored) = stored else {
                 return Err(not_found("readiness", &feature.id).into());
             };
             if stored.revision != expected_assessment_revision.get() {
@@ -569,30 +646,54 @@ pub(crate) fn apply_change(
                     stored.revision,
                 ));
             }
-            let Some(f) = body.findings.iter_mut().find(|f| &f.id == finding_id) else {
-                return Err(not_found("finding", finding_id).into());
-            };
-            if !matches!(f.state, FindingState::Open) {
-                return Err(conflict("finding_settled", finding_id));
-            }
             if blank(&note.0) {
                 return Err(invalid("closure_note", Some(finding_id)));
-            }
-            if f.blocking && evidence.0.is_empty() && ctx.principal_kind() != PrincipalKind::Human {
-                return Err(invalid("closure_evidence", Some(finding_id)));
             }
             for a in &evidence.0 {
                 check_artifact(tx, ctx, &feature.project_id, a)?;
             }
-            f.state = FindingState::Resolved;
-            f.closure_note = Some(note.clone());
-            f.closure_evidence = evidence.clone();
+            // The finding closes in every generation that holds it (an active plan's finding
+            // carried into its pending replacement closes there too).
+            let mut next = slots.clone();
+            let mut found = false;
+            for body in [next.active.as_mut(), next.pending.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                let Some(f) = body.findings.iter_mut().find(|f| &f.id == finding_id) else {
+                    continue;
+                };
+                if !matches!(f.state, FindingState::Open) {
+                    continue;
+                }
+                if f.blocking
+                    && evidence.0.is_empty()
+                    && ctx.principal_kind() != PrincipalKind::Human
+                {
+                    return Err(invalid("closure_evidence", Some(finding_id)));
+                }
+                f.state = FindingState::Resolved;
+                f.closure_note = Some(note.clone());
+                f.closure_evidence = evidence.clone();
+                found = true;
+            }
+            if !found {
+                let known = [slots.active.as_ref(), slots.pending.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|b| b.findings.iter().any(|f| &f.id == finding_id));
+                return Err(if known {
+                    conflict("finding_settled", finding_id)
+                } else {
+                    not_found("finding", finding_id).into()
+                });
+            }
             let revision = stored.revision + 1;
             tx.work().put_readiness(
                 &StoredReadiness {
                     feature_id: feature.id.clone(),
                     revision,
-                    body: serde_json::to_value(&body).unwrap_or_else(|_| json!({})),
+                    body: next.value(),
                 },
                 Some(stored.revision),
             )?;
@@ -665,26 +766,37 @@ pub fn accept_finding_risk(
             stored.revision,
         ));
     }
-    let Some(mut body) = Assessment::of(&stored.body) else {
-        return Err(not_found("readiness", feature_id).into());
-    };
-    let Some(f) = body.findings.iter_mut().find(|f| &f.id == finding_id) else {
-        return Err(not_found("finding", finding_id).into());
-    };
-    if f.prerequisite {
-        return Err(conflict("prerequisite_not_waivable", finding_id));
-    }
-    if !matches!(f.state, FindingState::Open) || blank(rationale) {
+    if blank(rationale) {
         return Err(conflict("finding_settled", finding_id));
     }
-    f.state = FindingState::RiskAccepted;
-    f.closure_note = Some(content(rationale));
+    let mut next = Slots::of(&stored.body);
+    let mut found = false;
+    for body in [next.active.as_mut(), next.pending.as_mut()]
+        .into_iter()
+        .flatten()
+    {
+        let Some(f) = body.findings.iter_mut().find(|f| &f.id == finding_id) else {
+            continue;
+        };
+        if f.prerequisite {
+            return Err(conflict("prerequisite_not_waivable", finding_id));
+        }
+        if !matches!(f.state, FindingState::Open) {
+            continue;
+        }
+        f.state = FindingState::RiskAccepted;
+        f.closure_note = Some(content(rationale));
+        found = true;
+    }
+    if !found {
+        return Err(conflict("finding_settled", finding_id));
+    }
     let revision = stored.revision + 1;
     tx.work().put_readiness(
         &StoredReadiness {
             feature_id: feature.id.clone(),
             revision,
-            body: serde_json::to_value(&body).unwrap_or_else(|_| json!({})),
+            body: next.value(),
         },
         Some(stored.revision),
     )?;
@@ -696,7 +808,11 @@ pub fn accept_finding_risk(
         "ReadinessRiskAccepted",
         json!({"findingId": finding_id.as_str(), "rationale": rationale}),
     )?;
-    Ok(assessment(tx.work(), &feature)?.expect("just recorded"))
+    let shown = match assessment(tx.work(), &feature)? {
+        Some(a) => Some(a),
+        None => pending_assessment(tx.work(), &feature)?,
+    };
+    Ok(shown.expect("just recorded"))
 }
 
 /// Records which scope units a plan adoption made stale (their evidence is no longer current;
@@ -706,10 +822,34 @@ pub(crate) fn record_adoption(
     ctx: &InvocationContext,
     feature: &StoredWork,
 ) -> Result<(), StorageError> {
-    let Some(stored) = tx.work().readiness(&feature.id)? else {
+    let Some(mut stored) = tx.work().readiness(&feature.id)? else {
         return Ok(());
     };
-    let Some(a) = Assessment::of(&stored.body) else {
+    // The pending draft's assessment becomes the active one when it reviewed exactly the plan
+    // adopted; one of another draft is dropped (it was never authority). The active plan's
+    // assessment is kept otherwise, its changed units now stale.
+    let mut slots = Slots::of(&stored.body);
+    let adopted = tx
+        .work()
+        .feature_plan(&feature.id)?
+        .and_then(|s| active_of(s.approved.as_ref()));
+    if let Some(pending) = slots.pending.take() {
+        if adopted.as_ref().is_some_and(|a| {
+            a.plan_revision == pending.plan_revision && a.digest == pending.plan_digest
+        }) {
+            let mut promoted = pending;
+            promoted.reviewed_pending = false;
+            slots.active = Some(promoted);
+        }
+        let next = StoredReadiness {
+            feature_id: feature.id.clone(),
+            revision: stored.revision + 1,
+            body: slots.value(),
+        };
+        tx.work().put_readiness(&next, Some(stored.revision))?;
+        stored = next;
+    }
+    let Some(a) = slots.active else {
         return Ok(());
     };
     let Some(current) = reference_units(tx.work(), &feature.id)? else {

@@ -3993,3 +3993,102 @@ fn no_root_stop_is_admitted_once_shutdown_is_requested() {
     let pending = read(&*fx.store, |s| s.runs().pending_stops(None, 10));
     assert_eq!(pending.len(), 2);
 }
+
+// ---------------------------------------------------------------------------------------------
+// A card linked to a feature while its own agent runs (DW-12): the feature's controls reach it
+
+/// Starts root-i (a standalone issue) with a running activation and a process tree, then links
+/// it to feature root-f as a direct store write (what `tasks.set_feature` records).
+fn linked_running_issue(fx: &Fx, processes: &ProcessSupervisor) -> StoredActivation {
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let a = fx.launch("supervisor-1");
+    spawn_tree(fx, processes, "root-i", "project-a");
+    let c = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute(
+        "UPDATE work_items SET parent_feature_id='root-f' WHERE id='root-i'",
+        [],
+    )
+    .unwrap();
+    a
+}
+
+#[test]
+fn a_feature_pause_and_stop_reach_a_linked_cards_running_activation_and_its_trees() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host.clone(), None);
+    let a = linked_running_issue(&fx, &processes);
+    // Pausing the feature asks the linked card's retained activation to stop.
+    let _ = fx.pause(&fx.user, "root-f");
+    assert_eq!(fx.activation(&a.id).phase, ActivationPhase::Stopping);
+    // Stopping the feature stops the card's trees, and the stop is not complete while the
+    // card's activation still runs.
+    let stop = fx.stop(&fx.user, "root-f");
+    let op = match decision(&stop) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("stop not accepted: {other:?}"),
+    };
+    let rt = runtime();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(host.stopped.load(Ordering::SeqCst), 1, "the card's tree");
+    assert!(processes.owned().is_empty());
+    assert!(
+        !tick
+            .stops
+            .iter()
+            .any(|(r, s)| r == &rid("root-f") && *s == OperationState::ObservedComplete),
+        "{:?}",
+        tick.stops
+    );
+    let state = |fx: &Fx| {
+        read(&*fx.store, |s| s.operations().operation(&op))
+            .unwrap()
+            .state
+    };
+    assert_ne!(state(&fx), OperationState::ObservedComplete);
+    // Once the card's activation ended, the feature's stop is observed complete.
+    let (x, e) = (a.id.clone(), a.owner_epoch);
+    fx.tx(move |svc, tx| svc.finish_activation(tx, &x, e, ActivationOutcome::Cancelled, None))
+        .expect("finished");
+    rt.block_on(sup.tick()).unwrap();
+    assert_eq!(state(&fx), OperationState::ObservedComplete);
+}
+
+#[test]
+fn a_linked_cards_retained_activation_is_not_renewed_once_its_feature_holds_it() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    let (_sup, processes) = supervisor(&fx, host, None);
+    let a = linked_running_issue(&fx, &processes);
+    // While the feature allows it, the linked agent keeps its lease (WORK-11).
+    let (x, e) = (a.id.clone(), a.owner_epoch);
+    let renewed = fx
+        .tx(move |svc, tx| svc.renew_activation(tx, &x, e))
+        .expect("renewed");
+    assert_eq!(renewed.phase, ActivationPhase::Running);
+    // The feature is paused by a write that did not reach the card (as before this change):
+    // the next renewal refuses to extend the lease and asks the activation to stop.
+    fx.tx(|_, tx| {
+        let f = RootId(id("root-f"));
+        let before = tx
+            .runs()
+            .root_control(&f)?
+            .unwrap_or_else(|| StoredRootControl::initial(f.clone()));
+        let mut after = before.clone();
+        after.desired = DesiredExecution::Paused;
+        after.revision = before.revision + 1;
+        if tx.runs().root_control(&f)?.is_some() {
+            tx.runs().update_root_control(&after, before.revision)
+        } else {
+            tx.runs().insert_root_control(&after)
+        }
+    });
+    let lease = renewed.lease_until_ms;
+    let (x, e) = (a.id.clone(), a.owner_epoch);
+    let refused = fx
+        .tx(move |svc, tx| svc.renew_activation(tx, &x, e))
+        .expect("answered");
+    assert_eq!(refused.phase, ActivationPhase::Stopping);
+    assert_eq!(refused.lease_until_ms, lease, "the lease is not extended");
+}

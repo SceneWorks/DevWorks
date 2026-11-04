@@ -29123,6 +29123,181 @@
     },
     {
       "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-tasks.prioritize-placement",
+      "normalized": {
+        "body": {
+          "expectedQueueRevision": "1",
+          "kind": "tasks.prioritize",
+          "placement": {
+            "anchorId": "work-a",
+            "side": "Before",
+            "workId": "work-b"
+          },
+          "priority": 1,
+          "projectId": "project-a"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "a prioritization names exactly one of ordered IDs and a placement",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-tasks.prioritize-ordered-and-placement",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-tasks.prioritize-placement",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-tasks.prioritize",
+      "normalized": {
+        "kind": "tasks.prioritize",
+        "value": {
+          "changed": true,
+          "id": "project-a",
+          "revision": "2"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-features.prioritize-placement",
+      "normalized": {
+        "body": {
+          "expectedQueueRevision": "1",
+          "kind": "features.prioritize",
+          "placement": {
+            "anchorId": "work-a",
+            "side": "Before",
+            "workId": "work-b"
+          },
+          "projectId": "project-a"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "a prioritization names exactly one of ordered IDs and a placement",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-features.prioritize-ordered-and-placement",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-features.prioritize-placement",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-features.prioritize",
+      "normalized": {
+        "kind": "features.prioritize",
+        "value": {
+          "changed": true,
+          "id": "project-a",
+          "revision": "2"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-issues.prioritize-placement",
+      "normalized": {
+        "body": {
+          "expectedQueueRevision": "1",
+          "kind": "issues.prioritize",
+          "placement": {
+            "anchorId": "work-a",
+            "side": "Before",
+            "workId": "work-b"
+          },
+          "projectId": "project-a"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "a prioritization names exactly one of ordered IDs and a placement",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-issues.prioritize-ordered-and-placement",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-issues.prioritize-placement",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-issues.prioritize",
+      "normalized": {
+        "kind": "issues.prioritize",
+        "value": {
+          "changed": true,
+          "id": "project-a",
+          "revision": "2"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
       "error": "unknown variant `Maybe`, expected one of `ResolvedDecision`, `BoundedInvestigation`, `NeedsUserDecision`",
       "expectedSchemaValid": false,
       "id": "reject-r2-readiness-unknown-disposition",

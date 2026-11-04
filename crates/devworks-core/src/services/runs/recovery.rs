@@ -433,8 +433,23 @@ impl ControlService {
         // the root while it still carries the stop; after a Continue only the trees this stop
         // already holds for reconciliation (newer trees belong to the newer generation).
         let named = stop_reconciliation_targets(tx.runs(), root_id, op)?;
+        // A feature's stop covers its linked cards' retained work as well.
+        let linked = super::stop_linked_roots(tx, op)?;
+        for card in &linked {
+            if let Some(a) = tx.runs().live_activation(card)?
+                && a.phase == ActivationPhase::Stopping
+                && a.owner.is_none()
+                && let Some(c) = tx.sessions().work_root(card)?
+            {
+                self.stop_activation(tx, &c, &a, ActivationOutcome::Cancelled, Some("stopped"))?;
+            }
+        }
         let mut all: Vec<(Id, String)> = uncertain.to_vec();
-        for p in unsettled_processes(tx, root_id)? {
+        let mut trees = unsettled_processes(tx, root_id)?;
+        for card in &linked {
+            trees.extend(unsettled_processes(tx, card)?);
+        }
+        for p in trees {
             let counts = !superseded || named.iter().any(|n| n == &p.0);
             if counts && !all.iter().any(|(i, _)| i == &p.0) {
                 all.push(p);
@@ -446,13 +461,24 @@ impl ControlService {
         // claimed, keeps the stop pending (it is executed and settled again once quiesced). The
         // trees it could not verify stopped are held for reconciliation now, so a later pass —
         // also one superseded by a Continue — still requires them reconciled.
-        let quiesced = if superseded {
+        let mut quiesced = if superseded {
             !tx.runs()
                 .live_activation(root_id)?
                 .is_some_and(|a| a.owner.is_some() && a.generation <= covered)
         } else {
             root_quiesced(tx, root_id)?
         };
+        // The linked cards' retained activations were asked to stop with the feature: the stop
+        // is complete only once they ended (a Continue of the feature resumes none of them).
+        for card in &linked {
+            quiesced &= if superseded {
+                !tx.runs()
+                    .live_activation(card)?
+                    .is_some_and(|a| a.owner.is_some())
+            } else {
+                root_quiesced(tx, card)?
+            };
+        }
         if !quiesced {
             if !uncertain.is_empty() {
                 self.hold_uncertain(tx, &root, op, uncertain)?;
