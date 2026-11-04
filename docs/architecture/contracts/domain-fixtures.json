@@ -6823,5 +6823,75 @@
     "raw": "{\"kind\":\"jobs.cancel\",\"value\":{\"id\":\"id-a\",\"jobId\":\"id-a\",\"revision\":\"1\",\"occurrenceKey\":\"fixture\",\"state\":\"ObservedComplete\",\"usage\":{\"items\":[],\"totalTrackedUsd\":\"0\",\"untrackedRequests\":\"0\",\"incompleteRequests\":\"0\"},\"status\":\"Skipped\",\"trigger\":\"Catchup\",\"occurrenceAtMs\":\"1793570000000\",\"finishedAtMs\":\"1793570000000\",\"reason\":\"The previous run is still active\",\"skippedForRunId\":\"run-b\",\"resumptions\":\"0\",\"cancelRequested\":false,\"linkedRootIds\":[\"root-a\"],\"sessionId\":\"session-a\",\"hold\":\"ApprovalWait\"}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r2-input-web.search",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"web.search\",\"scope\":{\"kind\":\"Workspace\"},\"query\":\"fixture\",\"providerId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-web.fetch",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"web.fetch\",\"scope\":{\"kind\":\"Workspace\"},\"url\":\"https://fixture.invalid/path\",\"maxBytes\":4096,\"timeoutMs\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-web.search",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.search\",\"value\":{\"items\":[{\"title\":\"fixture\",\"url\":\"https://fixture.invalid/path\",\"snippet\":\"Fixture content\",\"observedAtMs\":\"0\",\"trust\":\"Untrusted\",\"providerId\":\"brave\"}],\"hasMore\":true,\"nextCursor\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-web-result-trust",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"web.search\",\"value\":{\"items\":[{\"title\":\"fixture\",\"url\":\"https://fixture.invalid/path\",\"snippet\":\"Fixture content\",\"observedAtMs\":\"0\",\"trust\":\"Untrusted\",\"providerId\":\"brave\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-web.fetch",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Untrusted\",\"status\":200,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":301},{\"url\":\"https://fixture.invalid/moved\",\"status\":308}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-web.fetch-plain",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-web-document-provenance",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Untrusted\",\"status\":200,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":301},{\"url\":\"https://fixture.invalid/moved\",\"status\":308}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-web-document-not-2xx",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Untrusted\",\"status\":404,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":301},{\"url\":\"https://fixture.invalid/moved\",\"status\":308}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-result-web-redirect-not-3xx",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Untrusted\",\"status\":200,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":200}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-result-web-document-unknown-trust",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Verified\",\"status\":200,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":301},{\"url\":\"https://fixture.invalid/moved\",\"status\":308}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

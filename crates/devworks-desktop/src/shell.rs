@@ -11,6 +11,7 @@ use crate::route::{NAV_ORDER, NavGroup, Route};
 use crate::settings_screen::{KEEP_AWAKE, SettingsAction, SettingsScreen};
 use crate::theme;
 use crate::virtual_list::{self, Scrolls};
+use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::provider::ArtifactRef;
@@ -554,9 +555,14 @@ impl Shell {
     /// visible.
     fn invalidate_routing(&mut self) {
         self.chat.routing.invalidate();
-        // A load still paging may predate the change: it is replaced, not completed.
+        // A load still paging may predate the change: it is replaced, not completed. So may an
+        // availability query in flight for the visible conversation.
         if self.route == Route::Chat || self.coordinator_open {
             self.load_router_catalog();
+            let key = self.chat.draft_key();
+            if self.pending(&Slot::RouteStatus(key.clone())) {
+                self.reask_route_status_of(key);
+            }
         } else {
             self.chat.routing.catalog_load = None;
         }
@@ -585,8 +591,10 @@ impl Shell {
         self.refresh_route_status_of(key)
     }
 
-    /// Asks the router about one conversation's selection (and pin). A newer query supersedes
-    /// one still running (its selection may be stale).
+    /// Asks the router about one conversation's selection (and pin), unless a query for that
+    /// same selection is already in flight (its answer is as fresh). Periodic and hint-driven
+    /// refreshes therefore never stack identical queries on a slow router, which would occupy
+    /// every client worker and starve other requests (a message's save among them).
     fn refresh_route_status_of(&mut self, key: String) -> bool {
         let sel = self
             .chat
@@ -595,13 +603,41 @@ impl Shell {
             .get(&key)
             .cloned()
             .unwrap_or_default();
+        if self.pending(&Slot::RouteStatus(key.clone()))
+            && self.chat.routing.status_asked.get(&key) == Some(&sel)
+        {
+            return true;
+        }
+        self.ask_route_status(key, sel)
+    }
+
+    /// Asks again even when a query for the same selection is in flight: that query may predate
+    /// a change it cannot see (a route or pin just decided, routing settings just saved). The
+    /// newer query supersedes it.
+    fn reask_route_status_of(&mut self, key: String) -> bool {
+        let sel = self
+            .chat
+            .routing
+            .selections
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        self.ask_route_status(key, sel)
+    }
+
+    fn ask_route_status(&mut self, key: String, sel: crate::routing::Selection) -> bool {
         let session = (key != chat::NEW_DRAFT).then(|| key.clone());
-        self.query(
-            Slot::RouteStatus(key),
+        let asked = sel.clone();
+        let submitted = self.query(
+            Slot::RouteStatus(key.clone()),
             "Checking model availability",
             "router.availability",
             move |b| ops::router_availability(b, &sel.intent, &sel.effort, session.as_deref()),
-        )
+        );
+        if submitted {
+            self.chat.routing.status_asked.insert(key, asked);
+        }
+        submitted
     }
 
     /// A new route or effort for the active conversation: the explicit `router.pin` change of a
@@ -1130,6 +1166,7 @@ impl Shell {
                     },
                 };
                 let known = status.availability.is_some();
+                self.chat.routing.status_asked.remove(&key);
                 self.chat.routing.status.insert(key.clone(), status);
                 if known && self.chat.routing.first_route.contains(&key) {
                     self.route_first(&key);
@@ -1148,7 +1185,7 @@ impl Shell {
                 // Pinned, or refused because nothing is eligible: the status line says which. It
                 // is reread even when not shown, so no older reply stands for it.
                 self.chat.routing.status.remove(&key);
-                self.refresh_route_status_of(key);
+                self.reask_route_status_of(key);
             }
             (Slot::RoutePin(key), Reply::Command(c)) => {
                 match ops::pinned(c) {
@@ -1183,7 +1220,7 @@ impl Shell {
                 // selection adopted.
                 self.chat.routing.pin_in_flight.remove(&key);
                 self.chat.routing.status.remove(&key);
-                self.refresh_route_status_of(key);
+                self.reask_route_status_of(key);
             }
             (Slot::SessionStart, Reply::Command(c)) => {
                 let reason = self.chat.starting.take();
@@ -1498,6 +1535,35 @@ impl Shell {
                 // The view moved to another revision meanwhile: explain it at that one.
                 self.explain(key);
             }
+            (Slot::WebFetch, Reply::Query(q)) => {
+                let web = &mut self.settings.web;
+                web.fetching = false;
+                match ops::web_document(q) {
+                    Ok(doc) => {
+                        web.document = Some(doc);
+                        web.error = None;
+                    }
+                    Err(e) => web.error = Some(e.describe()),
+                }
+                self.web_action(WebAction::LoadActivity);
+            }
+            (Slot::WebSearch, Reply::Query(q)) => {
+                let web = &mut self.settings.web;
+                web.searching = false;
+                match ops::web_results(q) {
+                    Ok(results) => {
+                        web.results = Some(results);
+                        web.error = None;
+                    }
+                    Err(e) => web.error = Some(e.describe()),
+                }
+                self.web_action(WebAction::LoadActivity);
+            }
+            (Slot::WebActivity, Reply::Query(q)) => {
+                let web = &mut self.settings.web;
+                web.activity_loading = false;
+                web.activity = Some(ops::web_entries(q).map_err(|e| e.describe()));
+            }
             (Slot::SettingsExplain(key), Reply::Query(q)) => match ops::settings_chain(q) {
                 Ok(chain) => {
                     if let Some(v) = &mut self.settings.view {
@@ -1794,6 +1860,37 @@ impl Shell {
                 }
                 SettingsAction::OpenAddOns => self.navigate(Route::AddOns),
                 SettingsAction::OpenJobs => self.navigate(Route::Jobs),
+                SettingsAction::Web(action) => self.web_action(action),
+            }
+        }
+    }
+
+    /// Runs a web fetch, search or activity load through the same use cases agents call.
+    fn web_action(&mut self, action: WebAction) {
+        match action {
+            WebAction::Fetch(url) => {
+                if !self.query(Slot::WebFetch, "Fetching a page", "web.fetch", |b| {
+                    ops::web_fetch(b, &url)
+                }) {
+                    self.settings.web.fetching = false;
+                }
+            }
+            WebAction::Search { query, provider } => {
+                if !self.query(Slot::WebSearch, "Searching the web", "web.search", |b| {
+                    ops::web_search(b, &query, &provider)
+                }) {
+                    self.settings.web.searching = false;
+                }
+            }
+            WebAction::LoadActivity => {
+                if !self.query(
+                    Slot::WebActivity,
+                    "Loading web activity",
+                    "workspace.logs",
+                    ops::web_activity,
+                ) {
+                    self.settings.web.activity_loading = false;
+                }
             }
         }
     }

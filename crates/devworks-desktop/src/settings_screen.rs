@@ -5,9 +5,13 @@
 //! drafts, validation and runtime health are kept apart.
 use crate::memory::SettingsMemory;
 use crate::theme;
+use crate::web_panel::{WebAction, WebPanel, WebSettings};
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::protocol::records::SettingEntry;
-use devworks_core::settings::catalog::{Adoption, Category, ValueKind};
+use devworks_core::settings::catalog::{
+    Adoption, Category, ValueKind, WEB_FETCH_MAX_REDIRECTS_KEY, WEB_FETCH_PRIVATE_KEY,
+    WEB_SEARCH_CREDENTIAL_KEY, WEB_SEARCH_PROVIDER_KEY, WEB_TIMEOUT_KEY,
+};
 use devworks_core::settings::view::{Health, Item, SettingsView, Source, Status};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
@@ -39,6 +43,8 @@ pub struct SettingsScreen {
     pub explained: BTreeSet<String>,
     pub scrolls: crate::virtual_list::Scrolls,
     buffers: HashMap<&'static str, String>,
+    /// The web search and fetch section of Agent tools.
+    pub web: WebPanel,
 }
 
 /// What the screen asks the shell to do.
@@ -52,6 +58,8 @@ pub enum SettingsAction {
     OpenAddOns,
     /// Scheduled jobs (schedules and their controls, JOB-01).
     OpenJobs,
+    /// A web search, fetch or activity load from the Agent tools section.
+    Web(WebAction),
 }
 
 impl SettingsScreen {
@@ -307,9 +315,38 @@ impl SettingsScreen {
                 self.item_ui(ui, key, actions);
                 ui.add_space(8.0);
             }
+            if self.category == Some(Category::Tools) {
+                let settings = self.web_settings();
+                let mut web = Vec::new();
+                self.web.ui(ui, &settings, online, &mut web);
+                actions.extend(web.into_iter().map(SettingsAction::Web));
+            }
         });
         scrolls.record("settings-items", out.state.clamped_offset().y);
         self.scrolls = scrolls;
+    }
+
+    /// The effective (saved) web settings the web section summarizes.
+    pub fn web_settings(&self) -> WebSettings {
+        let effective = |key: &str| {
+            self.view
+                .as_ref()
+                .and_then(|v| v.item(key))
+                .map(|i| i.effective.clone())
+                .unwrap_or(Value::Null)
+        };
+        WebSettings {
+            provider: effective(WEB_SEARCH_PROVIDER_KEY)
+                .as_str()
+                .filter(|p| *p != "none")
+                .map(str::to_owned),
+            credential_configured: effective(WEB_SEARCH_CREDENTIAL_KEY)
+                .get("secretRef")
+                .is_some(),
+            allow_private: effective(WEB_FETCH_PRIVATE_KEY).as_bool().unwrap_or(false),
+            max_redirects: effective(WEB_FETCH_MAX_REDIRECTS_KEY).as_i64(),
+            timeout_ms: effective(WEB_TIMEOUT_KEY).as_i64(),
+        }
     }
 
     fn scope_row(&self, ui: &mut Ui) {

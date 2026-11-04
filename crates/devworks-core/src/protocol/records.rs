@@ -3229,6 +3229,20 @@ pub struct WebResult {
     pub url: Url,
     pub snippet: Content,
     pub observed_at_ms: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "TrustLevel", extend("x-since" = 2))]
+    pub trust: Option<TrustLevel>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub provider_id: Option<Id>,
 }
 impl Check for WebResult {
     fn check(&self) -> Result<(), String> {
@@ -3236,8 +3250,39 @@ impl Check for WebResult {
         self.url.check()?;
         self.snippet.check()?;
         self.observed_at_ms.check()?;
+        self.trust.check()?;
+        self.provider_id.check()?;
         crate::protocol::rules::record(
             "WebResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for WebResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.trust = None;
+        }
+        if revision < 2 {
+            self.provider_id = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebRedirect {
+    pub url: Url,
+    pub status: i32,
+}
+impl Check for WebRedirect {
+    fn check(&self) -> Result<(), String> {
+        self.url.check()?;
+        self.status.check()?;
+        crate::protocol::rules::record(
+            "WebRedirect",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -3253,6 +3298,41 @@ pub struct WebDocument {
     pub media_type: Label,
     pub observed_at_ms: Counter,
     pub truncated: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "TrustLevel", extend("x-since" = 2))]
+    pub trust: Option<TrustLevel>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "i32", extend("x-since" = 2))]
+    pub status: Option<i32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<WebRedirect>", extend("x-since" = 2))]
+    pub redirects: Option<Items<WebRedirect>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 2))]
+    pub source_sha256: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub source_byte_length: Option<Counter>,
 }
 impl Check for WebDocument {
     fn check(&self) -> Result<(), String> {
@@ -3262,11 +3342,36 @@ impl Check for WebDocument {
         self.media_type.check()?;
         self.observed_at_ms.check()?;
         self.truncated.check()?;
+        self.trust.check()?;
+        self.status.check()?;
+        self.redirects.check()?;
+        self.source_sha256.check()?;
+        self.source_byte_length.check()?;
         crate::protocol::rules::record(
             "WebDocument",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for WebDocument {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.trust = None;
+        }
+        if revision < 2 {
+            self.status = None;
+        }
+        if revision < 2 {
+            self.redirects = None;
+        }
+        if revision < 2 {
+            self.source_sha256 = None;
+        }
+        if revision < 2 {
+            self.source_byte_length = None;
+        }
     }
 }
 

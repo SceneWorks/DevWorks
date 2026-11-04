@@ -265,7 +265,8 @@ pub struct Runtime {
     /// The run supervision loop, awaited only within the shutdown bound (a root stop it is
     /// executing may be blocked on a tree).
     supervision: Mutex<Option<JoinHandle<()>>>,
-    /// The diagnostics monitor task, stopped first at shutdown (see [`Runtime::shutdown`]).
+    /// The diagnostics monitor task, signalled first at shutdown and joined within the bound
+    /// after the run-control transition (see [`Runtime::shutdown`]).
     monitoring: Mutex<Option<JoinHandle<()>>>,
     /// The scheduler loop, awaited only within the shutdown bound (a cancellation it is
     /// executing may be stopping a tree).
@@ -696,33 +697,23 @@ impl Runtime {
     /// resources) and releases the keep-awake request. Every tree is stopped natively even when
     /// the store refuses writes; the report carries each tree's outcome and any write failure.
     pub async fn shutdown(&self) -> ShutdownReport {
-        // AD20 step 1: fence admission in memory, then commit the run-control transition: live
-        // feature/issue work is held for manual Continue and asked to stop; launches get the
-        // cooperative grace. A storage failure here is not fatal: the next boot holds the same
-        // work from its boot epoch.
         // One bound for the whole shutdown (AD20): every later step gets what is left of it.
         let deadline = tokio::time::Instant::now() + self.shutdown_bound;
         // Schedule admission freezes first: no occurrence is claimed and no run started from
         // here on (runs already dispatching finish or are reconciled at the next boot).
         self.scheduler.stop();
         let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
-        // The diagnostics monitor stops first, so no retention, probe or sweep write starts
-        // after admission closes. A pass in progress is awaited within the bound; past it the
-        // task is abandoned (its unit of work, already admitted, commits or rolls back alone).
+        // The diagnostics monitor is only *signalled* here, and joined after the run-control
+        // transition below: a pass in progress (a full integrity check of a large store, say)
+        // must never use up the bound before the live work is held for Continue. Once signalled
+        // it starts no further step or probe, so no retention, probe or sweep write starts after
+        // the admission fence closes; none of it is a command, so none of it changes run control.
         self.monitor.stop();
-        let monitoring = self
-            .monitoring
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take();
-        if let Some(mut task) = monitoring
-            && let dispatch::Either::Left(()) =
-                dispatch::first(tokio::time::sleep(left()), &mut task).await
-        {
-            task.abort();
-        }
-        // Close admission: wait (off the async thread) for every admitted command to commit, so
-        // none commits after the quiescence snapshot.
+        // AD20 step 1: fence admission in memory, then commit the run-control transition: live
+        // feature/issue work is held for manual Continue and asked to stop; launches get the
+        // cooperative grace. A storage failure here is not fatal: the next boot holds the same
+        // work from its boot epoch. Close admission first: wait (off the async thread) for every
+        // admitted command to commit, so none commits after the quiescence snapshot.
         self.enter(ShutdownStage::DrainingAdmission);
         let admission = self.admission.clone();
         let _ = tokio::task::spawn_blocking(move || {
@@ -733,36 +724,26 @@ impl Runtime {
         let _ = self.runs.quiesce(self.shutdown_grace.min(left())).await;
         self.enter(ShutdownStage::StoppingWork);
         self.stop();
-        let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
-        for task in tasks {
-            let _ = task.await;
+        // Every boot-started task (delivery, collection, housekeeping, the monitor pass in
+        // progress, run supervision, the schedule loop), the deliveries and the scheduled runs in flight are awaited only within what
+        // is left of the one bound (CONTROL-09); past it each is abandoned, and the next boot
+        // recovers what it left: a unit of work it already admitted commits or rolls back
+        // alone, a claim's lease expires into recovery, an interrupted operation is classified.
+        // Supervision admits no further root stop once stopping; one it is executing ends
+        // within its own bound, and the owned-tree stop below covers its trees.
+        let mut joining: Vec<JoinHandle<()>> =
+            std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
+        for slot in [&self.monitoring, &self.supervision, &self.scheduling] {
+            joining.extend(slot.lock().unwrap_or_else(|p| p.into_inner()).take());
         }
-        // Run supervision admits no further root stop once stopping; one it is executing ends
-        // within its own bound (at most the shutdown bound, started before this deadline), and
-        // is not waited for past the deadline: the owned-tree stop below covers its trees.
-        let supervision = self
-            .supervision
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take();
-        if let Some(mut task) = supervision
-            && let dispatch::Either::Left(()) =
-                dispatch::first(tokio::time::sleep(left()), &mut task).await
-        {
-            task.abort();
+        for mut task in joining {
+            if let dispatch::Either::Left(()) =
+                dispatch::first(tokio::time::sleep_until(deadline), &mut task).await
+            {
+                task.abort();
+            }
         }
-        self.dispatcher.idle().await;
-        let scheduling = self
-            .scheduling
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take();
-        if let Some(mut task) = scheduling
-            && let dispatch::Either::Left(()) =
-                dispatch::first(tokio::time::sleep(left()), &mut task).await
-        {
-            task.abort();
-        }
+        let _ = dispatch::first(tokio::time::sleep_until(deadline), self.dispatcher.idle()).await;
         self.scheduler.drain(deadline).await;
         let bound = left();
         let stopped = self

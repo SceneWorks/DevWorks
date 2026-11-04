@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 3;
+pub const CATALOG_REVISION: i64 = 4;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -398,12 +398,75 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "tools.webSearch",
             "Web search",
-            "Allow agents the shared web search and fetch tools.",
+            "Allow agents the shared web search tool (code review agents included). Searches go to the provider configured below.",
             Tools,
             WORKSPACE,
             ValueKind::Bool,
             true,
             NextSafeStep
+        ),
+        setting!(
+            WEB_FETCH_TOOLS_KEY,
+            "Web page fetching",
+            "Allow agents the shared web page and documentation fetch tool (code review agents included). Fetched pages are kept as untrusted artifacts.",
+            Tools,
+            WORKSPACE,
+            ValueKind::Bool,
+            true,
+            NextSafeStep
+        ),
+        setting!(
+            WEB_SEARCH_PROVIDER_KEY,
+            "Web search provider",
+            "The external search service web search uses. None turns searching off: a search is refused as unsupported rather than answered with no results. Brave Search needs an API key, kept in the OS secret store.",
+            Tools,
+            WORKSPACE,
+            ValueKind::Choice(&["none", "brave"]),
+            "none",
+            NextAdmission
+        ),
+        setting!(
+            WEB_SEARCH_CREDENTIAL_KEY,
+            "Web search API key",
+            "Reference to the search provider's API key in the OS secret store. The key itself is never stored in configuration, history or logs, and is sent only to the provider.",
+            Tools,
+            WORKSPACE,
+            ValueKind::SecretRef,
+            Value::Null,
+            NextAdmission
+        ),
+        setting!(
+            WEB_FETCH_MAX_REDIRECTS_KEY,
+            "Fetch redirect limit",
+            "Most redirects one fetch follows. Every hop is checked against the network policy again and recorded. Five covers ordinary http-to-https, canonical-host and documentation-version redirects. Engineering default.",
+            Tools,
+            WORKSPACE,
+            ValueKind::Integer { min: 0, max: 20 },
+            5,
+            NextAdmission
+        ),
+        setting!(
+            WEB_TIMEOUT_KEY,
+            "Web request time limit (ms)",
+            "Longest a web fetch or search may take end to end, whatever the caller asks: name resolution, connection, TLS, every redirect and the body. Thirty seconds fits slow documentation hosts while keeping a stuck page from holding an agent. Engineering default.",
+            Tools,
+            WORKSPACE,
+            ValueKind::Integer {
+                min: 1_000,
+                max: 120_000
+            },
+            30_000,
+            NextAdmission
+        ),
+        setting!(
+            WEB_FETCH_PRIVATE_KEY,
+            "Fetch from private networks",
+            "Allow fetching from loopback and private network addresses, for example a local documentation server. Off by default so a page or agent cannot reach services on this machine or network. Link-local and cloud metadata addresses stay blocked either way.",
+            Tools,
+            WORKSPACE,
+            ValueKind::Bool,
+            false,
+            NextAdmission
         ),
         setting!(
             "tools.shell",
@@ -724,6 +787,18 @@ pub const ARTIFACT_MAX_FILE_KEY: &str = "storage.artifactMaxFileBytes";
 pub const LOG_RETENTION_DAYS_KEY: &str = "diagnostics.logRetentionDays";
 /// Most diagnostic log records retained.
 pub const LOG_MAX_RECORDS_KEY: &str = "diagnostics.logMaxRecords";
+/// Whether agents may use the shared web fetch tool.
+pub const WEB_FETCH_TOOLS_KEY: &str = "tools.webFetch";
+/// The configured external search provider (`none` or a provider ID).
+pub const WEB_SEARCH_PROVIDER_KEY: &str = "web.searchProvider";
+/// The secret-store reference of the search provider's credential.
+pub const WEB_SEARCH_CREDENTIAL_KEY: &str = "web.searchCredential";
+/// Most redirects one fetch follows.
+pub const WEB_FETCH_MAX_REDIRECTS_KEY: &str = "web.fetchMaxRedirects";
+/// Longest end-to-end web request (a fetch with its redirects, or a search), in milliseconds.
+pub const WEB_TIMEOUT_KEY: &str = "web.timeoutMs";
+/// Whether fetches may reach loopback and private network addresses.
+pub const WEB_FETCH_PRIVATE_KEY: &str = "web.fetchAllowPrivateNetwork";
 
 /// Looks up a descriptor by key. Unknown keys fail closed at every caller.
 pub fn descriptor(key: &str) -> Option<&'static SettingDescriptor> {
