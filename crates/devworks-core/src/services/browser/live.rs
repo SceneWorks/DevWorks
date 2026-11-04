@@ -1660,6 +1660,9 @@ impl Live {
                         detail: "the node has no visible box to click".into(),
                     });
                 }
+                // The box read may have let the page navigate: nothing is scrolled into a
+                // replacement document (a stale node here is refused with nothing sent).
+                self.resolve_node(node)?;
                 // From the scroll on, the page may have changed: every failure is post-dispatch.
                 let (x, y) = self
                     .place_click(i, &n, node, bounds)
@@ -1685,16 +1688,15 @@ impl Live {
                     MouseButton::Secondary => "right",
                     MouseButton::Middle => "middle",
                 };
-                for (kind, count) in [("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 1)]
-                {
-                    self.call(
-                        Some(&s),
-                        "Input.dispatchMouseEvent",
-                        json!({"type": kind, "x": x, "y": y, "button": if count == 0 { "none" } else { button }, "clickCount": count}),
-                        bounds.call,
-                    )
-                    .map_err(ActionError::After)?;
-                }
+                let events = [("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 1)]
+                    .map(|(kind, count)| {
+                        (
+                            "Input.dispatchMouseEvent",
+                            json!({"type": kind, "x": x, "y": y, "button": if count == 0 { "none" } else { button }, "clickCount": count}),
+                        )
+                    });
+                // The scroll already ran page handlers: a stale node is an unknown outcome.
+                self.send_input(Current::Node(node), true, &s, &events, bounds)?;
                 Ok(i)
             }
             BrowserInput::Text { node, text: t } => {
@@ -1726,13 +1728,13 @@ impl Live {
                         detail: "the node did not keep keyboard focus; nothing was typed".into(),
                     });
                 }
-                self.call(
-                    Some(&s),
-                    "Input.insertText",
-                    json!({"text": t.0}),
-                    bounds.call,
-                )
-                .map_err(ActionError::After)?;
+                self.send_input(
+                    Current::Node(node),
+                    true,
+                    &s,
+                    &[("Input.insertText", json!({"text": t.0}))],
+                    bounds,
+                )?;
                 Ok(i)
             }
             BrowserInput::Key {
@@ -1767,15 +1769,18 @@ impl Live {
                 if printable {
                     down["text"] = json!(k.text);
                 }
-                self.call(Some(&s), "Input.dispatchKeyEvent", down, bounds.call)
-                    .map_err(ActionError::After)?;
-                self.call(
-                    Some(&s),
-                    "Input.dispatchKeyEvent",
-                    json!({"type": "keyUp", "key": k.key, "code": k.code, "windowsVirtualKeyCode": k.vk, "modifiers": mask}),
-                    bounds.call,
-                )
-                .map_err(ActionError::After)?;
+                let up = json!({"type": "keyUp", "key": k.key, "code": k.code, "windowsVirtualKeyCode": k.vk, "modifiers": mask});
+                // Nothing reached the page yet: a stale target is refused with nothing sent.
+                self.send_input(
+                    Current::Target(target),
+                    false,
+                    &s,
+                    &[
+                        ("Input.dispatchKeyEvent", down),
+                        ("Input.dispatchKeyEvent", up),
+                    ],
+                    bounds,
+                )?;
                 Ok(i)
             }
             BrowserInput::Scroll { target, x, y } => {
@@ -1783,17 +1788,46 @@ impl Live {
                 let s = self.targets[i].cdp_session.clone();
                 // A point of the top-level viewport whose hit lands in the requested frame.
                 let (px, py) = self.scroll_point(i, &frame, bounds)?;
-                self.resolve(target)?;
-                self.call(
-                    Some(&s),
-                    "Input.dispatchMouseEvent",
-                    json!({"type": "mouseWheel", "x": px, "y": py, "deltaX": x, "deltaY": y}),
-                    bounds.call,
-                )
-                .map_err(ActionError::After)?;
+                self.send_input(
+                    Current::Target(target),
+                    false,
+                    &s,
+                    &[(
+                        "Input.dispatchMouseEvent",
+                        json!({"type": "mouseWheel", "x": px, "y": py, "deltaX": x, "deltaY": y}),
+                    )],
+                    bounds,
+                )?;
                 Ok(i)
             }
         }
+    }
+
+    /// Sends input to the page only while the reference it acts on is still current. Every
+    /// awaited call before it (a focus query, a hit test, a node description) absorbs the
+    /// events that arrived meanwhile, so a navigation during it has advanced the document
+    /// revision: the reference is checked again here, after the last of them and before the
+    /// first event, and input never reaches a replacement document. `changed` says whether the
+    /// action already ran page handlers (a scroll or a focus): a stale reference is then an
+    /// unknown outcome rather than "nothing was sent". Every input path sends through here.
+    fn send_input(
+        &mut self,
+        current: Current<'_>,
+        changed: bool,
+        session: &str,
+        events: &[(&str, Value)],
+        bounds: &Bounds,
+    ) -> Result<(), ActionError> {
+        let checked = match current {
+            Current::Target(t) => self.resolve(t).map(|_| ()),
+            Current::Node(n) => self.resolve_node(n).map(|_| ()),
+        };
+        checked.map_err(|e| if changed { post_dispatch(e) } else { e })?;
+        for (method, params) in events {
+            self.call(Some(session), method, params.clone(), bounds.call)
+                .map_err(ActionError::After)?;
+        }
+        Ok(())
     }
 
     /// Refuses unless keyboard focus is in `frame`: the root of its accessibility tree is
@@ -2212,14 +2246,16 @@ impl Live {
                 detail: "the file input accepts one file".into(),
             });
         }
-        self.resolve_node(node)?;
-        self.call(
-            Some(&s),
-            "DOM.setFileInputFiles",
-            json!({"files": paths, "backendNodeId": n.backend}),
-            bounds.call,
-        )
-        .map_err(ActionError::After)?;
+        self.send_input(
+            Current::Node(node),
+            false,
+            &s,
+            &[(
+                "DOM.setFileInputFiles",
+                json!({"files": paths, "backendNodeId": n.backend}),
+            )],
+            bounds,
+        )?;
         Ok(i)
     }
 
@@ -2269,6 +2305,13 @@ impl Live {
             self.console.total,
         )
     }
+}
+
+/// The reference an input acts on, checked again right before the input is sent.
+#[derive(Clone, Copy)]
+enum Current<'a> {
+    Target(&'a BrowserTarget),
+    Node(&'a BrowserNode),
 }
 
 /// An error observed after the navigation or input was sent: whatever it is, the effect may

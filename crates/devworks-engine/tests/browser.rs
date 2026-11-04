@@ -167,6 +167,9 @@ struct FakeBrowser {
     /// Reads wait (past their timeout) while set; `reads_stalled` records that one waited.
     stall_reads: bool,
     reads_stalled: bool,
+    /// Once: when a page receives this method, it first navigates to this URL (its document is
+    /// replaced while the request is answered), then answers from the new document.
+    navigate_on: Option<(String, String)>,
 }
 
 impl FakeBrowser {
@@ -410,6 +413,12 @@ impl FakeBrowser {
         }
         if self.hang.contains(&method) {
             return;
+        }
+        if self.navigate_on.as_ref().is_some_and(|(m, _)| *m == method)
+            && let Some(i) = self.page_of(session.as_deref())
+        {
+            let (_, url) = self.navigate_on.take().unwrap();
+            self.load(i, &url);
         }
         if let Some(k) = self
             .children
@@ -3500,6 +3509,75 @@ fn a_page_with_more_frames_than_registered_is_snapshotted_with_its_list_cut() {
     let ax = fx.json(&page.accessibility);
     assert_eq!(ax["frames"].as_array().unwrap().len(), MAX_FRAMES);
     assert_eq!(ax["framesTruncated"], true);
+}
+
+/// Every query an input awaits before it sends anything (a focus query, a hit test) may let the
+/// page navigate meanwhile: the reference is checked again after it, and nothing is sent into
+/// the replacement document.
+#[test]
+fn input_is_never_sent_into_a_document_that_replaced_its_target_during_a_query() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let b = fx.platform.browser(&session);
+    let replace_on = |method: &str| {
+        b.lock().unwrap().navigate_on = Some((method.into(), "https://app.test/form".into()));
+    };
+
+    // The page navigates while the key's focus query is answered (its new document holds
+    // focus): the stale target is refused and no key is sent.
+    let keys = requests(&b, "Input.dispatchKeyEvent");
+    replace_on("Accessibility.getFullAXTree");
+    let key = json!({"kind": "Key", "target": target_json(&snap), "key": "Enter", "modifiers": []});
+    assert_eq!(
+        failed_kind(fx.input(&user, &session, key)),
+        "browser_document"
+    );
+    assert!(
+        b.lock().unwrap().navigate_on.is_none(),
+        "the page navigated"
+    );
+    assert_eq!(requests(&b, "Input.dispatchKeyEvent"), keys);
+
+    // The page navigates while a click reads its node's box: nothing is scrolled or clicked
+    // in the new document, and the stale node is refused.
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    let (scrolls, mice) = (
+        requests(&b, "DOM.scrollIntoViewIfNeeded"),
+        requests(&b, "Input.dispatchMouseEvent"),
+    );
+    replace_on("DOM.getContentQuads");
+    let click = json!({"kind": "Click", "node": node(&snap, &ax, "Submit"), "button": "Primary"});
+    assert_eq!(
+        failed_kind(fx.input(&user, &session, click)),
+        "browser_document"
+    );
+    assert_eq!(requests(&b, "DOM.scrollIntoViewIfNeeded"), scrolls);
+    assert_eq!(requests(&b, "Input.dispatchMouseEvent"), mice);
+
+    // The page navigates while a click's hit test is answered (the new document has the same
+    // layout, so the point still "reaches" a node): no mouse event is sent. The node was
+    // already scrolled into view, so the outcome is unknown rather than "nothing happened".
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    let mice = requests(&b, "Input.dispatchMouseEvent");
+    replace_on("DOM.getNodeForLocation");
+    let click = json!({"kind": "Click", "node": node(&snap, &ax, "Submit"), "button": "Primary"});
+    assert!(
+        matches!(
+            fx.input(&user, &session, click),
+            OperationCompletion::OutcomeUnknown { .. }
+        ),
+        "a click after its scroll is an unknown outcome"
+    );
+    assert!(
+        b.lock().unwrap().navigate_on.is_none(),
+        "the page navigated"
+    );
+    assert_eq!(requests(&b, "Input.dispatchMouseEvent"), mice);
 }
 
 #[test]
