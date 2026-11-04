@@ -153,6 +153,11 @@ struct FakeBrowser {
     frame_scale: Option<f64>,
     /// An element covers this node: hit-testing over it finds the cover (backend 99).
     cover: Option<i64>,
+    /// Sessions that enabled request interception (`Fetch.enable`).
+    fetching: HashSet<String>,
+    /// A navigation paused at its request (interception): its request ID, page, URL and the
+    /// navigation's own request ID.
+    paused: Option<(String, usize, String, Value)>,
     /// The cover has `pointer-events: none`: pointer input passes through it.
     cover_inert: bool,
     /// This node has `pointer-events: none`: pointer input passes through it to the page.
@@ -477,9 +482,51 @@ impl FakeBrowser {
                 let (f, u) = (self.pages[i].frame.clone(), self.pages[i].url.clone());
                 self.reply(&id, json!({"frameTree": {"frame": {"id": f, "url": u}, "childFrames": []}}))
             }
+            "Fetch.enable" => {
+                if let Some(s) = session.clone() {
+                    self.fetching.insert(s);
+                }
+                self.reply(&id, json!({}))
+            }
+            // Like Chrome, an intercepted request pauses until the client answers it.
+            "Fetch.fulfillRequest" | "Fetch.failRequest" => {
+                self.reply(&id, json!({}));
+                let rid = p["requestId"].as_str().unwrap_or("").to_owned();
+                if let Some((pr, i, url, nav)) = self.paused.take() {
+                    if pr != rid {
+                        self.paused = Some((pr, i, url, nav));
+                        return;
+                    }
+                    let s = self.pages[i].session.clone();
+                    if method == "Fetch.failRequest" {
+                        let (f, l) = self.load(i, "chrome-error://chromewebdata/");
+                        self.reply(&nav, json!({"frameId": f, "loaderId": l, "errorText": "net::ERR_BLOCKED_BY_CLIENT"}));
+                        return;
+                    }
+                    let body = devworks_core::services::browser::cdp::decode_base64(
+                        p["body"].as_str().unwrap_or(""),
+                    )
+                    .unwrap_or_default();
+                    let body = String::from_utf8_lossy(&body).into_owned();
+                    let (f, l) = self.load(i, &url);
+                    if let Some(t) = body.split("<title>").nth(1).and_then(|r| r.split("</title>").next()) {
+                        self.pages[i].title = t.to_owned();
+                    }
+                    self.emit(Some(&s), "Page.lifecycleEvent", json!({"frameId": f, "loaderId": l, "name": "load"}));
+                    self.reply(&nav, json!({"frameId": f, "loaderId": l}));
+                }
+            }
             "Page.navigate" => {
                 let i = page.unwrap();
                 let url = p["url"].as_str().unwrap_or("").to_owned();
+                let intercepted = url.starts_with("https://artifact.devworks.invalid/") || url.starts_with("file:");
+                if intercepted && session.as_ref().is_some_and(|s| self.fetching.contains(s)) {
+                    let rid = format!("intercept-{}", self.log.len());
+                    let (s, f) = (self.pages[i].session.clone(), self.pages[i].frame.clone());
+                    self.paused = Some((rid.clone(), i, url.clone(), id.clone()));
+                    self.emit(Some(&s), "Fetch.requestPaused", json!({"requestId": rid, "request": {"url": url, "method": "GET"}, "frameId": f, "resourceType": "Document"}));
+                    return;
+                }
                 if url.contains("missing") {
                     let (f, l) = self.load(i, "chrome-error://chromewebdata/");
                     self.reply(&id, json!({"frameId": f, "loaderId": l, "errorText": "net::ERR_NAME_NOT_RESOLVED"}));
@@ -850,6 +897,14 @@ impl BrowserPlatform for FakePlatform {
     }
     fn remove_staged(&self, profile: &Profile, batch: &str) -> Result<(), BrowserFault> {
         self.native.remove_staged(profile, batch)
+    }
+    fn read_staged(
+        &self,
+        profile: &Profile,
+        path: &Path,
+        max: u64,
+    ) -> Result<Vec<u8>, BrowserFault> {
+        self.native.read_staged(profile, path, max)
     }
 }
 
@@ -3175,6 +3230,98 @@ fn a_click_is_hit_tested_the_way_pointer_input_is_routed() {
 }
 
 #[test]
+fn local_documents_are_never_loaded_or_read_through_an_owned_browser() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let b = fx.platform.browser(&session);
+    let failed = |rid: &str| {
+        b.lock().unwrap().log.iter().any(|m| {
+            m["method"] == "Fetch.failRequest"
+                && m["params"]["requestId"] == rid
+                && m["params"]["errorReason"] == "BlockedByClient"
+        })
+    };
+    // A page's local subresource or frame request is refused as blocked by the client.
+    {
+        let mut br = b.lock().unwrap();
+        let (s, f) = (br.pages[0].session.clone(), br.pages[0].frame.clone());
+        for (rid, kind, url) in [
+            ("sub-1", "Image", "file:///etc/passwd"),
+            ("frame-1", "Document", "file:///etc/hosts"),
+            (
+                "fs-1",
+                "Document",
+                "filesystem:https://app.test/temporary/x",
+            ),
+        ] {
+            br.emit(
+                Some(&s),
+                "Fetch.requestPaused",
+                json!({"requestId": rid, "request": {"url": url, "method": "GET"}, "frameId": f, "resourceType": kind}),
+            );
+        }
+    }
+    fx.svc().tick();
+    for rid in ["sub-1", "frame-1", "fs-1"] {
+        assert!(failed(rid), "{rid} was not refused");
+    }
+    // A local document that commits anyway (in any frame) is never read and the page is torn
+    // down: here the teardown navigation hangs, so the page stays unreadable meanwhile.
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let mut target = target_json(&snap);
+    {
+        let mut br = b.lock().unwrap();
+        br.hang.insert("Page.navigate".into());
+        let (s, f) = (br.pages[0].session.clone(), br.pages[0].frame.clone());
+        br.emit(
+            Some(&s),
+            "Page.frameNavigated",
+            json!({"frame": {"id": "F-local", "parentId": f, "url": "file:///etc/hosts", "loaderId": "L-local"}}),
+        );
+    }
+    fx.svc().tick();
+    assert!(
+        b.lock()
+            .unwrap()
+            .log
+            .iter()
+            .any(|m| m["method"] == "Page.navigate" && m["params"]["url"] == "about:blank"),
+        "the page was torn down"
+    );
+    let revision = target["documentRevision"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap()
+        + 1;
+    target["documentRevision"] = json!(revision.to_string());
+    let fault = fx.fault(&user, "browser.inspect", json!({"target": target}));
+    assert_eq!(fault.target_kind.unwrap().0, "browser_local_document");
+    let console = match fx.result(
+        &user,
+        "browser.console",
+        json!({"sessionId": session.as_str(), "afterSequence": "0", "page": {"limit": 50}}),
+    ) {
+        OperationResult::BrowserConsole { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let text = console
+        .items
+        .0
+        .iter()
+        .map(|o| fx.json(&o.evidence).to_string())
+        .collect::<String>();
+    assert!(text.contains("localDocumentBlocked"), "{text}");
+    assert!(
+        !text.contains("/etc/hosts"),
+        "the local path is not recorded: {text}"
+    );
+}
+
+#[test]
 fn a_browser_whose_main_process_exits_is_settled_while_its_helpers_linger() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
@@ -3614,19 +3761,17 @@ fn navigation_without_a_target_registers_a_new_one_and_artifact_pages_are_staged
     let op = fx.accepted(&user, "browser.navigate", json!({"sessionId": session.as_str(), "expectedRevision": s.revision.to_string(), "targetId": "t1", "location": {"kind": "Artifact", "artifact": r}}));
     fx.snapshot(fx.completion(&user, &op));
     let b = fx.platform.browser(&session);
+    // It is served from the session's artifact origin (never a local file URL), fulfilled from
+    // its staged copy by request interception.
     let url = b.lock().unwrap().pages[0].url.clone();
     let root = fx.profile_root(&session);
-    let expected = format!("file://{}", root.to_string_lossy().replace('\\', "/"));
     assert!(
-        url.starts_with("file://") && url.contains("report.html"),
+        url.starts_with("https://artifact.devworks.invalid/") && url.ends_with("report.html"),
         "{url}"
     );
-    assert!(
-        url.replace("%20", " ")
-            .starts_with(expected.trim_end_matches('/'))
-            || cfg!(windows),
-        "{url} under {expected}"
-    );
+    assert!(!url.contains(&*root.to_string_lossy()), "{url}");
+    assert_eq!(requests(&b, "Fetch.fulfillRequest"), 1);
+    assert_eq!(b.lock().unwrap().pages[0].title, "Report");
     // Console pages: a bounded page with a continuation cursor.
     for _ in 0..3 {
         fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
@@ -3952,6 +4097,73 @@ fn an_installed_browser_end_to_end_when_opted_in() {
         "{text}"
     );
     eprintln!("pointer routing: inert refused, overlay passed");
+    // An artifact page is served from the artifact origin: its refresh, link and frame into a
+    // local file load nothing, and nothing of the file is ever readable through inspect.
+    let secret_dir =
+        std::env::temp_dir().join(format!("devworks-local-secret-{}", std::process::id()));
+    std::fs::create_dir_all(&secret_dir).unwrap();
+    let secret = secret_dir.join("secret.txt");
+    std::fs::write(&secret, "DW46-LOCAL-SECRET-MARKER").unwrap();
+    let local = format!(
+        "file:///{}",
+        secret
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_start_matches('/')
+    );
+    let trap = fx
+        .app()
+        .artifacts()
+        .publish_evidence(
+            &**fx.app().store(),
+            Evidence {
+                scope: ArtifactScope::Workspace,
+                producer: user.principal().clone(),
+                principal_kind: "Human".into(),
+                agent_session: None,
+                root: None,
+                assignment: None,
+                title: "trap.html".into(),
+                media_type: "text/html".into(),
+                tags: vec![],
+                source: json!({"kind": "Fixture"}),
+            },
+            format!("<!doctype html><title>Trap</title><meta http-equiv=refresh content=\"0;url={local}\"><a href=\"{local}\">Local file</a><iframe src=\"{local}\"></iframe>").as_bytes(),
+            |_, _| Ok(()),
+        )
+        .unwrap()
+        .0;
+    let s = fx.session(&session);
+    let op = fx.accepted(&user, "browser.navigate", json!({"sessionId": session.as_str(), "expectedRevision": s.revision.to_string(), "targetId": target, "location": {"kind": "Artifact", "artifact": trap}}));
+    let trapped = fx.snapshot(fx.completion(&user, &op));
+    assert!(
+        trapped
+            .url
+            .0
+            .starts_with("https://artifact.devworks.invalid/"),
+        "{}",
+        trapped.url.0
+    );
+    fx.drive(1500);
+    let (now, nax) = fresh(&target_json(&trapped));
+    assert!(!nax.to_string().contains("DW46-LOCAL-SECRET"), "{nax}");
+    if nax["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["name"] == "Local file")
+    {
+        let _ = fx.input(
+            &user,
+            &session,
+            json!({"kind": "Click", "node": node(&now, &nax, "Local file"), "button": "Primary"}),
+        );
+        fx.drive(1500);
+    }
+    let (_, after) = fresh(&target_json(&now));
+    assert!(!after.to_string().contains("DW46-LOCAL-SECRET"), "{after}");
+    let _ = std::fs::remove_dir_all(&secret_dir);
+    eprintln!("artifact origin: no local file readable");
     // A real navigation invalidates the previous document's nodes.
     let snap = fx.snapshot(fx.navigate(
         &user,

@@ -43,6 +43,35 @@ impl std::fmt::Display for CdpError {
     }
 }
 
+/// The origin artifact pages are served from: a reserved name (`.invalid` never resolves),
+/// answered only by request interception inside the session's browser. Nothing listens on a
+/// socket, so no other process can reach it.
+pub const ARTIFACT_ORIGIN: &str = "https://artifact.devworks.invalid";
+
+/// URL patterns intercepted on every page and frame session: the artifact origin (fulfilled
+/// from the session's staged pages) and every scheme that reaches local data (always refused).
+pub const INTERCEPTED: [&str; 8] = [
+    "https://artifact.devworks.invalid/*",
+    "file:*",
+    "filesystem:*",
+    "chrome:*",
+    "chrome-extension:*",
+    "chrome-untrusted:*",
+    "devtools:*",
+    "view-source:*",
+];
+
+/// Most artifact pages one session keeps ready to serve (the newest ones).
+const SERVED_PAGES: usize = 8;
+
+/// A staged artifact page served at its exact URL under [`ARTIFACT_ORIGIN`].
+#[derive(Clone, Debug)]
+pub struct ServedPage {
+    pub url: String,
+    pub body: Vec<u8>,
+    pub media_type: String,
+}
+
 pub struct Cdp {
     transport: Box<dyn CdpTransport>,
     next_id: u64,
@@ -50,6 +79,7 @@ pub struct Cdp {
     /// Events dropped because the buffer was full (reported as truncation).
     pub dropped: u64,
     closed: bool,
+    served: VecDeque<ServedPage>,
 }
 
 impl Cdp {
@@ -60,7 +90,22 @@ impl Cdp {
             events: VecDeque::new(),
             dropped: 0,
             closed: false,
+            served: VecDeque::new(),
         }
+    }
+
+    /// Makes `page` available at its URL (the oldest is forgotten past [`SERVED_PAGES`]).
+    pub fn serve(&mut self, page: ServedPage) {
+        if self.served.len() >= SERVED_PAGES {
+            self.served.pop_front();
+        }
+        self.served.push_back(page);
+    }
+
+    /// The served page an intercepted request names exactly, if any.
+    pub fn served_page(&self, url: &str) -> Option<&ServedPage> {
+        let url = url.split('#').next().unwrap_or(url);
+        self.served.iter().rev().find(|p| p.url == url)
     }
 
     /// Whether the transport reported closure.
@@ -102,9 +147,47 @@ impl Cdp {
     /// Files a message that is not the awaited response: events are buffered; responses to
     /// earlier (timed-out) requests are discarded. A JavaScript dialog is answered at once
     /// (alert and beforeunload accepted, confirm and prompt dismissed): an open dialog blocks
-    /// the page, so input that opened it would otherwise never be acknowledged.
+    /// the page, so input that opened it would otherwise never be acknowledged. An intercepted
+    /// request is answered at once too (the navigation awaiting it would otherwise never end):
+    /// a served artifact page is fulfilled from its staged bytes; anything else intercepted (a
+    /// local scheme, an unknown artifact URL) is refused as blocked by the client.
     fn file(&mut self, message: Value) {
         if let Some(method) = message.get("method").and_then(Value::as_str) {
+            if method == "Fetch.requestPaused"
+                && let Some(request) = message.pointer("/params/requestId").and_then(Value::as_str)
+            {
+                let url = message
+                    .pointer("/params/request/url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let (answer, params) = match self.served_page(url) {
+                    Some(page) => (
+                        "Fetch.fulfillRequest",
+                        json!({
+                            "requestId": request, "responseCode": 200,
+                            "responseHeaders": [
+                                {"name": "Content-Type", "value": page.media_type},
+                                {"name": "X-Content-Type-Options", "value": "nosniff"},
+                                {"name": "Cache-Control", "value": "no-store"},
+                                {"name": "Referrer-Policy", "value": "no-referrer"},
+                            ],
+                            "body": encode_base64(&page.body),
+                        }),
+                    ),
+                    None => (
+                        "Fetch.failRequest",
+                        json!({"requestId": request, "errorReason": "BlockedByClient"}),
+                    ),
+                };
+                self.next_id += 1;
+                let mut reply = json!({"id": self.next_id, "method": answer, "params": params});
+                if let Some(s) = message.get("sessionId") {
+                    reply["sessionId"] = s.clone();
+                }
+                if self.transport.send(&reply.to_string()).is_err() {
+                    self.closed = true;
+                }
+            }
             if method == "Page.javascriptDialogOpening"
                 && let Some(session) = message.get("sessionId").and_then(Value::as_str)
             {

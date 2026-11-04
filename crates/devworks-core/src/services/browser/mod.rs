@@ -1487,9 +1487,26 @@ impl BrowserService {
         let url = match &input.location {
             BrowserLocation::Remote { url } => url.0.clone(),
             BrowserLocation::Blank {} => "about:blank".into(),
-            BrowserLocation::Artifact { .. } => {
+            // An artifact page is served from the session's artifact origin (never a `file:`
+            // URL, which could reach every other local file), from its staged copy.
+            BrowserLocation::Artifact { artifact } => {
                 let path = op.payload["staged"][0].as_str().unwrap_or_default();
-                file_url(path)
+                let body = self
+                    .platform
+                    .read_staged(
+                        &live.profile,
+                        std::path::Path::new(path),
+                        live::ARTIFACT_PAGE_LIMIT,
+                    )
+                    .map_err(|e| ActionError::Refused {
+                        kind: "browser_artifact",
+                        detail: format!("the artifact page could not be served: {e}"),
+                    })?;
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "page".into());
+                live.serve_artifact(&name, body, &artifact.media_type)
             }
         };
         let i = match &input.target_id {
@@ -2892,24 +2909,6 @@ fn unresolved(state: Option<OperationState>) -> bool {
 
 fn completed(result: OperationResult) -> EffectOutcome {
     EffectOutcome::Completed(json!({"result": result}))
-}
-
-fn file_url(path: &str) -> String {
-    let p = path.replace('\\', "/");
-    let encoded: String = p
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' | b':' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect();
-    if encoded.starts_with('/') {
-        format!("file://{encoded}")
-    } else {
-        format!("file:///{encoded}")
-    }
 }
 
 fn conflict(id: &Id, expected: &Revision, current: i64) -> Failure {

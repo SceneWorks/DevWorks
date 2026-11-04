@@ -389,3 +389,50 @@ fn a_browser_that_stops_reading_closes_the_pipe_without_blocking_the_host() {
     assert!(took < Duration::from_secs(5), "{took:?}");
     drop(from_host);
 }
+
+#[test]
+fn a_served_page_is_read_only_from_a_staged_file_of_its_session() {
+    let d = Dir::new();
+    let p = platform(&d);
+    let profile = p.create_profile(&Id::new("session-r").unwrap()).unwrap();
+    let staged = p
+        .stage_file(
+            &profile,
+            "batch-1",
+            "1-page.html",
+            &mut std::io::Cursor::new(b"<p>ok</p>"),
+            64,
+        )
+        .unwrap();
+    assert_eq!(p.read_staged(&profile, &staged, 64).unwrap(), b"<p>ok</p>");
+    // Larger than its bound, outside the session root, through `..`, or a link: refused.
+    assert!(matches!(
+        p.read_staged(&profile, &staged, 4),
+        Err(BrowserFault::Refused(_))
+    ));
+    let outside = d.0.join("outside.txt");
+    std::fs::write(&outside, b"host file").unwrap();
+    assert!(matches!(
+        p.read_staged(&profile, &outside, 64),
+        Err(BrowserFault::Refused(_))
+    ));
+    let climbing = profile
+        .root
+        .join("batch-1")
+        .join("..")
+        .join("..")
+        .join("outside.txt");
+    assert!(matches!(
+        p.read_staged(&profile, &climbing, 64),
+        Err(BrowserFault::Refused(_))
+    ));
+    #[cfg(unix)]
+    {
+        let link = profile.root.join("batch-1").join("2-link.html");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(matches!(
+            p.read_staged(&profile, &link, 64),
+            Err(BrowserFault::Refused(_))
+        ));
+    }
+}

@@ -138,6 +138,14 @@ pub trait BrowserPlatform: Send + Sync {
     ) -> Result<PathBuf, BrowserFault>;
     /// Removes one staged batch directory (no-follow); absent is not an error.
     fn remove_staged(&self, profile: &Profile, batch: &str) -> Result<(), BrowserFault>;
+    /// Reads a staged file of the session (a regular file under its root, not followed through
+    /// a link), at most `max_bytes`; a larger one is refused.
+    fn read_staged(
+        &self,
+        profile: &Profile,
+        path: &Path,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, BrowserFault>;
 }
 
 /// Most open targets one session keeps (live and recorded alike).

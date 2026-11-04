@@ -13,7 +13,10 @@
 //! and passed through the host redactor before they become evidence; URLs lose user info,
 //! fragments and the values of credential-shaped query parameters. No header, cookie or body is
 //! captured, and no network interception or page script is used.
-use super::cdp::{Cdp, CdpError, CdpEvent, decode_base64, dialog_accepted};
+use super::cdp::{
+    ARTIFACT_ORIGIN, Cdp, CdpError, CdpEvent, INTERCEPTED, ServedPage, decode_base64,
+    dialog_accepted,
+};
 use crate::authority::redact::Redactor;
 use crate::ports::browser::{MAX_TARGETS, Profile};
 use crate::protocol::records::{
@@ -34,6 +37,36 @@ pub const NODE_LIMIT: usize = 5_000;
 /// Most frames (and out-of-process frames) one target registers; a page with more keeps the
 /// first ones addressable and its snapshots say the list was cut.
 pub const MAX_FRAMES: usize = 256;
+/// The schemes a frame may commit (deny by default): web documents, the blank and srcdoc
+/// documents, inline data and blobs a page made itself, and Chrome's network error page.
+/// Everything else (`file:`, `filesystem:`, `chrome:`, `chrome-extension:`, `devtools:`,
+/// `view-source:`, ...) can reach local data and tears the page down.
+pub const ALLOWED_SCHEMES: [&str; 6] = ["http", "https", "about", "data", "blob", "chrome-error"];
+/// Largest artifact page served (it is held in memory and sent as one message).
+pub const ARTIFACT_PAGE_LIMIT: u64 = 16 * 1024 * 1024;
+
+/// Whether a committed document's URL is allowed (see [`ALLOWED_SCHEMES`]).
+pub fn allowed_document(url: &str) -> bool {
+    url.split_once(':')
+        .is_some_and(|(scheme, _)| ALLOWED_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str()))
+}
+
+/// 128 bits no page can predict: two outputs of SipHash keyed by the standard library's
+/// operating-system-seeded hash keys.
+fn unguessable() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    (0..2u64)
+        .map(|k| {
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u64(k);
+            h.write_u128(nanos);
+            format!("{:016x}", h.finish())
+        })
+        .collect()
+}
 /// Snapshots retained per target (older node references stop resolving).
 pub const SNAPSHOTS_KEPT: usize = 8;
 /// Largest evidence document one observation publishes.
@@ -120,6 +153,9 @@ pub struct Target {
     pub children: Vec<Child>,
     /// More frames attached than [`MAX_FRAMES`] (the rest are not addressable).
     pub frames_cut: bool,
+    /// A frame committed a local document (a scheme outside [`ALLOWED_SCHEMES`]): the page is
+    /// being torn down and nothing of it is read meanwhile.
+    pub local: bool,
     next_frame: u64,
     pub document_revision: i64,
     pub snapshots: VecDeque<Snapshot>,
@@ -141,6 +177,7 @@ impl Target {
             }],
             children: Vec::new(),
             frames_cut: false,
+            local: false,
             id,
             cdp_target,
             cdp_session,
@@ -294,6 +331,11 @@ pub struct Live {
     pending_attach: Vec<Value>,
     /// Out-of-process frames attached but not configured yet: (target, child).
     pending_children: Vec<(usize, Child)>,
+    /// Targets whose page committed a local document and is to be torn down.
+    pending_teardown: Vec<usize>,
+    /// Where this session's artifact pages are served: `<origin>/<unguessable token>/`.
+    artifact_prefix: String,
+    next_artifact: u64,
     started: Instant,
 }
 
@@ -444,6 +486,9 @@ impl Live {
             policy: Value::Null,
             pending_attach: Vec::new(),
             pending_children: Vec::new(),
+            pending_teardown: Vec::new(),
+            artifact_prefix: format!("{ARTIFACT_ORIGIN}/{}/", unguessable()),
+            next_artifact: 0,
             started: Instant::now(),
         }
     }
@@ -631,6 +676,12 @@ impl Live {
         }
         let s = cdp_session.to_owned();
         for (method, params) in [
+            ("Fetch.enable", intercepted()),
+            // A file chooser a page opens selects nothing: files reach a page only by upload.
+            (
+                "Page.setInterceptFileChooserDialog",
+                json!({"enabled": true}),
+            ),
             ("Page.enable", json!({})),
             ("Page.setLifecycleEventsEnabled", json!({"enabled": true})),
             ("Runtime.enable", json!({})),
@@ -699,6 +750,7 @@ impl Live {
     fn configure_child(&mut self, i: usize, child: Child, bounds: &Bounds) -> Result<(), CdpError> {
         let s = child.session.clone();
         for (method, params) in [
+            ("Fetch.enable", intercepted()),
             ("Page.enable", json!({})),
             ("Page.setLifecycleEventsEnabled", json!({"enabled": true})),
             ("Runtime.enable", json!({})),
@@ -872,6 +924,25 @@ impl Live {
                     let id = frame.get("id").and_then(Value::as_str).unwrap_or_default();
                     let url = frame.get("url").and_then(Value::as_str).unwrap_or_default();
                     let page = self.targets[i].is_page(e.session.as_deref());
+                    if !allowed_document(url) {
+                        // A local document committed (in any frame): nothing of the page is
+                        // read again, and the page is torn down (navigated to a blank one).
+                        let t = &mut self.targets[i];
+                        t.local = true;
+                        t.invalidate();
+                        let scheme = url.split(':').next().unwrap_or("").to_owned();
+                        self.console.push(json!({
+                            "at": at, "kind": "localDocumentBlocked", "target": tid,
+                            "scheme": text(&scheme),
+                        }));
+                        if !self.pending_teardown.contains(&i) {
+                            self.pending_teardown.push(i);
+                        }
+                        return;
+                    }
+                    if frame.get("parentId").is_none() && page {
+                        self.targets[i].local = false;
+                    }
                     if frame.get("parentId").is_none() && page {
                         let t = &mut self.targets[i];
                         t.frames.truncate(1);
@@ -999,7 +1070,10 @@ impl Live {
     /// out-of-process frames.
     pub fn settle_pending(&mut self, bounds: &Bounds) -> Result<(), CdpError> {
         for _ in 0..8 {
-            if self.pending_attach.is_empty() && self.pending_children.is_empty() {
+            if self.pending_attach.is_empty()
+                && self.pending_children.is_empty()
+                && self.pending_teardown.is_empty()
+            {
                 return Ok(());
             }
             for (i, child) in std::mem::take(&mut self.pending_children) {
@@ -1009,6 +1083,18 @@ impl Live {
                     // A frame that went away before it was configured.
                     Err(CdpError::Remote { .. }) => self.detach_child(i, &session),
                     Err(e) => return Err(e),
+                }
+            }
+            for i in std::mem::take(&mut self.pending_teardown) {
+                if self.targets.get(i).is_some_and(|t| !t.closed) {
+                    let s = self.targets[i].cdp_session.clone();
+                    // The navigation's own events (a blank document) clear the guard.
+                    let _ = self.cdp.call(
+                        Some(&s),
+                        "Page.navigate",
+                        json!({"url": "about:blank"}),
+                        bounds.call,
+                    );
                 }
             }
             for p in std::mem::take(&mut self.pending_attach) {
@@ -1044,6 +1130,28 @@ impl Live {
         self.absorb_events();
         r?;
         self.settle_pending(bounds)
+    }
+
+    /// Serves a staged artifact page at a fresh URL of this session's artifact origin path and
+    /// returns that URL.
+    pub fn serve_artifact(&mut self, name: &str, body: Vec<u8>, media_type: &str) -> String {
+        self.next_artifact += 1;
+        let name: String = name
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect();
+        let url = format!("{}{}/{name}", self.artifact_prefix, self.next_artifact);
+        self.cdp.serve(ServedPage {
+            url: url.clone(),
+            body,
+            media_type: media_type.to_owned(),
+        });
+        url
     }
 
     fn open_count(&self) -> usize {
@@ -1085,6 +1193,17 @@ impl Live {
             .filter(|t| !t.closed)
             .map(|t| t.id.clone())
             .collect()
+    }
+
+    /// Refuses reading a target whose page committed a local document (until it is torn down).
+    fn refuse_local(&self, i: usize) -> Result<(), ActionError> {
+        if self.targets[i].local {
+            return Err(ActionError::Refused {
+                kind: "browser_local_document",
+                detail: "the page committed a local document and is being torn down".into(),
+            });
+        }
+        Ok(())
     }
 
     fn target_index(&self, id: &str) -> Option<usize> {
@@ -1213,6 +1332,7 @@ impl Live {
         // Frames attached by the last request are configured before the document is read.
         self.settle_pending(bounds).map_err(ActionError::Before)?;
         let (i, frame) = self.resolve(target)?;
+        self.refuse_local(i)?;
         // Read on the session hosting the frame's document: an out-of-process frame has its own.
         let s = frame.session.clone();
         let tree = self
@@ -1374,6 +1494,7 @@ impl Live {
         bounds: &Bounds,
     ) -> Result<(Vec<u8>, bool), ActionError> {
         let (i, _) = self.resolve(target)?;
+        self.refuse_local(i)?;
         if target.frame_id.as_str() != self.targets[i].main_frame() {
             return Err(ActionError::Refused {
                 kind: "browser_frame",
@@ -2151,6 +2272,15 @@ pub fn post_dispatch(e: ActionError) -> ActionError {
             ActionError::After(CdpError::Protocol(format!("after the action: {detail}")))
         }
     }
+}
+
+/// The `Fetch.enable` parameters: every [`INTERCEPTED`] pattern at the request stage.
+fn intercepted() -> Value {
+    let patterns: Vec<Value> = INTERCEPTED
+        .iter()
+        .map(|p| json!({"urlPattern": p, "requestStage": "Request"}))
+        .collect();
+    json!({"patterns": patterns})
 }
 
 /// A local root on the way from the page to a document: its session, the map from its viewport

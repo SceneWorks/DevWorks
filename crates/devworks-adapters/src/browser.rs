@@ -422,6 +422,44 @@ impl BrowserPlatform for NativeBrowserPlatform {
         Ok(path)
     }
 
+    fn read_staged(
+        &self,
+        profile: &Profile,
+        path: &Path,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, BrowserFault> {
+        if !path.starts_with(&profile.root)
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(BrowserFault::Refused(
+                "the file is not staged under the session root".into(),
+            ));
+        }
+        let meta = std::fs::symlink_metadata(path).map_err(io)?;
+        if !meta.is_file() {
+            return Err(BrowserFault::Refused(
+                "the staged path is not a file".into(),
+            ));
+        }
+        if meta.len() > max_bytes {
+            return Err(BrowserFault::Refused(
+                "the staged file exceeds its size bound".into(),
+            ));
+        }
+        let mut out = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|f| f.take(max_bytes + 1).read_to_end(&mut out))
+            .map_err(io)?;
+        if out.len() as u64 > max_bytes {
+            return Err(BrowserFault::Refused(
+                "the staged file exceeds its size bound".into(),
+            ));
+        }
+        Ok(out)
+    }
+
     fn remove_staged(&self, profile: &Profile, batch: &str) -> Result<(), BrowserFault> {
         let dir = profile.root.join(component(batch)?);
         match std::fs::symlink_metadata(&dir) {
