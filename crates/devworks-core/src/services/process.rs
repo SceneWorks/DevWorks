@@ -395,6 +395,13 @@ impl ProcessSupervisor {
         live.tree.take_output()
     }
 
+    /// The control channel of a tree launched with a control pipe, once.
+    pub fn take_control(&self, p: &OwnedProcess) -> Option<crate::ports::process::ControlChannel> {
+        let entry = self.entry(&p.id)?;
+        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        live.tree.take_control()
+    }
+
     /// Observes a tree without blocking; a tree found empty is settled `Reaped`.
     pub fn poll(&self, p: &OwnedProcess) -> Result<Option<StopOutcome>, StorageError> {
         let Some(entry) = self.entry(&p.id) else {

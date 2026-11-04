@@ -132,7 +132,7 @@ impl Streams {
 #[derive(Clone, Default)]
 pub struct Readers(Arc<Mutex<HashMap<String, usize>>>);
 impl Readers {
-    fn acquire(&self, digest: &str) -> ReaderGuard {
+    pub(super) fn acquire(&self, digest: &str) -> ReaderGuard {
         *self
             .0
             .lock()

@@ -4,6 +4,7 @@
 //! resource housekeeping, run supervision and the diagnostics monitor, and only then returns the
 //! [`Runtime`] through which commands and queries are admitted. See the crate documentation ("Boot
 //! sequence") for the order and why each step sits where it does.
+use crate::browser::{BrowserComposition, Supervision as BrowserSupervision};
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
 use crate::replies::reply_consumer;
@@ -23,6 +24,7 @@ use devworks_core::services::artifacts::lifecycle::{
     CollectReport, RecoveryReport as ArtifactRecoveryReport,
 };
 use devworks_core::services::artifacts::replies::ReceiptReplies;
+use devworks_core::services::browser::{BrowserRecovery, BrowserService};
 use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
 use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
@@ -90,6 +92,12 @@ pub struct Composition {
     /// boot recovery through it, feeds it the boot report, collection passes and consumers, and
     /// runs its retention and monitor passes.
     pub diagnostics: Arc<DiagnosticService>,
+    /// Owned browser sessions (`browser.*`): when present, [`boot`] builds the one
+    /// [`BrowserService`] over the composition's store, artifact service and process owner,
+    /// registers its use cases and effect consumer, recovers earlier boots' sessions after the
+    /// owned processes, supervises it and closes its sessions at shutdown. When absent, no
+    /// browser operation is registered (nothing unqualified is advertised).
+    pub browser: Option<BrowserComposition>,
     /// The other use cases (queue, sessions, history, settings, ...).
     pub use_cases: UseCases,
     /// Consumers besides the required ones [`boot`] registers itself (package handlers, ...).
@@ -119,6 +127,8 @@ pub struct RuntimeConfig {
     /// runs at boot regardless. Hourly by default: retention is counted in days, and a full
     /// integrity check reads the whole store.
     pub diagnostics_interval: Duration,
+    /// Time between browser supervision passes (notifications, popups, crash detection).
+    pub browser_interval: Duration,
 }
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
@@ -131,6 +141,7 @@ impl RuntimeConfig {
             shutdown_grace: Duration::from_secs(5),
             shutdown_bound: Duration::from_secs(30),
             diagnostics_interval: Duration::from_secs(60 * 60),
+            browser_interval: Duration::from_secs(1),
         }
     }
 }
@@ -149,6 +160,9 @@ pub struct BootReport {
     pub runs: BootRecovery,
     /// The keep-awake setting as applied at boot.
     pub keep_awake: KeepAwakeStatus,
+    /// Browser sessions of earlier boots settled from what process recovery verified, and the
+    /// orphaned profile roots removed (`None` when no browser is composed).
+    pub browser: Option<BrowserRecovery>,
 }
 
 /// Why boot stopped; nothing was started and no command can be admitted.
@@ -166,6 +180,8 @@ pub enum BootError {
     Runs(StorageError),
     /// The keep-awake setting could not be read.
     Settings(StorageError),
+    /// Browser session recovery failed.
+    Browser(StorageError),
 }
 
 /// One artifact collection pass.
@@ -214,6 +230,8 @@ pub struct Runtime {
     keep_awake: Arc<KeepAwake>,
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
+    browser: Option<Arc<BrowserService>>,
+    browser_supervision: Arc<BrowserSupervision>,
     shutdown_grace: Duration,
     shutdown_bound: Duration,
     report: BootReport,
@@ -261,10 +279,37 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         runs,
         power,
         diagnostics,
+        browser,
         use_cases,
         mut consumers,
         config,
     } = composition;
+    // The one process owner: every owned tree (browsers included) is launched through it. It is
+    // built first so the browser service can be composed with it; its recovery still runs at
+    // step 4.
+    let supervisor = Arc::new(ProcessSupervisor::new(
+        store.clone(),
+        process_host,
+        resources.clone(),
+    ));
+    let browser = browser.map(|b| {
+        Arc::new(BrowserService::new(
+            store.clone(),
+            b.platform,
+            artifacts.clone(),
+            supervisor.clone(),
+            b.fs,
+            b.app_data_root,
+            ids.clone(),
+            clock.clone(),
+            b.config,
+        ))
+    });
+    let mut use_cases = use_cases;
+    if let Some(b) = &browser {
+        use_cases = use_cases.with_browser(b.clone());
+        consumers.push(crate::browser::consumer(b.clone()));
+    }
     let use_cases = use_cases
         .with_artifacts(artifacts.clone())
         .with_resources(resources.clone())
@@ -305,11 +350,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .unwrap_or_else(|_| Err(panicked("artifact recovery")))
         .map_err(BootError::Artifacts)
         .map_err(failed)?;
-    let supervisor = Arc::new(ProcessSupervisor::new(
-        store.clone(),
-        process_host,
-        resources.clone(),
-    ));
     let booted_at_ms = clock.now_ms().get();
     let housekeeper = Arc::new(Housekeeper::new(
         store.clone(),
@@ -322,6 +362,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .await
         .map_err(BootError::Resources)
         .map_err(failed)?;
+    // Browser sessions of earlier boots settle from what process recovery just verified.
+    let recovered_browser = match &browser {
+        Some(b) => {
+            let svc = b.clone();
+            Some(
+                tokio::task::spawn_blocking(move || svc.recover())
+                    .await
+                    .unwrap_or_else(|_| Err(panicked("browser recovery")))
+                    .map_err(BootError::Browser)
+                    .map_err(failed)?,
+            )
+        }
+        None => None,
+    };
     let mut run_supervisor = RunSupervisor::new(
         store.clone(),
         clock,
@@ -359,6 +413,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         resources: recovered_resources,
         runs: recovered_runs,
         keep_awake: applied,
+        browser: recovered_browser,
     };
     let (svc, recovered) = (diagnostics.clone(), report.clone());
     let _ = tokio::task::spawn_blocking(move || diag::record_boot(&svc, &recovered)).await;
@@ -388,6 +443,17 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         collector.status.subscribe(),
         dispatcher.clone(),
     );
+    let browser_supervision = Arc::new(BrowserSupervision::default());
+    let mut tasks = vec![delivery, collection, housekeeping];
+    if let Some(b) = &browser {
+        let svc = b.clone();
+        diagnostics.register_source(Arc::new(move |now| svc.health(now)));
+        tasks.push(tokio::spawn(crate::browser::run(
+            b.clone(),
+            browser_supervision.clone(),
+            config.browser_interval,
+        )));
+    }
     let monitor = Arc::new(Monitor::default());
     let (watcher, svc, every) = (
         monitor.clone(),
@@ -411,10 +477,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         keep_awake,
         diagnostics,
         monitor,
+        browser,
+        browser_supervision,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
         report,
-        tasks: Mutex::new(vec![delivery, collection, housekeeping]),
+        tasks: Mutex::new(tasks),
         supervision: Mutex::new(Some(supervision)),
         monitoring: Mutex::new(Some(monitoring)),
     })
@@ -489,6 +557,12 @@ impl Runtime {
         self.diagnostics.export(ctx, query, request_key, |raw| {
             self.command(ctx, "artifacts.save", raw)
         })
+    }
+    /// The browser service the `browser.*` use cases, its effect consumer and supervision
+    /// share (`None` when no browser is composed). Typed completions of accepted browser
+    /// commands are read through [`BrowserService::completion`].
+    pub fn browser(&self) -> Option<&Arc<BrowserService>> {
+        self.browser.as_ref()
     }
     /// The process supervisor every owned tree is launched through (process tools, package and
     /// helper hosts).
@@ -685,6 +759,12 @@ impl Runtime {
             task.abort();
         }
         self.dispatcher.idle().await;
+        // Browser sessions close through the process owner (their records settle and profiles
+        // are removed) before the remaining owned trees are stopped.
+        if let Some(b) = self.browser.clone() {
+            let closing = tokio::task::spawn_blocking(move || b.shutdown());
+            let _ = dispatch::first(tokio::time::sleep(left()), closing).await;
+        }
         let bound = left();
         let stopped = self
             .housekeeper
@@ -698,6 +778,7 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        self.browser_supervision.stop();
         self.dispatcher.stop();
         self.collector.stop();
         self.housekeeper.stop();

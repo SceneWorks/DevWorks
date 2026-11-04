@@ -243,6 +243,7 @@ fn composition(
                 None,
             ),
         ),
+        browser: None,
         use_cases: UseCases::new()
             .with_queue()
             .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store)))

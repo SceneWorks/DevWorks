@@ -6,6 +6,7 @@
 //! registered use case is reported as [`GatewayFailure::NoUseCase`] before any store access, so
 //! nothing unimplemented is advertised or recorded.
 pub mod artifacts;
+pub mod browser;
 pub mod cursor;
 pub mod diagnostics;
 pub mod history;
@@ -143,6 +144,14 @@ impl UseCases {
     /// Registers the diagnostics operations of the workspace family (`DiagnosticService`).
     pub fn with_diagnostics(mut self, service: Arc<diagnostics::DiagnosticService>) -> Self {
         for op in diagnostics::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the browser family (`BrowserBackend`).
+    pub fn with_browser(mut self, service: Arc<browser::BrowserService>) -> Self {
+        for op in browser::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

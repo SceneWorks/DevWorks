@@ -520,6 +520,45 @@ fn a_tree_that_finishes_reports_its_exit_code() {
     assert!(!tree.identity().birth.is_empty());
 }
 
+/// The private control channel (DW-047's DevTools pipe): what the host writes reaches the
+/// child's read end, what the child writes comes back, and the channel ends with the child.
+/// On Windows the inherited handle values are named on the command line (here read by
+/// PowerShell's anonymous pipe client, as Chromium's `--remote-debugging-io-pipes` reads them).
+#[test]
+fn a_control_pipe_is_a_private_channel_to_the_child() {
+    let _serial = serial();
+    let mut spec = if cfg!(windows) {
+        let script = "& { param($i, $o); $in = New-Object System.IO.Pipes.AnonymousPipeClientStream([System.IO.Pipes.PipeDirection]::In, [string]$i); $out = New-Object System.IO.Pipes.AnonymousPipeClientStream([System.IO.Pipes.PipeDirection]::Out, [string]$o); $line = (New-Object System.IO.StreamReader($in)).ReadLine(); $b = [System.Text.Encoding]::ASCII.GetBytes('got ' + $line); $out.Write($b, 0, $b.Length); $out.Flush(); $out.Dispose() }";
+        ProcessSpec::new(&[
+            "powershell".into(),
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-Command".into(),
+            script.into(),
+        ])
+        .unwrap()
+    } else {
+        shell("IFS= read -r line <&3; printf 'got %s' \"$line\" >&4")
+    };
+    spec.control_pipe = Some(devworks_core::ports::process::ControlPipe {
+        windows_args: vec!["{read}".into(), "{write}".into()],
+    });
+    let mut tree = NativeProcessHost.spawn(&spec).unwrap();
+    let (mut to_child, mut from_child) = tree.take_control().expect("a control channel");
+    assert!(tree.take_control().is_none(), "handed out once");
+    std::io::Write::write_all(&mut to_child, b"hello\n").unwrap();
+    std::io::Write::flush(&mut to_child).unwrap();
+    let mut reply = String::new();
+    std::io::Read::read_to_string(&mut from_child, &mut reply).unwrap();
+    assert_eq!(reply, "got hello");
+    let status = until_empty(&mut *tree, Duration::from_secs(30)).expect("finished");
+    assert_eq!(status.exit_code, Some(0));
+    // A child without a control pipe gets none.
+    let mut plain = NativeProcessHost.spawn(&shell("exit 0")).unwrap();
+    assert!(plain.take_control().is_none());
+    until_empty(&mut *plain, Duration::from_secs(10)).expect("finished");
+}
+
 #[test]
 fn the_forced_stop_reaps_every_descendant() {
     let _serial = serial();

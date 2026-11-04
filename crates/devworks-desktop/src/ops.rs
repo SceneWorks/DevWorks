@@ -5,7 +5,7 @@ use crate::backend::Backend;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
 use devworks_core::protocol::records::{
-    ArtifactRecord, ResourceRecord, SessionRecord, SettingEntry, ValidationReport,
+    ArtifactRecord, BrowserSession, ResourceRecord, SessionRecord, SettingEntry, ValidationReport,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, DomainFault};
@@ -357,6 +357,41 @@ pub fn resources_list(backend: &dyn Backend) -> Vec<u8> {
         "resources.list",
         json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
     )
+}
+/// The workspace's owned browser sessions (`browser.sessions`).
+pub fn browser_sessions_list(backend: &dyn Backend) -> Vec<u8> {
+    query_frame(
+        backend,
+        "browser.sessions",
+        json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
+    )
+}
+pub fn browser_sessions(outcome: QueryOutcome) -> Result<(Vec<BrowserSession>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::BrowserSessions { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("browser.sessions", &other)),
+    }
+}
+/// Closes (interrupts) a browser session at its current revision.
+pub fn browser_close(backend: &dyn Backend, session: &str, revision: &str) -> Vec<u8> {
+    command_frame(
+        backend,
+        "browser.sessions",
+        json!({"action": {"kind": "Close", "sessionId": session, "expectedRevision": revision}}),
+    )
+}
+/// `true` when the close was accepted (the browser is being stopped through the process
+/// owner), `false` when the session had already stopped.
+pub fn browser_closed(outcome: CommandOutcome) -> Result<bool, Failure> {
+    match outcome.map_err(gateway)? {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Accepted { .. } => Ok(true),
+            DomainDecision::Applied { .. } | DomainDecision::NoChange { .. } => Ok(false),
+            DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
+        },
+        CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
 }
 pub fn resources(outcome: QueryOutcome) -> Result<(Vec<ResourceRecord>, bool), Failure> {
     match query_result(outcome)? {

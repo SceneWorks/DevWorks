@@ -24,6 +24,7 @@
 //!   the future stops waiting but never rolls back an admitted job.
 mod artifacts;
 mod authority;
+mod browser;
 mod configuration;
 mod conn;
 mod diagnostics;
@@ -42,7 +43,7 @@ pub use migrations::{
     MIGRATION_0001_SHA256, MIGRATION_0002_SHA256, MIGRATION_0003_SHA256, MIGRATION_0004_SHA256,
     MIGRATION_0005_SHA256, MIGRATION_0006_SHA256, MIGRATION_0007_SHA256, MIGRATION_0008_SHA256,
     MIGRATION_0009_SHA256, MIGRATION_0010_SHA256, MIGRATION_0011_SHA256, MIGRATION_0012_SHA256,
-    MIGRATIONS, Migration,
+    MIGRATION_0016_SHA256, MIGRATIONS, Migration,
 };
 
 use conn::{Role, db};

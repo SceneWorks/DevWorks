@@ -1,4 +1,5 @@
 //! DevWorks infrastructure adapters.
+pub mod browser;
 pub mod diagnostics;
 pub mod fs;
 pub mod paths;

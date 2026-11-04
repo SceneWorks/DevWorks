@@ -14,7 +14,7 @@ use crate::virtual_list::{self, Scrolls};
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{ArtifactRecord, ResourceRecord};
+use devworks_core::protocol::records::{ArtifactRecord, BrowserSession, ItemState, ResourceRecord};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
 use eframe::egui::{
@@ -138,6 +138,7 @@ pub struct Shell {
     pub settings: SettingsScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
+    pub browser: ListState<BrowserSession>,
     pub completions: Completions,
     scrolls: Scrolls,
     lifecycle: Lifecycle,
@@ -270,6 +271,7 @@ impl Shell {
             settings,
             artifacts: ListState::default(),
             resources: ListState::default(),
+            browser: ListState::default(),
             completions: Completions::default(),
             scrolls: Scrolls::restoring(&memory.scroll),
             lifecycle: Lifecycle::Open,
@@ -387,6 +389,7 @@ impl Shell {
             }
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
+            Route::Browser => self.load_browser(),
             _ => {}
         }
     }
@@ -495,6 +498,30 @@ impl Shell {
             ops::workspace_artifacts,
         );
     }
+    fn load_browser(&mut self) {
+        self.query(
+            Slot::BrowserSessions,
+            "Loading browser sessions",
+            "browser.sessions",
+            ops::browser_sessions_list,
+        );
+    }
+
+    /// Interrupts a browser session: Close stops its browser through the process owner.
+    fn close_browser(&mut self, session: &BrowserSession) {
+        let (id, revision) = (
+            session.id.as_str().to_owned(),
+            session.revision.as_str().to_owned(),
+        );
+        let sid = id.clone();
+        self.command(
+            Slot::BrowserClose(id),
+            "Closing the browser session",
+            "browser.sessions",
+            move |b| ops::browser_close(b, &sid, &revision),
+        );
+    }
+
     fn load_resources(&mut self) {
         self.query(
             Slot::ResourcesList,
@@ -1163,6 +1190,31 @@ impl Shell {
                 }
                 Err(e) => self.artifacts.error = Some(e.describe()),
             },
+            (Slot::BrowserSessions, Reply::Query(q)) => match ops::browser_sessions(q) {
+                Ok((items, more)) => {
+                    self.browser = ListState {
+                        items,
+                        loaded: true,
+                        error: None,
+                        more,
+                    };
+                }
+                Err(e) => self.browser.error = Some(e.describe()),
+            },
+            (Slot::BrowserClose(_), Reply::Command(c)) => {
+                match ops::browser_closed(c) {
+                    Ok(true) => self.announce("The browser session is being closed."),
+                    Ok(false) => self.announce("The browser session had already stopped."),
+                    Err(Failure::Unknown) => {
+                        self.announce("Closing the browser session: outcome not confirmed.")
+                    }
+                    Err(e) => self.announce(format!(
+                        "The browser session could not be closed: {}",
+                        e.describe()
+                    )),
+                }
+                self.load_browser();
+            }
             (Slot::ResourcesList, Reply::Query(q)) => match ops::resources(q) {
                 Ok((items, more)) => {
                     self.resources = ListState {
@@ -1284,6 +1336,7 @@ impl Shell {
         match self.route {
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
+            Route::Browser if !self.pending(&Slot::BrowserSessions) => self.load_browser(),
             _ => {}
         }
     }
@@ -2048,7 +2101,8 @@ impl Shell {
                 ui.add_space(10.0);
                 let item = |ui: &mut Ui, r: Route, current: Route, go: &mut Option<Route>| {
                     let active = current == r
-                        || (r == Route::Agents && current == Route::Resources)
+                        || (r == Route::Agents
+                            && matches!(current, Route::Resources | Route::Browser))
                         || (r == Route::Repositories && current == Route::Indexing)
                         || (r == Route::Settings && current == Route::AddOns);
                     let resp = ui.add(
@@ -2239,6 +2293,7 @@ impl Shell {
             }
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
+            Route::Browser => self.browser_screen(ui),
             _ => self.pending_screen(ui),
         }
     }
@@ -2504,14 +2559,15 @@ impl Shell {
         }
     }
 
-    fn resources_screen(&mut self, ui: &mut Ui) {
-        let screen = Route::Resources.screen();
+    fn browser_screen(&mut self, ui: &mut Ui) {
+        let screen = Route::Browser.screen();
         let online = self.online();
         let mut reload = false;
-        let mut mem = self.routes.remove(&Route::Resources).unwrap_or_default();
-        let list = &self.resources;
+        let mut close: Option<BrowserSession> = None;
+        let mut mem = self.routes.remove(&Route::Browser).unwrap_or_default();
+        let list = &self.browser;
         let scrolls = &mut self.scrolls;
-        let mut st = (&mut reload, &mut mem);
+        let mut st = (&mut reload, &mut mem, &mut close);
         widgets::pane(
             ui,
             Header {
@@ -2524,6 +2580,100 @@ impl Shell {
             |ui, st| {
                 if widgets::secondary_button(ui, "Refresh").clicked() {
                     *st.0 = true;
+                }
+                let selected =
+                    st.1.selection
+                        .as_ref()
+                        .and_then(|id| list.items.iter().find(|s| s.id.as_str() == id));
+                if let Some(s) = selected.filter(|s| {
+                    matches!(
+                        s.state,
+                        ItemState::Healthy | ItemState::Partial | ItemState::Unavailable
+                    )
+                }) && widgets::secondary_button(ui, "Close session").clicked()
+                {
+                    *st.2 = Some(s.clone());
+                }
+            },
+            |ui, st, _| {
+                let mem = &mut *st.1;
+                let RouteMemory {
+                    filter, selection, ..
+                } = mem;
+                list_body(
+                    ui,
+                    &online,
+                    list,
+                    ListText {
+                        what: "browser sessions",
+                        empty_title: "No browser sessions",
+                        empty_body: "Agents' owned browser sessions appear here; evidence they record is kept in Artifacts.",
+                        id_salt: "browser-list",
+                    },
+                    st.0,
+                    scrolls,
+                    |s: &BrowserSession| s.id.as_str().to_owned(),
+                    |s: &BrowserSession| s.id.as_str().to_owned(),
+                    filter,
+                    selection,
+                    |ui, s: &BrowserSession, selected| {
+                        let state = match s.state {
+                            ItemState::Partial => "starting",
+                            ItemState::Healthy => "running",
+                            ItemState::Disabled => "closed",
+                            ItemState::Failed => "failed",
+                            ItemState::Unavailable => "stop not verified",
+                            ItemState::Enabled => "enabled",
+                        };
+                        ui.selectable_label(
+                            selected,
+                            format!(
+                                "{}  ·  {state}  ·  {} target(s)  ·  revision {}",
+                                s.id.as_str(),
+                                s.target_ids.0.len(),
+                                s.revision.as_str()
+                            ),
+                        )
+                        .clicked()
+                    },
+                );
+            },
+        );
+        self.routes.insert(Route::Browser, mem);
+        if let Some(s) = close {
+            self.close_browser(&s);
+        }
+        if reload {
+            self.load_browser();
+        }
+    }
+
+    fn resources_screen(&mut self, ui: &mut Ui) {
+        let screen = Route::Resources.screen();
+        let online = self.online();
+        let mut reload = false;
+        let mut link = false;
+        let mut mem = self.routes.remove(&Route::Resources).unwrap_or_default();
+        let list = &self.resources;
+        let scrolls = &mut self.scrolls;
+        let mut st = (&mut reload, &mut mem, &mut link);
+        widgets::pane(
+            ui,
+            Header {
+                title: screen.title,
+                summary: screen.summary,
+                tabs: &[],
+                tab: 0,
+            },
+            &mut st,
+            |ui, st| {
+                if widgets::secondary_button(ui, "Refresh").clicked() {
+                    *st.0 = true;
+                }
+                if let Some((label, _)) = screen.link
+                    && widgets::secondary_button(ui, label).clicked()
+                {
+                    *st.2 = true;
                 }
             },
             |ui, st, _| {
@@ -2572,6 +2722,9 @@ impl Shell {
             },
         );
         self.routes.insert(Route::Resources, mem);
+        if link && let Some((_, target)) = screen.link {
+            self.navigate(target);
+        }
         if reload {
             self.load_resources();
         }

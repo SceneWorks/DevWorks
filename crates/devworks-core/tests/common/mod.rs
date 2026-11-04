@@ -375,6 +375,9 @@ impl ReadSnapshot for MemSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead {
         &self.unsupported
     }
+    fn browser(&self) -> &dyn BrowserRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -446,6 +449,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
+        &mut self.unsupported
+    }
+    fn browser(&mut self) -> &mut dyn BrowserRepository {
         &mut self.unsupported
     }
 }
@@ -1438,6 +1444,52 @@ impl DiagnosticRepository for Unsupported {
         nope()
     }
     fn release_export_intent(&mut self, _: &ExportIntent) -> Result<bool, StorageError> {
+        nope()
+    }
+}
+impl BrowserRead for Unsupported {
+    fn browser_session(&self, _: &Id) -> Result<Option<StoredBrowserSession>, StorageError> {
+        nope()
+    }
+    fn browser_sessions(
+        &self,
+        _: &BrowserFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredBrowserSession>, StorageError> {
+        nope()
+    }
+    fn browser_observations(
+        &self,
+        _: &Id,
+        _: BrowserChannel,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredBrowserObservation>, StorageError> {
+        nope()
+    }
+}
+impl BrowserRepository for Unsupported {
+    fn insert_browser_session(&mut self, _: &StoredBrowserSession) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_browser_session(
+        &mut self,
+        _: &StoredBrowserSession,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn next_observation_sequence(&mut self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn set_last_action(&mut self, _: &Id, _: &OperationId) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_browser_observation(
+        &mut self,
+        _: &StoredBrowserObservation,
+    ) -> Result<(), StorageError> {
         nope()
     }
 }

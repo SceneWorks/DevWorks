@@ -10,7 +10,7 @@
 //! is never mistaken for the recorded process. A process group or job is not an inescapable
 //! sandbox: a descendant that leaves it is not tracked, and the host reports what it could
 //! verify instead of claiming a stop from the root's exit.
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 /// What to launch. The program is resolved by the OS from `program` (a path or a name on
@@ -25,7 +25,24 @@ pub struct ProcessSpec {
     pub clear_env: bool,
     /// Capture stdout and stderr as pipes ([`ProcessTree::take_output`]); otherwise discard.
     pub capture_output: bool,
+    /// Give the child a private control channel ([`ProcessTree::take_control`]) that no other
+    /// process can reach: anonymous pipes, never a name or a port.
+    pub control_pipe: Option<ControlPipe>,
 }
+
+/// A private bidirectional control channel of a child. On Unix the child reads what the host
+/// writes from file descriptor 3 and writes what the host reads to file descriptor 4. On
+/// Windows the child inherits two anonymous pipe handles, named on its command line by
+/// [`Self::windows_args`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlPipe {
+    /// Windows only: arguments appended at launch, with `{read}` replaced by the decimal value
+    /// of the handle the child reads and `{write}` by the handle it writes.
+    pub windows_args: Vec<String>,
+}
+
+/// The host's ends of a control channel: what it writes to the child, what it reads from it.
+pub type ControlChannel = (Box<dyn Write + Send>, Box<dyn Read + Send>);
 impl ProcessSpec {
     pub fn new(argv: &[String]) -> Option<Self> {
         let (program, args) = argv.split_first()?;
@@ -36,6 +53,7 @@ impl ProcessSpec {
             env: Vec::new(),
             clear_env: false,
             capture_output: false,
+            control_pipe: None,
         })
     }
     /// The program followed by its arguments.
@@ -111,6 +129,10 @@ pub trait ProcessTree: Send {
     fn poll(&mut self) -> Result<TreeStatus, ProcessError>;
     /// The captured stdout and stderr pipes, once.
     fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)>;
+    /// The host's ends of the control channel of a tree launched with a control pipe, once.
+    fn take_control(&mut self) -> Option<ControlChannel> {
+        None
+    }
 }
 
 /// The native launcher.

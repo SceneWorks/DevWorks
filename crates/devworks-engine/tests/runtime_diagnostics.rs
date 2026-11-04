@@ -101,6 +101,7 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
             )),
             power: Arc::new(NativePower),
             diagnostics: diagnostics.clone(),
+            browser: None,
             use_cases: UseCases::new().with_queue(),
             consumers,
             config,

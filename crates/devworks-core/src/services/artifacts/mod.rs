@@ -117,6 +117,7 @@
 //! filename); an unknown attachment and a stored file that cannot be read are both `NotFound`
 //! (the source's quirk: I/O failures were reported as not found), and an unavailable store is
 //! `StorageUnavailable`.
+pub mod evidence;
 pub mod lifecycle;
 pub mod preview;
 pub mod replies;

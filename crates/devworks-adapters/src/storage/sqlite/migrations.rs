@@ -171,7 +171,22 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0012_diagnostics.sql"),
         rebuilds_tables: false,
     },
+    // Additive: owned browser sessions and their observation index (two tables and their
+    // indexes; versions 13-15 are reserved for concurrent items and may be absent). The writer
+    // floor stays at 11: an earlier writer never writes these tables, and every record it writes
+    // is unchanged here (artifact, operation, process and actor rows are never deleted, so the
+    // references cannot break). The reader floor stays at 8: no earlier build reads them.
+    Migration {
+        version: 16,
+        minimum_reader: 8,
+        minimum_writer: 11,
+        sql: include_str!("migrations/0016_browser_sessions.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 16; a test fails if the shipped text changes.
+pub const MIGRATION_0016_SHA256: &str =
+    "5c2689337e06c3e84301299f40fd4c6e5ca563b553b76157b626048cb8ffac88";
 /// Recorded checksum of migration 12; a test fails if the shipped text changes.
 pub const MIGRATION_0012_SHA256: &str =
     "dbcf28e8dc5a8eb6e4b801fb9f976021cd5e14cbf9e2b5b82af38f008c6cedba";

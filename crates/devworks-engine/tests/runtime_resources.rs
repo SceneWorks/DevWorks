@@ -174,6 +174,7 @@ fn composition(
                 None,
             ),
         ),
+        browser: None,
         use_cases: UseCases::new().with_settings(Arc::new(SettingsService {
             roles: Arc::new(HostRoles { store }),
             paths: Arc::new(FsPathProbe),

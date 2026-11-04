@@ -67,6 +67,9 @@ pub enum Slot {
     DeleteAttachment(String),
     ArtifactsList,
     ResourcesList,
+    BrowserSessions,
+    /// Closing a browser session (its ID).
+    BrowserClose(String),
 }
 
 /// A finished request.

@@ -1,16 +1,19 @@
 //! Owned process trees on Windows: a kill-on-close Job Object per tree, assigned while the
 //! child is still suspended.
 use devworks_core::ports::process::{
-    NativeIdentity, Probe, ProcessError, ProcessSpec, ProcessTree, TreeStatus,
+    ControlChannel, NativeIdentity, Probe, ProcessError, ProcessSpec, ProcessTree, TreeStatus,
 };
 use std::io::Read;
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE,
+    CloseHandle, FILETIME, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, STILL_ACTIVE,
+    SetHandleInformation,
 };
+use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
@@ -21,6 +24,7 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
     QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
 };
+use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, GetExitCodeProcess, GetProcessTimes, OpenProcess,
     OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
@@ -85,6 +89,42 @@ fn resume(pid: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Held while inheritable control-pipe handles exist, so no other owned child launched
+/// concurrently inherits them.
+static SPAWN: Mutex<()> = Mutex::new(());
+
+impl Owned {
+    /// The handle as a file, transferring ownership.
+    fn into_file(self) -> std::fs::File {
+        let h = self.0;
+        std::mem::forget(self);
+        // SAFETY: the handle is owned and transferred exactly once.
+        unsafe { std::fs::File::from_raw_handle(h as _) }
+    }
+}
+
+/// An anonymous pipe whose `child` end is inheritable and whose host end is not:
+/// (read end, write end).
+fn pipe(child_reads: bool) -> Result<(Owned, Owned), String> {
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: 1,
+    };
+    let (mut r, mut w): (HANDLE, HANDLE) = (std::ptr::null_mut(), std::ptr::null_mut());
+    // SAFETY: two writable handle out-parameters and valid security attributes.
+    if unsafe { CreatePipe(&mut r, &mut w, &sa, 0) } == 0 {
+        return Err(last_error("create the control pipe"));
+    }
+    let (r, w) = (Owned(r), Owned(w));
+    let host = if child_reads { &w } else { &r };
+    // SAFETY: clearing inheritance on a handle this function owns.
+    if unsafe { SetHandleInformation(host.0, HANDLE_FLAG_INHERIT, 0) } == 0 {
+        return Err(last_error("keep the control pipe private"));
+    }
+    Ok((r, w))
+}
+
 pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError> {
     // SAFETY: an unnamed job with default security; the handle is owned by `Owned`.
     let job = Owned(unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) });
@@ -125,9 +165,36 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     };
     cmd.stdout(out()).stderr(out());
     cmd.creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| ProcessError::Spawn(e.to_string()))?;
+    // A private control channel: two anonymous pipes whose child ends are inherited (and named
+    // on the command line); the host ends are not inheritable. The spawn lock keeps the
+    // inheritable ends from reaching another owned child launched at the same moment.
+    let serial = SPAWN.lock().unwrap_or_else(|p| p.into_inner());
+    let mut pipes = None;
+    if let Some(c) = &spec.control_pipe {
+        let (child_read, host_write) = pipe(true).map_err(ProcessError::Spawn)?;
+        let (host_read, child_write) = pipe(false).map_err(ProcessError::Spawn)?;
+        let (r, w) = (
+            (child_read.0 as usize).to_string(),
+            (child_write.0 as usize).to_string(),
+        );
+        cmd.args(
+            c.windows_args
+                .iter()
+                .map(|a| a.replace("{read}", &r).replace("{write}", &w)),
+        );
+        pipes = Some((child_read, child_write, host_write, host_read));
+    }
+    let spawned = cmd.spawn();
+    // The child's ends close here: end of file reaches the host when the child exits.
+    let control: Option<ControlChannel> = pipes.map(|(cr, cw, hw, hr)| {
+        drop((cr, cw));
+        (
+            Box::new(hw.into_file()) as Box<dyn std::io::Write + Send>,
+            Box::new(hr.into_file()) as Box<dyn Read + Send>,
+        )
+    });
+    drop(serial);
+    let mut child = spawned.map_err(|e| ProcessError::Spawn(e.to_string()))?;
     let process = child.as_raw_handle() as HANDLE;
     let pid = child.id();
     let fail = |child: &mut Child, e: String| {
@@ -164,6 +231,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         empty: false,
         exit_code: None,
         output,
+        control,
     }))
 }
 
@@ -174,6 +242,7 @@ struct JobTree {
     empty: bool,
     exit_code: Option<i32>,
     output: Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)>,
+    control: Option<ControlChannel>,
 }
 // SAFETY: the job handle is a kernel object handle usable from any thread.
 unsafe impl Send for JobTree {}
@@ -234,6 +303,9 @@ impl ProcessTree for JobTree {
     }
     fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)> {
         self.output.take()
+    }
+    fn take_control(&mut self) -> Option<ControlChannel> {
+        self.control.take()
     }
 }
 

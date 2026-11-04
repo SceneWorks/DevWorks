@@ -51,8 +51,9 @@
 //! repository ([`ConfigurationRepository`]), the host authority ledger ([`AuthorityLedger`]), the
 //! artifact store records ([`ArtifactRepository`]), the session, transcript and lineage
 //! records ([`SessionRepository`]), the resource reservation and owned-process records
-//! ([`ResourceRepository`]), the run root control records ([`RunRepository`]) and the retained
-//! diagnostic log ([`DiagnosticRepository`]).
+//! ([`ResourceRepository`]), the run root control records ([`RunRepository`]), the retained
+//! diagnostic log ([`DiagnosticRepository`]) and the owned browser sessions with their
+//! observation index ([`BrowserRepository`]).
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -70,6 +71,7 @@ use std::sync::mpsc;
 
 mod artifacts;
 mod authority;
+mod browser;
 mod configuration;
 mod diagnostics;
 mod resources;
@@ -77,6 +79,7 @@ mod runs;
 mod sessions;
 pub use artifacts::*;
 pub use authority::*;
+pub use browser::*;
 pub use configuration::*;
 pub use diagnostics::*;
 pub use resources::*;
@@ -472,6 +475,7 @@ pub trait WriteTransaction {
     fn resources(&mut self) -> &mut dyn ResourceRepository;
     fn runs(&mut self) -> &mut dyn RunRepository;
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
+    fn browser(&mut self) -> &mut dyn BrowserRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -512,6 +516,7 @@ pub trait ReadSnapshot {
     fn resources(&self) -> &dyn ResourceRead;
     fn runs(&self) -> &dyn RunRead;
     fn diagnostics(&self) -> &dyn DiagnosticRead;
+    fn browser(&self) -> &dyn BrowserRead;
 }
 
 // ---------------------------------------------------------------------------------------------

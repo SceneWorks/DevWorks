@@ -1,0 +1,1812 @@
+//! One running owned browser: its CDP connection, registered targets with their frame and
+//! document revisions, accessibility snapshots and node maps, and the bounded, redacted
+//! notification buffers. Everything here is ephemeral and dies with the browser process.
+//!
+//! **Revisions.** Every main-frame navigation, document replacement, frame attach/detach/
+//! navigation and renderer crash advances the target's document revision, which invalidates
+//! every node reference into it. A snapshot is the only source of node references: a node ID
+//! names the exact DOM node (its backend node ID) the snapshot saw, and is honoured only while
+//! the target's document revision still equals the snapshot's. A stale reference is refused;
+//! nothing is ever re-resolved by role, name or selector.
+//!
+//! **Untrusted output.** Page text, accessibility names, console messages and URLs are bounded
+//! and passed through the host redactor before they become evidence; URLs lose user info,
+//! fragments and the values of credential-shaped query parameters. No header, cookie or body is
+//! captured, and no network interception or page script is used.
+use super::cdp::{Cdp, CdpError, CdpEvent, decode_base64, dialog_accepted};
+use crate::authority::redact::Redactor;
+use crate::ports::browser::Profile;
+use crate::protocol::records::{
+    BrowserInput, BrowserNode, BrowserTarget, KeyModifier, MouseButton,
+};
+use crate::protocol::{Id, Revision};
+use crate::services::process::OwnedProcess;
+use serde_json::{Value, json};
+use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
+
+/// Most notifications buffered per channel before publication; older ones are dropped.
+pub const NOTICE_LIMIT: usize = 2_000;
+/// Longest text kept from one notification, name or value.
+pub const TEXT_LIMIT: usize = 2_048;
+/// Most accessibility nodes one snapshot records.
+pub const NODE_LIMIT: usize = 5_000;
+/// Snapshots retained per target (older node references stop resolving).
+pub const SNAPSHOTS_KEPT: usize = 8;
+/// Largest evidence document one observation publishes.
+pub const EVIDENCE_LIMIT: usize = 256 * 1024;
+/// Largest screenshot accepted.
+pub const SCREENSHOT_LIMIT: usize = 32 * 1024 * 1024;
+/// Largest full-page capture edge (CSS pixels); taller pages are clipped.
+pub const CAPTURE_EDGE: f64 = 16_384.0;
+
+/// Permissions denied for every page of an owned profile (W3C permission names).
+pub const DENIED_PERMISSIONS: [&str; 12] = [
+    "geolocation",
+    "notifications",
+    "midi",
+    "camera",
+    "microphone",
+    "clipboard-read",
+    "clipboard-write",
+    "background-sync",
+    "persistent-storage",
+    "idle-detection",
+    "display-capture",
+    "window-management",
+];
+
+/// Durations the live session works within.
+#[derive(Clone, Copy, Debug)]
+pub struct Bounds {
+    pub call: Duration,
+    pub navigation: Duration,
+    /// How long an input waits for its effects (navigation, dialogs, new targets) to show.
+    pub settle: Duration,
+}
+
+/// A node an accessibility snapshot recorded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeRef {
+    pub backend: i64,
+    pub role: String,
+    /// The CDP session whose document holds the node (an out-of-process frame's own session).
+    pub session: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Snapshot {
+    pub revision: i64,
+    pub frame: String,
+    pub document_revision: i64,
+    pub nodes: HashMap<String, NodeRef>,
+}
+
+/// One frame of a target: its host ID, its CDP frame ID and the CDP session hosting its
+/// document (the target's own session, or the session of the out-of-process frame it is in).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame {
+    pub host: String,
+    pub cdp: String,
+    pub session: String,
+}
+
+/// An out-of-process frame attached under a target (`Target.setAutoAttach`, flattened).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Child {
+    /// The child's own CDP session.
+    pub session: String,
+    /// Its frame (the iframe target's ID equals its frame ID).
+    pub frame: String,
+    /// The session of the document that embeds it.
+    pub parent: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Target {
+    /// Host target ID (`t1`, `t2`, ...).
+    pub id: String,
+    pub cdp_target: String,
+    pub cdp_session: String,
+    /// `initial`, `opened` (by `browser.navigate` without a target) or `popup`.
+    pub origin: &'static str,
+    pub opener: Option<String>,
+    /// The target's frames; the first is the main frame (`<target>-f0`).
+    pub frames: Vec<Frame>,
+    /// Out-of-process frames attached under the target.
+    pub children: Vec<Child>,
+    next_frame: u64,
+    pub document_revision: i64,
+    pub snapshots: VecDeque<Snapshot>,
+    next_snapshot: i64,
+    pub url: String,
+    pub crashed: bool,
+    pub closed: bool,
+    /// Loader IDs whose `load` lifecycle event was seen.
+    loaded: Vec<String>,
+}
+impl Target {
+    fn new(id: String, cdp_target: String, cdp_session: String, origin: &'static str) -> Self {
+        let main = format!("{id}-f0");
+        Self {
+            frames: vec![Frame {
+                host: main,
+                cdp: cdp_target.clone(),
+                session: cdp_session.clone(),
+            }],
+            children: Vec::new(),
+            id,
+            cdp_target,
+            cdp_session,
+            origin,
+            opener: None,
+            next_frame: 1,
+            document_revision: 1,
+            snapshots: VecDeque::new(),
+            next_snapshot: 0,
+            url: "about:blank".into(),
+            crashed: false,
+            closed: false,
+            loaded: Vec::new(),
+        }
+    }
+    pub fn main_frame(&self) -> &str {
+        &self.frames[0].host
+    }
+    fn invalidate(&mut self) {
+        self.document_revision += 1;
+        self.snapshots.clear();
+    }
+    fn frame_of_cdp(&self, cdp: &str) -> Option<usize> {
+        self.frames.iter().position(|f| f.cdp == cdp)
+    }
+    fn child_of_session(&self, session: &str) -> Option<&Child> {
+        self.children.iter().find(|c| c.session == session)
+    }
+    /// Whether `session` is the target's own (top-level) session.
+    fn is_page(&self, session: Option<&str>) -> bool {
+        session == Some(self.cdp_session.as_str())
+    }
+    pub fn wire(&self, session: &Id, frame: &str) -> BrowserTarget {
+        BrowserTarget {
+            session_id: session.clone(),
+            target_id: Id::new(self.id.clone()).expect("host target id"),
+            frame_id: Id::new(frame.to_owned()).expect("host frame id"),
+            document_revision: Revision::new(self.document_revision).expect("positive"),
+        }
+    }
+}
+
+/// A bounded buffer of redacted notifications awaiting publication.
+#[derive(Debug, Default)]
+pub struct Notices {
+    pending: VecDeque<Value>,
+    pub dropped: u64,
+    pub total: u64,
+}
+impl Notices {
+    fn push(&mut self, entry: Value) {
+        if self.pending.len() >= NOTICE_LIMIT {
+            self.pending.pop_front();
+            self.dropped += 1;
+        }
+        self.total += 1;
+        self.pending.push_back(entry);
+    }
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty() && self.dropped == 0
+    }
+    /// The pending entries as one bounded evidence document; `truncated` when entries were
+    /// dropped or cut.
+    pub fn drain(&mut self, session: &Id, channel: &str) -> (Vec<u8>, bool) {
+        let mut entries = Vec::new();
+        let mut size = 0;
+        let mut cut = 0u64;
+        for e in self.pending.drain(..) {
+            let n = e.to_string().len() + 1;
+            if size + n > EVIDENCE_LIMIT - 1024 {
+                cut += 1;
+                continue;
+            }
+            size += n;
+            entries.push(e);
+        }
+        let dropped = std::mem::take(&mut self.dropped) + cut;
+        let doc = json!({
+            "sessionId": session.as_str(),
+            "channel": channel,
+            "entries": entries,
+            "dropped": dropped,
+        });
+        (doc.to_string().into_bytes(), dropped > 0)
+    }
+}
+
+/// Why an action did not complete.
+#[derive(Debug)]
+pub enum ActionError {
+    /// A reference no longer matches the live state; nothing was sent.
+    Stale { kind: &'static str, detail: String },
+    /// Refused before any input was sent (unsupported key, not a file input, no box).
+    Refused { kind: &'static str, detail: String },
+    /// The browser failed a request before any input was sent.
+    Before(CdpError),
+    /// The request was sent and its effect is unknown (timeout, transport loss).
+    After(CdpError),
+    /// The browser reported a navigation failure (the document changed to its error page).
+    Navigation(String),
+    /// The session is closing.
+    Closing,
+}
+
+pub struct Live {
+    pub session: Id,
+    pub profile: Profile,
+    pub process: OwnedProcess,
+    pub cdp: Cdp,
+    pub product: String,
+    pub protocol: String,
+    pub targets: Vec<Target>,
+    next_target: u64,
+    pub console: Notices,
+    pub network: Notices,
+    /// The registered target set changed since the session record was last written.
+    pub targets_changed: bool,
+    /// Permissions whose denial the browser accepted / refused, and the download policy.
+    pub policy: Value,
+    pending_attach: Vec<Value>,
+    /// Out-of-process frames attached but not configured yet: (target, child).
+    pending_children: Vec<(usize, Child)>,
+    started: Instant,
+}
+
+fn text(s: &str) -> String {
+    let cut: String = s.chars().take(TEXT_LIMIT).collect();
+    Redactor::new().redact_text(&cut)
+}
+
+/// The URL as evidence: user info, fragment and the values of credential-shaped query
+/// parameters are removed; the rest is bounded and redacted.
+pub fn safe_url(url: &str) -> String {
+    // The fragment never leaves the page; it is dropped before anything else is read.
+    let url = url.split('#').next().unwrap_or(url);
+    let (base, query) = match url.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (url, None),
+    };
+    let base = match base.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = match rest.find('/') {
+                Some(i) => (&rest[..i], &rest[i..]),
+                None => (rest, ""),
+            };
+            let host = authority.rsplit('@').next().unwrap_or(authority);
+            format!("{scheme}://{host}{path}")
+        }
+        None => base.to_owned(),
+    };
+    let mut out = base;
+    if let Some(q) = query {
+        let parts: Vec<String> = q
+            .split('&')
+            .filter(|p| !p.is_empty())
+            .map(|p| match p.split_once('=') {
+                Some((k, _)) if sensitive_param(k) => format!("{k}=[REDACTED]"),
+                _ => p.to_owned(),
+            })
+            .collect();
+        if !parts.is_empty() {
+            out.push('?');
+            out.push_str(&parts.join("&"));
+        }
+    }
+    text(&out)
+}
+fn sensitive_param(name: &str) -> bool {
+    let n: String = name
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    [
+        "token",
+        "key",
+        "secret",
+        "password",
+        "passwd",
+        "auth",
+        "code",
+        "sig",
+        "session",
+        "credential",
+        "jwt",
+        "access",
+        "refresh",
+        "otp",
+        "nonce",
+        "ticket",
+    ]
+    .iter()
+    .any(|s| n.contains(s))
+}
+
+impl Live {
+    pub fn new(session: Id, profile: Profile, process: OwnedProcess, cdp: Cdp) -> Self {
+        Self {
+            session,
+            profile,
+            process,
+            cdp,
+            product: String::new(),
+            protocol: String::new(),
+            targets: Vec::new(),
+            next_target: 0,
+            console: Notices::default(),
+            network: Notices::default(),
+            targets_changed: false,
+            policy: Value::Null,
+            pending_attach: Vec::new(),
+            pending_children: Vec::new(),
+            started: Instant::now(),
+        }
+    }
+
+    fn at(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+
+    fn call(
+        &mut self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, CdpError> {
+        let r = self.cdp.call(session, method, params, timeout);
+        self.absorb_events();
+        r
+    }
+
+    /// Configures the browser after connecting: version handshake, download and permission
+    /// policy, target discovery and auto-attach, and every initial page target.
+    /// `startup` bounds the first request: the browser answers it once it has started.
+    pub fn setup(&mut self, bounds: &Bounds, startup: Duration) -> Result<(), CdpError> {
+        let version = self.call(None, "Browser.getVersion", json!({}), startup)?;
+        self.product = version
+            .get("product")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .chars()
+            .take(128)
+            .collect();
+        self.protocol = version
+            .get("protocolVersion")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .chars()
+            .take(32)
+            .collect();
+        if self.protocol != "1.3" {
+            return Err(CdpError::Protocol(format!(
+                "unsupported DevTools protocol version {}",
+                self.protocol
+            )));
+        }
+        // Downloads are denied: no download destination grant exists for a browser session.
+        self.call(
+            None,
+            "Browser.setDownloadBehavior",
+            json!({"behavior": "deny", "eventsEnabled": true}),
+            bounds.call,
+        )?;
+        let mut denied = Vec::new();
+        let mut refused = Vec::new();
+        for p in DENIED_PERMISSIONS {
+            match self.call(
+                None,
+                "Browser.setPermission",
+                json!({"permission": {"name": p}, "setting": "denied"}),
+                bounds.call,
+            ) {
+                Ok(_) => denied.push(p),
+                Err(CdpError::Remote { message, .. }) => {
+                    refused.push(json!({"permission": p, "error": text(&message)}))
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        self.policy = json!({
+            "downloads": "denied",
+            "dialogs": "alert and beforeunload accepted, confirm and prompt dismissed",
+            "permissionsDenied": denied,
+            "permissionsNotApplied": refused,
+            "networkInterception": false,
+            "pageScripts": false,
+        });
+        self.call(
+            None,
+            "Target.setDiscoverTargets",
+            json!({"discover": true}),
+            bounds.call,
+        )?;
+        self.call(
+            None,
+            "Target.setAutoAttach",
+            json!({"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}),
+            bounds.call,
+        )?;
+        let targets = self.call(None, "Target.getTargets", json!({}), bounds.call)?;
+        for info in targets
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            if info.get("type").and_then(Value::as_str) == Some("page") {
+                self.attach(&info, "initial", bounds)?;
+            }
+        }
+        if self.targets.is_empty() {
+            return Err(CdpError::Protocol("the browser has no page target".into()));
+        }
+        self.settle_pending(bounds)?;
+        Ok(())
+    }
+
+    fn registered(&self, cdp_target: &str) -> bool {
+        self.targets.iter().any(|t| t.cdp_target == cdp_target)
+    }
+
+    /// Attaches to a page target and registers it under the session.
+    fn attach(
+        &mut self,
+        info: &Value,
+        origin: &'static str,
+        bounds: &Bounds,
+    ) -> Result<Option<usize>, CdpError> {
+        let Some(cdp_target) = info.get("targetId").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        if self.registered(cdp_target) {
+            return Ok(self.targets.iter().position(|t| t.cdp_target == cdp_target));
+        }
+        let attached = self.cdp.call(
+            None,
+            "Target.attachToTarget",
+            json!({"targetId": cdp_target, "flatten": true}),
+            bounds.call,
+        )?;
+        let Some(session) = attached.get("sessionId").and_then(Value::as_str) else {
+            return Err(CdpError::Protocol("attach returned no session".into()));
+        };
+        Ok(Some(self.register(info, session, origin, bounds)?))
+    }
+
+    fn register(
+        &mut self,
+        info: &Value,
+        cdp_session: &str,
+        origin: &'static str,
+        bounds: &Bounds,
+    ) -> Result<usize, CdpError> {
+        let cdp_target = info
+            .get("targetId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if let Some(i) = self.targets.iter().position(|t| t.cdp_target == cdp_target) {
+            return Ok(i);
+        }
+        self.next_target += 1;
+        let id = format!("t{}", self.next_target);
+        let mut t = Target::new(id, cdp_target, cdp_session.to_owned(), origin);
+        t.url = info
+            .get("url")
+            .and_then(Value::as_str)
+            .map(safe_url)
+            .unwrap_or_else(|| "about:blank".into());
+        t.opener = info
+            .get("openerId")
+            .and_then(Value::as_str)
+            .and_then(|o| self.targets.iter().find(|x| x.cdp_target == o))
+            .map(|x| x.id.clone());
+        let origin = if t.opener.is_some() && origin != "opened" {
+            "popup"
+        } else {
+            origin
+        };
+        t.origin = origin;
+        self.targets.push(t);
+        self.targets_changed = true;
+        let i = self.targets.len() - 1;
+        if origin == "popup" {
+            let (id, opener) = (self.targets[i].id.clone(), self.targets[i].opener.clone());
+            let at = self.at();
+            self.console.push(json!({
+                "at": at, "kind": "popup", "target": id, "opener": opener,
+                "url": self.targets[i].url,
+            }));
+        }
+        let s = cdp_session.to_owned();
+        for (method, params) in [
+            ("Page.enable", json!({})),
+            ("Page.setLifecycleEventsEnabled", json!({"enabled": true})),
+            ("Runtime.enable", json!({})),
+            ("Network.enable", json!({})),
+            ("Log.enable", json!({})),
+            ("DOM.enable", json!({})),
+            // Out-of-process (cross-site) frames attach as flattened child sessions.
+            (
+                "Target.setAutoAttach",
+                json!({"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}),
+            ),
+        ] {
+            self.cdp.call(Some(&s), method, params, bounds.call)?;
+        }
+        let tree = self
+            .cdp
+            .call(Some(&s), "Page.getFrameTree", json!({}), bounds.call)?;
+        if let Some(main) = tree.pointer("/frameTree/frame/id").and_then(Value::as_str) {
+            self.targets[i].frames[0].cdp = main.to_owned();
+            if let Some(url) = tree.pointer("/frameTree/frame/url").and_then(Value::as_str) {
+                self.targets[i].url = safe_url(url);
+            }
+        }
+        let mut children = Vec::new();
+        collect_frames(tree.pointer("/frameTree/childFrames"), &mut children);
+        for c in children {
+            self.add_frame(i, &c, &s);
+        }
+        Ok(i)
+    }
+
+    /// Records `cdp_frame` under `target`, hosted by `session` (a frame already known keeps its
+    /// host ID; an out-of-process frame moves to its own session).
+    fn add_frame(&mut self, target: usize, cdp_frame: &str, session: &str) {
+        let t = &mut self.targets[target];
+        let hosted = t
+            .children
+            .iter()
+            .find(|c| c.frame == cdp_frame)
+            .map_or(session, |c| c.session.as_str())
+            .to_owned();
+        match t.frame_of_cdp(cdp_frame) {
+            Some(k) => t.frames[k].session = hosted,
+            None => {
+                let id = format!("{}-f{}", t.id, t.next_frame);
+                t.next_frame += 1;
+                t.frames.push(Frame {
+                    host: id,
+                    cdp: cdp_frame.to_owned(),
+                    session: hosted,
+                });
+            }
+        }
+    }
+
+    fn target_of_session(&self, cdp_session: Option<&str>) -> Option<usize> {
+        let s = cdp_session?;
+        self.targets
+            .iter()
+            .position(|t| t.cdp_session == s || t.child_of_session(s).is_some())
+    }
+
+    /// Configures an attached out-of-process frame: its domains, its own auto-attach (nested
+    /// frames) and its frame tree, all on its session.
+    fn configure_child(&mut self, i: usize, child: Child, bounds: &Bounds) -> Result<(), CdpError> {
+        let s = child.session.clone();
+        for (method, params) in [
+            ("Page.enable", json!({})),
+            ("Page.setLifecycleEventsEnabled", json!({"enabled": true})),
+            ("Runtime.enable", json!({})),
+            ("Network.enable", json!({})),
+            ("Log.enable", json!({})),
+            ("DOM.enable", json!({})),
+            (
+                "Target.setAutoAttach",
+                json!({"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}),
+            ),
+            ("Runtime.runIfWaitingForDebugger", json!({})),
+        ] {
+            self.cdp.call(Some(&s), method, params, bounds.call)?;
+        }
+        let tree = self
+            .cdp
+            .call(Some(&s), "Page.getFrameTree", json!({}), bounds.call)?;
+        let mut frames = vec![child.frame.clone()];
+        collect_frames(tree.pointer("/frameTree/childFrames"), &mut frames);
+        for f in frames {
+            self.add_frame(i, &f, &s);
+        }
+        self.targets[i].invalidate();
+        Ok(())
+    }
+
+    /// Detaches an out-of-process frame's session: its frames leave the target.
+    fn detach_child(&mut self, i: usize, session: &str) {
+        let t = &mut self.targets[i];
+        t.children.retain(|c| c.session != session);
+        let mut k = 1;
+        while k < t.frames.len() {
+            if t.frames[k].session == session {
+                t.frames.remove(k);
+            } else {
+                k += 1;
+            }
+        }
+        t.invalidate();
+    }
+
+    /// Applies buffered events to the live state.
+    pub fn absorb_events(&mut self) {
+        for e in self.cdp.take_events() {
+            self.apply(e);
+        }
+    }
+
+    fn apply(&mut self, e: CdpEvent) {
+        let at = self.at();
+        let ti = self.target_of_session(e.session.as_deref());
+        let tid = ti.map(|i| self.targets[i].id.clone());
+        let p = &e.params;
+        match e.method.as_str() {
+            "Target.attachedToTarget" => {
+                let info = p.get("targetInfo").cloned().unwrap_or(Value::Null);
+                match info.get("type").and_then(Value::as_str) {
+                    Some("page") => self.pending_attach.push(json!({
+                        "info": info, "sessionId": p.get("sessionId"),
+                    })),
+                    Some("iframe") => {
+                        if let (Some(i), Some(parent), Some(child), Some(frame)) = (
+                            ti,
+                            e.session.clone(),
+                            p.get("sessionId").and_then(Value::as_str),
+                            info.get("targetId").and_then(Value::as_str),
+                        ) {
+                            let c = Child {
+                                session: child.to_owned(),
+                                frame: frame.to_owned(),
+                                parent,
+                            };
+                            if self.targets[i].child_of_session(child).is_none() {
+                                self.targets[i].children.push(c.clone());
+                                self.pending_children.push((i, c));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "Target.targetCreated" => {
+                let info = p.get("targetInfo").cloned().unwrap_or(Value::Null);
+                if info.get("type").and_then(Value::as_str) == Some("page")
+                    && info.get("attached").and_then(Value::as_bool) != Some(true)
+                {
+                    self.pending_attach.push(json!({"info": info}));
+                }
+            }
+            "Target.targetDestroyed" | "Target.detachedFromTarget" => {
+                let cdp = p.get("targetId").and_then(Value::as_str);
+                let sess = p.get("sessionId").and_then(Value::as_str);
+                // An out-of-process frame went away (removed, or navigated same-site).
+                let child = self.targets.iter().enumerate().find_map(|(i, t)| {
+                    t.children
+                        .iter()
+                        .find(|c| Some(c.session.as_str()) == sess || Some(c.frame.as_str()) == cdp)
+                        .map(|c| (i, c.session.clone()))
+                });
+                if let Some((i, session)) = child {
+                    self.detach_child(i, &session);
+                } else if let Some(t) = self.targets.iter_mut().find(|t| {
+                    !t.closed
+                        && (Some(t.cdp_target.as_str()) == cdp
+                            || Some(t.cdp_session.as_str()) == sess)
+                }) {
+                    t.closed = true;
+                    t.invalidate();
+                    self.targets_changed = true;
+                    let id = t.id.clone();
+                    self.console
+                        .push(json!({"at": at, "kind": "targetClosed", "target": id}));
+                }
+            }
+            "Target.targetCrashed" | "Inspector.targetCrashed"
+                if ti.is_some_and(|i| !self.targets[i].is_page(e.session.as_deref())) =>
+            {
+                // An out-of-process frame's renderer crashed: its document is gone.
+                let i = ti.expect("checked");
+                self.targets[i].invalidate();
+                self.console
+                    .push(json!({"at": at, "kind": "frameCrash", "target": tid}));
+            }
+            "Target.targetCrashed" | "Inspector.targetCrashed" => {
+                let cdp = p.get("targetId").and_then(Value::as_str);
+                let idx = cdp
+                    .and_then(|c| self.targets.iter().position(|t| t.cdp_target == c))
+                    .or(ti);
+                if let Some(i) = idx {
+                    let t = &mut self.targets[i];
+                    t.crashed = true;
+                    t.invalidate();
+                    self.targets_changed = true;
+                    let id = t.id.clone();
+                    self.console.push(json!({
+                        "at": at, "kind": "crash", "target": id,
+                        "status": p.get("status").and_then(Value::as_str).map(text),
+                    }));
+                }
+            }
+            "Page.frameAttached" => {
+                if let (Some(i), Some(f), Some(s)) = (
+                    ti,
+                    p.get("frameId").and_then(Value::as_str),
+                    e.session.as_deref(),
+                ) {
+                    self.add_frame(i, f, s);
+                    self.targets[i].invalidate();
+                }
+            }
+            "Page.frameDetached" => {
+                if let (Some(i), Some(f)) = (ti, p.get("frameId").and_then(Value::as_str)) {
+                    let t = &mut self.targets[i];
+                    // A frame that moved to its own process stays (its child session hosts it).
+                    if let Some(k) = t
+                        .frame_of_cdp(f)
+                        .filter(|k| *k > 0 && t.children.iter().all(|c| c.frame != f))
+                    {
+                        t.frames.remove(k);
+                    }
+                    t.invalidate();
+                }
+            }
+            "Page.frameNavigated" => {
+                if let Some(i) = ti {
+                    let frame = p.get("frame").cloned().unwrap_or(Value::Null);
+                    let id = frame.get("id").and_then(Value::as_str).unwrap_or_default();
+                    let url = frame.get("url").and_then(Value::as_str).unwrap_or_default();
+                    let page = self.targets[i].is_page(e.session.as_deref());
+                    if frame.get("parentId").is_none() && page {
+                        let t = &mut self.targets[i];
+                        t.frames.truncate(1);
+                        t.children.clear();
+                        t.frames[0].cdp = id.to_owned();
+                        t.url = safe_url(url);
+                    } else if let Some(s) = e.session.as_deref() {
+                        self.add_frame(i, id, s);
+                    }
+                    self.targets[i].invalidate();
+                }
+            }
+            "Page.navigatedWithinDocument" => {
+                if let Some(i) = ti.filter(|i| self.targets[*i].is_page(e.session.as_deref())) {
+                    let main = self.targets[i].frames[0].cdp.clone();
+                    if p.get("frameId").and_then(Value::as_str) == Some(main.as_str()) {
+                        let url = p.get("url").and_then(Value::as_str).unwrap_or_default();
+                        self.targets[i].url = safe_url(url);
+                    }
+                }
+            }
+            "DOM.documentUpdated" => {
+                if let Some(i) = ti {
+                    self.targets[i].invalidate();
+                }
+            }
+            "Page.lifecycleEvent" => {
+                if let Some(i) = ti.filter(|i| self.targets[*i].is_page(e.session.as_deref()))
+                    && p.get("name").and_then(Value::as_str) == Some("load")
+                    && let Some(l) = p.get("loaderId").and_then(Value::as_str)
+                {
+                    let t = &mut self.targets[i];
+                    if t.loaded.len() >= 64 {
+                        t.loaded.remove(0);
+                    }
+                    t.loaded.push(l.to_owned());
+                }
+            }
+            "Page.javascriptDialogOpening" => {
+                // The client answered it as it arrived (see `Cdp`); this records the notice.
+                let kind = p.get("type").and_then(Value::as_str).unwrap_or("alert");
+                let accept = dialog_accepted(kind);
+                self.console.push(json!({
+                    "at": at, "kind": "dialog", "target": tid, "dialog": kind,
+                    "message": p.get("message").and_then(Value::as_str).map(text),
+                    "handled": if accept { "accepted" } else { "dismissed" },
+                }));
+            }
+            "Browser.downloadWillBegin" | "Page.downloadWillBegin" => {
+                self.console.push(json!({
+                    "at": at, "kind": "download", "target": tid, "handled": "denied",
+                    "url": p.get("url").and_then(Value::as_str).map(safe_url),
+                    "suggestedFilename": p.get("suggestedFilename").and_then(Value::as_str).map(text),
+                }));
+            }
+            "Runtime.consoleAPICalled" => {
+                let args: Vec<String> = p
+                    .get("args")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().take(16).map(remote_text).collect())
+                    .unwrap_or_default();
+                self.console.push(json!({
+                    "at": at, "kind": "console", "target": tid,
+                    "level": p.get("type").and_then(Value::as_str).unwrap_or("log"),
+                    "text": text(&args.join(" ")),
+                }));
+            }
+            "Runtime.exceptionThrown" => {
+                let d = p.get("exceptionDetails").cloned().unwrap_or(Value::Null);
+                let message = d
+                    .pointer("/exception/description")
+                    .and_then(Value::as_str)
+                    .or_else(|| d.get("text").and_then(Value::as_str))
+                    .unwrap_or("exception");
+                self.console.push(json!({
+                    "at": at, "kind": "exception", "target": tid, "level": "error",
+                    "text": text(message),
+                    "url": d.get("url").and_then(Value::as_str).map(safe_url),
+                }));
+            }
+            "Log.entryAdded" => {
+                let entry = p.get("entry").cloned().unwrap_or(Value::Null);
+                self.console.push(json!({
+                    "at": at, "kind": "log", "target": tid,
+                    "level": entry.get("level").and_then(Value::as_str).unwrap_or("info"),
+                    "source": entry.get("source").and_then(Value::as_str),
+                    "text": text(entry.get("text").and_then(Value::as_str).unwrap_or("")),
+                    "url": entry.get("url").and_then(Value::as_str).map(safe_url),
+                }));
+            }
+            "Network.requestWillBeSent" => {
+                self.network.push(json!({
+                    "at": at, "kind": "request", "target": tid,
+                    "requestId": p.get("requestId").and_then(Value::as_str).map(text),
+                    "method": p.pointer("/request/method").and_then(Value::as_str).map(text),
+                    "url": p.pointer("/request/url").and_then(Value::as_str).map(safe_url),
+                    "resourceType": p.get("type").and_then(Value::as_str),
+                }));
+            }
+            "Network.responseReceived" => {
+                self.network.push(json!({
+                    "at": at, "kind": "response", "target": tid,
+                    "requestId": p.get("requestId").and_then(Value::as_str).map(text),
+                    "status": p.pointer("/response/status").and_then(Value::as_i64),
+                    "mimeType": p.pointer("/response/mimeType").and_then(Value::as_str).map(text),
+                    "url": p.pointer("/response/url").and_then(Value::as_str).map(safe_url),
+                    "resourceType": p.get("type").and_then(Value::as_str),
+                }));
+            }
+            "Network.loadingFailed" => {
+                self.network.push(json!({
+                    "at": at, "kind": "failed", "target": tid,
+                    "requestId": p.get("requestId").and_then(Value::as_str).map(text),
+                    "error": p.get("errorText").and_then(Value::as_str).map(text),
+                    "canceled": p.get("canceled").and_then(Value::as_bool),
+                    "blockedReason": p.get("blockedReason").and_then(Value::as_str),
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    /// Registers newly discovered page targets (popups) and configures newly attached
+    /// out-of-process frames.
+    pub fn settle_pending(&mut self, bounds: &Bounds) -> Result<(), CdpError> {
+        for _ in 0..8 {
+            if self.pending_attach.is_empty() && self.pending_children.is_empty() {
+                return Ok(());
+            }
+            for (i, child) in std::mem::take(&mut self.pending_children) {
+                let session = child.session.clone();
+                match self.configure_child(i, child, bounds) {
+                    Ok(()) => {}
+                    // A frame that went away before it was configured.
+                    Err(CdpError::Remote { .. }) => self.detach_child(i, &session),
+                    Err(e) => return Err(e),
+                }
+            }
+            for p in std::mem::take(&mut self.pending_attach) {
+                let info = p.get("info").cloned().unwrap_or(Value::Null);
+                let r = match p.get("sessionId").and_then(Value::as_str) {
+                    Some(s) => self.register(&info, s, "popup", bounds).map(Some),
+                    None => self.attach(&info, "popup", bounds),
+                };
+                match r {
+                    Ok(_) => {}
+                    // A target that went away before registration finished is not an error.
+                    Err(CdpError::Remote { .. }) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            self.absorb_events();
+        }
+        Ok(())
+    }
+
+    /// Reads events for at most `budget` and applies them.
+    pub fn pump(&mut self, budget: Duration, bounds: &Bounds) -> Result<(), CdpError> {
+        let r = self.cdp.pump(budget, Duration::from_millis(5));
+        self.absorb_events();
+        r?;
+        self.settle_pending(bounds)
+    }
+
+    /// The open (not closed) targets, in registration order.
+    pub fn open_targets(&self) -> Vec<String> {
+        self.targets
+            .iter()
+            .filter(|t| !t.closed)
+            .map(|t| t.id.clone())
+            .collect()
+    }
+
+    fn target_index(&self, id: &str) -> Option<usize> {
+        self.targets.iter().position(|t| t.id == id && !t.closed)
+    }
+
+    /// The target, CDP frame and hosting CDP session a wire target names, when its document
+    /// revision is current.
+    pub fn resolve(&self, target: &BrowserTarget) -> Result<(usize, Frame), ActionError> {
+        let Some(i) = self.target_index(target.target_id.as_str()) else {
+            return Err(ActionError::Stale {
+                kind: "browser_target",
+                detail: format!("target {} is not open", target.target_id.as_str()),
+            });
+        };
+        let t = &self.targets[i];
+        if t.crashed {
+            return Err(ActionError::Stale {
+                kind: "browser_target",
+                detail: format!("target {} crashed", t.id),
+            });
+        }
+        let Some(frame) = t.frames.iter().find(|f| f.host == target.frame_id.as_str()) else {
+            return Err(ActionError::Stale {
+                kind: "browser_frame",
+                detail: format!(
+                    "frame {} is not in target {}",
+                    target.frame_id.as_str(),
+                    t.id
+                ),
+            });
+        };
+        if target.document_revision.get() != t.document_revision {
+            return Err(ActionError::Stale {
+                kind: "browser_document",
+                detail: format!(
+                    "document revision {} is not current ({})",
+                    target.document_revision.as_str(),
+                    t.document_revision
+                ),
+            });
+        }
+        Ok((i, frame.clone()))
+    }
+
+    /// The exact DOM node a snapshot named, when its snapshot and document are still current.
+    pub fn resolve_node(&self, node: &BrowserNode) -> Result<(usize, NodeRef), ActionError> {
+        let (i, _) = self.resolve(&node.target)?;
+        let t = &self.targets[i];
+        let Some(s) = t
+            .snapshots
+            .iter()
+            .find(|s| s.revision == node.snapshot_revision.get())
+        else {
+            return Err(ActionError::Stale {
+                kind: "browser_snapshot",
+                detail: format!(
+                    "snapshot {} of target {} is no longer retained",
+                    node.snapshot_revision.as_str(),
+                    t.id
+                ),
+            });
+        };
+        if s.document_revision != t.document_revision || s.frame != node.target.frame_id.as_str() {
+            return Err(ActionError::Stale {
+                kind: "browser_snapshot",
+                detail: "the snapshot belongs to another document or frame".into(),
+            });
+        }
+        match s.nodes.get(node.node_id.as_str()) {
+            Some(n) => Ok((i, n.clone())),
+            None => Err(ActionError::Stale {
+                kind: "browser_node",
+                detail: format!(
+                    "node {} is not in snapshot {}",
+                    node.node_id.as_str(),
+                    s.revision
+                ),
+            }),
+        }
+    }
+
+    /// The current URL and title of a target (from its navigation history; no page script).
+    pub fn location(&mut self, i: usize, bounds: &Bounds) -> Result<(String, String), CdpError> {
+        let s = self.targets[i].cdp_session.clone();
+        let h = self.call(
+            Some(&s),
+            "Page.getNavigationHistory",
+            json!({}),
+            bounds.call,
+        )?;
+        let idx = h.get("currentIndex").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let entry = h
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|e| e.get(idx))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let url = entry
+            .get("url")
+            .and_then(Value::as_str)
+            .map(safe_url)
+            .unwrap_or_else(|| self.targets[i].url.clone());
+        let title = entry
+            .get("title")
+            .and_then(Value::as_str)
+            .map(text)
+            .unwrap_or_default();
+        Ok((url, title))
+    }
+
+    /// Takes an accessibility snapshot of one frame: a new snapshot revision with a node map,
+    /// and its bounded, redacted evidence document.
+    pub fn snapshot(
+        &mut self,
+        target: &BrowserTarget,
+        bounds: &Bounds,
+    ) -> Result<(BrowserTarget, String, String, Vec<u8>), ActionError> {
+        // Frames attached by the last request are configured before the document is read.
+        self.settle_pending(bounds).map_err(ActionError::Before)?;
+        let (i, frame) = self.resolve(target)?;
+        // Read on the session hosting the frame's document: an out-of-process frame has its own.
+        let s = frame.session.clone();
+        let tree = self
+            .call(
+                Some(&s),
+                "Accessibility.getFullAXTree",
+                json!({"frameId": frame.cdp}),
+                bounds.call,
+            )
+            .map_err(ActionError::Before)?;
+        let (url, title) = self.location(i, bounds).map_err(ActionError::Before)?;
+        // The document may have changed while the tree was read.
+        let (i, _) = self.resolve(target)?;
+        let ax = tree
+            .get("nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut host_of: HashMap<String, String> = HashMap::new();
+        let mut nodes = HashMap::new();
+        let mut out = Vec::new();
+        let mut truncated = false;
+        for n in &ax {
+            if n.get("ignored").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            if out.len() >= NODE_LIMIT {
+                truncated = true;
+                break;
+            }
+            let Some(ax_id) = n.get("nodeId").and_then(Value::as_str) else {
+                continue;
+            };
+            let host = format!("n{}", out.len() + 1);
+            host_of.insert(ax_id.to_owned(), host.clone());
+            let role = n
+                .pointer("/role/value")
+                .and_then(Value::as_str)
+                .unwrap_or("generic")
+                .to_owned();
+            if let Some(b) = n.get("backendDOMNodeId").and_then(Value::as_i64) {
+                nodes.insert(
+                    host.clone(),
+                    NodeRef {
+                        backend: b,
+                        role: role.clone(),
+                        session: s.clone(),
+                    },
+                );
+            }
+            out.push((n.clone(), host, role));
+        }
+        let mut list = Vec::with_capacity(out.len());
+        for (n, host, role) in out {
+            let states: Vec<Value> = n
+                .get("properties")
+                .and_then(Value::as_array)
+                .map(|ps| {
+                    ps.iter()
+                        .filter_map(|p| {
+                            let name = p.get("name").and_then(Value::as_str)?;
+                            let v = p.pointer("/value/value")?;
+                            matches!(
+                                name,
+                                "focused"
+                                    | "disabled"
+                                    | "checked"
+                                    | "expanded"
+                                    | "selected"
+                                    | "required"
+                                    | "invalid"
+                                    | "readonly"
+                                    | "pressed"
+                                    | "focusable"
+                                    | "editable"
+                                    | "multiselectable"
+                            )
+                            .then(|| json!({"name": name, "value": v}))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let parent = n
+                .get("parentId")
+                .and_then(Value::as_str)
+                .and_then(|p| host_of.get(p))
+                .cloned();
+            list.push(json!({
+                "nodeId": host,
+                "parentId": parent,
+                "role": role,
+                "name": n.pointer("/name/value").and_then(Value::as_str).map(text),
+                "value": n.pointer("/value/value").map(|v| match v {
+                    Value::String(s) => Value::String(text(s)),
+                    other => other.clone(),
+                }),
+                "description": n.pointer("/description/value").and_then(Value::as_str).map(text),
+                "states": states,
+                "actionable": nodes.contains_key(&host),
+            }));
+        }
+        let t = &mut self.targets[i];
+        t.next_snapshot += 1;
+        let revision = t.next_snapshot;
+        if t.snapshots.len() >= SNAPSHOTS_KEPT {
+            t.snapshots.pop_front();
+        }
+        t.snapshots.push_back(Snapshot {
+            revision,
+            frame: target.frame_id.as_str().to_owned(),
+            document_revision: t.document_revision,
+            nodes,
+        });
+        let frames: Vec<Value> = t
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(k, f)| {
+                json!({
+                    "frameId": f.host,
+                    "main": k == 0,
+                    "outOfProcess": f.session != t.cdp_session,
+                })
+            })
+            .collect();
+        let wire = t.wire(&self.session, target.frame_id.as_str());
+        let mut doc = json!({
+            "sessionId": self.session.as_str(),
+            "targetId": t.id,
+            "frameId": target.frame_id.as_str(),
+            "documentRevision": t.document_revision,
+            "snapshotRevision": revision,
+            "url": url,
+            "title": title,
+            "frames": frames,
+            "nodes": list,
+            "truncated": truncated,
+        });
+        let mut bytes = doc.to_string().into_bytes();
+        while bytes.len() > EVIDENCE_LIMIT * 8 {
+            // Bound the document: keep the first half of the nodes until it fits.
+            let nodes = doc["nodes"].as_array_mut().expect("nodes");
+            let keep = nodes.len() / 2;
+            nodes.truncate(keep);
+            doc["truncated"] = json!(true);
+            bytes = doc.to_string().into_bytes();
+        }
+        Ok((wire, url, title, bytes))
+    }
+
+    /// A PNG screenshot of a target's main frame (the whole page when `full_page`, clipped to
+    /// [`CAPTURE_EDGE`]). Returns the bytes and whether the capture was clipped.
+    pub fn screenshot(
+        &mut self,
+        target: &BrowserTarget,
+        full_page: bool,
+        bounds: &Bounds,
+    ) -> Result<(Vec<u8>, bool), ActionError> {
+        let (i, _) = self.resolve(target)?;
+        if target.frame_id.as_str() != self.targets[i].main_frame() {
+            return Err(ActionError::Refused {
+                kind: "browser_frame",
+                detail: "screenshots capture the main frame of a target".into(),
+            });
+        }
+        let s = self.targets[i].cdp_session.clone();
+        let mut params = json!({"format": "png"});
+        let mut clipped = false;
+        if full_page {
+            let m = self
+                .call(Some(&s), "Page.getLayoutMetrics", json!({}), bounds.call)
+                .map_err(ActionError::Before)?;
+            let size = m
+                .get("cssContentSize")
+                .or_else(|| m.get("contentSize"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let w = size.get("width").and_then(Value::as_f64).unwrap_or(0.0);
+            let h = size.get("height").and_then(Value::as_f64).unwrap_or(0.0);
+            clipped = w > CAPTURE_EDGE || h > CAPTURE_EDGE;
+            params = json!({
+                "format": "png",
+                "captureBeyondViewport": true,
+                "clip": {"x": 0, "y": 0, "width": w.clamp(1.0, CAPTURE_EDGE), "height": h.clamp(1.0, CAPTURE_EDGE), "scale": 1},
+            });
+        }
+        let shot = self
+            .call(
+                Some(&s),
+                "Page.captureScreenshot",
+                params,
+                bounds.navigation,
+            )
+            .map_err(ActionError::Before)?;
+        let data = shot.get("data").and_then(Value::as_str).unwrap_or("");
+        if data.len() > SCREENSHOT_LIMIT / 3 * 4 + 4 {
+            return Err(ActionError::Refused {
+                kind: "browser_screenshot",
+                detail: "the screenshot exceeds its size bound".into(),
+            });
+        }
+        let bytes = decode_base64(data).ok_or_else(|| {
+            ActionError::Before(CdpError::Protocol("screenshot data is not base64".into()))
+        })?;
+        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Err(ActionError::Before(CdpError::Protocol(
+                "screenshot is not a PNG image".into(),
+            )));
+        }
+        // The capture must still show the document the caller named.
+        self.resolve(target)?;
+        Ok((bytes, clipped))
+    }
+
+    /// Opens a new page target and registers it explicitly.
+    pub fn open_target(&mut self, bounds: &Bounds) -> Result<usize, ActionError> {
+        let created = self
+            .call(
+                None,
+                "Target.createTarget",
+                json!({"url": "about:blank"}),
+                bounds.call,
+            )
+            .map_err(ActionError::After)?;
+        let Some(cdp) = created.get("targetId").and_then(Value::as_str) else {
+            return Err(ActionError::After(CdpError::Protocol(
+                "createTarget returned no target".into(),
+            )));
+        };
+        let info = json!({"targetId": cdp, "type": "page", "url": "about:blank"});
+        // Auto-attach may have registered it already (as a popup of nobody).
+        if let Some(i) = self.targets.iter().position(|t| t.cdp_target == cdp) {
+            self.targets[i].origin = "opened";
+            return Ok(i);
+        }
+        self.pending_attach
+            .retain(|p| p.pointer("/info/targetId").and_then(Value::as_str) != Some(cdp));
+        self.attach(&info, "opened", bounds)
+            .map_err(ActionError::After)?
+            .ok_or_else(|| ActionError::After(CdpError::Protocol("target not attached".into())))
+    }
+
+    /// Navigates target `i` to `url` and waits (bounded) for its load.
+    pub fn navigate(
+        &mut self,
+        i: usize,
+        url: &str,
+        bounds: &Bounds,
+        closing: &dyn Fn() -> bool,
+    ) -> Result<(), ActionError> {
+        let s = self.targets[i].cdp_session.clone();
+        let r = self
+            .call(Some(&s), "Page.navigate", json!({"url": url}), bounds.call)
+            .map_err(|e| match e {
+                CdpError::Remote { .. } => ActionError::Before(e),
+                other => ActionError::After(other),
+            })?;
+        if let Some(err) = r.get("errorText").and_then(Value::as_str) {
+            self.pump(Duration::from_millis(50), bounds)
+                .map_err(ActionError::After)?;
+            return Err(ActionError::Navigation(text(err)));
+        }
+        let Some(loader) = r.get("loaderId").and_then(Value::as_str).map(str::to_owned) else {
+            // A same-document navigation: no new document to wait for.
+            return Ok(());
+        };
+        let deadline = Instant::now() + bounds.navigation;
+        while !self.targets[i].loaded.contains(&loader) {
+            if closing() {
+                return Err(ActionError::Closing);
+            }
+            if Instant::now() >= deadline || self.targets[i].crashed {
+                // The navigation was dispatched; the snapshot shows what is there now.
+                break;
+            }
+            self.pump(Duration::from_millis(50), bounds)
+                .map_err(ActionError::After)?;
+        }
+        Ok(())
+    }
+
+    /// Performs one input action and returns what it touched (the target index).
+    pub fn input(&mut self, action: &BrowserInput, bounds: &Bounds) -> Result<usize, ActionError> {
+        self.settle_pending(bounds).map_err(ActionError::Before)?;
+        match action {
+            BrowserInput::Click { node, button } => {
+                let (i, n) = self.resolve_node(node)?;
+                // Pointer input goes to the top-level page; DOM reads go to the node's session.
+                let s = self.targets[i].cdp_session.clone();
+                let b = n.backend;
+                self.call(
+                    Some(&n.session),
+                    "DOM.scrollIntoViewIfNeeded",
+                    json!({"backendNodeId": b}),
+                    bounds.call,
+                )
+                .map_err(before_or_after)?;
+                let quads = self
+                    .call(
+                        Some(&n.session),
+                        "DOM.getContentQuads",
+                        json!({"backendNodeId": b}),
+                        bounds.call,
+                    )
+                    .map_err(before_or_after)?;
+                let Some((x, y)) = centre(&quads) else {
+                    return Err(ActionError::Refused {
+                        kind: "browser_node",
+                        detail: "the node has no visible box to click".into(),
+                    });
+                };
+                let (dx, dy) = self.frame_offset(i, &n.session, bounds)?;
+                let (x, y) = (x + dx, y + dy);
+                self.resolve_node(node)?;
+                let button = match button {
+                    MouseButton::Primary => "left",
+                    MouseButton::Secondary => "right",
+                    MouseButton::Middle => "middle",
+                };
+                for (kind, count) in [("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 1)]
+                {
+                    self.call(
+                        Some(&s),
+                        "Input.dispatchMouseEvent",
+                        json!({"type": kind, "x": x, "y": y, "button": if count == 0 { "none" } else { button }, "clickCount": count}),
+                        bounds.call,
+                    )
+                    .map_err(ActionError::After)?;
+                }
+                Ok(i)
+            }
+            BrowserInput::Text { node, text: t } => {
+                let (i, n) = self.resolve_node(node)?;
+                // Focus the node in its own document; text goes to the focused frame.
+                let s = self.targets[i].cdp_session.clone();
+                self.call(
+                    Some(&n.session),
+                    "DOM.focus",
+                    json!({"backendNodeId": n.backend}),
+                    bounds.call,
+                )
+                .map_err(before_or_after)?;
+                self.resolve_node(node)?;
+                self.call(
+                    Some(&s),
+                    "Input.insertText",
+                    json!({"text": t.0}),
+                    bounds.call,
+                )
+                .map_err(ActionError::After)?;
+                Ok(i)
+            }
+            BrowserInput::Key {
+                target,
+                key,
+                modifiers,
+            } => {
+                let (i, _) = self.resolve(target)?;
+                let Some(k) = key_of(&key.0) else {
+                    return Err(ActionError::Refused {
+                        kind: "browser_key",
+                        detail: format!("unsupported key {}", text(&key.0)),
+                    });
+                };
+                let mask = modifiers.0.iter().fold(0, |m, x| {
+                    m | match x {
+                        KeyModifier::Alt => 1,
+                        KeyModifier::Control => 2,
+                        KeyModifier::Meta => 4,
+                        KeyModifier::Shift => 8,
+                    }
+                });
+                let s = self.targets[i].cdp_session.clone();
+                let printable = mask & 0b110 == 0 && k.text.is_some();
+                let mut down = json!({
+                    "type": if printable { "keyDown" } else { "rawKeyDown" },
+                    "key": k.key, "code": k.code, "windowsVirtualKeyCode": k.vk,
+                    "modifiers": mask,
+                });
+                if printable {
+                    down["text"] = json!(k.text);
+                }
+                self.call(Some(&s), "Input.dispatchKeyEvent", down, bounds.call)
+                    .map_err(ActionError::After)?;
+                self.call(
+                    Some(&s),
+                    "Input.dispatchKeyEvent",
+                    json!({"type": "keyUp", "key": k.key, "code": k.code, "windowsVirtualKeyCode": k.vk, "modifiers": mask}),
+                    bounds.call,
+                )
+                .map_err(ActionError::After)?;
+                Ok(i)
+            }
+            BrowserInput::Scroll { target, x, y } => {
+                let (i, _) = self.resolve(target)?;
+                let s = self.targets[i].cdp_session.clone();
+                let m = self
+                    .call(Some(&s), "Page.getLayoutMetrics", json!({}), bounds.call)
+                    .map_err(before_or_after)?;
+                let vp = m
+                    .get("cssLayoutViewport")
+                    .or_else(|| m.get("layoutViewport"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let w = vp
+                    .get("clientWidth")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(800.0);
+                let h = vp
+                    .get("clientHeight")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(600.0);
+                self.resolve(target)?;
+                self.call(
+                    Some(&s),
+                    "Input.dispatchMouseEvent",
+                    json!({"type": "mouseWheel", "x": w / 2.0, "y": h / 2.0, "deltaX": x, "deltaY": y}),
+                    bounds.call,
+                )
+                .map_err(ActionError::After)?;
+                Ok(i)
+            }
+        }
+    }
+
+    /// The offset of a document hosted by `session` within its target's top-level viewport: the
+    /// content-box origin of each out-of-process frame's owner element, up to the page. A
+    /// rotated or skewed frame owner is not supported (its quad's first corner is used).
+    fn frame_offset(
+        &mut self,
+        i: usize,
+        session: &str,
+        bounds: &Bounds,
+    ) -> Result<(f64, f64), ActionError> {
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut current = session.to_owned();
+        for _ in 0..16 {
+            if self.targets[i].is_page(Some(&current)) {
+                return Ok((x, y));
+            }
+            let Some(child) = self.targets[i].child_of_session(&current).cloned() else {
+                return Err(ActionError::Stale {
+                    kind: "browser_frame",
+                    detail: "the node's out-of-process frame is no longer attached".into(),
+                });
+            };
+            let owner = self
+                .call(
+                    Some(&child.parent),
+                    "DOM.getFrameOwner",
+                    json!({"frameId": child.frame}),
+                    bounds.call,
+                )
+                .map_err(before_or_after)?;
+            let Some(owner) = owner.get("backendNodeId").and_then(Value::as_i64) else {
+                return Err(ActionError::Refused {
+                    kind: "browser_frame",
+                    detail: "the frame has no owner element".into(),
+                });
+            };
+            self.call(
+                Some(&child.parent),
+                "DOM.scrollIntoViewIfNeeded",
+                json!({"backendNodeId": owner}),
+                bounds.call,
+            )
+            .map_err(before_or_after)?;
+            let model = self
+                .call(
+                    Some(&child.parent),
+                    "DOM.getBoxModel",
+                    json!({"backendNodeId": owner}),
+                    bounds.call,
+                )
+                .map_err(before_or_after)?;
+            let content: Vec<f64> = model
+                .pointer("/model/content")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_f64).collect())
+                .unwrap_or_default();
+            if content.len() != 8 {
+                return Err(ActionError::Refused {
+                    kind: "browser_frame",
+                    detail: "the frame owner has no box".into(),
+                });
+            }
+            x += content[0];
+            y += content[1];
+            current = child.parent;
+        }
+        Err(ActionError::Refused {
+            kind: "browser_frame",
+            detail: "out-of-process frames nest too deeply".into(),
+        })
+    }
+
+    /// Sets the files of a file input after re-checking that the node is still exactly that
+    /// file input (and that it accepts several files when several are given).
+    pub fn set_files(
+        &mut self,
+        node: &BrowserNode,
+        paths: &[String],
+        bounds: &Bounds,
+    ) -> Result<usize, ActionError> {
+        let (i, n) = self.resolve_node(node)?;
+        let s = n.session.clone();
+        let d = self
+            .call(
+                Some(&s),
+                "DOM.describeNode",
+                json!({"backendNodeId": n.backend}),
+                bounds.call,
+            )
+            .map_err(before_or_after)?;
+        let name = d
+            .pointer("/node/nodeName")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let attrs: Vec<String> = d
+            .pointer("/node/attributes")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let attr = |k: &str| {
+            attrs
+                .chunks(2)
+                .find(|c| c[0].eq_ignore_ascii_case(k))
+                .map(|c| c.get(1).cloned().unwrap_or_default())
+        };
+        if !name.eq_ignore_ascii_case("input")
+            || !attr("type").is_some_and(|t| t.eq_ignore_ascii_case("file"))
+        {
+            return Err(ActionError::Refused {
+                kind: "browser_node",
+                detail: "the node is not a file input".into(),
+            });
+        }
+        if paths.len() > 1 && attr("multiple").is_none() {
+            return Err(ActionError::Refused {
+                kind: "browser_node",
+                detail: "the file input accepts one file".into(),
+            });
+        }
+        self.resolve_node(node)?;
+        self.call(
+            Some(&s),
+            "DOM.setFileInputFiles",
+            json!({"files": paths, "backendNodeId": n.backend}),
+            bounds.call,
+        )
+        .map_err(ActionError::After)?;
+        Ok(i)
+    }
+
+    /// What an action observably did: waits up to the settle bound for its effects, then
+    /// describes the target before/after (URL, document revision, new targets, dialogs).
+    pub fn observe_after(
+        &mut self,
+        i: usize,
+        before: (String, i64, usize, u64),
+        action: Value,
+        bounds: &Bounds,
+    ) -> Result<Vec<u8>, CdpError> {
+        let deadline = Instant::now() + bounds.settle;
+        while Instant::now() < deadline {
+            self.pump(Duration::from_millis(25), bounds)?;
+        }
+        let t = &self.targets[i];
+        let (url_before, rev_before, targets_before, console_before) = before;
+        let new_targets: Vec<&str> = self.targets[targets_before..]
+            .iter()
+            .map(|t| t.id.as_str())
+            .collect();
+        let doc = json!({
+            "sessionId": self.session.as_str(),
+            "targetId": t.id,
+            "action": action,
+            "urlBefore": url_before,
+            "urlAfter": t.url,
+            "documentRevisionBefore": rev_before,
+            "documentRevisionAfter": t.document_revision,
+            "navigated": t.document_revision != rev_before,
+            "targetCrashed": t.crashed,
+            "newTargets": new_targets,
+            "consoleNotices": self.console.total.saturating_sub(console_before),
+            "outcome": "input delivered; the workflow outcome is what this observation shows, not a pass",
+        });
+        Ok(doc.to_string().into_bytes())
+    }
+
+    /// The state an action observation compares against.
+    pub fn before(&self, i: usize) -> (String, i64, usize, u64) {
+        let t = &self.targets[i];
+        (
+            t.url.clone(),
+            t.document_revision,
+            self.targets.len(),
+            self.console.total,
+        )
+    }
+}
+
+fn before_or_after(e: CdpError) -> ActionError {
+    match e {
+        CdpError::Remote { .. } | CdpError::Protocol(_) => ActionError::Before(e),
+        other => ActionError::After(other),
+    }
+}
+
+fn collect_frames(children: Option<&Value>, out: &mut Vec<String>) {
+    for c in children.and_then(Value::as_array).into_iter().flatten() {
+        if let Some(id) = c.pointer("/frame/id").and_then(Value::as_str) {
+            out.push(id.to_owned());
+        }
+        collect_frames(c.get("childFrames"), out);
+    }
+}
+
+fn remote_text(v: &Value) -> String {
+    match v.get("value") {
+        Some(Value::String(s)) => s.clone(),
+        Some(other) if !other.is_null() => other.to_string(),
+        _ => v
+            .get("description")
+            .and_then(Value::as_str)
+            .or_else(|| v.get("type").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_owned(),
+    }
+}
+
+/// The centre of the first content quad.
+fn centre(quads: &Value) -> Option<(f64, f64)> {
+    let q = quads.get("quads")?.as_array()?.first()?.as_array()?;
+    if q.len() != 8 {
+        return None;
+    }
+    let v: Vec<f64> = q.iter().filter_map(Value::as_f64).collect();
+    if v.len() != 8 {
+        return None;
+    }
+    Some((
+        (v[0] + v[2] + v[4] + v[6]) / 4.0,
+        (v[1] + v[3] + v[5] + v[7]) / 4.0,
+    ))
+}
+
+/// A key the input action can press.
+pub struct Key {
+    pub key: String,
+    pub code: String,
+    pub vk: i64,
+    pub text: Option<String>,
+}
+
+/// Named keys and single printable characters.
+pub fn key_of(name: &str) -> Option<Key> {
+    let named = |key: &str, code: &str, vk: i64, text: Option<&str>| {
+        Some(Key {
+            key: key.into(),
+            code: code.into(),
+            vk,
+            text: text.map(str::to_owned),
+        })
+    };
+    match name {
+        "Enter" => named("Enter", "Enter", 13, Some("\r")),
+        "Tab" => named("Tab", "Tab", 9, None),
+        "Escape" => named("Escape", "Escape", 27, None),
+        "Backspace" => named("Backspace", "Backspace", 8, None),
+        "Delete" => named("Delete", "Delete", 46, None),
+        "Space" | " " => named(" ", "Space", 32, Some(" ")),
+        "ArrowUp" => named("ArrowUp", "ArrowUp", 38, None),
+        "ArrowDown" => named("ArrowDown", "ArrowDown", 40, None),
+        "ArrowLeft" => named("ArrowLeft", "ArrowLeft", 37, None),
+        "ArrowRight" => named("ArrowRight", "ArrowRight", 39, None),
+        "Home" => named("Home", "Home", 36, None),
+        "End" => named("End", "End", 35, None),
+        "PageUp" => named("PageUp", "PageUp", 33, None),
+        "PageDown" => named("PageDown", "PageDown", 34, None),
+        _ => {
+            let mut chars = name.chars();
+            let c = chars.next()?;
+            if chars.next().is_some() || c.is_control() {
+                return None;
+            }
+            let (code, vk) = if c.is_ascii_alphabetic() {
+                (
+                    format!("Key{}", c.to_ascii_uppercase()),
+                    c.to_ascii_uppercase() as i64,
+                )
+            } else if c.is_ascii_digit() {
+                (format!("Digit{c}"), c as i64)
+            } else {
+                (String::new(), 0)
+            };
+            Some(Key {
+                key: c.to_string(),
+                code,
+                vk,
+                text: Some(c.to_string()),
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evidence_urls_drop_credentials_fragments_and_secret_parameters() {
+        assert_eq!(
+            safe_url("https://user:pw@example.test/a/b?q=1&token=abc&Api-Key=z#frag"),
+            "https://example.test/a/b?q=1&token=[REDACTED]&Api-Key=[REDACTED]"
+        );
+        assert_eq!(safe_url("about:blank"), "about:blank");
+        assert_eq!(safe_url("http://h.test/p#x?token=1"), "http://h.test/p");
+        assert_eq!(
+            safe_url("https://h.test/cb?code=xyz&state=ok"),
+            "https://h.test/cb?code=[REDACTED]&state=ok"
+        );
+    }
+
+    #[test]
+    fn keys_map_named_and_printable_and_refuse_others() {
+        assert_eq!(key_of("Enter").unwrap().vk, 13);
+        let a = key_of("a").unwrap();
+        assert_eq!((a.code.as_str(), a.text.as_deref()), ("KeyA", Some("a")));
+        assert!(key_of("F13").is_none());
+        assert!(key_of("\u{7}").is_none());
+        assert!(key_of("").is_none());
+    }
+
+    #[test]
+    fn notices_are_bounded_and_report_drops() {
+        let mut n = Notices::default();
+        for i in 0..(NOTICE_LIMIT + 3) {
+            n.push(json!({"i": i}));
+        }
+        assert_eq!(n.dropped, 3);
+        let (doc, truncated) = n.drain(&Id::new("s").unwrap(), "Console");
+        assert!(truncated);
+        let v: Value = serde_json::from_slice(&doc).unwrap();
+        assert_eq!(v["dropped"], 3);
+        assert_eq!(v["entries"].as_array().unwrap().len(), NOTICE_LIMIT);
+        assert!(n.is_empty());
+    }
+}

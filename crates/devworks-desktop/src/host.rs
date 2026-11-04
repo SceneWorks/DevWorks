@@ -10,6 +10,7 @@
 //! [`InvocationContext`], exactly as an agent tool reaches the same use cases (ARCH-02).
 use crate::backend::{Backend, Waker};
 use crate::platform::{HostIds, StoreAuthority, SystemClock, user_display_name};
+use devworks_adapters::browser::NativeBrowserPlatform;
 use devworks_adapters::diagnostics::DiagnosticExports;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
@@ -64,6 +65,9 @@ pub struct DesktopConfig {
     pub app_build: String,
     /// Shared bound of the owned-process stop at shutdown (AD20 default 30 s).
     pub shutdown_bound: Duration,
+    /// An explicitly configured Chromium-family browser executable (`DEVWORKS_BROWSER`), offered
+    /// as the `configured` browser asset beside the discovered Chrome, Chromium and Edge.
+    pub browser_path: Option<PathBuf>,
 }
 impl DesktopConfig {
     pub fn new(data_root: impl Into<PathBuf>) -> Self {
@@ -72,6 +76,9 @@ impl DesktopConfig {
             user_name: user_display_name(),
             app_build: concat!("devworks-desktop/", env!("CARGO_PKG_VERSION")).to_owned(),
             shutdown_bound: Duration::from_secs(30),
+            browser_path: std::env::var_os("DEVWORKS_BROWSER")
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from),
         }
     }
 }
@@ -197,6 +204,17 @@ async fn compose(
         runs: RunComposition::new(Arc::new(ControlService::new(id_source.clone()))),
         power: Arc::new(NativePower),
         diagnostics,
+        // Owned browser sessions: discovered or configured Chromium-family browsers, owned
+        // profiles under the data root, launched through the process owner.
+        browser: Some(devworks_engine::browser::BrowserComposition {
+            platform: Arc::new(NativeBrowserPlatform::new(
+                &config.data_root,
+                config.browser_path.clone(),
+            )),
+            fs: Arc::new(NativeFilesystem::new()),
+            app_data_root: Some(config.data_root.to_string_lossy().into_owned()),
+            config: devworks_core::services::browser::BrowserConfig::default(),
+        }),
         use_cases,
         consumers: Vec::new(),
         config: runtime_config,

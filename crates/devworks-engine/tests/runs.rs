@@ -2171,6 +2171,7 @@ fn composition_with(
                 None,
             ),
         ),
+        browser: None,
         use_cases: UseCases::new(),
         consumers: Vec::new(),
         config,

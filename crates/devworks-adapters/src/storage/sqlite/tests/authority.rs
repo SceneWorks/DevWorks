@@ -2245,6 +2245,9 @@ impl WriteTransaction for Lying<'_> {
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
         self.inner.diagnostics()
     }
+    fn browser(&mut self) -> &mut dyn BrowserRepository {
+        self.inner.browser()
+    }
 }
 
 fn seams_run(
