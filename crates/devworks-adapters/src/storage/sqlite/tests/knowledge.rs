@@ -4141,3 +4141,24 @@ fn an_unmerge_keeps_the_baseline_of_the_evidence_it_cites() {
     relate_with(&fx, &a, &la, "unmerge", &lb, &[&e]);
     keeps_merged_citation(&fx, &a, &lb);
 }
+
+#[test]
+fn evidence_supplied_with_a_merge_brings_its_baseline_and_unmerge_takes_it_back() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    // B cites nothing; X is a lesson without evidence; the evidence of `repo:merged` at c1
+    // comes only with the merge.
+    let (la, lb, _) = three_lessons(&fx, &a);
+    let e = fx.read_claim(&a, proj("project-a"), &la).evidence.0[0]
+        .id
+        .clone();
+    let lx = lesson_in_a(&fx, &a, "X", "Agent", "ex");
+    relate_with(&fx, &a, &lx, "same_as", &lb, &[&e]);
+    assert_eq!(cited_snippets(&fx, &a, &lb), vec!["merged evidence"]);
+    observe_merged_source(&fx);
+    assert_eq!(fx.claim(&a, proj("project-a"), &lb).stale, Some(true));
+    // The merge owns both, so its unmerge takes both back.
+    relate_in_a(&fx, &a, &lx, "unmerge", &lb);
+    assert!(cited_snippets(&fx, &a, &lb).is_empty());
+    assert_eq!(fx.claim(&a, proj("project-a"), &lb).stale, Some(false));
+}

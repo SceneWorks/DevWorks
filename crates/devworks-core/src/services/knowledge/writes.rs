@@ -1347,8 +1347,10 @@ fn relate(
             // The source-revision baselines come with the citations, so a later observation
             // of a merged source marks the target stale; those the target lacked, or holds
             // only through another active merge, are the merge's too.
+            // Evidence supplied with the merge brings its baselines the same way.
+            let supplied = basis_of(&mut w, &evidence, None, Vec::new())?;
             let mut added_basis = Vec::new();
-            for (source_ref, revision) in &from.basis {
+            for (source_ref, revision) in from.basis.iter().chain(&supplied) {
                 match target.basis.iter().find(|(r, _)| r == source_ref) {
                     None => {
                         target.basis.push((source_ref.clone(), revision.clone()));
