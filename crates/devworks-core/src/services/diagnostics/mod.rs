@@ -970,23 +970,31 @@ impl DiagnosticService {
     /// one write owner, the memory-write probe's replacement). Call it outside any read
     /// snapshot: the inspection takes a reader of its own.
     pub fn refresh_monitor(&self) -> MonitorState {
-        let database = self.storage.as_ref().map(|p| {
+        self.refresh_monitor_unless(&|| false)
+    }
+    /// [`Self::refresh_monitor`], starting no further probe once `stopped` holds (the runtime's
+    /// shutdown): a probe that did not run keeps its previous reading.
+    pub fn refresh_monitor_unless(&self, stopped: &dyn Fn() -> bool) -> MonitorState {
+        let probes = self.storage.as_ref().filter(|_| !stopped());
+        let database = probes.map(|p| {
             let r = p.database().map_err(|e| self.error_text(&e));
             (self.now(), r)
         });
-        let integrity = self.storage.as_ref().map(|p| {
+        let integrity = probes.filter(|_| !stopped()).map(|p| {
             let r = p
                 .integrity()
                 .map(|r| r.problems)
                 .map_err(|e| self.error_text(&e));
             (self.now(), r)
         });
-        let start = std::time::Instant::now();
-        let probe = run_write(&*self.store, WriteOptions::default(), |tx| {
-            tx.committed_sequence()
-        })
-        .map(|_| start.elapsed().as_millis() as u64)
-        .map_err(|e| self.error_text(&e));
+        let probe = (!stopped()).then(|| {
+            let start = std::time::Instant::now();
+            run_write(&*self.store, WriteOptions::default(), |tx| {
+                tx.committed_sequence()
+            })
+            .map(|_| start.elapsed().as_millis() as u64)
+            .map_err(|e| self.error_text(&e))
+        });
         let mut m = self.monitor.lock().unwrap_or_else(|p| p.into_inner());
         if integrity.is_some() {
             m.integrity = integrity;
@@ -994,7 +1002,9 @@ impl DiagnosticService {
         if database.is_some() {
             m.database = database;
         }
-        m.write_probe = Some((self.now(), probe));
+        if let Some(probe) = probe {
+            m.write_probe = Some((self.now(), probe));
+        }
         m.clone()
     }
 
