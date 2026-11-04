@@ -1090,16 +1090,26 @@ impl ConnectionService {
                 "the workspace was restored; sign in again".into(),
             ));
         }
-        if c.lifecycle == "ReauthenticationRequired" {
-            return Err(AccessError::ReauthenticationRequired(
+        let refused = c.lifecycle == "ReauthenticationRequired";
+        let reauthenticate = || {
+            AccessError::ReauthenticationRequired(
                 c.state_reason
                     .clone()
                     .unwrap_or_else(|| "sign in again".into()),
-            ));
+            )
+        };
+        if refused && !testing {
+            return Err(reauthenticate());
         }
         let Some(credential) = self.load(&c, &handle)? else {
             return Ok(None);
         };
+        // The user's own test or refresh retries a refused API key (it may be valid again;
+        // a passing test returns the connection to Connected). Routing never does, and a
+        // refused subscription token needs a new sign-in.
+        if refused && !matches!(credential, Credential::ApiKey(_)) {
+            return Err(reauthenticate());
+        }
         match credential {
             Credential::ApiKey(k) => Ok(Some(base(AccessCredential::ApiKey(k)))),
             Credential::OAuth(t) => {

@@ -2183,6 +2183,17 @@ fn unknown_refresh_outcomes_are_counted_per_credential() {
         cx.svc.access(&id("claude"), None),
         Err(AccessError::ReauthenticationRequired(_))
     ));
+    // A test does not retry a refused subscription token (only a new sign-in recovers it).
+    let sent = cx.http.requests(CLAUDE_TOKEN).len() + cx.http.requests(ANTHROPIC).len();
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "claude", "action": "Inspect"})));
+    assert_eq!(
+        cx.http.requests(CLAUDE_TOKEN).len() + cx.http.requests(ANTHROPIC).len(),
+        sent
+    );
+    assert!(is(
+        lifecycle(&cx.connection("claude")),
+        "ReauthenticationRequired"
+    ));
 }
 
 #[test]
@@ -2397,4 +2408,60 @@ fn cancelling_a_first_device_sign_in_refuses_its_publication_durably() {
     let c = cx.connection("codex");
     assert_eq!(c.credential_ref, None, "{c:?}");
     assert_eq!(c.credential_revision.as_ref().map(Counter::get), Some(1));
+}
+
+#[test]
+fn a_refused_key_that_becomes_valid_again_recovers_through_an_explicit_test() {
+    let cx = Cx::new();
+    let key = cx.stage("sk-ant-flaky");
+    cx.add("anthropic", "AnthropicMessages", ANTHROPIC, Some(&key));
+    let model = json!({"id": "opus-api", "displayName": "Opus (API)",
+        "endpointProfile": "AnthropicMessages", "upstreamModelId": "claude-opus-5-5",
+        "enabled": true, "tierMemberships": [], "efforts": [], "imageInput": false,
+        "tools": true, "revision": "1"});
+    assert!(summary(cx.configure(json!({"kind": "Model", "model": model}))).2);
+    let list = format!("{ANTHROPIC}/v1/models");
+    for (action, n) in [("Inspect", 1), ("Refresh", 3)] {
+        // The provider refuses the key: unusable for routing, and never retried by itself.
+        cx.http.reset(Method::Get, &list, 401, json!({}));
+        summary(cx.configure(
+            json!({"kind": "SignIn", "connectionId": "anthropic", "action": "Inspect"}),
+        ));
+        assert!(is(
+            lifecycle(&cx.connection("anthropic")),
+            "ReauthenticationRequired"
+        ));
+        assert!(!cx.availability("opus-api").available);
+        assert!(matches!(
+            cx.svc.access(&id("anthropic"), None),
+            Err(AccessError::ReauthenticationRequired(_))
+        ));
+        cx.advance(DISCOVERY_INTERVAL_MS + 1);
+        cx.svc.tick();
+        assert_eq!(
+            cx.http.requests(&list).len(),
+            n,
+            "routing and the timer never retry it"
+        );
+        // The same key is accepted again: the user's own test (or refresh) recovers it.
+        cx.http.reset(
+            Method::Get,
+            &list,
+            200,
+            json!({"data": [{"id": "claude-opus-5-5"}], "has_more": false}),
+        );
+        assert!(
+            summary(
+                cx.configure(json!({"kind": "SignIn", "connectionId": "anthropic",
+            "action": action}))
+            )
+            .2
+        );
+        let c = cx.connection("anthropic");
+        assert!(is(lifecycle(&c), "Connected"), "{action}: {c:?}");
+        assert_eq!(c.healthy, Some(true));
+        assert_eq!(c.credential_ref.as_ref(), Some(&key), "the same key");
+        assert!(cx.availability("opus-api").available);
+        assert!(cx.svc.access(&id("anthropic"), None).is_ok());
+    }
 }
