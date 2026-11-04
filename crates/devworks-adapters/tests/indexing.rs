@@ -40,7 +40,7 @@ use devworks_core::services::process::ProcessSupervisor;
 use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::resources::ResourceService;
 use devworks_core::services::runs::ControlService;
-use devworks_core::settings::catalog::descriptor;
+use devworks_core::settings::catalog::{OVERLAY_RECORDS_KEPT_KEY, descriptor};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -2539,4 +2539,164 @@ fn swift_extensions_module_scopes_and_call_families_link_by_the_retained_rules()
     assert_eq!(cpp_c.payload["targetUnit"], json!("native/lib.cpp"));
     let py = call("src/ffi.rs", "py_fn");
     assert_eq!(py.payload["candidates"], json!(0), "{py:?}");
+}
+
+#[test]
+fn ended_ref_overlay_records_are_pruned_past_both_limits_in_bounded_passes() {
+    let _s = serial();
+    let fx = Fx::new(|s| s.overlay_prune_batch = 3);
+    let src = Temp::new("src");
+    let dir = src.join("prune");
+    repo(&dir, &[("src/lib.rs", "pub fn a() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let index = run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let view = fx.published(&repo_id).view;
+    let day = 86_400_000;
+    let overlay = |n: u32, state: &str, ended_at: i64| StoredOverlay {
+        id: Id::new(format!("ovl-{n:04}")).unwrap(),
+        repository_id: repo_id.clone(),
+        worktree_id: None,
+        worktree_path: None,
+        state: state.into(),
+        revision: 1,
+        base_generation_id: None,
+        base_oid: None,
+        head_oid: Some(format!("{n:040x}")),
+        head_ref: None,
+        capture_digest: None,
+        branch_generation_id: None,
+        worktree_generation_id: None,
+        view_id: None,
+        run_id: None,
+        reason: None,
+        created_at_ms: ended_at,
+        updated_at_ms: ended_at,
+        expires_at_ms: T0 + 365 * day,
+    };
+    // 40 expired records ended at T0 + n; older than both limits: n = 0..8.
+    let mut all: Vec<StoredOverlay> = (0..40)
+        .map(|n| overlay(n, OVERLAY_EXPIRED, T0 + i64::from(n)))
+        .collect();
+    // One of them still holds a layer no view names (with graph rows).
+    let layer = Id::new("gen-ovl-0000").unwrap();
+    all[0].branch_generation_id = Some(layer.clone());
+    let (g, r) = (layer.clone(), repo_id.clone());
+    fx.write(move |tx| {
+        tx.indexing().insert_generation(&StoredGeneration {
+            id: g.clone(),
+            repository_id: r,
+            layer: LAYER_BRANCH.into(),
+            state: GEN_STAGING.into(),
+            source_digest: "b".repeat(40),
+            watermark: 0,
+            manifest: json!({}),
+        })?;
+        tx.indexing().put_unit(
+            &StoredUnit {
+                generation_id: g,
+                unit_key: "src/x.rs".into(),
+                content_digest: "c".repeat(64),
+                action: UNIT_REPLACE.into(),
+                payload: json!({}),
+            },
+            &[StoredNode {
+                unit_key: "src/x.rs".into(),
+                node_id: "n-x".into(),
+                kind: "Function".into(),
+                name: "x".into(),
+                payload: json!({"qualifiedName": "x"}),
+            }],
+            &[],
+        )
+    });
+    // The oldest of all, but a view still names one (its own view) or one of its layers.
+    let mut named = overlay(100, OVERLAY_FAILED, T0 - 10);
+    named.view_id = Some(view.view_id.clone());
+    let mut layered = overlay(101, OVERLAY_UNAVAILABLE, T0 - 9);
+    layered.branch_generation_id = Some(view.baseline_id.clone());
+    all.extend([named, layered, overlay(102, OVERLAY_READY, T0 - 8)]);
+    fx.write(move |tx| {
+        for o in &all {
+            tx.indexing().put_overlay(o, None)?;
+        }
+        Ok(())
+    });
+    // A finished run of an overlay that will be pruned: run history survives.
+    let mut run = fx.run(&index.id);
+    run.id = Id::new("run-ovl-0000").unwrap();
+    run.kind = RUN_OVERLAY.into();
+    run.overlay_id = Some(Id::new("ovl-0000").unwrap());
+    run.state = RUN_QUEUED.into();
+    run.stage = "queued".into();
+    run.revision = 1;
+    run.owner = None;
+    run.lease_until_ms = None;
+    run.finished_at_ms = None;
+    let mut done = run.clone();
+    done.state = RUN_CANCELLED.into();
+    done.stage = "cancelled".into();
+    done.revision = 2;
+    done.finished_at_ms = Some(T0);
+    fx.write(move |tx| {
+        tx.indexing().insert_run(&run)?;
+        tx.indexing().update_run(&done, 1)
+    });
+    let exists = |n: u32| {
+        let id = Id::new(format!("ovl-{n:04}")).unwrap();
+        fx.read(move |s| s.indexing().overlay(&id)).is_some()
+    };
+    let pass = || {
+        fx.worker
+            .housekeeping(false, &|| false)
+            .unwrap()
+            .pruned_overlays
+    };
+
+    // Beyond the newest 32 but within the 14-day window: kept.
+    fx.now(T0 + day);
+    assert_eq!(pass(), 0);
+    // Past both limits: pruned, at most 3 per pass.
+    fx.now(T0 + 15 * day);
+    assert_eq!((pass(), pass(), pass(), pass()), (3, 3, 2, 0));
+    assert!(
+        (0..8).all(|n| !exists(n)),
+        "the 8 oldest expired records are pruned"
+    );
+    let g = layer.clone();
+    assert!(
+        fx.read(move |s| s.indexing().generation(&g)).is_none(),
+        "a pruned record's layer and graph rows are reclaimed"
+    );
+    assert!((8..40).all(exists), "the newest 32 ended records are kept");
+    assert!(
+        exists(100) && exists(101),
+        "records a view still names are kept"
+    );
+    assert!(exists(102), "a live overlay is kept");
+    let kept = fx.run(&Id::new("run-ovl-0000").unwrap());
+    assert_eq!(kept.state, RUN_CANCELLED);
+    assert_eq!(kept.overlay_id.as_ref().map(Id::as_str), Some("ovl-0000"));
+    // The per-repository count is the workspace setting.
+    let d = descriptor(OVERLAY_RECORDS_KEPT_KEY).unwrap();
+    let assignment = serde_json::from_value(json!({
+        "key": OVERLAY_RECORDS_KEPT_KEY,
+        "value": {"schema": d.schema_ref(), "value": 30},
+    }))
+    .unwrap();
+    let ctx = fx.user();
+    fx.write(move |tx| {
+        devworks_core::settings::service::apply_human_assignments(
+            tx,
+            &ctx,
+            &ConfigScope::Workspace,
+            &[assignment],
+            json!({"test": true}),
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert_eq!(pass(), 2);
+    assert!(!exists(8) && !exists(9) && exists(10));
 }

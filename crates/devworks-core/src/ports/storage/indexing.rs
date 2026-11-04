@@ -442,6 +442,16 @@ pub trait IndexRead {
     fn overlays(&self, repository: &Id) -> Result<Vec<StoredOverlay>, StorageError>;
     /// Overlays (not expired or unavailable) whose expiry is at or before `now_ms`.
     fn overlays_due(&self, now_ms: i64, limit: u16) -> Result<Vec<StoredOverlay>, StorageError>;
+    /// At most `limit` ended ref overlays (expired, unavailable or failed; no worktree) that
+    /// record retention may prune, oldest first: ended at or before `ended_before_ms`, beyond the
+    /// `keep` most recently ended ref overlays of their repository, naming no view and with no
+    /// active run.
+    fn prunable_ref_overlays(
+        &self,
+        ended_before_ms: i64,
+        keep: u32,
+        limit: u16,
+    ) -> Result<Vec<StoredOverlay>, StorageError>;
 }
 
 pub trait IndexRepository: IndexRead {
@@ -517,6 +527,9 @@ pub trait IndexRepository: IndexRead {
     ) -> Result<i64, StorageError>;
     /// Removes a view that no published pointer names, with its registry row and texts.
     fn remove_view(&mut self, view: &Id) -> Result<(), StorageError>;
+    /// Removes an ended ref overlay's record at `expected_revision` (record retention). Runs,
+    /// history and logs that name it are kept; a live or worktree overlay is refused.
+    fn remove_overlay(&mut self, overlay: &Id, expected_revision: i64) -> Result<(), StorageError>;
     /// Inserts an overlay (`expected_revision` `None`) or replaces it at that revision.
     fn put_overlay(
         &mut self,

@@ -34,7 +34,8 @@
 //! to `Queued` for the retry). A ready overlay becomes `Stale` when its baseline is republished or
 //! its worktree changes (observed by housekeeping, which queues the rebuild), `Expired` once its
 //! retention passes (its view and layers go; the record stays), and `Unavailable` when retired
-//! or when its index is removed. Only the run an overlay names can change its state.
+//! or when its index is removed. Only the run an overlay names can change its state. An ended
+//! ref overlay's record is pruned by record retention ([`prune_ref_overlays`]).
 use super::config::EffectiveConfig;
 use super::git::{Change, EMPTY_TREE_SHA1, EMPTY_TREE_SHA256, TreeEntry};
 use super::worker::{
@@ -55,6 +56,7 @@ use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::{DomainErrorCode, Id, RevisionDimension};
 use crate::services::projects::visible_repository;
 use crate::services::sessions::{Failure, Refusal, rev};
+use crate::settings::catalog::{OVERLAY_RECORD_RETENTION_DAYS_KEY, OVERLAY_RECORDS_KEPT_KEY};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -726,6 +728,92 @@ pub(crate) fn expire_overlay(
         "IndexOverlayExpired",
         json!({"worktreeId": o.worktree_id.as_ref().map(Id::as_str), "principalKind": "Host"}),
     )
+}
+
+/// Record retention of ended ref overlays (CODE-11; separate from artifact retention): at most
+/// [`super::IndexSettings::overlay_prune_batch`] records that ended longer ago than
+/// `indexing.overlayRecordRetentionDays` and are beyond the `indexing.overlayRecordsKept` most
+/// recently ended ref overlays of their repository are removed, each in its own short write
+/// that re-checks it: still ended at the same revision, naming no view, with no active run and
+/// no layer a view names. Its layers are retired (the generation reclamation pass removes their
+/// graph data); its runs, history and logs stay, and the removal is recorded in history. Returns
+/// how many were pruned.
+pub(crate) fn prune_ref_overlays(
+    env: &IndexEnv,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<usize, StorageError> {
+    let now = env.now();
+    let batch = env.settings.overlay_prune_batch;
+    if batch == 0 {
+        return Ok(0);
+    }
+    let candidates = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        let days = crate::services::diagnostics::setting(
+            s.configuration(),
+            OVERLAY_RECORD_RETENTION_DAYS_KEY,
+        )?;
+        let keep =
+            crate::services::diagnostics::setting(s.configuration(), OVERLAY_RECORDS_KEPT_KEY)?;
+        let ended_before = now.saturating_sub(days.saturating_mul(86_400_000));
+        // A few more than the batch, so records a view still names do not stall the pass.
+        s.indexing().prunable_ref_overlays(
+            ended_before,
+            u32::try_from(keep.max(0)).unwrap_or(u32::MAX),
+            batch.saturating_mul(4),
+        )
+    })?;
+    let mut pruned = 0;
+    for o in candidates {
+        if pruned >= usize::from(batch) || stop() {
+            break;
+        }
+        let removed = run_write(&*env.store, WriteOptions::default(), move |tx| {
+            let Some(cur) = tx.indexing().overlay(&o.id)? else {
+                return Ok(false);
+            };
+            let layers: Vec<Id> = [&cur.branch_generation_id, &cur.worktree_generation_id]
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect();
+            let mut in_view = false;
+            for g in &layers {
+                in_view |= tx.indexing().generation_in_view(g)?;
+            }
+            // The same revision keeps what the selection checked (ended, no worktree, no view);
+            // a view may since name one of its layers, and a run may have been queued.
+            if cur.revision != o.revision
+                || in_view
+                || tx
+                    .indexing()
+                    .active_run(&cur.repository_id, Some(&cur.id))?
+                    .is_some()
+            {
+                return Ok(false);
+            }
+            for g in &layers {
+                retire_unused(tx, g)?;
+            }
+            tx.indexing().remove_overlay(&cur.id, cur.revision)?;
+            let host = tx.store().host_actor.clone();
+            history(
+                tx,
+                &host,
+                None,
+                (OVERLAY_AGGREGATE, &cur.id, cur.revision + 1),
+                "IndexOverlayPruned",
+                json!({
+                    "repositoryId": cur.repository_id.as_str(),
+                    "headCommit": cur.head_oid,
+                    "state": cur.state,
+                    "principalKind": "Host",
+                }),
+            )?;
+            Ok(true)
+        })?;
+        pruned += usize::from(removed);
+    }
+    Ok(pruned)
 }
 
 /// Housekeeping observation: ready overlays whose worktree or baseline moved are marked stale

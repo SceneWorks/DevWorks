@@ -163,6 +163,8 @@ pub struct IndexSettings {
     pub file_budget_ms: u64,
     /// Overlay retention from its last refresh (the retained 72 hours).
     pub overlay_ttl_ms: i64,
+    /// Ended ref-overlay records one housekeeping pass prunes at most (one short write each).
+    pub overlay_prune_batch: u16,
     /// Baseline views kept besides the published one (for exact pins and overlays).
     pub retained_baselines: usize,
     /// Discovery depth below a base directory and the most directories one scan visits.
@@ -183,6 +185,7 @@ impl Default for IndexSettings {
             batch_bytes: 16 * 1024 * 1024,
             file_budget_ms: 10_000,
             overlay_ttl_ms: 72 * 3_600_000,
+            overlay_prune_batch: 16,
             retained_baselines: 1,
             discovery_depth: 6,
             discovery_max_dirs: 20_000,

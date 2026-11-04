@@ -870,6 +870,20 @@ macro_rules! index_reads {
                     .collect::<rusqlite::Result<Vec<_>>>())?;
                 rows.into_iter().map(overlay_from).collect()
             }
+            fn prunable_ref_overlays(
+                &self,
+                ended_before_ms: i64,
+                keep: u32,
+                n: u16,
+            ) -> Result<Vec<StoredOverlay>, StorageError> {
+                let n = limit(n)?;
+                let mut s = db(self.conn.prepare_cached(&format!(
+                    "SELECT {OVERLAY_COLUMNS} FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY repository_id ORDER BY updated_at DESC, id DESC) AS rank FROM index_overlays WHERE worktree_id IS NULL AND state IN ('Expired','Unavailable','Failed')) AS ended WHERE rank>?2 AND updated_at<=?1 AND view_id IS NULL AND NOT EXISTS (SELECT 1 FROM index_runs r WHERE r.overlay_id=ended.id AND r.state IN ('Queued','Running')) ORDER BY updated_at, id LIMIT ?3"
+                )))?;
+                let rows = db(db(s.query_map(params![ended_before_ms, keep, n], overlay_of))?
+                    .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter().map(overlay_from).collect()
+            }
         }
     };
 }
@@ -1425,6 +1439,36 @@ impl IndexRepository for Unit<'_> {
         ] {
             db(db(self.conn.prepare_cached(sql))?.execute([view.as_str()]))?;
         }
+        Ok(())
+    }
+    fn remove_overlay(&mut self, overlay: &Id, expected: i64) -> Result<(), StorageError> {
+        let Some(current) = self.overlay(overlay)? else {
+            return Err(StorageError::NotFound {
+                kind: "index_overlay",
+                id: overlay.as_str().to_owned(),
+            });
+        };
+        if current.revision != expected {
+            return Err(StorageError::conflict(
+                RevisionDimension::Source,
+                "index_overlay",
+                overlay.clone(),
+                rev(expected)?,
+                rev(current.revision)?,
+            ));
+        }
+        if current.worktree_id.is_some()
+            || !matches!(
+                current.state.as_str(),
+                OVERLAY_EXPIRED | OVERLAY_UNAVAILABLE | OVERLAY_FAILED
+            )
+        {
+            return Err(invalid("only an ended ref overlay's record is removed"));
+        }
+        db(db(self
+            .conn
+            .prepare_cached("DELETE FROM index_overlays WHERE id=?1"))?
+        .execute([overlay.as_str()]))?;
         Ok(())
     }
     fn put_overlay(

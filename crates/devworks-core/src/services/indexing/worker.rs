@@ -792,6 +792,8 @@ struct LiveRun {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Housekeeping {
     pub expired_overlays: usize,
+    /// Ended ref-overlay records removed by record retention.
+    pub pruned_overlays: usize,
     pub reclaimed_rows: u64,
     pub stale_overlays: usize,
     pub refreshes_queued: usize,
@@ -1050,6 +1052,7 @@ impl IndexWorker {
             )?;
             report.expired_overlays += usize::from(expired);
         }
+        report.pruned_overlays = super::overlay::prune_ref_overlays(&self.env, stop)?;
         if observe {
             let (stale, queued) =
                 super::overlay::observe_all(&self.env, &self.observe_cursor, stop)?;

@@ -1633,6 +1633,14 @@ impl IndexRead for Unsupported {
     fn overlays_due(&self, _: i64, _: u16) -> Result<Vec<StoredOverlay>, StorageError> {
         nope()
     }
+    fn prunable_ref_overlays(
+        &self,
+        _: i64,
+        _: u32,
+        _: u16,
+    ) -> Result<Vec<StoredOverlay>, StorageError> {
+        nope()
+    }
 }
 impl IndexRepository for Unsupported {
     fn put_source_config(&mut self, _: &StoredSourceConfig, _: i64) -> Result<(), StorageError> {
@@ -1683,6 +1691,9 @@ impl IndexRepository for Unsupported {
         nope()
     }
     fn put_overlay(&mut self, _: &StoredOverlay, _: Option<i64>) -> Result<(), StorageError> {
+        nope()
+    }
+    fn remove_overlay(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
         nope()
     }
 }
