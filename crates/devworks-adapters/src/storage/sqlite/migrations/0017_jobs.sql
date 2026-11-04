@@ -1,4 +1,4 @@
--- DevWorks store migration 0019: durable schedules and manual jobs (JOB-01..09).
+-- DevWorks store migration 0017: durable schedules and manual jobs (JOB-01..09).
 -- Additive. schedules and job_runs (migration 1, never written by an earlier build) gain the
 -- job's title, scope, schedule, kind, authorization, hold, restore and project-archive
 -- activation epochs, interval anchor, interrupted run and lifecycle times, and the run's sequence, definition snapshot,

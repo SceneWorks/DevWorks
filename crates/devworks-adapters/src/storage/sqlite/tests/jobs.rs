@@ -3,10 +3,10 @@
 //! transactional steps (claims with missed and overlapping occurrences, DST gaps and folds,
 //! native dispatch through the gateway, scheduled inference up to its dispatch port,
 //! cancellation, interruption and resumption across restart), project archive and restore,
-//! discovery checkpoints and action identities, per-run usage, and migration 19. The clock is the
+//! discovery checkpoints and action identities, per-run usage, and migration 17. The clock is the
 //! harness's deterministic clock; nothing sleeps on a schedule and no inference runs.
 use super::{Harness, T0};
-use crate::storage::sqlite::{MIGRATION_0019_SHA256, MIGRATIONS, SqliteStore};
+use crate::storage::sqlite::{MIGRATION_0017_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
@@ -1727,17 +1727,17 @@ fn an_archival_since_activation_holds_the_schedule_even_without_the_hook() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Migration 19
+// Migration 17
 
 #[test]
-fn migration_19_is_additive_and_enforces_one_active_run() {
+fn migration_17_is_additive_and_enforces_one_active_run() {
     let m = MIGRATIONS
         .iter()
-        .find(|m| m.version == 19)
-        .expect("migration 19");
+        .find(|m| m.version == 17)
+        .expect("migration 17");
     assert_eq!(
         m.checksum(),
-        MIGRATION_0019_SHA256,
+        MIGRATION_0017_SHA256,
         "an applied migration was edited"
     );
     assert_eq!((m.minimum_reader, m.minimum_writer), (8, 14));

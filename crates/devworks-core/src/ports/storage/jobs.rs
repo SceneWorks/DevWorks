@@ -1,5 +1,5 @@
 //! Durable schedules and their runs (JOB-01..09): the `schedules` and `job_runs` records of the
-//! initial schema, extended by migration 19 with discovery checkpoints, action identities, run
+//! initial schema, extended by migration 17 with discovery checkpoints, action identities, run
 //! links and per-run usage.
 //!
 //! * **Jobs** are app-level (`project_id` `None`) or project schedules. The repository enforces
