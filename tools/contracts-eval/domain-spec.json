@@ -841,7 +841,11 @@
         "claim_id": "?Id",
         "source": "EvidenceLocator",
         "snippet": "Content",
-        "metadata": "?SchemaValue"
+        "metadata": "?SchemaValue",
+        "source_revision": "?Text"
+      },
+      "since": {
+        "source_revision": 2
       }
     },
     "KnowledgeEntity": {
@@ -852,7 +856,23 @@
         "label": "Label",
         "entity_type": "Label",
         "aliases": "Items<Label>",
-        "scope": "DataScope"
+        "scope": "DataScope",
+        "canonical_name": "?Label",
+        "external_id": "?Text",
+        "source": "?Label",
+        "author_id": "?ActorId",
+        "created_at_ms": "?Counter",
+        "updated_at_ms": "?Counter",
+        "deleted": "?bool"
+      },
+      "since": {
+        "canonical_name": 2,
+        "external_id": 2,
+        "source": 2,
+        "author_id": 2,
+        "created_at_ms": 2,
+        "updated_at_ms": 2,
+        "deleted": 2
       }
     },
     "KnowledgeClaim": {
@@ -874,7 +894,37 @@
         "normalized_text": "?Content",
         "effective_at_ms": "?Counter",
         "supersedes": "?Id",
-        "source": "?Label"
+        "source": "?Label",
+        "entry_kind": "?KnowledgeEntryKind",
+        "lifecycle": "?KnowledgeLifecycle",
+        "origin": "?KnowledgeOrigin",
+        "origin_ref": "?Text",
+        "autonomous": "?bool",
+        "author_id": "?ActorId",
+        "session_id": "?Id",
+        "created_at_ms": "?Counter",
+        "updated_at_ms": "?Counter",
+        "verified_at_ms": "?Counter",
+        "verified_source_revision": "?Text",
+        "stale": "?bool",
+        "superseded_by": "?Id",
+        "lesson": "?LessonRecord"
+      },
+      "since": {
+        "entry_kind": 2,
+        "lifecycle": 2,
+        "origin": 2,
+        "origin_ref": 2,
+        "autonomous": 2,
+        "author_id": 2,
+        "session_id": 2,
+        "created_at_ms": 2,
+        "updated_at_ms": 2,
+        "verified_at_ms": 2,
+        "verified_source_revision": 2,
+        "stale": 2,
+        "superseded_by": 2,
+        "lesson": 2
       }
     },
     "ClaimDraft": {
@@ -892,7 +942,19 @@
         "normalized_text": "?Content",
         "effective_at_ms": "?Counter",
         "supersedes": "?Id",
-        "source": "?Label"
+        "source": "?Label",
+        "entry_kind": "?KnowledgeEntryKind",
+        "origin": "?KnowledgeOrigin",
+        "origin_ref": "?Text",
+        "lesson": "?LessonDraft",
+        "source_revision": "?Text"
+      },
+      "since": {
+        "entry_kind": 2,
+        "origin": 2,
+        "origin_ref": 2,
+        "lesson": 2,
+        "source_revision": 2
       }
     },
     "KnowledgeBatch": {
@@ -926,7 +988,15 @@
         "truncated": "bool",
         "conflicts": "Rows<KnowledgeConflict>",
         "supersession_ids": "Items<Id>",
-        "summary": "?Content"
+        "summary": "?Content",
+        "relations": "?Rows<KnowledgeRelation>",
+        "revisions": "?Rows<KnowledgeRevisionEntry>",
+        "scope_revision": "?Revision"
+      },
+      "since": {
+        "relations": 2,
+        "revisions": 2,
+        "scope_revision": 2
       }
     },
     "KnowledgeQuery": {
@@ -2647,6 +2717,195 @@
         "findings_coverage": "Coverage",
         "evidence": "Items<ArtifactRef>"
       }
+    },
+    "KnowledgeEntryKind": {
+      "kind": "enum",
+      "values": [
+        "Goal",
+        "Decision",
+        "Constraint",
+        "Fact",
+        "Gotcha",
+        "Attempt",
+        "Architecture",
+        "Lesson",
+        "Finding",
+        "Proposal"
+      ]
+    },
+    "KnowledgeLifecycle": {
+      "kind": "enum",
+      "values": [
+        "Active",
+        "Superseded",
+        "Retracted",
+        "Deleted"
+      ]
+    },
+    "KnowledgeOrigin": {
+      "kind": "enum",
+      "values": [
+        "User",
+        "Agent"
+      ]
+    },
+    "LessonSource": {
+      "kind": "enum",
+      "values": [
+        "Prompt",
+        "Review",
+        "RelayedPrompt",
+        "RelayedReview",
+        "Agent",
+        "Subagent",
+        "BotReview"
+      ]
+    },
+    "RuleState": {
+      "kind": "enum",
+      "values": [
+        "Candidate",
+        "Proposed",
+        "Effective",
+        "Rejected",
+        "Retired"
+      ]
+    },
+    "RuleEffect": {
+      "kind": "enum",
+      "values": [
+        "UserInstruction",
+        "Recurrence",
+        "Promoted"
+      ]
+    },
+    "LessonAddressKind": {
+      "kind": "enum",
+      "values": [
+        "Code",
+        "Instruction",
+        "Skill",
+        "Documentation",
+        "Test"
+      ]
+    },
+    "ChallengeOutcome": {
+      "kind": "enum",
+      "values": [
+        "Uphold",
+        "Retire"
+      ]
+    },
+    "ChallengeState": {
+      "kind": "enum",
+      "values": [
+        "Open",
+        "Upheld",
+        "Retired"
+      ]
+    },
+    "PromoteAction": {
+      "kind": "enum",
+      "values": [
+        "Effective",
+        "Propose",
+        "Reject",
+        "Address"
+      ]
+    },
+    "LessonView": {
+      "kind": "enum",
+      "values": [
+        "All",
+        "RecentlyLearned",
+        "Recurring",
+        "Unaddressed",
+        "Undelivered"
+      ]
+    },
+    "Applicability": {
+      "kind": "record",
+      "fields": {
+        "activities": "Items<Label>",
+        "paths": "Items<RelativePath>",
+        "tools": "Items<Label>",
+        "harness": "?Label",
+        "repository_ids": "Items<Id>"
+      }
+    },
+    "LessonDraft": {
+      "kind": "record",
+      "fields": {
+        "source": "LessonSource",
+        "source_ref": "?Text",
+        "quoted_words": "?Content",
+        "applicability": "Applicability",
+        "same_as": "?Id"
+      }
+    },
+    "LessonAddress": {
+      "kind": "record",
+      "fields": {
+        "kind": "LessonAddressKind",
+        "name": "Label",
+        "reference": "?Text"
+      }
+    },
+    "LessonChallenge": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "state": "ChallengeState",
+        "reason": "Content",
+        "evidence_ids": "Items<Id>",
+        "author_id": "ActorId",
+        "opened_at_ms": "Counter",
+        "resolved_at_ms": "?Counter",
+        "resolution": "?Content"
+      }
+    },
+    "LessonRecord": {
+      "kind": "record",
+      "fields": {
+        "rule_state": "RuleState",
+        "effect": "?RuleEffect",
+        "effective_at_ms": "?Counter",
+        "source": "LessonSource",
+        "source_ref": "?Text",
+        "quoted_words": "?Content",
+        "applicability": "Applicability",
+        "recurrence": "Counter",
+        "recurrence_threshold": "Counter",
+        "challenges": "Items<LessonChallenge>",
+        "addressed_by": "Items<LessonAddress>",
+        "delivered_sessions": "Counter",
+        "last_delivered_at_ms": "?Counter",
+        "reason": "?Content"
+      }
+    },
+    "KnowledgeRelation": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "subject_id": "Id",
+        "predicate": "Label",
+        "object_id": "Id",
+        "evidence_ids": "Items<Id>",
+        "author_id": "ActorId",
+        "created_at_ms": "Counter"
+      }
+    },
+    "KnowledgeRevisionEntry": {
+      "kind": "record",
+      "fields": {
+        "revision": "Revision",
+        "change": "Label",
+        "author_id": "ActorId",
+        "at_ms": "Counter",
+        "lifecycle": "KnowledgeLifecycle",
+        "write_id": "?Id",
+        "value": "?Content"
+      }
     }
   },
   "operations": {
@@ -3976,12 +4235,22 @@
         "kinds": "Items<KnowledgeKind>",
         "page": "PageRequest",
         "entity_limit": "Limit",
-        "claim_limit": "Limit"
+        "claim_limit": "Limit",
+        "states": "?Items<KnowledgeLifecycle>",
+        "entry_kinds": "?Items<KnowledgeEntryKind>",
+        "source": "?Label",
+        "stale": "?bool"
       },
       "result": "Page<KnowledgeClaim>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Scoped lexical search, newest first: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies before any candidate is materialized. Every word of text must appear (Unicode case-folded) in the claim or its subject entity. Lifecycle Active by default (revision 1: Active only). Cursors bind the query and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state.",
+      "since": {
+        "states": 2,
+        "entry_kinds": 2,
+        "source": 2,
+        "stale": 2
+      }
     },
     "knowledge.read": {
       "operation": "knowledge.read",
@@ -3994,7 +4263,7 @@
       "result": "KnowledgeBundle",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "One visible claim with its subject/object entities, evidence, open conflicts (active claims of the same subject and predicate with another value) and supersession chain; revision reads a recorded past revision. Schema revision 2: relations, revision history and the scope revision."
     },
     "knowledge.record": {
       "operation": "knowledge.record",
@@ -4020,7 +4289,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "A new revision of an active claim at its exact revision."
     },
     "knowledge.relate": {
       "operation": "knowledge.relate",
@@ -4035,7 +4304,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Typed attributed relation between visible entities or claims of the scope. Lessons: same_as merges the subject into the object as recurrence, contradicts keeps both with an open conflict, unmerge reverses a same_as merge."
     },
     "knowledge.tag": {
       "operation": "knowledge.tag",
@@ -4049,7 +4318,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Replace each selected claim's tag set (Unicode case-folded, sorted, unique) at its exact revision."
     },
     "knowledge.verify": {
       "operation": "knowledge.verify",
@@ -4059,12 +4328,16 @@
         "claim_id": "Id",
         "expected_revision": "Revision",
         "reason": "Content",
-        "evidence_ids": "Items<Id>"
+        "evidence_ids": "Items<Id>",
+        "source_revision": "?Text"
       },
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision."
+      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: the source revision verified against; a later observed source revision marks the claim stale until verified again.",
+      "since": {
+        "source_revision": 2
+      }
     },
     "knowledge.retract": {
       "operation": "knowledge.retract",
@@ -4079,7 +4352,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision."
+      "rules": "Mark an active claim wrong at its exact revision; it stays readable as Retracted."
     },
     "knowledge.challenge": {
       "operation": "knowledge.challenge",
@@ -4089,12 +4362,18 @@
         "claim_id": "Id",
         "expected_revision": "Revision",
         "reason": "Content",
-        "evidence_ids": "Items<Id>"
+        "evidence_ids": "Items<Id>",
+        "resolve_challenge_id": "?Id",
+        "outcome": "?ChallengeOutcome"
       },
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision."
+      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: resolve an open challenge (Uphold or Retire) or, with outcome Retire and no challenge, retire the rule; a resolution is the user's and nothing waits on a challenge.",
+      "since": {
+        "resolve_challenge_id": 2,
+        "outcome": 2
+      }
     },
     "knowledge.scope": {
       "operation": "knowledge.scope",
@@ -4112,12 +4391,20 @@
       "operation": "knowledge.diagnostics",
       "mode": "Query",
       "fields": {
-        "scope": "DataScope"
+        "scope": "DataScope",
+        "source_id": "?Id",
+        "import_source": "?ArtifactRef",
+        "import_schema": "?SchemaRef"
       },
       "result": "Page<Diagnostic>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Counts, retrieval mode and recent write outcomes of a visible scope; the reply stamp carries the scope revision. Diagnostic codes: component knowledge.retrieval code LexicalOnly while no embedding route exists (vector search is never claimed); component knowledge.counts per lifecycle and lesson state; component knowledge.writes for recent writes. Schema revision 2: sourceId previews a delete by source and importSource with importSchema previews a user data import, each as a component knowledge.preview diagnostic whose id is the exact preview digest, plus one knowledge.import diagnostic per candidate with its outcome.",
+      "since": {
+        "source_id": 2,
+        "import_source": 2,
+        "import_schema": 2
+      }
     },
     "knowledge.delete_by_source": {
       "operation": "knowledge.delete_by_source",
@@ -4145,7 +4432,7 @@
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "The user or host only. Exact revisions; tombstone the selected claims (provenance kept, content purged) and evidence no surviving claim uses; journal counts."
     },
     "knowledge.write_status": {
       "operation": "knowledge.write_status",
@@ -4156,7 +4443,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "The durable receipt of a committed Knowledge write."
     },
     "knowledge.subgraph": {
       "operation": "knowledge.subgraph",
@@ -4263,12 +4550,20 @@
         "claim_id": "Id",
         "expected_revision": "Revision",
         "destination": "DataScope",
-        "proposal_id": "?Id"
+        "proposal_id": "?Id",
+        "action": "?PromoteAction",
+        "address": "?LessonAddress",
+        "reason": "?Content"
       },
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Authorize both scopes and preserve original provenance/version. Promotion grants no instruction or execution authority."
+      "rules": "Authorize both scopes and preserve original provenance/version. Promotion grants no instruction or execution authority. Schema revision 2: action Effective (default; the user makes a lesson an effective rule early), Propose, Reject (the user, with reason) or Address (a lesson addressed in code, instructions, a skill, documentation or a test). No rule waits for approval.",
+      "since": {
+        "action": 2,
+        "address": 2,
+        "reason": 2
+      }
     },
     "knowledge.tagged_lessons": {
       "operation": "knowledge.tagged_lessons",
@@ -4276,12 +4571,20 @@
       "fields": {
         "scope": "DataScope",
         "tags": "NonEmpty<Label>",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "rule_states": "?Items<RuleState>",
+        "activity": "?Label",
+        "view": "?LessonView"
       },
       "result": "Page<KnowledgeClaim>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Lessons carrying every tag, newest first: a project scope reads its own and general lessons. Schema revision 2: rule states, activity and views (recently learned, recurring, unaddressed, undelivered).",
+      "since": {
+        "rule_states": 2,
+        "activity": 2,
+        "view": 2
+      }
     },
     "dreaming.run": {
       "operation": "dreaming.run",
@@ -6806,6 +7109,66 @@
       2
     ],
     "router.availability": [
+      1,
+      2
+    ],
+    "knowledge.search": [
+      1,
+      2
+    ],
+    "knowledge.read": [
+      1,
+      2
+    ],
+    "knowledge.record": [
+      1,
+      2
+    ],
+    "knowledge.revise": [
+      1,
+      2
+    ],
+    "knowledge.verify": [
+      1,
+      2
+    ],
+    "knowledge.challenge": [
+      1,
+      2
+    ],
+    "knowledge.diagnostics": [
+      1,
+      2
+    ],
+    "knowledge.subgraph": [
+      1,
+      2
+    ],
+    "knowledge.entity_bundle": [
+      1,
+      2
+    ],
+    "knowledge.entity_graph": [
+      1,
+      2
+    ],
+    "knowledge.claim_bundle": [
+      1,
+      2
+    ],
+    "knowledge.expand_frontier": [
+      1,
+      2
+    ],
+    "knowledge.query": [
+      1,
+      2
+    ],
+    "knowledge.promote": [
+      1,
+      2
+    ],
+    "knowledge.tagged_lessons": [
       1,
       2
     ]

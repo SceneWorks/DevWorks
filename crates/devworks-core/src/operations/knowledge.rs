@@ -30,6 +30,34 @@ pub struct SearchInput {
     pub page: PageRequest,
     pub entity_limit: Limit,
     pub claim_limit: Limit,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<KnowledgeLifecycle>", extend("x-since" = 2))]
+    pub states: Option<Items<KnowledgeLifecycle>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<KnowledgeEntryKind>", extend("x-since" = 2))]
+    pub entry_kinds: Option<Items<KnowledgeEntryKind>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub source: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub stale: Option<bool>,
 }
 impl Check for SearchInput {
     fn check(&self) -> Result<(), String> {
@@ -40,11 +68,28 @@ impl Check for SearchInput {
         self.page.check()?;
         self.entity_limit.check()?;
         self.claim_limit.check()?;
+        self.states.check()?;
+        self.entry_kinds.check()?;
+        self.source.check()?;
+        self.stale.check()?;
         Ok(())
     }
 }
 impl Revisioned for SearchInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.states = None;
+        }
+        if revision < 2 {
+            self.entry_kinds = None;
+        }
+        if revision < 2 {
+            self.source = None;
+        }
+        if revision < 2 {
+            self.stale = None;
+        }
+    }
 }
 
 /// `knowledge.read` Query input.
@@ -83,7 +128,9 @@ impl Check for RecordInput {
     }
 }
 impl Revisioned for RecordInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.batch.retain_revision(revision);
+    }
 }
 
 /// `knowledge.revise` Command input.
@@ -105,7 +152,9 @@ impl Check for ReviseInput {
     }
 }
 impl Revisioned for ReviseInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.replacement.retain_revision(revision);
+    }
 }
 
 /// `knowledge.relate` Command input.
@@ -163,6 +212,13 @@ pub struct VerifyInput {
     pub expected_revision: Revision,
     pub reason: Content,
     pub evidence_ids: Items<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub source_revision: Option<Text>,
 }
 impl Check for VerifyInput {
     fn check(&self) -> Result<(), String> {
@@ -171,11 +227,16 @@ impl Check for VerifyInput {
         self.expected_revision.check()?;
         self.reason.check()?;
         self.evidence_ids.check()?;
+        self.source_revision.check()?;
         Ok(())
     }
 }
 impl Revisioned for VerifyInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.source_revision = None;
+        }
+    }
 }
 
 /// `knowledge.retract` Command input.
@@ -225,15 +286,49 @@ impl Revisioned for ScopeInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagnosticsInput {
     pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub source_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ArtifactRef", extend("x-since" = 2))]
+    pub import_source: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaRef", extend("x-since" = 2))]
+    pub import_schema: Option<SchemaRef>,
 }
 impl Check for DiagnosticsInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
+        self.source_id.check()?;
+        self.import_source.check()?;
+        self.import_schema.check()?;
         Ok(())
     }
 }
 impl Revisioned for DiagnosticsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.source_id = None;
+        }
+        if revision < 2 {
+            self.import_source = None;
+        }
+        if revision < 2 {
+            self.import_schema = None;
+        }
+    }
 }
 
 /// `knowledge.delete_by_source` Command input.
@@ -455,6 +550,27 @@ pub struct PromoteInput {
     pub destination: DataScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PromoteAction", extend("x-since" = 2))]
+    pub action: Option<PromoteAction>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "LessonAddress", extend("x-since" = 2))]
+    pub address: Option<LessonAddress>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 2))]
+    pub reason: Option<Content>,
 }
 impl Check for PromoteInput {
     fn check(&self) -> Result<(), String> {
@@ -462,11 +578,24 @@ impl Check for PromoteInput {
         self.expected_revision.check()?;
         self.destination.check()?;
         self.proposal_id.check()?;
+        self.action.check()?;
+        self.address.check()?;
+        self.reason.check()?;
         Ok(())
     }
 }
 impl Revisioned for PromoteInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.action = None;
+        }
+        if revision < 2 {
+            self.address = None;
+        }
+        if revision < 2 {
+            self.reason = None;
+        }
+    }
 }
 
 /// `knowledge.challenge` Command input.
@@ -478,6 +607,20 @@ pub struct ChallengeInput {
     pub expected_revision: Revision,
     pub reason: Content,
     pub evidence_ids: Items<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub resolve_challenge_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ChallengeOutcome", extend("x-since" = 2))]
+    pub outcome: Option<ChallengeOutcome>,
 }
 impl Check for ChallengeInput {
     fn check(&self) -> Result<(), String> {
@@ -486,11 +629,20 @@ impl Check for ChallengeInput {
         self.expected_revision.check()?;
         self.reason.check()?;
         self.evidence_ids.check()?;
+        self.resolve_challenge_id.check()?;
+        self.outcome.check()?;
         Ok(())
     }
 }
 impl Revisioned for ChallengeInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.resolve_challenge_id = None;
+        }
+        if revision < 2 {
+            self.outcome = None;
+        }
+    }
 }
 
 /// `knowledge.tagged_lessons` Query input.
@@ -500,17 +652,51 @@ pub struct TaggedLessonsInput {
     pub scope: DataScope,
     pub tags: NonEmpty<Label>,
     pub page: PageRequest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<RuleState>", extend("x-since" = 2))]
+    pub rule_states: Option<Items<RuleState>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub activity: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "LessonView", extend("x-since" = 2))]
+    pub view: Option<LessonView>,
 }
 impl Check for TaggedLessonsInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
         self.tags.check()?;
         self.page.check()?;
+        self.rule_states.check()?;
+        self.activity.check()?;
+        self.view.check()?;
         Ok(())
     }
 }
 impl Revisioned for TaggedLessonsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.rule_states = None;
+        }
+        if revision < 2 {
+            self.activity = None;
+        }
+        if revision < 2 {
+            self.view = None;
+        }
+    }
 }
 
 /// An admitted input of the `knowledge` family, built only for the selected operation and mode.

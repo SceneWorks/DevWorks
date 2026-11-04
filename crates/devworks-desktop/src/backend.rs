@@ -77,6 +77,16 @@ pub enum Slot {
     RoutePin(String),
     /// The first routed request of a conversation (session ID): its selection becomes its pin.
     RouteFirst(String),
+    /// A Knowledge listing page (its request generation).
+    KnowledgeList(u64),
+    /// One Knowledge entry with its evidence and history (claim ID).
+    KnowledgeRead(String),
+    /// Knowledge counts and retrieval mode.
+    KnowledgeDiagnostics,
+    /// The preview of a delete by source (the source).
+    KnowledgePreview(String),
+    /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
+    KnowledgeWrite,
 }
 
 /// A finished request.
@@ -137,13 +147,24 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 6] = [
+pub const COMMANDS: [&str; 17] = [
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
     "artifacts.delete",
     "router.pin",
     "router.route",
+    "knowledge.record",
+    "knowledge.revise",
+    "knowledge.tag",
+    "knowledge.verify",
+    "knowledge.retract",
+    "knowledge.challenge",
+    "knowledge.promote",
+    "knowledge.scope",
+    "knowledge.delete_selected",
+    "knowledge.relate",
+    "knowledge.delete_by_source",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.

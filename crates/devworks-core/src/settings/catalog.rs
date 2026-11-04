@@ -617,6 +617,16 @@ fn build() -> Vec<SettingDescriptor> {
             NextAdmission
         ),
         setting!(
+            "knowledge.lessonRecurrenceThreshold",
+            "Lesson recurrence threshold",
+            "Distinct source events after which a lesson an agent or reviewer inferred takes effect as a rule, without approval. A rule from your own words takes effect at once. Engineering default.",
+            Knowledge,
+            INHERITED,
+            ValueKind::Integer { min: 2, max: 20 },
+            3,
+            NextAdmission
+        ),
+        setting!(
             "power.keepAwake",
             "Keep the computer awake while DevWorks is open",
             "While DevWorks is open, ask the operating system not to sleep when idle, even with no active work; the display may still turn off. It does not prevent explicit sleep, closing the lid, shutdown or every power policy. Closing DevWorks or turning this off releases the request.",

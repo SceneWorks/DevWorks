@@ -2964,7 +2964,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<KnowledgeClaim>",
         result_schema: schema_of::<Page<KnowledgeClaim>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.read",
@@ -2986,7 +2986,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.record",
@@ -3008,7 +3008,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.revise",
@@ -3030,7 +3030,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.relate",
@@ -3096,7 +3096,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.retract",
@@ -3162,7 +3162,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.delete_by_source",
@@ -3250,7 +3250,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.entity_bundle",
@@ -3272,7 +3272,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.entity_graph",
@@ -3294,7 +3294,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.claim_bundle",
@@ -3316,7 +3316,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.expand_frontier",
@@ -3338,7 +3338,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.render_summary",
@@ -3382,7 +3382,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.import_user_data",
@@ -3426,7 +3426,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.challenge",
@@ -3448,7 +3448,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.tagged_lessons",
@@ -3470,7 +3470,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<KnowledgeClaim>",
         result_schema: schema_of::<Page<KnowledgeClaim>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "dreaming.run",

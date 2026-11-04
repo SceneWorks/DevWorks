@@ -187,7 +187,27 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0013_router.sql"),
         rebuilds_tables: false,
     },
+    // Additive: the unified Knowledge tables, their indexes and two FTS5 projections, referencing
+    // only actors, projects and sessions (migration 1/7 tables, unchanged). Versions 14-17 are
+    // reserved for open work; versions need only increase, and the number is renumbered to the
+    // next free version at integration.
+    // The writer floor stays at 11 (the highest so far): applying a migration overwrites the
+    // store's floors, so a lower value would re-admit the build-10 writers migration 11 refuses.
+    // It need not rise: no earlier build writes these tables, so none can break their
+    // compare-and-set revisions, scope revisions or lexical rows, and every record an earlier
+    // writer writes is unchanged here. The reader floor stays at 8: no earlier build reads these
+    // tables, and every query an earlier reader makes returns the same results.
+    Migration {
+        version: 18,
+        minimum_reader: 8,
+        minimum_writer: 11,
+        sql: include_str!("migrations/0018_knowledge.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 18; a test fails if the shipped text changes.
+pub const MIGRATION_0018_SHA256: &str =
+    "5b4b7acfaa4752a299598f30bba12ab8a35d82229a60c6dfd769f435565f2e11";
 /// Recorded checksum of migration 13; a test fails if the shipped text changes.
 pub const MIGRATION_0013_SHA256: &str =
     "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";

@@ -182,6 +182,40 @@
       ],
       "type": "object"
     },
+    "Applicability": {
+      "additionalProperties": false,
+      "properties": {
+        "activities": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "harness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paths": {
+          "$ref": "#/$defs/List_RelativePath_0_128"
+        },
+        "repositoryIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "tools": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        }
+      },
+      "required": [
+        "activities",
+        "paths",
+        "tools",
+        "repositoryIds"
+      ],
+      "type": "object"
+    },
     "ApprovalState": {
       "enum": [
         "Pending",
@@ -655,6 +689,14 @@
         "Capacity",
         "StorageUnavailable",
         "Policy"
+      ],
+      "type": "string"
+    },
+    "ChallengeState": {
+      "enum": [
+        "Open",
+        "Upheld",
+        "Retired"
       ],
       "type": "string"
     },
@@ -3519,6 +3561,18 @@
             }
           ]
         },
+        "relations": {
+          "$ref": "#/$defs/List_KnowledgeRelation_0_500",
+          "x-since": 2
+        },
+        "revisions": {
+          "$ref": "#/$defs/List_KnowledgeRevisionEntry_0_500",
+          "x-since": 2
+        },
+        "scopeRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 2
+        },
         "summary": {
           "anyOf": [
             {
@@ -3550,8 +3604,20 @@
     "KnowledgeClaim": {
       "additionalProperties": false,
       "properties": {
+        "authorId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "autonomous": {
+          "type": "boolean",
+          "x-since": 2
+        },
         "confidence": {
           "$ref": "#/$defs/Probability"
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         },
         "effectiveAtMs": {
           "anyOf": [
@@ -3563,6 +3629,10 @@
             }
           ]
         },
+        "entryKind": {
+          "$ref": "#/$defs/KnowledgeEntryKind",
+          "x-since": 2
+        },
         "evidenceIds": {
           "$ref": "#/$defs/List_Id_0_128"
         },
@@ -3571,6 +3641,14 @@
         },
         "kind": {
           "$ref": "#/$defs/KnowledgeKind"
+        },
+        "lesson": {
+          "$ref": "#/$defs/LessonRecord",
+          "x-since": 2
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/KnowledgeLifecycle",
+          "x-since": 2
         },
         "normalizedText": {
           "anyOf": [
@@ -3592,6 +3670,14 @@
             }
           ]
         },
+        "origin": {
+          "$ref": "#/$defs/KnowledgeOrigin",
+          "x-since": 2
+        },
+        "originRef": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
         "predicate": {
           "$ref": "#/$defs/Text1To256"
         },
@@ -3600,6 +3686,10 @@
         },
         "scope": {
           "$ref": "#/$defs/DataScope"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
         },
         "source": {
           "anyOf": [
@@ -3611,11 +3701,19 @@
             }
           ]
         },
+        "stale": {
+          "type": "boolean",
+          "x-since": 2
+        },
         "state": {
           "$ref": "#/$defs/KnowledgeState"
         },
         "subjectId": {
           "$ref": "#/$defs/Id"
+        },
+        "supersededBy": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
         },
         "supersedes": {
           "anyOf": [
@@ -3629,6 +3727,10 @@
         },
         "tags": {
           "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "updatedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         },
         "value": {
           "anyOf": [
@@ -3649,6 +3751,14 @@
               "type": "null"
             }
           ]
+        },
+        "verifiedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "verifiedSourceRevision": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         }
       },
       "required": [
@@ -3695,8 +3805,28 @@
         "aliases": {
           "$ref": "#/$defs/List_Text1To256_0_128"
         },
+        "authorId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "canonicalName": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "deleted": {
+          "type": "boolean",
+          "x-since": 2
+        },
         "entityType": {
           "$ref": "#/$defs/Text1To256"
+        },
+        "externalId": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         },
         "id": {
           "$ref": "#/$defs/Id"
@@ -3709,6 +3839,14 @@
         },
         "scope": {
           "$ref": "#/$defs/DataScope"
+        },
+        "source": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "updatedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         }
       },
       "required": [
@@ -3721,6 +3859,21 @@
       ],
       "type": "object"
     },
+    "KnowledgeEntryKind": {
+      "enum": [
+        "Goal",
+        "Decision",
+        "Constraint",
+        "Fact",
+        "Gotcha",
+        "Attempt",
+        "Architecture",
+        "Lesson",
+        "Finding",
+        "Proposal"
+      ],
+      "type": "string"
+    },
     "KnowledgeKind": {
       "enum": [
         "Fact",
@@ -3731,6 +3884,106 @@
         "Proposal"
       ],
       "type": "string"
+    },
+    "KnowledgeLifecycle": {
+      "enum": [
+        "Active",
+        "Superseded",
+        "Retracted",
+        "Deleted"
+      ],
+      "type": "string"
+    },
+    "KnowledgeOrigin": {
+      "enum": [
+        "User",
+        "Agent"
+      ],
+      "type": "string"
+    },
+    "KnowledgeRelation": {
+      "additionalProperties": false,
+      "properties": {
+        "authorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "evidenceIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "objectId": {
+          "$ref": "#/$defs/Id"
+        },
+        "predicate": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "subjectId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "id",
+        "subjectId",
+        "predicate",
+        "objectId",
+        "evidenceIds",
+        "authorId",
+        "createdAtMs"
+      ],
+      "type": "object"
+    },
+    "KnowledgeRevisionEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "atMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "authorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "change": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/KnowledgeLifecycle"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "writeId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "revision",
+        "change",
+        "authorId",
+        "atMs",
+        "lifecycle"
+      ],
+      "type": "object"
     },
     "KnowledgeState": {
       "enum": [
@@ -3903,6 +4156,206 @@
         "Releasing",
         "Uncertain",
         "Released"
+      ],
+      "type": "string"
+    },
+    "LessonAddress": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/LessonAddressKind"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "type": "object"
+    },
+    "LessonAddressKind": {
+      "enum": [
+        "Code",
+        "Instruction",
+        "Skill",
+        "Documentation",
+        "Test"
+      ],
+      "type": "string"
+    },
+    "LessonChallenge": {
+      "additionalProperties": false,
+      "properties": {
+        "authorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "evidenceIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "openedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "reason": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolvedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ChallengeState"
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "reason",
+        "evidenceIds",
+        "authorId",
+        "openedAtMs"
+      ],
+      "type": "object"
+    },
+    "LessonRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "addressedBy": {
+          "$ref": "#/$defs/List_LessonAddress_0_128"
+        },
+        "applicability": {
+          "$ref": "#/$defs/Applicability"
+        },
+        "challenges": {
+          "$ref": "#/$defs/List_LessonChallenge_0_128"
+        },
+        "deliveredSessions": {
+          "$ref": "#/$defs/Counter"
+        },
+        "effect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleEffect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effectiveAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastDeliveredAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quotedWords": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recurrence": {
+          "$ref": "#/$defs/Counter"
+        },
+        "recurrenceThreshold": {
+          "$ref": "#/$defs/Counter"
+        },
+        "ruleState": {
+          "$ref": "#/$defs/RuleState"
+        },
+        "source": {
+          "$ref": "#/$defs/LessonSource"
+        },
+        "sourceRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ruleState",
+        "source",
+        "applicability",
+        "recurrence",
+        "recurrenceThreshold",
+        "challenges",
+        "addressedBy",
+        "deliveredSessions"
+      ],
+      "type": "object"
+    },
+    "LessonSource": {
+      "enum": [
+        "Prompt",
+        "Review",
+        "RelayedPrompt",
+        "RelayedReview",
+        "Agent",
+        "Subagent",
+        "BotReview"
       ],
       "type": "string"
     },
@@ -4289,11 +4742,43 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_KnowledgeRelation_0_500": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeRelation"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_KnowledgeRevisionEntry_0_500": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeRevisionEntry"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_LeaseRecord_0_500": {
       "items": {
         "$ref": "#/$defs/LeaseRecord"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_LessonAddress_0_128": {
+      "items": {
+        "$ref": "#/$defs/LessonAddress"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_LessonChallenge_0_128": {
+      "items": {
+        "$ref": "#/$defs/LessonChallenge"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },
@@ -4412,6 +4897,14 @@
     "List_RecoveryAction_0_128": {
       "items": {
         "$ref": "#/$defs/RecoveryAction"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_RelativePath_0_128": {
+      "items": {
+        "$ref": "#/$defs/RelativePath"
       },
       "maxItems": 128,
       "minItems": 0,
@@ -8501,6 +8994,24 @@
       ],
       "type": "object"
     },
+    "RuleEffect": {
+      "enum": [
+        "UserInstruction",
+        "Recurrence",
+        "Promoted"
+      ],
+      "type": "string"
+    },
+    "RuleState": {
+      "enum": [
+        "Candidate",
+        "Proposed",
+        "Effective",
+        "Rejected",
+        "Retired"
+      ],
+      "type": "string"
+    },
     "Schedule": {
       "oneOf": [
         {
@@ -8919,6 +9430,10 @@
         },
         "source": {
           "$ref": "#/$defs/EvidenceLocator"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         }
       },
       "required": [

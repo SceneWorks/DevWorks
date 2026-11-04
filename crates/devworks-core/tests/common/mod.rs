@@ -378,6 +378,9 @@ impl ReadSnapshot for MemSnapshot {
     fn router(&self) -> &dyn RouterRead {
         &self.unsupported
     }
+    fn knowledge(&self) -> &dyn KnowledgeRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -452,6 +455,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn router(&mut self) -> &mut dyn RouterRepository {
+        &mut self.unsupported
+    }
+    fn knowledge(&mut self) -> &mut dyn KnowledgeRepository {
         &mut self.unsupported
     }
 }
@@ -1650,6 +1656,211 @@ impl RunRepository for Unsupported {
         nope()
     }
     fn delete_turn(&mut self, _: &Id, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+}
+
+impl KnowledgeRead for Unsupported {
+    fn knowledge_scope_revision(&self, _: &KnowledgeScope) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn knowledge_entity(&self, _: &Id) -> Result<Option<StoredEntity>, StorageError> {
+        nope()
+    }
+    fn knowledge_entity_by_key(
+        &self,
+        _: &KnowledgeScope,
+        _: &str,
+    ) -> Result<Option<StoredEntity>, StorageError> {
+        nope()
+    }
+    fn knowledge_claim(&self, _: &Id) -> Result<Option<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_claims(
+        &self,
+        _: &ClaimQuery,
+        _: Option<(i64, &str)>,
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_claims_about(
+        &self,
+        _: &[String],
+        _: &Id,
+        _: &str,
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_entity_users(&self, _: &Id, _: u16) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_evidence(&self, _: &Id) -> Result<Option<StoredEvidence>, StorageError> {
+        nope()
+    }
+    fn knowledge_evidence_users(&self, _: &Id, _: u16) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn knowledge_relations(&self, _: &Id, _: u16) -> Result<Vec<StoredRelation>, StorageError> {
+        nope()
+    }
+    fn knowledge_history(&self, _: &Id, _: u16) -> Result<Vec<StoredHistory>, StorageError> {
+        nope()
+    }
+    fn knowledge_history_at(&self, _: &Id, _: i64) -> Result<Option<StoredHistory>, StorageError> {
+        nope()
+    }
+    fn knowledge_write(&self, _: &Id) -> Result<Option<StoredWrite>, StorageError> {
+        nope()
+    }
+    fn knowledge_recent_writes(
+        &self,
+        _: &KnowledgeScope,
+        _: u16,
+    ) -> Result<Vec<StoredWrite>, StorageError> {
+        nope()
+    }
+    fn knowledge_lesson_event_count(&self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn knowledge_lesson_events(
+        &self,
+        _: &Id,
+        _: u16,
+    ) -> Result<Vec<StoredLessonEvent>, StorageError> {
+        nope()
+    }
+    fn knowledge_merged_events(
+        &self,
+        _: &Id,
+        _: u16,
+    ) -> Result<Vec<StoredLessonEvent>, StorageError> {
+        nope()
+    }
+    fn knowledge_challenges(&self, _: &Id, _: u16) -> Result<Vec<StoredChallenge>, StorageError> {
+        nope()
+    }
+    fn knowledge_challenge(&self, _: &Id) -> Result<Option<StoredChallenge>, StorageError> {
+        nope()
+    }
+    fn knowledge_open_challenges(&self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn knowledge_addresses(&self, _: &Id) -> Result<Vec<StoredAddress>, StorageError> {
+        nope()
+    }
+    fn knowledge_deliveries(&self, _: &Id) -> Result<DeliverySummary, StorageError> {
+        nope()
+    }
+    fn knowledge_claim_stale(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn knowledge_source_head(&self, _: &str) -> Result<Option<String>, StorageError> {
+        nope()
+    }
+    fn knowledge_source_claims(
+        &self,
+        _: &KnowledgeScope,
+        _: &str,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_source_entities(
+        &self,
+        _: &KnowledgeScope,
+        _: &str,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<StoredEntity>, StorageError> {
+        nope()
+    }
+    fn knowledge_claim_evidence(&self, _: &Id) -> Result<Vec<StoredEvidence>, StorageError> {
+        nope()
+    }
+    fn knowledge_counts(&self, _: &[String]) -> Result<KnowledgeCounts, StorageError> {
+        nope()
+    }
+    fn knowledge_imported(&self, _: &Id, _: i64) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
+}
+impl KnowledgeRepository for Unsupported {
+    fn bump_scope(&mut self, _: &KnowledgeScope) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn put_knowledge_entity(
+        &mut self,
+        _: &StoredEntity,
+        _: Option<i64>,
+    ) -> Result<StoredEntity, StorageError> {
+        nope()
+    }
+    fn put_knowledge_claim(
+        &mut self,
+        _: &StoredClaim,
+        _: Option<i64>,
+    ) -> Result<StoredClaim, StorageError> {
+        nope()
+    }
+    fn put_knowledge_evidence(&mut self, _: &StoredEvidence, _: bool) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_knowledge_relation(&mut self, _: &StoredRelation) -> Result<(), StorageError> {
+        nope()
+    }
+    fn remove_knowledge_relation(&mut self, _: &Id, _: i64) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn put_knowledge_history(&mut self, _: &StoredHistory) -> Result<(), StorageError> {
+        nope()
+    }
+    fn purge_knowledge_history(
+        &mut self,
+        _: &Id,
+        _: &dyn Fn(&serde_json::Value) -> serde_json::Value,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_knowledge_write(&mut self, _: &StoredWrite) -> Result<(), StorageError> {
+        nope()
+    }
+    fn add_knowledge_lesson_event(&mut self, _: &StoredLessonEvent) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn merge_knowledge_lesson_events(&mut self, _: &Id, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn unmerge_knowledge_lesson_events(&mut self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn put_knowledge_challenge(&mut self, _: &StoredChallenge) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_knowledge_address(&mut self, _: &StoredAddress) -> Result<(), StorageError> {
+        nope()
+    }
+    fn record_knowledge_delivery(
+        &mut self,
+        _: &Id,
+        _: &Id,
+        _: i64,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn observe_knowledge_source(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: i64,
+    ) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn map_knowledge_import(&mut self, _: &Id, _: i64, _: &Id, _: &Id) -> Result<(), StorageError> {
         nope()
     }
 }

@@ -8,6 +8,7 @@
 pub mod diagnostics;
 pub mod files;
 pub mod process;
+pub mod retrieval;
 pub mod router;
 pub mod storage;
 
@@ -56,6 +57,13 @@ pub enum IdKind {
     Diagnostic,
     /// Router session pins.
     RoutePin,
+    /// Knowledge entities, claims, evidence, relations, challenges and writes.
+    KnowledgeEntity,
+    KnowledgeClaim,
+    KnowledgeEvidence,
+    KnowledgeRelation,
+    KnowledgeChallenge,
+    KnowledgeWrite,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

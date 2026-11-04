@@ -22,6 +22,7 @@ use devworks_core::authority::HostRoles;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::ports::diagnostics::StorageHealthProbe;
+use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::router::{ConnectionDirectory, NoConnections};
 use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions, run_write};
 use devworks_core::ports::{Clock, IdKind, IdSource};
@@ -30,6 +31,7 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
+use devworks_core::services::knowledge::KnowledgeService;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::resources::ResourceService;
 use devworks_core::services::router::InferenceRouter;
@@ -152,11 +154,12 @@ async fn compose(
     let store: Arc<dyn ApplicationStore> = sqlite.clone();
     let id_source: Arc<dyn IdSource> = ids.clone();
     let sources = Arc::new(HostArtifactSources::new(clock.clone(), id_source.clone()));
+    let artifact_files = Arc::new(NativeArtifactFiles::new(
+        config.data_root.clone(),
+        config.data_root.join("cache"),
+    ));
     let artifacts = Arc::new(ArtifactService::new(
-        Arc::new(NativeArtifactFiles::new(
-            config.data_root.clone(),
-            config.data_root.join("cache"),
-        )),
+        artifact_files.clone(),
         sources.clone(),
         Arc::new(NativeFilesystem::new()),
         clock.clone(),
@@ -185,6 +188,14 @@ async fn compose(
             id_source.clone(),
             clock.clone(),
             config.connections.clone(),
+        )))
+        // Unified Knowledge. Retrieval is lexical until an embedding route exists (vector
+        // search is never reported as run); imports read their saved artifact version.
+        .with_knowledge(Arc::new(KnowledgeService::new(
+            id_source.clone(),
+            clock.clone(),
+            Some(artifact_files),
+            Arc::new(NoVectorIndex),
         )));
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),

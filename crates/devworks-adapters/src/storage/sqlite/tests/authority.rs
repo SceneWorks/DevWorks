@@ -2248,6 +2248,9 @@ impl WriteTransaction for Lying<'_> {
     fn router(&mut self) -> &mut dyn devworks_core::ports::storage::RouterRepository {
         self.inner.router()
     }
+    fn knowledge(&mut self) -> &mut dyn devworks_core::ports::storage::KnowledgeRepository {
+        self.inner.knowledge()
+    }
 }
 
 fn seams_run(

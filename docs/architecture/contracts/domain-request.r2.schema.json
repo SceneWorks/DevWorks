@@ -42,6 +42,40 @@
       ],
       "type": "string"
     },
+    "Applicability": {
+      "additionalProperties": false,
+      "properties": {
+        "activities": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "harness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paths": {
+          "$ref": "#/$defs/List_RelativePath_0_128"
+        },
+        "repositoryIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "tools": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        }
+      },
+      "required": [
+        "activities",
+        "paths",
+        "tools",
+        "repositoryIds"
+      ],
+      "type": "object"
+    },
     "ApprovalState": {
       "enum": [
         "Pending",
@@ -360,6 +394,13 @@
       "minimum": 1,
       "type": "integer"
     },
+    "ChallengeOutcome": {
+      "enum": [
+        "Uphold",
+        "Retire"
+      ],
+      "type": "string"
+    },
     "ClaimDraft": {
       "additionalProperties": false,
       "properties": {
@@ -376,11 +417,19 @@
             }
           ]
         },
+        "entryKind": {
+          "$ref": "#/$defs/KnowledgeEntryKind",
+          "x-since": 2
+        },
         "evidenceIds": {
           "$ref": "#/$defs/List_Id_0_128"
         },
         "kind": {
           "$ref": "#/$defs/KnowledgeKind"
+        },
+        "lesson": {
+          "$ref": "#/$defs/LessonDraft",
+          "x-since": 2
         },
         "normalizedText": {
           "anyOf": [
@@ -402,6 +451,14 @@
             }
           ]
         },
+        "origin": {
+          "$ref": "#/$defs/KnowledgeOrigin",
+          "x-since": 2
+        },
+        "originRef": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
         "predicate": {
           "$ref": "#/$defs/Text1To256"
         },
@@ -414,6 +471,10 @@
               "type": "null"
             }
           ]
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         },
         "subjectId": {
           "$ref": "#/$defs/Id"
@@ -3027,6 +3088,10 @@
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
+            },
+            "sourceRevision": {
+              "$ref": "#/$defs/Text1To4096",
+              "x-since": 2
             }
           },
           "required": [
@@ -3088,8 +3153,16 @@
               "const": "knowledge.challenge",
               "type": "string"
             },
+            "outcome": {
+              "$ref": "#/$defs/ChallengeOutcome",
+              "x-since": 2
+            },
             "reason": {
               "$ref": "#/$defs/Text0To65536"
+            },
+            "resolveChallengeId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
@@ -3228,6 +3301,14 @@
         {
           "additionalProperties": false,
           "properties": {
+            "action": {
+              "$ref": "#/$defs/PromoteAction",
+              "x-since": 2
+            },
+            "address": {
+              "$ref": "#/$defs/LessonAddress",
+              "x-since": 2
+            },
             "claimId": {
               "$ref": "#/$defs/Id"
             },
@@ -3250,6 +3331,10 @@
                   "type": "null"
                 }
               ]
+            },
+            "reason": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 2
             }
           },
           "required": [
@@ -7277,6 +7362,10 @@
             "entityLimit": {
               "$ref": "#/$defs/Limit"
             },
+            "entryKinds": {
+              "$ref": "#/$defs/List_KnowledgeEntryKind_0_128",
+              "x-since": 2
+            },
             "kind": {
               "const": "knowledge.search",
               "type": "string"
@@ -7289,6 +7378,18 @@
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
+            },
+            "source": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 2
+            },
+            "stale": {
+              "type": "boolean",
+              "x-since": 2
+            },
+            "states": {
+              "$ref": "#/$defs/List_KnowledgeLifecycle_0_128",
+              "x-since": 2
             },
             "tags": {
               "$ref": "#/$defs/List_Text1To256_0_128"
@@ -7343,12 +7444,24 @@
         {
           "additionalProperties": false,
           "properties": {
+            "importSchema": {
+              "$ref": "#/$defs/SchemaRef",
+              "x-since": 2
+            },
+            "importSource": {
+              "$ref": "#/$defs/ArtifactRef",
+              "x-since": 2
+            },
             "kind": {
               "const": "knowledge.diagnostics",
               "type": "string"
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
+            },
+            "sourceId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
             }
           },
           "required": [
@@ -7524,6 +7637,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "activity": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 2
+            },
             "kind": {
               "const": "knowledge.tagged_lessons",
               "type": "string"
@@ -7531,11 +7648,19 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "ruleStates": {
+              "$ref": "#/$defs/List_RuleState_0_128",
+              "x-since": 2
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             },
             "tags": {
               "$ref": "#/$defs/List_Text1To256_1_128"
+            },
+            "view": {
+              "$ref": "#/$defs/LessonView",
+              "x-since": 2
             }
           },
           "required": [
@@ -10375,6 +10500,21 @@
       ],
       "type": "object"
     },
+    "KnowledgeEntryKind": {
+      "enum": [
+        "Goal",
+        "Decision",
+        "Constraint",
+        "Fact",
+        "Gotcha",
+        "Attempt",
+        "Architecture",
+        "Lesson",
+        "Finding",
+        "Proposal"
+      ],
+      "type": "string"
+    },
     "KnowledgeKind": {
       "enum": [
         "Fact",
@@ -10383,6 +10523,22 @@
         "Constraint",
         "Finding",
         "Proposal"
+      ],
+      "type": "string"
+    },
+    "KnowledgeLifecycle": {
+      "enum": [
+        "Active",
+        "Superseded",
+        "Retracted",
+        "Deleted"
+      ],
+      "type": "string"
+    },
+    "KnowledgeOrigin": {
+      "enum": [
+        "User",
+        "Agent"
       ],
       "type": "string"
     },
@@ -10480,6 +10636,110 @@
         "Challenged",
         "Verified",
         "Retracted"
+      ],
+      "type": "string"
+    },
+    "LessonAddress": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/LessonAddressKind"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "type": "object"
+    },
+    "LessonAddressKind": {
+      "enum": [
+        "Code",
+        "Instruction",
+        "Skill",
+        "Documentation",
+        "Test"
+      ],
+      "type": "string"
+    },
+    "LessonDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "applicability": {
+          "$ref": "#/$defs/Applicability"
+        },
+        "quotedWords": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sameAs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/LessonSource"
+        },
+        "sourceRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "applicability"
+      ],
+      "type": "object"
+    },
+    "LessonSource": {
+      "enum": [
+        "Prompt",
+        "Review",
+        "RelayedPrompt",
+        "RelayedReview",
+        "Agent",
+        "Subagent",
+        "BotReview"
+      ],
+      "type": "string"
+    },
+    "LessonView": {
+      "enum": [
+        "All",
+        "RecentlyLearned",
+        "Recurring",
+        "Unaddressed",
+        "Undelivered"
       ],
       "type": "string"
     },
@@ -10640,9 +10900,25 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_KnowledgeEntryKind_0_128": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeEntryKind"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_KnowledgeKind_0_128": {
       "items": {
         "$ref": "#/$defs/KnowledgeKind"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_KnowledgeLifecycle_0_128": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeLifecycle"
       },
       "maxItems": 128,
       "minItems": 0,
@@ -10718,6 +10994,14 @@
       },
       "maxItems": 128,
       "minItems": 1,
+      "type": "array"
+    },
+    "List_RuleState_0_128": {
+      "items": {
+        "$ref": "#/$defs/RuleState"
+      },
+      "maxItems": 128,
+      "minItems": 0,
       "type": "array"
     },
     "List_SchemaRef_0_128": {
@@ -11333,6 +11617,15 @@
       },
       "type": "object"
     },
+    "PromoteAction": {
+      "enum": [
+        "Effective",
+        "Propose",
+        "Reject",
+        "Address"
+      ],
+      "type": "string"
+    },
     "ProposalDecision": {
       "enum": [
         "Approve",
@@ -11822,6 +12115,16 @@
         }
       ]
     },
+    "RuleState": {
+      "enum": [
+        "Candidate",
+        "Proposed",
+        "Effective",
+        "Rejected",
+        "Retired"
+      ],
+      "type": "string"
+    },
     "Schedule": {
       "oneOf": [
         {
@@ -11981,6 +12284,10 @@
         },
         "source": {
           "$ref": "#/$defs/EvidenceLocator"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         }
       },
       "required": [

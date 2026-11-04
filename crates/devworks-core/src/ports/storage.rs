@@ -72,6 +72,7 @@ mod artifacts;
 mod authority;
 mod configuration;
 mod diagnostics;
+mod knowledge;
 mod resources;
 mod router;
 mod runs;
@@ -80,6 +81,7 @@ pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
 pub use diagnostics::*;
+pub use knowledge::*;
 pub use resources::*;
 pub use router::*;
 pub use runs::*;
@@ -475,6 +477,7 @@ pub trait WriteTransaction {
     fn runs(&mut self) -> &mut dyn RunRepository;
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
+    fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -516,6 +519,7 @@ pub trait ReadSnapshot {
     fn runs(&self) -> &dyn RunRead;
     fn diagnostics(&self) -> &dyn DiagnosticRead;
     fn router(&self) -> &dyn RouterRead;
+    fn knowledge(&self) -> &dyn KnowledgeRead;
 }
 
 // ---------------------------------------------------------------------------------------------

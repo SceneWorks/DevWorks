@@ -4,6 +4,7 @@
 use crate::attachments;
 use crate::backend::{Backend, Client, Reply, Slot, TaskOutput, Unresolved, is_unknown};
 use crate::chat::{self, AttachState, Attachment, Chat, ChatAction, StartReason, Surface};
+use crate::knowledge_screen::{self, KnowledgeAction, KnowledgeScreen};
 use crate::memory::{Memory, RouteMemory};
 use crate::notifications::{CardAction, Completions};
 use crate::ops::{self, Failure};
@@ -136,6 +137,7 @@ pub struct Shell {
     routes: BTreeMap<Route, RouteMemory>,
     pub chat: Chat,
     pub settings: SettingsScreen,
+    pub knowledge: KnowledgeScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
     pub completions: Completions,
@@ -270,6 +272,7 @@ impl Shell {
             routes: memory.routes.clone(),
             chat,
             settings,
+            knowledge: KnowledgeScreen::new(),
             artifacts: ListState::default(),
             resources: ListState::default(),
             completions: Completions::default(),
@@ -389,6 +392,9 @@ impl Shell {
             }
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
+            Route::Knowledge if !self.knowledge.loaded && self.knowledge.listing.is_none() => {
+                self.load_knowledge();
+            }
             _ => {}
         }
     }
@@ -507,6 +513,105 @@ impl Shell {
             "artifacts.list",
             ops::workspace_artifacts,
         );
+    }
+    /// Starts a new Knowledge listing (first page) and refreshes the retrieval mode. A listing
+    /// that could not be submitted is not left in progress.
+    fn load_knowledge(&mut self) {
+        let (op, body) = self.knowledge.begin_listing(false);
+        let generation = self.knowledge.generation;
+        if !self.query(
+            Slot::KnowledgeList(generation),
+            "Loading Knowledge",
+            op,
+            move |b| knowledge_screen::query(b, op, body),
+        ) {
+            self.knowledge.listing = None;
+        }
+        let body = self.knowledge.diagnostics_body();
+        self.query(
+            Slot::KnowledgeDiagnostics,
+            "Checking Knowledge",
+            "knowledge.diagnostics",
+            move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+        );
+    }
+    fn read_knowledge(&mut self, claim: devworks_core::protocol::Id) {
+        let body = self.knowledge.read_body(&claim);
+        self.query(
+            Slot::KnowledgeRead(claim.as_str().to_owned()),
+            "Loading a Knowledge entry",
+            "knowledge.read",
+            move |b| knowledge_screen::query(b, "knowledge.read", body),
+        );
+    }
+    /// Submits one Knowledge write at a time; the screen's draft and reason stay until its
+    /// outcome is recorded.
+    fn knowledge_write(&mut self, label: &str, op: &'static str, body: serde_json::Value) {
+        if self.knowledge.writing.is_some() {
+            return;
+        }
+        self.knowledge.writing = Some(label.to_owned());
+        if !self.command(Slot::KnowledgeWrite, label, op, move |b| {
+            knowledge_screen::command(b, op, body)
+        }) {
+            self.knowledge.writing = None;
+            self.knowledge.message = Some((
+                widgets::Tone::Attention,
+                format!("{label} was not sent: DevWorks is offline or closing."),
+            ));
+        }
+    }
+    fn knowledge_actions(&mut self, actions: Vec<KnowledgeAction>) {
+        for a in actions {
+            match a {
+                KnowledgeAction::Search => self.load_knowledge(),
+                KnowledgeAction::More => {
+                    if self.knowledge.listing.is_some() || self.knowledge.cursor.is_none() {
+                        continue;
+                    }
+                    let (op, body) = self.knowledge.begin_listing(true);
+                    let generation = self.knowledge.generation;
+                    if !self.query(
+                        Slot::KnowledgeList(generation),
+                        "Loading more Knowledge",
+                        op,
+                        move |b| knowledge_screen::query(b, op, body),
+                    ) {
+                        self.knowledge.listing = None;
+                    }
+                }
+                KnowledgeAction::Select(id) => {
+                    self.knowledge.selected = Some(id.clone());
+                    self.knowledge.detail = None;
+                    self.knowledge.detail_error = None;
+                    self.read_knowledge(id);
+                }
+                KnowledgeAction::Save(draft) => match self.knowledge.save_body(&draft) {
+                    Ok((op, body)) => self.knowledge_write("Entry", op, body),
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::PreviewSource => match self.knowledge.preview_body() {
+                    Ok((source, body)) => {
+                        self.knowledge.source_preview = None;
+                        self.query(
+                            Slot::KnowledgePreview(source),
+                            "Previewing a cleanup",
+                            "knowledge.diagnostics",
+                            move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+                        );
+                    }
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::DeleteSource => match self.knowledge.delete_source_body() {
+                    Ok((op, body)) => self.knowledge_write("Delete by source", op, body),
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::Change(change) => match self.knowledge.change_body(change) {
+                    Ok((op, body)) => self.knowledge_write(change.label(), op, body),
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+            }
+        }
     }
     fn load_resources(&mut self) {
         self.query(
@@ -1497,6 +1602,24 @@ impl Shell {
                 }
                 Err(e) => self.artifacts.error = Some(e.describe()),
             },
+            (Slot::KnowledgeList(generation), Reply::Query(q)) => {
+                if self.knowledge.listed(generation, q) {
+                    self.load_knowledge();
+                }
+            }
+            (Slot::KnowledgeRead(claim), Reply::Query(q)) => self.knowledge.read_reply(&claim, q),
+            (Slot::KnowledgeDiagnostics, Reply::Query(q)) => self.knowledge.diagnostics_reply(q),
+            (Slot::KnowledgePreview(source), Reply::Query(q)) => {
+                self.knowledge.preview_reply(&source, q)
+            }
+            (Slot::KnowledgeWrite, Reply::Command(c)) => {
+                if self.knowledge.written(c) {
+                    self.load_knowledge();
+                    if let Some(id) = self.knowledge.selected.clone() {
+                        self.read_knowledge(id);
+                    }
+                }
+            }
             (Slot::ResourcesList, Reply::Query(q)) => match ops::resources(q) {
                 Ok((items, more)) => {
                     self.resources = ListState {
@@ -1626,6 +1749,15 @@ impl Shell {
         match self.route {
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
+            // Only an unpaged listing is re-read in place: a re-read of a list the user paged
+            // through would drop the pages they loaded.
+            Route::Knowledge
+                if self.knowledge.loaded
+                    && self.knowledge.listing.is_none()
+                    && self.knowledge.items.len() <= knowledge_screen::PAGE as usize =>
+            {
+                self.load_knowledge()
+            }
             _ => {}
         }
     }
@@ -2649,6 +2781,19 @@ impl Shell {
             }
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
+            Route::Knowledge => {
+                let online = self.online();
+                let mut actions = Vec::new();
+                // The selected subview is route memory, kept across navigation and restarts.
+                self.knowledge.tab = self.routes.entry(Route::Knowledge).or_default().tab;
+                self.knowledge.ui(
+                    ui,
+                    online.as_ref().map(|_| ()).map_err(String::as_str),
+                    &mut actions,
+                );
+                self.routes.entry(Route::Knowledge).or_default().tab = self.knowledge.tab;
+                self.knowledge_actions(actions);
+            }
             _ => self.pending_screen(ui),
         }
     }

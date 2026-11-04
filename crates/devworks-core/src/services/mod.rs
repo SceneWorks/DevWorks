@@ -9,6 +9,7 @@ pub mod artifacts;
 pub mod cursor;
 pub mod diagnostics;
 pub mod history;
+pub mod knowledge;
 pub mod power;
 pub mod process;
 pub mod queue;
@@ -145,6 +146,16 @@ impl UseCases {
     /// availability (`InferenceRouter`).
     pub fn with_router(mut self, service: Arc<router::InferenceRouter>) -> Self {
         for op in router::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the unified Knowledge operations of the slice that manages claims, entities,
+    /// evidence and lessons (`KnowledgeService`). The bundle, graph and summary reads keep no
+    /// use case here (DW-31).
+    pub fn with_knowledge(mut self, service: Arc<knowledge::KnowledgeService>) -> Self {
+        for op in knowledge::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

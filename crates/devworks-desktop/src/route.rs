@@ -221,7 +221,7 @@ pub static SCREENS: [Screen; 19] = [
         subviews: &["Entries", "Documents"],
         inner_sidebar: Some("Entry"),
         summary_strip: &[],
-        pending: pending("Knowledge entries and retained documents", "DW-30, DW-35"),
+        pending: None,
         link: None,
     },
     Screen {

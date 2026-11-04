@@ -376,6 +376,15 @@ impl Check for Probability {
         Ok(())
     }
 }
+impl Probability {
+    /// The value when it is finite and within `0..=1`.
+    pub fn new(x: f64) -> Option<Self> {
+        (x.is_finite() && (0.0..=1.0).contains(&x)).then_some(Self(x))
+    }
+    pub fn get(&self) -> f64 {
+        self.0
+    }
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
 pub struct DynamicJson(pub serde_json::Value);
