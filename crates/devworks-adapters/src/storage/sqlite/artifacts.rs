@@ -409,7 +409,7 @@ macro_rules! artifact_reads {
     ($t:ty) => {
         impl ArtifactRead for $t {
             fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError> {
-                exists(self.conn, "SELECT 1 FROM projects WHERE id=?1", [project.0.as_str()])
+                exists(self.conn, "SELECT 1 FROM projects WHERE id=?1 AND lifecycle<>'Deleted'", [project.0.as_str()])
             }
             fn subject_exists(
                 &self,
@@ -623,7 +623,7 @@ impl ArtifactRepository for Unit<'_> {
         {
             if !exists(
                 self.conn,
-                "SELECT 1 FROM projects WHERE id=?1",
+                "SELECT 1 FROM projects WHERE id=?1 AND lifecycle<>'Deleted'",
                 [project.0.as_str()],
             )? {
                 return Err(StorageError::NotFound {

@@ -27,6 +27,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+pub mod projects;
+
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
 pub trait Dialogs {
     fn pick_files(&mut self) -> Vec<PathBuf>;
@@ -139,6 +141,10 @@ pub struct Shell {
     pub settings: SettingsScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
+    /// All projects, the project selector and Repositories (DW-11).
+    pub projects: projects::ProjectsUi,
+    /// The project the navigation selected; its screens follow it.
+    selected_project: Option<String>,
     pub completions: Completions,
     scrolls: Scrolls,
     lifecycle: Lifecycle,
@@ -273,6 +279,8 @@ impl Shell {
             settings,
             artifacts: ListState::default(),
             resources: ListState::default(),
+            projects: projects::ProjectsUi::default(),
+            selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             scrolls: Scrolls::restoring(&memory.scroll),
             lifecycle: Lifecycle::Open,
@@ -390,6 +398,15 @@ impl Shell {
             }
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
+            Route::Portfolio => {
+                self.load_projects();
+                self.load_deleted_projects();
+                self.load_repositories();
+            }
+            Route::Repositories => {
+                self.load_projects();
+                self.load_repositories();
+            }
             _ => {}
         }
     }
@@ -522,9 +539,14 @@ impl Shell {
     /// visible.
     fn invalidate_routing(&mut self) {
         self.chat.routing.invalidate();
-        // A load still paging may predate the change: it is replaced, not completed.
+        // A load still paging may predate the change: it is replaced, not completed. So may an
+        // availability query in flight for the visible conversation.
         if self.route == Route::Chat || self.coordinator_open {
             self.load_router_catalog();
+            let key = self.chat.draft_key();
+            if self.pending(&Slot::RouteStatus(key.clone())) {
+                self.reask_route_status_of(key);
+            }
         } else {
             self.chat.routing.catalog_load = None;
         }
@@ -553,8 +575,10 @@ impl Shell {
         self.refresh_route_status_of(key)
     }
 
-    /// Asks the router about one conversation's selection (and pin). A newer query supersedes
-    /// one still running (its selection may be stale).
+    /// Asks the router about one conversation's selection (and pin), unless a query for that
+    /// same selection is already in flight (its answer is as fresh). Periodic and hint-driven
+    /// refreshes therefore never stack identical queries on a slow router, which would occupy
+    /// every client worker and starve other requests (a message's save among them).
     fn refresh_route_status_of(&mut self, key: String) -> bool {
         let sel = self
             .chat
@@ -563,13 +587,41 @@ impl Shell {
             .get(&key)
             .cloned()
             .unwrap_or_default();
+        if self.pending(&Slot::RouteStatus(key.clone()))
+            && self.chat.routing.status_asked.get(&key) == Some(&sel)
+        {
+            return true;
+        }
+        self.ask_route_status(key, sel)
+    }
+
+    /// Asks again even when a query for the same selection is in flight: that query may predate
+    /// a change it cannot see (a route or pin just decided, routing settings just saved). The
+    /// newer query supersedes it.
+    fn reask_route_status_of(&mut self, key: String) -> bool {
+        let sel = self
+            .chat
+            .routing
+            .selections
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        self.ask_route_status(key, sel)
+    }
+
+    fn ask_route_status(&mut self, key: String, sel: crate::routing::Selection) -> bool {
         let session = (key != chat::NEW_DRAFT).then(|| key.clone());
-        self.query(
-            Slot::RouteStatus(key),
+        let asked = sel.clone();
+        let submitted = self.query(
+            Slot::RouteStatus(key.clone()),
             "Checking model availability",
             "router.availability",
             move |b| ops::router_availability(b, &sel.intent, &sel.effort, session.as_deref()),
-        )
+        );
+        if submitted {
+            self.chat.routing.status_asked.insert(key, asked);
+        }
+        submitted
     }
 
     /// A new route or effort for the active conversation: the explicit `router.pin` change of a
@@ -1009,6 +1061,9 @@ impl Shell {
     }
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
+        let Some((slot, reply)) = self.apply_projects(slot, reply) else {
+            return;
+        };
         match (slot, reply) {
             // Started before a session mutation was applied: it may lack that change.
             (Slot::SessionsList, Reply::Query(_))
@@ -1092,6 +1147,7 @@ impl Shell {
                     },
                 };
                 let known = status.availability.is_some();
+                self.chat.routing.status_asked.remove(&key);
                 self.chat.routing.status.insert(key.clone(), status);
                 if known && self.chat.routing.first_route.contains(&key) {
                     self.route_first(&key);
@@ -1110,7 +1166,7 @@ impl Shell {
                 // Pinned, or refused because nothing is eligible: the status line says which. It
                 // is reread even when not shown, so no older reply stands for it.
                 self.chat.routing.status.remove(&key);
-                self.refresh_route_status_of(key);
+                self.reask_route_status_of(key);
             }
             (Slot::RoutePin(key), Reply::Command(c)) => {
                 match ops::pinned(c) {
@@ -1145,7 +1201,7 @@ impl Shell {
                 // selection adopted.
                 self.chat.routing.pin_in_flight.remove(&key);
                 self.chat.routing.status.remove(&key);
-                self.refresh_route_status_of(key);
+                self.reask_route_status_of(key);
             }
             (Slot::SessionStart, Reply::Command(c)) => {
                 let reason = self.chat.starting.take();
@@ -1656,6 +1712,11 @@ impl Shell {
         match self.route {
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
+            Route::Portfolio | Route::Repositories
+                if !self.pending(&Slot::ProjectsList) && !self.pending(&Slot::RepositoriesList) =>
+            {
+                self.load_route();
+            }
             _ => {}
         }
     }
@@ -1905,6 +1966,7 @@ impl Shell {
             intelligence_open: self.intelligence_open,
             coordinator_open: self.coordinator_open,
             selected_session: self.chat.selected.clone(),
+            selected_project: self.selected_project.clone(),
             sidebar_tab: self.chat.tab,
             history_query: self.chat.history_query.clone(),
             drafts: self
@@ -2053,6 +2115,9 @@ impl Shell {
                     self.settings.saving = true;
                     self.settings.unconfirmed = true;
                 }
+                Slot::ProjectSettingsSave(p) => {
+                    self.projects.base.entry(p.clone()).or_default().saving = true;
+                }
                 Slot::RouteFirst(id) => {
                     self.chat.routing.first_in_flight.insert(id.clone());
                 }
@@ -2111,6 +2176,10 @@ impl Shell {
                 });
             }
             self.load_sessions();
+            // The navigation's project selector lists the projects on every screen.
+            if self.route != Route::Portfolio && self.route != Route::Repositories {
+                self.load_projects();
+            }
             self.load_route();
             self.restore_previews();
             // First messages saved before their routing was known, at the last close.
@@ -2546,11 +2615,7 @@ impl Shell {
                             }
                             ui.add_space(10.0);
                             widgets::caption(ui, "YOUR PROJECT");
-                            ui.add_enabled(false, egui::Button::new("No project selected"))
-                                .on_disabled_hover_text(
-                                    "Projects arrive with DW-11; project screens show what \
-                                     they will hold until then.",
-                                );
+                            self.project_selector(ui);
                             for r in NAV_ORDER
                                 .iter()
                                 .copied()
@@ -2710,6 +2775,8 @@ impl Shell {
             }
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
+            Route::Portfolio => self.portfolio_screen(ui),
+            Route::Repositories => self.repositories_screen(ui),
             _ => self.pending_screen(ui),
         }
     }

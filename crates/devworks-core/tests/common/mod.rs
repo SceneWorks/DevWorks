@@ -378,6 +378,9 @@ impl ReadSnapshot for MemSnapshot {
     fn router(&self) -> &dyn RouterRead {
         &self.unsupported
     }
+    fn projects(&self) -> &dyn ProjectRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -452,6 +455,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn router(&mut self) -> &mut dyn RouterRepository {
+        &mut self.unsupported
+    }
+    fn projects(&mut self) -> &mut dyn ProjectRepository {
         &mut self.unsupported
     }
 }
@@ -1447,6 +1453,84 @@ impl RouterRepository for Unsupported {
         nope()
     }
     fn record_route_request(&mut self, _: &StoredRouteRequest) -> Result<(), StorageError> {
+        nope()
+    }
+}
+impl ProjectRead for Unsupported {
+    fn project(&self, _: &ProjectId) -> Result<Option<StoredProject>, StorageError> {
+        nope()
+    }
+    fn projects(
+        &self,
+        _: &ProjectFilter,
+        _: Option<&ProjectPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredProject>, StorageError> {
+        nope()
+    }
+    fn members(&self, _: &ProjectId) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn repository(&self, _: &Id) -> Result<Option<StoredRepository>, StorageError> {
+        nope()
+    }
+    fn repositories(
+        &self,
+        _: &RepositoryFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredRepository>, StorageError> {
+        nope()
+    }
+    fn repository_projects(&self, _: &Id) -> Result<Vec<ProjectId>, StorageError> {
+        nope()
+    }
+    fn index_views(&self, _: &Id) -> Result<Vec<StoredIndexView>, StorageError> {
+        nope()
+    }
+    fn index_view(&self, _: &Id) -> Result<Option<StoredIndexView>, StorageError> {
+        nope()
+    }
+    fn repository_text(
+        &self,
+        _: &Id,
+        _: TextKind,
+    ) -> Result<Option<StoredRepositoryText>, StorageError> {
+        nope()
+    }
+    fn work_naming_repository(&self, _: &ProjectId, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn pending_archive_stops(&self, _: u16) -> Result<Vec<ProjectId>, StorageError> {
+        nope()
+    }
+}
+impl ProjectRepository for Unsupported {
+    fn insert_project(&mut self, _: &StoredProject) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_project(&mut self, _: &StoredProject, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_members(&mut self, _: &ProjectId, _: &[Id]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_repository(&mut self, _: &StoredRepository) -> Result<(), StorageError> {
+        nope()
+    }
+    fn touch_repository(&mut self, _: &Id, _: i64) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn publish_index_view(&mut self, _: &StoredIndexView) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_repository_text(&mut self, _: &StoredRepositoryText) -> Result<(), StorageError> {
+        nope()
+    }
+    fn remove_index(&mut self, _: &Id) -> Result<u64, StorageError> {
+        nope()
+    }
+    fn finish_archive_stop(&mut self, _: &ProjectId, _: i64) -> Result<bool, StorageError> {
         nope()
     }
 }

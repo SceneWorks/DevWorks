@@ -104,6 +104,12 @@ pub const STOP_CAPABILITY: &str = "runs.stop";
 pub const LISTED_BLOCKERS: usize = 100;
 /// Project lifecycle label of an archived project: no work, queue allocation or dispatch.
 pub const ARCHIVED: &str = "Archived";
+/// Whether a project in `lifecycle` is closed to work: anything but `Active` (an archived
+/// project, and a deleted one, whose tombstone follows its archival) allocates and dispatches
+/// nothing.
+pub fn closed_to_work(lifecycle: &str) -> bool {
+    lifecycle != crate::ports::storage::ACTIVE
+}
 const PAGE: u16 = 500;
 
 /// Bounded, categorized retry and lease policy of activations (CONTROL-06).
@@ -499,14 +505,14 @@ impl ControlService {
         let root_subject = Subject::Root(root.id.clone());
         if runs
             .project_lifecycle(&root.project_id)?
-            .is_some_and(|l| l == ARCHIVED)
+            .is_some_and(|l| closed_to_work(&l))
         {
             c.push(derived(
                 "archived",
                 root_subject.clone(),
                 1,
                 HoldCause::Policy,
-                "the project is archived",
+                "the project is archived or deleted",
             ));
         }
         let root_level = active_blockers(runs, &BlockerFilter::RootLevel(root.id.clone()))?;
@@ -904,7 +910,7 @@ impl ControlService {
         if tx
             .runs()
             .project_lifecycle(&root.project_id)?
-            .is_some_and(|l| l == ARCHIVED)
+            .is_some_and(|l| closed_to_work(&l))
         {
             return Err(refuse(
                 DomainErrorCode::Conflict,
@@ -1199,7 +1205,7 @@ impl ControlService {
         if tx
             .runs()
             .project_lifecycle(&root.project_id)?
-            .is_some_and(|l| l == ARCHIVED)
+            .is_some_and(|l| closed_to_work(&l))
         {
             return Err(refuse(
                 DomainErrorCode::Conflict,
