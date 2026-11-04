@@ -253,7 +253,7 @@ pub static SCREENS: [Screen; 19] = [
         subviews: &["Schedules", "Runs"],
         inner_sidebar: None,
         summary_strip: &[],
-        pending: pending("schedules, manual jobs and their runs", "DW-50"),
+        pending: None,
         link: None,
     },
     Screen {

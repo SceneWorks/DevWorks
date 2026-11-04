@@ -130,16 +130,39 @@ pub struct InspectInput {
     pub job_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PageRequest", extend("x-since" = 2))]
+    pub history: Option<PageRequest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PageRequest", extend("x-since" = 2))]
+    pub usage: Option<PageRequest>,
 }
 impl Check for InspectInput {
     fn check(&self) -> Result<(), String> {
         self.job_id.check()?;
         self.run_id.check()?;
+        self.history.check()?;
+        self.usage.check()?;
         Ok(())
     }
 }
 impl Revisioned for InspectInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.history = None;
+        }
+        if revision < 2 {
+            self.usage = None;
+        }
+    }
 }
 
 /// `jobs.cancel` Command input.

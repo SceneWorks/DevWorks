@@ -7196,6 +7196,209 @@
     "schemaValid": false
   },
   {
+    "id": "r2-input-jobs.list",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"jobs.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-jobs.create",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.create\",\"scope\":{\"kind\":\"Workspace\"},\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-jobs.edit",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.edit\",\"jobId\":\"id-a\",\"expectedRevision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-jobs.enable",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.enable\",\"jobId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-jobs.disable",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.disable\",\"jobId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-jobs.delete",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.delete\",\"jobId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-jobs.run_now",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.run_now\",\"jobId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-jobs.cancel",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.cancel\",\"jobId\":\"id-a\",\"runId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-jobs.inspect",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"jobs.inspect\",\"jobId\":\"id-a\",\"runId\":\"run-a\",\"history\":{\"limit\":20,\"cursor\":\"cursor-a\"},\"usage\":{\"limit\":50}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-jobs.inspect-plain",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"jobs.inspect\",\"jobId\":\"id-a\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-inspect-history",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"jobs.inspect\",\"jobId\":\"id-a\",\"history\":{\"limit\":20}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-inspect-null-history",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"jobs.inspect\",\"jobId\":\"id-a\",\"history\":null},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-inspect-history-over-limit",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"jobs.inspect\",\"jobId\":\"id-a\",\"history\":{\"limit\":501}},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-jobs.create",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.create\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":true,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"ReactivationRequired\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-jobs.edit",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":true,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"ReactivationRequired\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-jobs.enable",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.enable\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":true,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"ReactivationRequired\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-jobs.disable",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.disable\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":true,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"ReactivationRequired\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-jobs.delete",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.delete\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":true,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"ReactivationRequired\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-jobs.delete-tombstone",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.delete\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"ReactivationRequired\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"deletedAtMs\":\"3\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-jobs.run_now",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.run_now\",\"value\":{\"id\":\"id-a\",\"jobId\":\"id-a\",\"revision\":\"1\",\"occurrenceKey\":\"fixture\",\"state\":\"ObservedComplete\",\"usage\":{\"items\":[],\"totalTrackedUsd\":\"0\",\"untrackedRequests\":\"0\",\"incompleteRequests\":\"0\"},\"status\":\"Skipped\",\"trigger\":\"Scheduled\",\"occurrenceAtMs\":\"1793570000000\",\"finishedAtMs\":\"1793570000000\",\"reason\":\"The previous run is still active\",\"skippedForRunId\":\"run-b\",\"resumptions\":\"0\",\"cancelRequested\":false,\"linkedRootIds\":[\"root-a\"],\"sessionId\":\"session-a\",\"hold\":\"ApprovalWait\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-jobs.cancel",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.cancel\",\"value\":{\"id\":\"id-a\",\"jobId\":\"id-a\",\"revision\":\"1\",\"occurrenceKey\":\"fixture\",\"state\":\"ObservedComplete\",\"usage\":{\"items\":[],\"totalTrackedUsd\":\"0\",\"untrackedRequests\":\"0\",\"incompleteRequests\":\"0\"},\"status\":\"Skipped\",\"trigger\":\"Scheduled\",\"occurrenceAtMs\":\"1793570000000\",\"finishedAtMs\":\"1793570000000\",\"reason\":\"The previous run is still active\",\"skippedForRunId\":\"run-b\",\"resumptions\":\"0\",\"cancelRequested\":false,\"linkedRootIds\":[\"root-a\"],\"sessionId\":\"session-a\",\"hold\":\"ApprovalWait\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-jobs.list",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.list\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":true,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"ReactivationRequired\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\"},{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-jobs.inspect",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.inspect\",\"value\":{\"job\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":true,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"ReactivationRequired\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\"},\"run\":{\"id\":\"id-a\",\"jobId\":\"id-a\",\"revision\":\"1\",\"occurrenceKey\":\"fixture\",\"state\":\"ObservedComplete\",\"usage\":{\"items\":[],\"totalTrackedUsd\":\"0\",\"untrackedRequests\":\"0\",\"incompleteRequests\":\"0\"},\"status\":\"Skipped\",\"trigger\":\"Scheduled\",\"occurrenceAtMs\":\"1793570000000\",\"finishedAtMs\":\"1793570000000\",\"reason\":\"The previous run is still active\",\"skippedForRunId\":\"run-b\",\"resumptions\":\"0\",\"cancelRequested\":false,\"linkedRootIds\":[\"root-a\"],\"sessionId\":\"session-a\",\"hold\":\"ApprovalWait\"},\"runs\":[{\"id\":\"id-a\",\"jobId\":\"id-a\",\"revision\":\"1\",\"occurrenceKey\":\"fixture\",\"state\":\"ObservedComplete\",\"usage\":{\"items\":[],\"totalTrackedUsd\":\"0\",\"untrackedRequests\":\"0\",\"incompleteRequests\":\"0\"},\"status\":\"Skipped\",\"trigger\":\"Scheduled\",\"occurrenceAtMs\":\"1793570000000\",\"finishedAtMs\":\"1793570000000\",\"reason\":\"The previous run is still active\",\"skippedForRunId\":\"run-b\",\"resumptions\":\"0\",\"cancelRequested\":false,\"linkedRootIds\":[\"root-a\"],\"sessionId\":\"session-a\",\"hold\":\"ApprovalWait\"},{\"id\":\"id-a\",\"jobId\":\"id-a\",\"revision\":\"1\",\"occurrenceKey\":\"fixture\",\"state\":\"ObservedComplete\",\"usage\":{\"items\":[],\"totalTrackedUsd\":\"0\",\"untrackedRequests\":\"0\",\"incompleteRequests\":\"0\"}}],\"runsNextCursor\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-job-next-run",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"jobs.enable\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":true,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"ReactivationRequired\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-result-run-status",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"jobs.run_now\",\"value\":{\"id\":\"id-a\",\"jobId\":\"id-a\",\"revision\":\"1\",\"occurrenceKey\":\"fixture\",\"state\":\"ObservedComplete\",\"usage\":{\"items\":[],\"totalTrackedUsd\":\"0\",\"untrackedRequests\":\"0\",\"incompleteRequests\":\"0\"},\"status\":\"Skipped\",\"trigger\":\"Scheduled\",\"occurrenceAtMs\":\"1793570000000\",\"finishedAtMs\":\"1793570000000\",\"reason\":\"The previous run is still active\",\"skippedForRunId\":\"run-b\",\"resumptions\":\"0\",\"cancelRequested\":false,\"linkedRootIds\":[\"root-a\"],\"sessionId\":\"session-a\",\"hold\":\"ApprovalWait\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-result-inspection-runs",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"jobs.inspect\",\"value\":{\"job\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false},\"runs\":[]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-run-unknown-status",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.run_now\",\"value\":{\"id\":\"id-a\",\"jobId\":\"id-a\",\"revision\":\"1\",\"occurrenceKey\":\"fixture\",\"state\":\"ObservedComplete\",\"usage\":{\"items\":[],\"totalTrackedUsd\":\"0\",\"untrackedRequests\":\"0\",\"incompleteRequests\":\"0\"},\"status\":\"Missed\",\"trigger\":\"Scheduled\",\"occurrenceAtMs\":\"1793570000000\",\"finishedAtMs\":\"1793570000000\",\"reason\":\"The previous run is still active\",\"skippedForRunId\":\"run-b\",\"resumptions\":\"0\",\"cancelRequested\":false,\"linkedRootIds\":[\"root-a\"],\"sessionId\":\"session-a\",\"hold\":\"ApprovalWait\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-job-unknown-hold",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.enable\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Calendar\",\"expression\":\"30 2 * * *\",\"timezone\":\"America/New_York\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":true,\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"nextRunAtMs\":\"1793570000000\",\"lastRunStartedAtMs\":\"1793560000000\",\"lastRunFinishedAtMs\":\"1793560060000\",\"lastRunStatus\":\"Succeeded\",\"activeRunId\":\"run-b\",\"hold\":\"Paused\",\"authorized\":true,\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-run-unknown-trigger",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"jobs.cancel\",\"value\":{\"id\":\"id-a\",\"jobId\":\"id-a\",\"revision\":\"1\",\"occurrenceKey\":\"fixture\",\"state\":\"ObservedComplete\",\"usage\":{\"items\":[],\"totalTrackedUsd\":\"0\",\"untrackedRequests\":\"0\",\"incompleteRequests\":\"0\"},\"status\":\"Skipped\",\"trigger\":\"Catchup\",\"occurrenceAtMs\":\"1793570000000\",\"finishedAtMs\":\"1793570000000\",\"reason\":\"The previous run is still active\",\"skippedForRunId\":\"run-b\",\"resumptions\":\"0\",\"cancelRequested\":false,\"linkedRootIds\":[\"root-a\"],\"sessionId\":\"session-a\",\"hold\":\"ApprovalWait\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "r2-input-web.search",
     "entry": "domain-request.r2",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"web.search\",\"scope\":{\"kind\":\"Workspace\"},\"query\":\"fixture\",\"providerId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":2}",

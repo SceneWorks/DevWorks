@@ -627,6 +627,9 @@ impl Backend for DesktopBackend {
     fn scratch_dir(&self) -> PathBuf {
         self.host.data_root.join("staging-ui")
     }
+    fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
+        self.host.runtime.jobs().catalog().capabilities()
+    }
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
         use std::io::Read;
         let runtime = &self.host.runtime;

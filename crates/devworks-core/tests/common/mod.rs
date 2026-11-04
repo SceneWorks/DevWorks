@@ -381,6 +381,9 @@ impl ReadSnapshot for MemSnapshot {
     fn projects(&self) -> &dyn ProjectRead {
         &self.unsupported
     }
+    fn jobs(&self) -> &dyn JobRead {
+        &self.unsupported
+    }
     fn work(&self) -> &dyn WorkRead {
         &self.unsupported
     }
@@ -461,6 +464,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn projects(&mut self) -> &mut dyn ProjectRepository {
+        &mut self.unsupported
+    }
+    fn jobs(&mut self) -> &mut dyn JobRepository {
         &mut self.unsupported
     }
     fn work(&mut self) -> &mut dyn WorkRepository {
@@ -1407,6 +1413,122 @@ impl ResourceRead for Unsupported {
         _: Option<&Id>,
         _: u16,
     ) -> Result<Vec<StoredProcess>, StorageError> {
+        nope()
+    }
+}
+impl JobRead for Unsupported {
+    fn job(&self, _: &Id) -> Result<Option<StoredJob>, StorageError> {
+        nope()
+    }
+    fn jobs(
+        &self,
+        _: &JobScope,
+        _: Option<bool>,
+        _: Option<(&str, &str)>,
+        _: u16,
+    ) -> Result<Vec<StoredJob>, StorageError> {
+        nope()
+    }
+    fn job_titled(
+        &self,
+        _: Option<&ProjectId>,
+        _: &str,
+    ) -> Result<Option<StoredJob>, StorageError> {
+        nope()
+    }
+    fn due_jobs(&self, _: i64, _: u16) -> Result<Vec<StoredJob>, StorageError> {
+        nope()
+    }
+    fn all_jobs(&self, _: Option<&Id>, _: u16) -> Result<Vec<StoredJob>, StorageError> {
+        nope()
+    }
+    fn job_run(&self, _: &Id) -> Result<Option<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn job_runs(&self, _: &Id, _: Option<i64>, _: u16) -> Result<Vec<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn active_run(&self, _: &Id) -> Result<Option<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn runs_where(
+        &self,
+        _: &RunFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn run_links(&self, _: &Id) -> Result<Vec<RootId>, StorageError> {
+        nope()
+    }
+    fn checkpoint(&self, _: &Id, _: &str) -> Result<Option<StoredJobCheckpoint>, StorageError> {
+        nope()
+    }
+    fn action(&self, _: &Id, _: &str) -> Result<Option<StoredJobAction>, StorageError> {
+        nope()
+    }
+    fn unsettled_actions(&self, _: &Id) -> Result<Vec<StoredJobAction>, StorageError> {
+        nope()
+    }
+    fn run_usage(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<StoredJobUsage>, StorageError> {
+        nope()
+    }
+    fn usage_totals(&self, _: &Id) -> Result<JobUsageTotals, StorageError> {
+        nope()
+    }
+}
+impl JobRepository for Unsupported {
+    fn insert_job(&mut self, _: &StoredJob) -> Result<StoredJob, StorageError> {
+        nope()
+    }
+    fn update_job(&mut self, _: &StoredJob, _: i64) -> Result<StoredJob, StorageError> {
+        nope()
+    }
+    fn set_job_schedule(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: Option<i64>,
+        _: Option<&Id>,
+    ) -> Result<StoredJob, StorageError> {
+        nope()
+    }
+    fn insert_run(&mut self, _: &StoredJobRun) -> Result<StoredJobRun, StorageError> {
+        nope()
+    }
+    fn update_run(&mut self, _: &StoredJobRun, _: i64) -> Result<StoredJobRun, StorageError> {
+        nope()
+    }
+    fn set_run_checkpoint(&mut self, _: &Id, _: &str) -> Result<(), StorageError> {
+        nope()
+    }
+    fn link_root(&mut self, _: &Id, _: &RootId) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_checkpoint(
+        &mut self,
+        _: &StoredJobCheckpoint,
+        _: Option<i64>,
+    ) -> Result<StoredJobCheckpoint, StorageError> {
+        nope()
+    }
+    fn insert_action(&mut self, _: &StoredJobAction) -> Result<StoredJobAction, StorageError> {
+        nope()
+    }
+    fn update_action(
+        &mut self,
+        _: &StoredJobAction,
+        _: i64,
+    ) -> Result<StoredJobAction, StorageError> {
+        nope()
+    }
+    fn record_usage(&mut self, _: &StoredJobUsage) -> Result<StoredJobUsage, StorageError> {
         nope()
     }
 }

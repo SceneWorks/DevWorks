@@ -73,6 +73,7 @@ mod artifacts;
 mod authority;
 mod configuration;
 mod diagnostics;
+mod jobs;
 mod projects;
 mod resources;
 mod router;
@@ -83,6 +84,7 @@ pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
 pub use diagnostics::*;
+pub use jobs::*;
 pub use projects::*;
 pub use resources::*;
 pub use router::*;
@@ -481,6 +483,7 @@ pub trait WriteTransaction {
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
     fn projects(&mut self) -> &mut dyn ProjectRepository;
+    fn jobs(&mut self) -> &mut dyn JobRepository;
     fn work(&mut self) -> &mut dyn WorkRepository;
 }
 
@@ -524,6 +527,7 @@ pub trait ReadSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead;
     fn router(&self) -> &dyn RouterRead;
     fn projects(&self) -> &dyn ProjectRead;
+    fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;
 }
 

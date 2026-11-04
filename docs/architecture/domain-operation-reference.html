@@ -1756,47 +1756,47 @@
 </thead>
 <tbody><tr>
 <td><code>jobs.list</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>page</code>: <code>PageRequest</code><br><code>enabled</code>: <code>?bool</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>page</code>: <code>PageRequest</code><br><code>enabled</code>: <code>?bool</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;JobRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>jobs.create</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>title</code>: <code>Label</code><br><code>schedule</code>: <code>Schedule</code><br><code>definition</code>: <code>JobDefinition</code><br><code>enabled</code>: <code>bool</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>title</code>: <code>Label</code><br><code>schedule</code>: <code>Schedule</code><br><code>definition</code>: <code>JobDefinition</code><br><code>enabled</code>: <code>bool</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>JobRecord</code></td>
 </tr>
 <tr>
 <td><code>jobs.edit</code></td>
-<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>title</code>: <code>Label</code><br><code>schedule</code>: <code>Schedule</code><br><code>definition</code>: <code>JobDefinition</code></td>
+<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>title</code>: <code>Label</code><br><code>schedule</code>: <code>Schedule</code><br><code>definition</code>: <code>JobDefinition</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>JobRecord</code></td>
 </tr>
 <tr>
 <td><code>jobs.enable</code></td>
-<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code></td>
+<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>JobRecord</code></td>
 </tr>
 <tr>
 <td><code>jobs.run_now</code></td>
-<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code></td>
+<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>JobRun</code></td>
 </tr>
 <tr>
 <td><code>jobs.inspect</code></td>
-<td><strong>Query</strong><br><code>jobId</code>: <code>Id</code><br><code>runId</code>: <code>?Id</code></td>
+<td><strong>Query</strong><br><code>jobId</code>: <code>Id</code><br><code>runId</code>: <code>?Id</code><br><code>history</code>: <code>?PageRequest</code><br><code>usage</code>: <code>?PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>JobInspection</code></td>
 </tr>
 <tr>
 <td><code>jobs.cancel</code></td>
-<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>runId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code></td>
+<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>runId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>JobRun</code></td>
 </tr>
 <tr>
 <td><code>jobs.delete</code></td>
-<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code></td>
+<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>JobRecord</code></td>
 </tr>
 <tr>
 <td><code>jobs.disable</code></td>
-<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code></td>
+<td><strong>Command</strong><br><code>jobId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>JobRecord</code></td>
 </tr>
 </tbody></table>
@@ -2340,6 +2340,12 @@
 <p><code>Sqlite</code>, <code>MariaDb</code>, <code>MySql</code>, <code>Postgres</code>, <code>SqlServer</code>.</p>
 <h3 id="jobkind">JobKind</h3>
 <p><code>Native</code>, <code>Inference</code>.</p>
+<h3 id="jobrunstatus">JobRunStatus</h3>
+<p><code>Queued</code>, <code>Running</code>, <code>Holding</code>, <code>Succeeded</code>, <code>Failed</code>, <code>Skipped</code>, <code>Cancelled</code>, <code>OutcomeUnknown</code>.</p>
+<h3 id="jobtrigger">JobTrigger</h3>
+<p><code>Scheduled</code>, <code>Manual</code>.</p>
+<h3 id="jobhold">JobHold</h3>
+<p><code>ReactivationRequired</code>, <code>AuthorizationRequired</code>, <code>ProjectClosed</code>.</p>
 <h3 id="proposaldecision">ProposalDecision</h3>
 <p><code>Approve</code>, <code>Reject</code>.</p>
 <h3 id="gitactionkind">GitActionKind</h3>
@@ -5705,6 +5711,54 @@
 <td><code>lastRunId</code></td>
 <td><code>?Id</code></td>
 </tr>
+<tr>
+<td><code>scope</code></td>
+<td><code>?DataScope</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>nextRunAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>lastRunStartedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>lastRunFinishedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>lastRunStatus</code></td>
+<td><code>?JobRunStatus</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>lastError</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>activeRunId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>hold</code></td>
+<td><code>?JobHold</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>authorized</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>createdAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>updatedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>deletedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
 </tbody></table>
 <h3 id="jobrun">JobRun</h3>
 <table>
@@ -5741,6 +5795,54 @@
 <tr>
 <td><code>usage</code></td>
 <td><code>UsageReport</code></td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>?JobRunStatus</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>trigger</code></td>
+<td><code>?JobTrigger</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>occurrenceAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>startedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>finishedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>hold</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>cancelRequested</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>resumptions</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>sessionId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>linkedRootIds</code></td>
+<td><code>?Items&lt;RootId&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>skippedForRunId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="schemavalue">SchemaValue</h3>
@@ -7561,6 +7663,14 @@
 <tr>
 <td><code>run</code></td>
 <td><code>?JobRun</code></td>
+</tr>
+<tr>
+<td><code>runs</code></td>
+<td><code>?Rows&lt;JobRun&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>runsNextCursor</code></td>
+<td><code>?Cursor</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="repositoryindexstatus">RepositoryIndexStatus</h3>

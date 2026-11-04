@@ -172,6 +172,34 @@
         "Inference"
       ]
     },
+    "JobRunStatus": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Running",
+        "Holding",
+        "Succeeded",
+        "Failed",
+        "Skipped",
+        "Cancelled",
+        "OutcomeUnknown"
+      ]
+    },
+    "JobTrigger": {
+      "kind": "enum",
+      "values": [
+        "Scheduled",
+        "Manual"
+      ]
+    },
+    "JobHold": {
+      "kind": "enum",
+      "values": [
+        "ReactivationRequired",
+        "AuthorizationRequired",
+        "ProjectClosed"
+      ]
+    },
     "ProposalDecision": {
       "kind": "enum",
       "values": [
@@ -1627,7 +1655,33 @@
         "definition": "JobDefinition",
         "enabled": "bool",
         "interrupted_run_id": "?Id",
-        "last_run_id": "?Id"
+        "last_run_id": "?Id",
+        "scope": "?DataScope",
+        "next_run_at_ms": "?Counter",
+        "last_run_started_at_ms": "?Counter",
+        "last_run_finished_at_ms": "?Counter",
+        "last_run_status": "?JobRunStatus",
+        "last_error": "?Text",
+        "active_run_id": "?Id",
+        "hold": "?JobHold",
+        "authorized": "?bool",
+        "created_at_ms": "?Counter",
+        "updated_at_ms": "?Counter",
+        "deleted_at_ms": "?Counter"
+      },
+      "since": {
+        "scope": 2,
+        "next_run_at_ms": 2,
+        "last_run_started_at_ms": 2,
+        "last_run_finished_at_ms": 2,
+        "last_run_status": 2,
+        "last_error": 2,
+        "active_run_id": 2,
+        "hold": 2,
+        "authorized": 2,
+        "created_at_ms": 2,
+        "updated_at_ms": 2,
+        "deleted_at_ms": 2
       }
     },
     "JobRun": {
@@ -1639,7 +1693,33 @@
         "occurrence_key": "Text",
         "state": "OperationState",
         "operation_id": "?OperationId",
-        "usage": "UsageReport"
+        "usage": "UsageReport",
+        "status": "?JobRunStatus",
+        "trigger": "?JobTrigger",
+        "occurrence_at_ms": "?Counter",
+        "started_at_ms": "?Counter",
+        "finished_at_ms": "?Counter",
+        "reason": "?Text",
+        "hold": "?Label",
+        "cancel_requested": "?bool",
+        "resumptions": "?Counter",
+        "session_id": "?Id",
+        "linked_root_ids": "?Items<RootId>",
+        "skipped_for_run_id": "?Id"
+      },
+      "since": {
+        "status": 2,
+        "trigger": 2,
+        "occurrence_at_ms": 2,
+        "started_at_ms": 2,
+        "finished_at_ms": 2,
+        "reason": 2,
+        "hold": 2,
+        "cancel_requested": 2,
+        "resumptions": 2,
+        "session_id": 2,
+        "linked_root_ids": 2,
+        "skipped_for_run_id": 2
       }
     },
     "SchemaValue": {
@@ -2452,7 +2532,13 @@
       "kind": "record",
       "fields": {
         "job": "JobRecord",
-        "run": "?JobRun"
+        "run": "?JobRun",
+        "runs": "?Rows<JobRun>",
+        "runs_next_cursor": "?Cursor"
+      },
+      "since": {
+        "runs": 2,
+        "runs_next_cursor": 2
       }
     },
     "RepositoryIndexStatus": {
@@ -5912,7 +5998,7 @@
       "result": "Page<JobRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Bounded page of the visible jobs of one scope (Workspace: app-level jobs; Project: that project's) in title then ID order, optionally filtered by enabled; deleted jobs are omitted; cursors bind the scope, filter and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.create": {
       "operation": "jobs.create",
@@ -5927,7 +6013,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization."
+      "rules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization (a person); other principals create disabled drafts. Titles are unique per scope; a calendar schedule is a standard five-field cron expression (Cronos semantics) in an IANA time zone and must produce a future occurrence. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.edit": {
       "operation": "jobs.edit",
@@ -5942,7 +6028,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Replaces title, schedule and definition at the expected revision and recomputes the next future occurrence (no catch-up). Only a person may edit an enabled or authorized job; another principal's edit of a draft leaves it unauthorized. A run already claimed keeps its own definition snapshot. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.enable": {
       "operation": "jobs.enable",
@@ -5954,7 +6040,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects."
+      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Enabling (a person only) authorizes the current definition, clears a restore or project hold of an open project and computes the next future occurrence without replaying missed ones. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.disable": {
       "operation": "jobs.disable",
@@ -5966,7 +6052,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects."
+      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Disabling stops future occurrences; a run already active continues to its outcome. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.delete": {
       "operation": "jobs.delete",
@@ -5978,7 +6064,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects."
+      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Delete tombstones the job (history kept, no longer listed or inspectable) and requests cancellation of its active run. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.run_now": {
       "operation": "jobs.run_now",
@@ -5990,19 +6076,25 @@
       "result": "JobRun",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature."
+      "rules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature. A run while another run of the job is active is recorded Skipped and nothing is queued; another principal may run only an authorized job; a closed project refuses. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.inspect": {
       "operation": "jobs.inspect",
       "mode": "Query",
       "fields": {
         "job_id": "Id",
-        "run_id": "?Id"
+        "run_id": "?Id",
+        "history": "?PageRequest",
+        "usage": "?PageRequest"
       },
       "result": "JobInspection",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "The job and its selected (or latest) run. Schema revision 2: a newest-first page of the job's run history (history) and of the selected run's usage items (usage), each continued by a cursor bound to the job, run and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
+      "since": {
+        "history": 2,
+        "usage": 2
+      }
     },
     "jobs.cancel": {
       "operation": "jobs.cancel",
@@ -6015,7 +6107,7 @@
       "result": "JobRun",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Cancels the named run only (never a later run of the job): a run not yet dispatched is cancelled at once; a dispatched run is asked to stop through the process owner and its outcome is recorded when known (Accepted). A finished run answers unchanged. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "settings.read_effective": {
       "operation": "settings.read_effective",
@@ -7259,6 +7351,42 @@
       2
     ],
     "router.configure": [
+      1,
+      2
+    ],
+    "jobs.list": [
+      1,
+      2
+    ],
+    "jobs.create": [
+      1,
+      2
+    ],
+    "jobs.edit": [
+      1,
+      2
+    ],
+    "jobs.enable": [
+      1,
+      2
+    ],
+    "jobs.disable": [
+      1,
+      2
+    ],
+    "jobs.delete": [
+      1,
+      2
+    ],
+    "jobs.run_now": [
+      1,
+      2
+    ],
+    "jobs.inspect": [
+      1,
+      2
+    ],
+    "jobs.cancel": [
       1,
       2
     ],

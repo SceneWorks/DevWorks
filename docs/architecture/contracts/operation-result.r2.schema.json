@@ -3455,6 +3455,14 @@
         }
       ]
     },
+    "JobHold": {
+      "enum": [
+        "ReactivationRequired",
+        "AuthorizationRequired",
+        "ProjectClosed"
+      ],
+      "type": "string"
+    },
     "JobInspection": {
       "additionalProperties": false,
       "properties": {
@@ -3470,6 +3478,14 @@
               "type": "null"
             }
           ]
+        },
+        "runs": {
+          "$ref": "#/$defs/List_JobRun_0_500",
+          "x-since": 2
+        },
+        "runsNextCursor": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         }
       },
       "required": [
@@ -3480,11 +3496,31 @@
     "JobRecord": {
       "additionalProperties": false,
       "properties": {
+        "activeRunId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "authorized": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "definition": {
           "$ref": "#/$defs/JobDefinition"
         },
+        "deletedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "enabled": {
           "type": "boolean"
+        },
+        "hold": {
+          "$ref": "#/$defs/JobHold",
+          "x-since": 2
         },
         "id": {
           "$ref": "#/$defs/Id"
@@ -3499,6 +3535,14 @@
             }
           ]
         },
+        "lastError": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
+        "lastRunFinishedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "lastRunId": {
           "anyOf": [
             {
@@ -3509,14 +3553,34 @@
             }
           ]
         },
+        "lastRunStartedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "lastRunStatus": {
+          "$ref": "#/$defs/JobRunStatus",
+          "x-since": 2
+        },
+        "nextRunAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
         "schedule": {
           "$ref": "#/$defs/Schedule"
         },
+        "scope": {
+          "$ref": "#/$defs/DataScope",
+          "x-since": 2
+        },
         "title": {
           "$ref": "#/$defs/Text1To256"
+        },
+        "updatedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         }
       },
       "required": [
@@ -3532,11 +3596,31 @@
     "JobRun": {
       "additionalProperties": false,
       "properties": {
+        "cancelRequested": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "finishedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "hold": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
         "jobId": {
           "$ref": "#/$defs/Id"
+        },
+        "linkedRootIds": {
+          "$ref": "#/$defs/List_Id_0_128",
+          "x-since": 2
+        },
+        "occurrenceAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         },
         "occurrenceKey": {
           "$ref": "#/$defs/Text1To4096"
@@ -3551,11 +3635,39 @@
             }
           ]
         },
+        "reason": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
+        "resumptions": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
+        "sessionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "skippedForRunId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "startedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "state": {
           "$ref": "#/$defs/OperationState"
+        },
+        "status": {
+          "$ref": "#/$defs/JobRunStatus",
+          "x-since": 2
+        },
+        "trigger": {
+          "$ref": "#/$defs/JobTrigger",
+          "x-since": 2
         },
         "usage": {
           "$ref": "#/$defs/UsageReport"
@@ -3570,6 +3682,26 @@
         "usage"
       ],
       "type": "object"
+    },
+    "JobRunStatus": {
+      "enum": [
+        "Queued",
+        "Running",
+        "Holding",
+        "Succeeded",
+        "Failed",
+        "Skipped",
+        "Cancelled",
+        "OutcomeUnknown"
+      ],
+      "type": "string"
+    },
+    "JobTrigger": {
+      "enum": [
+        "Scheduled",
+        "Manual"
+      ],
+      "type": "string"
     },
     "KnowledgeBundle": {
       "additionalProperties": false,
@@ -4340,6 +4472,14 @@
     "List_JobRecord_0_500": {
       "items": {
         "$ref": "#/$defs/JobRecord"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_JobRun_0_500": {
+      "items": {
+        "$ref": "#/$defs/JobRun"
       },
       "maxItems": 500,
       "minItems": 0,

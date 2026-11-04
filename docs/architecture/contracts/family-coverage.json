@@ -13144,11 +13144,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Bounded page of the visible jobs of one scope (Workspace: app-level jobs; Project: that project's) in title then ID order, optionally filtered by enabled; deleted jobs are omitted; cursors bind the scope, filter and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13190,11 +13198,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization.",
+          "semanticRules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization (a person); other principals create disabled drafts. Titles are unique per scope; a calendar schedule is a standard five-field cron expression (Cronos semantics) in an IANA time zone and must produce a future occurrence. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13236,11 +13252,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Replaces title, schedule and definition at the expected revision and recomputes the next future occurrence (no catch-up). Only a person may edit an enabled or authorized job; another principal's edit of a draft leaves it unauthorized. A run already claimed keeps its own definition snapshot. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13282,11 +13306,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects.",
+          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Enabling (a person only) authorizes the current definition, clears a restore or project hold of an open project and computes the next future occurrence without replaying missed ones. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13328,11 +13360,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Journaled",
-          "semanticRules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature.",
+          "semanticRules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature. A run while another run of the job is active is recorded Skipped and nothing is queued; another principal may run only an authorized job; a closed project refuses. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13374,11 +13414,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "The job and its selected (or latest) run. Schema revision 2: a newest-first page of the job's run history (history) and of the selected run's usage items (usage), each continued by a cursor bound to the job, run and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13420,11 +13468,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Journaled",
-          "semanticRules": "",
+          "semanticRules": "Cancels the named run only (never a later run of the job): a run not yet dispatched is cancelled at once; a dispatched run is asked to stop through the process owner and its outcome is recorded when known (Accepted). A finished run answers unchanged. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13466,11 +13522,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects.",
+          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Delete tombstones the job (history kept, no longer listed or inspectable) and requests cancellation of its active run. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13512,11 +13576,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects.",
+          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Disabling stops future occurrences; a run already active continues to its outcome. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
