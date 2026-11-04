@@ -1314,7 +1314,13 @@ impl WorkService {
             .enumerate()
             .map(|(n, id)| (id.as_str(), n))
             .collect();
-        for id in ordered {
+        // Placements already validated their two endpoints. Their computed order also includes
+        // the other kinds in a mixed project bucket so those positions remain undisturbed.
+        let supplied = match &order {
+            Order::Ids(ids) => *ids,
+            Order::Placement(_) => &[],
+        };
+        for id in supplied {
             match items.iter().find(|w| &w.id == id) {
                 Some(w) if member(w) => {}
                 Some(w) => return Err(conflict("queue_member", &w.id)),
@@ -1845,7 +1851,7 @@ fn placement_order(
     }
     let mut order: Vec<&StoredWork> = items
         .iter()
-        .filter(|w| member(w) && w.priority == bucket && w.id != moved.id)
+        .filter(|w| w.priority == bucket && w.id != moved.id)
         .collect();
     order.sort_by(|a, b| {
         a.manual_order

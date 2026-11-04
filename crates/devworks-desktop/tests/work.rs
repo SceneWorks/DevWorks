@@ -1057,6 +1057,77 @@ fn decision_text(
 }
 
 #[test]
+fn refreshing_a_cached_feature_shows_independent_readiness_changes() {
+    let root = Root::new("readiness-after-unlink");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let f = initial_approved_plan(&engine, &*backend, &mut h);
+    h.state_mut().work.plan = None;
+    let card = command(
+        &*backend,
+        "tasks.create",
+        json!({"projectId": f.project_id,
+        "parentId": f.id, "title":"Pay button", "description":"", "repositoryIds":[],
+        "statusId":default_status_id(&f.project_id,"backlog"),"priority":0}),
+    );
+    let mut requirements = serde_json::to_value(&f.requirements).unwrap();
+    requirements[0]["coveredByTaskIds"] = json!([card.id]);
+    let f = command(
+        &*backend,
+        "features.edit_plan",
+        json!({"featureId":f.id,
+        "expectedRevision":f.revision,"plan":{"content":f.plan,"goals":f.goals,
+        "repositoryIds":f.repository_ids,"requirements":requirements,
+        "acceptance":f.acceptance,"acceptanceTests":f.acceptance_tests.map(|x| x.0).unwrap_or_default()}}),
+    );
+    let f = approve_plan(&engine, &*backend, &f);
+    let approval = f.approval.as_ref().unwrap();
+    let f = command(
+        &*backend,
+        "features.edit",
+        json!({"workId":f.id,"expectedRevision":f.revision,
+        "changes":{"readiness":{"kind":"Assess","planRevision":approval.plan_revision,
+        "planDigest":approval.plan_digest,"summary":"Ready to implement","findings":[]}}}),
+    );
+    assert!(f.readiness.as_ref().unwrap().ready);
+    h.state_mut()
+        .work
+        .detail
+        .insert(f.id.as_str().into(), f.clone());
+    click(&mut h, Role::Button, "Refresh");
+    assert!(
+        h.state()
+            .work
+            .freshest(f.id.as_str())
+            .unwrap()
+            .readiness
+            .unwrap()
+            .ready
+    );
+    command(
+        &*backend,
+        "tasks.set_feature",
+        json!({"taskId":card.id,
+        "expectedRevision":card.revision,"clearFeature":true}),
+    );
+    click(&mut h, Role::Button, "Refresh");
+    let shown = h.state().work.freshest(f.id.as_str()).unwrap();
+    assert_eq!(shown.revision, f.revision, "coverage has its own revision");
+    let r = shown.readiness.unwrap();
+    assert!(
+        !r.ready,
+        "the refreshed detail must show the independent blocker"
+    );
+    let finding = r.findings.0.iter().find(|x| x.blocking).unwrap();
+    assert!(
+        has_text(&h, &finding.summary.0),
+        "the detail renders the new finding"
+    );
+}
+
+#[test]
 fn an_approved_requirement_is_dropped_with_a_project_decision_and_can_be_restored() {
     use devworks_core::ports::storage::{ArtifactScope, read_snapshot};
     use devworks_core::protocol::records::RequirementStatus;

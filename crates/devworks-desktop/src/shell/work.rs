@@ -479,6 +479,24 @@ impl WorkUi {
             .find(|w| w.id.as_str() == id);
         match (self.detail.get(id), listed) {
             (Some(d), Some(l)) if l.revision.get() > d.revision.get() => Some(l.clone()),
+            (Some(d), Some(l)) if l.revision == d.revision => {
+                let mut newest = d.clone();
+                // Membership changes can advance readiness without changing the feature's
+                // work revision. Keep full cached detail, but take the newer assessment slots.
+                let readiness_revision = |w: &WorkRecord| {
+                    w.readiness
+                        .iter()
+                        .chain(&w.pending_readiness)
+                        .map(|r| r.revision.get())
+                        .max()
+                        .unwrap_or(0)
+                };
+                if readiness_revision(l) > readiness_revision(d) {
+                    newest.readiness = l.readiness.clone();
+                    newest.pending_readiness = l.pending_readiness.clone();
+                }
+                Some(newest)
+            }
             (Some(d), _) => Some(d.clone()),
             (None, l) => l.cloned(),
         }

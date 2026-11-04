@@ -3219,6 +3219,28 @@ struct Generations {
     f: WorkRecord,
 }
 impl Generations {
+    fn assess_work(
+        &self,
+        pending: bool,
+        work: &[&WorkRecord],
+        evidence: u32,
+    ) -> DomainCommandReply {
+        let f = self.fx.get_at("features.get", &self.f.id, Some(2)).unwrap();
+        let (revision, digest) = if pending {
+            let p = f.pending_plan.as_ref().unwrap();
+            (p.revision.as_str().to_owned(), plan_digest(&p.draft))
+        } else {
+            let p = f.approval.as_ref().unwrap();
+            (
+                p.plan_revision.as_str().to_owned(),
+                String::from(p.plan_digest.clone()),
+            )
+        };
+        let mut finding = Self::blocker(vec![self.fx.artifact(&self.p, evidence)]);
+        finding["affectedWorkIds"] = json!(work.iter().map(|w| w.id.clone()).collect::<Vec<_>>());
+        let r = self.readiness_revision(&f);
+        self.assess(&f, &revision, digest, Some(&r), json!([finding]))
+    }
     fn new(active_findings: Value) -> Self {
         let fx = Fx::new();
         let p = fx.project("Alpha", &[]);
@@ -3450,6 +3472,147 @@ fn a_placement_moves_one_card_in_a_bucket_larger_than_an_ordered_list_can_name()
         !matches!(r, CommandReply::Recorded { .. })
             || matches!(recorded(r), DomainDecision::Refused { .. })
     );
+}
+
+#[test]
+fn adjacent_placements_preserve_the_complete_mixed_project_bucket() {
+    for op in [
+        "issues.prioritize",
+        "tasks.prioritize",
+        "features.prioritize",
+    ] {
+        let fx = Fx::new();
+        let p = fx.project("Alpha", &[]);
+        let f = fx.feature(&p, "F", &[]);
+        let a = fx.task(&fx.user(), &p, None, "A", 0);
+        let b = fx.task(&fx.user(), &p, None, "B", 0);
+        let g = fx.feature(&p, "G", &[]);
+        let order = || {
+            let mut all: Vec<_> = [&f, &a, &b, &g].into_iter().map(|w| fx.fresh(w)).collect();
+            all.sort_by_key(|w| w.manual_order.as_ref().unwrap().get());
+            ids(&all)
+        };
+        let place = |work: &WorkRecord, anchor: &WorkRecord| {
+            let mut body = json!({"projectId":p, "expectedQueueRevision":fx.queue(&p, PROJECT_QUEUE).to_string(),
+                "placement":{"workId":work.id,"anchorId":anchor.id,"side":"After"}});
+            if op == "tasks.prioritize" {
+                body["priority"] = json!(0);
+            }
+            fx.command_at(&fx.agent(), op, body, Some(2))
+        };
+        assert_eq!(order(), ["F", "A", "B", "G"]);
+        // The complete bucket supplies positions, but endpoint validation remains kind-specific.
+        let (work, anchor, wrong) = if op == "features.prioritize" {
+            (&f, &g, &a)
+        } else {
+            (&a, &b, &f)
+        };
+        assert_eq!(kind_of(&refused(place(work, wrong))), "queue_member");
+        assert_eq!(order(), ["F", "A", "B", "G"]);
+        applied(place(work, anchor));
+        let expected = if op == "features.prioritize" {
+            ["A", "B", "G", "F"]
+        } else {
+            ["F", "B", "A", "G"]
+        };
+        assert_eq!(order(), expected, "{op}");
+    }
+}
+
+#[test]
+fn divergent_active_and_pending_findings_preserve_both_open_gates() {
+    let g = Generations::new(json!([]));
+    let fx = &g.fx;
+    let cards: Vec<_> = ["A", "B", "C", "Unaffected"]
+        .into_iter()
+        .map(|title| fx.task(&fx.user(), &g.p, Some(&g.f), title, 0))
+        .collect();
+    applied(g.assess_work(false, &[&cards[0]], 2));
+    let prior = work_of(applied(g.assess_work(true, &[&cards[0], &cards[1]], 3)));
+    let f = work_of(applied(g.assess_work(false, &[&cards[0], &cards[2]], 4)));
+    let pending = f.pending_readiness.as_ref().unwrap();
+    let gated = &pending.findings.0[0].affected_work_ids.0;
+    assert_eq!(
+        gated.len(),
+        3,
+        "both branches of the finding stay open: {gated:?}"
+    );
+    for card in &cards[..3] {
+        assert!(gated.contains(&card.id));
+    }
+    let evidence = &pending.findings.0[0].evidence.0;
+    assert_eq!(
+        evidence.len(),
+        2,
+        "both gates retain their supporting evidence"
+    );
+    for source in [
+        prior.pending_readiness.as_ref().unwrap(),
+        f.readiness.as_ref().unwrap(),
+    ] {
+        let expected = &source.findings.0[0].evidence.0[0];
+        assert!(
+            evidence
+                .iter()
+                .any(|e| e.artifact_id == expected.artifact_id
+                    && e.version_id == expected.version_id)
+        );
+    }
+    fx.approve(&f);
+    let fid = f.id.clone();
+    let body = fx.read(move |s| Ok(s.work().readiness(&fid)?.unwrap().body));
+    for card in &cards[..3] {
+        assert_eq!(
+            devworks_core::services::work::readiness::gating_finding(&body, &card.id).as_deref(),
+            Some("F1")
+        );
+    }
+    assert!(
+        devworks_core::services::work::readiness::gating_finding(&body, &cards[3].id).is_none()
+    );
+}
+
+#[test]
+fn a_divergent_gate_union_beyond_the_wire_bound_refuses_without_changing_either_assessment() {
+    let g = Generations::new(json!([]));
+    let cards: Vec<_> = (0..129)
+        .map(|i| {
+            g.fx.task(&g.fx.user(), &g.p, Some(&g.f), &format!("Card {i}"), 0)
+        })
+        .collect();
+    applied(g.assess_work(false, &[&cards[0]], 2));
+    applied(g.assess_work(true, &cards[..128].iter().collect::<Vec<_>>(), 3));
+    let before = g.fx.get_at("features.get", &g.f.id, Some(2)).unwrap();
+    let fault = refused(g.assess_work(false, &[&cards[0], &cards[128]], 4));
+    assert_eq!(kind_of(&fault), "finding_scope_limit");
+    let after = g.fx.get_at("features.get", &g.f.id, Some(2)).unwrap();
+    assert_eq!(
+        serde_json::to_value(before.readiness).unwrap(),
+        serde_json::to_value(after.readiness).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(before.pending_readiness).unwrap(),
+        serde_json::to_value(after.pending_readiness).unwrap()
+    );
+}
+
+#[test]
+fn a_whole_scope_pending_gate_survives_a_work_specific_active_update() {
+    use devworks_core::services::runs::scope::Readiness;
+    let g = Generations::new(json!([]));
+    let a = g.fx.task(&g.fx.user(), &g.p, Some(&g.f), "A", 0);
+    let b = g.fx.task(&g.fx.user(), &g.p, Some(&g.f), "B", 0);
+    applied(g.assess_work(false, &[&a], 2));
+    applied(g.assess_work(true, &[], 3));
+    let f = work_of(applied(g.assess_work(false, &[&a, &b], 4)));
+    assert!(
+        f.pending_readiness.as_ref().unwrap().findings.0[0]
+            .affected_work_ids
+            .0
+            .is_empty()
+    );
+    g.fx.approve(&f);
+    assert!(matches!(g.e1(), Readiness::Blocked { .. }));
 }
 
 #[test]

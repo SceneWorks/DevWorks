@@ -390,11 +390,12 @@ fn keeps_gate(stored: &ReadinessFinding, given: &ReadinessFinding) -> R<()> {
             && stored.scope_key != given.scope_key)
         || (stored.scope_key.is_none() && given.scope_key.is_some())
         || (stored.affected_work_ids.0.is_empty() && !given.affected_work_ids.0.is_empty())
-        || !stored
-            .affected_work_ids
-            .0
-            .iter()
-            .all(|w| given.affected_work_ids.0.contains(w));
+        || (!given.affected_work_ids.0.is_empty()
+            && !stored
+                .affected_work_ids
+                .0
+                .iter()
+                .all(|w| given.affected_work_ids.0.contains(w)));
     if weakened {
         return Err(conflict("open_finding_needs_closure", &stored.id));
     }
@@ -422,8 +423,10 @@ fn strengthens(stored: &ReadinessFinding, given: &ReadinessFinding) -> bool {
 /// leaves only through `CloseFinding` or a human's finding-specific risk acceptance, both of
 /// which act on every generation at once, so neither a draft's assessment nor plan approval
 /// clears it). A pending statement of the finding is kept while it is open and keeps the active
-/// gate; otherwise the active statement replaces it. Returns whether `pending` changed.
-fn carry_open(active: &Assessment, pending: &mut Assessment) -> bool {
+/// gate. Divergent open statements retain the pending statement with the union of both gates
+/// and evidence. Incompatible named scopes or a union beyond the wire bounds refuse the write
+/// rather than lose a gate or broaden it to unrelated work. Returns whether `pending` changed.
+fn carry_open(active: &Assessment, pending: &mut Assessment) -> R<bool> {
     let mut changed = false;
     for o in active
         .findings
@@ -436,14 +439,62 @@ fn carry_open(active: &Assessment, pending: &mut Assessment) -> bool {
                 changed = true;
             }
             Some(p) => {
-                if !matches!(p.state, FindingState::Open) || keeps_gate(o, p).is_err() {
+                if !matches!(p.state, FindingState::Open) {
                     *p = o.clone();
+                    changed = true;
+                } else if keeps_gate(o, p).is_err() {
+                    let mut merged = p.clone();
+                    merged.blocking |= o.blocking;
+                    merged.prerequisite |= o.prerequisite;
+                    merged.scope_key = match (&p.scope_key, &o.scope_key) {
+                        (Some(a), Some(b)) if a != b => {
+                            return Err(conflict("open_finding_needs_closure", &o.id));
+                        }
+                        (Some(a), Some(_)) => Some(a.clone()),
+                        _ => None,
+                    };
+                    if p.affected_work_ids.0.is_empty() || o.affected_work_ids.0.is_empty() {
+                        merged.affected_work_ids.0.clear();
+                    } else {
+                        union_ids(
+                            &mut merged.affected_work_ids.0,
+                            &o.affected_work_ids.0,
+                            &o.id,
+                        )?;
+                    }
+                    union_ids(&mut merged.requirement_ids.0, &o.requirement_ids.0, &o.id)?;
+                    for evidence in &o.evidence.0 {
+                        if !merged.evidence.0.iter().any(|e| {
+                            e.artifact_id == evidence.artifact_id
+                                && e.version_id == evidence.version_id
+                        }) {
+                            if merged.evidence.0.len() >= 128 {
+                                return Err(invalid("finding_evidence_limit", Some(&o.id)));
+                            }
+                            merged.evidence.0.push(evidence.clone());
+                        }
+                    }
+                    keeps_gate(o, &merged)?;
+                    keeps_gate(p, &merged)?;
+                    *p = merged;
                     changed = true;
                 }
             }
         }
     }
-    changed
+    Ok(changed)
+}
+
+fn union_ids(out: &mut Vec<Id>, other: &[Id], finding: &Id) -> R<()> {
+    for id in other {
+        if !out.contains(id) {
+            if out.len() >= 128 {
+                return Err(invalid("finding_scope_limit", Some(finding)));
+            }
+            out.push(id.clone());
+        }
+    }
+    Ok(())
 }
 
 fn evidence_keys(f: &ReadinessFinding) -> BTreeSet<String> {
@@ -634,7 +685,7 @@ pub(crate) fn apply_change(
                 // A finding the active plan's assessment opens or widens also holds the pending
                 // replacement, so adopting it cannot drop the finding.
                 if let Some(p) = next.pending.as_mut()
-                    && carry_open(&body, p)
+                    && carry_open(&body, p)?
                     && p.findings.len() > 128
                 {
                     return Err(invalid("finding_limit", Some(&feature.id)));
@@ -1075,7 +1126,7 @@ pub(crate) fn record_adoption(
             // At the finding limit the adoption is refused rather than carry a finding the
             // assessment cannot hold (it would fall out of every bounded view of it).
             if let Some(old) = &slots.active
-                && carry_open(old, &mut promoted)
+                && carry_open(old, &mut promoted)?
                 && promoted.findings.len() > 128
             {
                 return Err(invalid("finding_limit", Some(&feature.id)));
