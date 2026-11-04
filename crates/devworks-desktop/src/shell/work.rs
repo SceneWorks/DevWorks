@@ -107,22 +107,37 @@ pub struct EditForm {
 pub struct PlanForm {
     pub snapshot: WorkRecord,
     pub text: String,
-    /// `E1: statement` lines.
-    pub requirements: String,
-    /// `A1: text` lines.
-    pub acceptance: String,
-    pub goals: String,
+    /// One entry per requirement, criterion and test (an ID and its text, which may span
+    /// lines): each round-trips exactly, and an entry the user did not change is submitted as
+    /// it was read.
+    pub requirements: Vec<Entry>,
+    pub acceptance: Vec<Entry>,
+    /// One goal per entry.
+    pub goals: Vec<String>,
     pub repositories: BTreeSet<String>,
     /// The content the draft keeps when its text is unchanged.
     pub content: Option<ArtifactRef>,
     /// The text `content` holds (unchanged text keeps the content).
     pub original: String,
-    /// `T1: text` lines of the feature's acceptance tests.
-    pub acceptance_tests: String,
+    pub acceptance_tests: Vec<Entry>,
     /// The draft the form started from: what the form does not show (requirement status, drop
     /// decisions and coverage; criterion state and evidence) is kept from it, never dropped.
     pub base: PlanBase,
 }
+/// One requirement, criterion or test being edited: its ID and its full text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Entry {
+    pub id: String,
+    pub text: String,
+}
+/// The next free `<prefix><n>` ID among `entries`.
+pub fn next_id(entries: &[Entry], prefix: &str) -> String {
+    (1..)
+        .map(|n| format!("{prefix}{n}"))
+        .find(|c| !entries.iter().any(|e| &e.id == c))
+        .expect("a free identifier")
+}
+
 /// The requirements and criteria a plan form started from.
 #[derive(Clone, Debug, Default)]
 pub struct PlanBase {
@@ -170,9 +185,11 @@ pub fn open_plan_form(f: &WorkRecord) -> PlanForm {
     };
     let criteria = |c: &[AcceptanceCriterion]| {
         c.iter()
-            .map(|a| format!("{}: {}", a.id.as_str(), a.text.0))
+            .map(|a| Entry {
+                id: a.id.as_str().to_owned(),
+                text: a.text.0.clone(),
+            })
             .collect::<Vec<_>>()
-            .join("\n")
     };
     PlanForm {
         snapshot: f.clone(),
@@ -181,12 +198,14 @@ pub fn open_plan_form(f: &WorkRecord) -> PlanForm {
             .requirements
             .iter()
             .filter(|r| !matches!(r.status, RequirementStatus::Dropped))
-            .map(|r| format!("{}: {}", r.id.as_str(), r.statement.0))
-            .collect::<Vec<_>>()
-            .join("\n"),
+            .map(|r| Entry {
+                id: r.id.as_str().to_owned(),
+                text: r.statement.0.clone(),
+            })
+            .collect(),
         acceptance: criteria(&base.acceptance),
         acceptance_tests: criteria(&base.acceptance_tests),
-        goals: goals.join("\n"),
+        goals,
         repositories: repos,
         original: String::new(),
         content,
@@ -194,14 +213,15 @@ pub fn open_plan_form(f: &WorkRecord) -> PlanForm {
     }
 }
 
-/// The criteria of `text` (`ID: text` lines), keeping the stored state and evidence of each one
-/// whose ID and text are unchanged.
-fn merged_criteria(text: &str, base: &[AcceptanceCriterion]) -> Vec<Value> {
-    lines(text)
-        .into_iter()
-        .map(|(id, t)| match base.iter().find(|b| b.id.as_str() == id) {
-            Some(b) if b.text.0 == t => serde_json::to_value(b).unwrap_or(Value::Null),
-            _ => json!({"id": id, "text": t, "evidenceIds": [], "state": "Unmet"}),
+/// The criteria of `entries`, keeping the stored state and evidence of each one whose ID and
+/// text are unchanged (an unchanged entry is submitted exactly as it was read).
+fn merged_criteria(entries: &[Entry], base: &[AcceptanceCriterion]) -> Vec<Value> {
+    entries
+        .iter()
+        .filter(|e| !e.text.trim().is_empty())
+        .map(|e| match base.iter().find(|b| b.id.as_str() == e.id) {
+            Some(b) if b.text.0 == e.text => serde_json::to_value(b).unwrap_or(Value::Null),
+            _ => json!({"id": e.id.trim(), "text": e.text, "evidenceIds": [], "state": "Unmet"}),
         })
         .collect()
 }
@@ -211,34 +231,38 @@ fn merged_criteria(text: &str, base: &[AcceptanceCriterion]) -> Vec<Value> {
 /// covering tasks, dropped requirements (their decision stays recorded), and each unchanged
 /// criterion's state and evidence.
 pub fn plan_body(form: &PlanForm, content: &ArtifactRef) -> Value {
-    let written = lines(&form.requirements);
+    let written: Vec<&Entry> = form
+        .requirements
+        .iter()
+        .filter(|e| !e.text.trim().is_empty())
+        .collect();
     let mut reqs: Vec<Value> = written
         .iter()
-        .map(
-            |(id, t)| match form.base.requirements.iter().find(|b| b.id.as_str() == id) {
+        .map(|e| {
+            match form
+                .base
+                .requirements
+                .iter()
+                .find(|b| b.id.as_str() == e.id)
+            {
                 Some(b) => {
                     let mut v = serde_json::to_value(b).unwrap_or(Value::Null);
-                    v["statement"] = json!(t);
+                    v["statement"] = json!(e.text);
                     v
                 }
-                None => json!({"id": id, "statement": t, "status": "Confirmed",
+                None => json!({"id": e.id.trim(), "statement": e.text, "status": "Confirmed",
                 "coveredByTaskIds": []}),
-            },
-        )
+            }
+        })
         .collect();
     for b in &form.base.requirements {
         if matches!(b.status, RequirementStatus::Dropped)
-            && !written.iter().any(|(id, _)| id == b.id.as_str())
+            && !written.iter().any(|e| e.id == b.id.as_str())
         {
             reqs.push(serde_json::to_value(b).unwrap_or(Value::Null));
         }
     }
-    let goals: Vec<String> = form
-        .goals
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.trim().to_owned())
-        .collect();
+    let goals: Vec<&String> = form.goals.iter().filter(|g| !g.trim().is_empty()).collect();
     let repos: Vec<&String> = form.repositories.iter().collect();
     json!({
         "content": content,
@@ -366,18 +390,6 @@ fn short(s: &str, n: usize) -> String {
     } else {
         t
     }
-}
-fn lines(text: &str) -> Vec<(String, String)> {
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .enumerate()
-        .map(|(i, l)| match l.split_once(':') {
-            Some((id, rest)) if Id::new(id.trim()).is_ok() => {
-                (id.trim().to_owned(), rest.trim().to_owned())
-            }
-            _ => (format!("X{}", i + 1), l.trim().to_owned()),
-        })
-        .collect()
 }
 fn matches_text(w: &WorkRecord, needle: &str) -> bool {
     let n = fold(needle.trim());
@@ -2534,30 +2546,28 @@ fn plan_form(
             .desired_rows(4),
     );
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Plan text"));
-    let r = ui.add(
-        egui::TextEdit::multiline(&mut form.requirements)
-            .hint_text("E1: requirement")
-            .desired_rows(3),
-    );
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Requirements"));
-    let r = ui.add(
-        egui::TextEdit::multiline(&mut form.acceptance)
-            .hint_text("A1: acceptance criterion")
-            .desired_rows(2),
-    );
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Acceptance"));
-    let r = ui.add(
-        egui::TextEdit::multiline(&mut form.acceptance_tests)
-            .hint_text("T1: acceptance test")
-            .desired_rows(2),
-    );
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Acceptance tests"));
-    let r = ui.add(
-        egui::TextEdit::multiline(&mut form.goals)
-            .hint_text("One goal per line")
-            .desired_rows(2),
-    );
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Goals"));
+    entry_list(ui, "Requirement", "E", &mut form.requirements);
+    entry_list(ui, "Acceptance criterion", "A", &mut form.acceptance);
+    entry_list(ui, "Acceptance test", "T", &mut form.acceptance_tests);
+    ui.label(RichText::new("Goals").strong());
+    let mut remove: Option<usize> = None;
+    for (i, g) in form.goals.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let r = ui.add(egui::TextEdit::multiline(g).desired_rows(1));
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::TextInput, true, format!("Goal {}", i + 1))
+            });
+            if ui.small_button(format!("Remove goal {}", i + 1)).clicked() {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        form.goals.remove(i);
+    }
+    if ui.small_button("Add goal").clicked() {
+        form.goals.push(String::new());
+    }
     for repo in project_repos {
         let mut on = form.repositories.contains(repo);
         if ui.checkbox(&mut on, repo).changed() {
@@ -2586,6 +2596,52 @@ fn plan_form(
     });
     if cancel {
         work.plan = None;
+    }
+}
+
+/// An editable list of entries, one ID field and one multi-line text field each, with add and
+/// remove controls.
+fn entry_list(ui: &mut Ui, what: &str, prefix: &str, entries: &mut Vec<Entry>) {
+    ui.label(RichText::new(format!("{what}s")).strong());
+    let mut remove: Option<usize> = None;
+    for (i, e) in entries.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let r = ui.add(egui::TextEdit::singleline(&mut e.id).desired_width(56.0));
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::TextInput,
+                    true,
+                    format!("{what} {} ID", i + 1),
+                )
+            });
+            let r = ui.add(egui::TextEdit::multiline(&mut e.text).desired_rows(2));
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::TextInput,
+                    true,
+                    format!("{what} {} text", i + 1),
+                )
+            });
+            if ui
+                .small_button(format!("Remove {} {}", what.to_lowercase(), i + 1))
+                .clicked()
+            {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        entries.remove(i);
+    }
+    if ui
+        .small_button(format!("Add {}", what.to_lowercase()))
+        .clicked()
+    {
+        let id = next_id(entries, prefix);
+        entries.push(Entry {
+            id,
+            text: String::new(),
+        });
     }
 }
 

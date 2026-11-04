@@ -185,19 +185,20 @@ fn features_board_issues_and_overview_share_the_agent_operations() {
 
 #[test]
 fn the_plan_editor_keeps_what_it_does_not_show() {
-    use devworks_desktop::shell::work::{open_plan_form, plan_body};
+    use devworks_desktop::shell::work::{Entry, open_plan_form, plan_body};
     let art = json!({"artifactId": "art-1", "versionId": "ver-1", "sha256": "a".repeat(64),
         "byteLength": "4", "mediaType": "text/plain"});
     let draft = json!({
         "content": art,
-        "acceptance": [{"id": "A1", "text": "works", "evidenceIds": ["ev-1"], "state": "Met"}],
-        "repositoryIds": [], "goals": ["ship"],
+        "acceptance": [{"id": "A1", "text": "works\non every browser: Safari and Edge",
+            "evidenceIds": ["ev-1"], "state": "Met"}],
+        "repositoryIds": [], "goals": ["ship\nthis quarter"],
         "requirements": [
             {"id": "E1", "statement": "pay", "status": "Proposed", "coveredByTaskIds": ["task-1"]},
             {"id": "E2", "statement": "refunds", "status": "Dropped", "dropDecision": art,
              "coveredByTaskIds": []}],
-        "acceptanceTests": [{"id": "T1", "text": "checkout e2e", "evidenceIds": [],
-            "state": "Unmet"}],
+        "acceptanceTests": [{"id": "T1", "text": "checkout e2e\n  1. add\n  2. pay",
+            "evidenceIds": ["ev-2"], "state": "Met"}],
     });
     let record: WorkRecord = serde_json::from_value(json!({
         "id": "feature-1", "revision": "3", "projectId": "project-1", "kind": "Feature",
@@ -211,17 +212,33 @@ fn the_plan_editor_keeps_what_it_does_not_show() {
     }))
     .unwrap();
     let mut form = open_plan_form(&record);
-    // The editor shows the acceptance tests and only the live requirements.
-    assert_eq!(form.acceptance_tests, "T1: checkout e2e");
-    assert_eq!(form.requirements, "E1: pay");
-    form.requirements = "E1: pay by card".into();
+    // One entry per criterion, test and live requirement, multi-line text intact.
+    assert_eq!(
+        form.acceptance_tests,
+        vec![Entry {
+            id: "T1".into(),
+            text: "checkout e2e\n  1. add\n  2. pay".into()
+        }]
+    );
+    assert_eq!(
+        form.requirements,
+        vec![Entry {
+            id: "E1".into(),
+            text: "pay".into()
+        }]
+    );
+    form.requirements[0].text = "pay by card\nor wallet".into();
     let content = serde_json::from_value(art.clone()).unwrap();
     let body = plan_body(&form, &content);
     // Saving keeps the acceptance tests, each requirement's status and coverage, the dropped
     // requirement with its decision, and the unchanged criterion's state and evidence.
     assert_eq!(body["acceptanceTests"], draft["acceptanceTests"]);
     assert_eq!(body["acceptance"], draft["acceptance"]);
-    assert_eq!(body["requirements"][0]["statement"], "pay by card");
+    assert_eq!(
+        body["requirements"][0]["statement"],
+        "pay by card\nor wallet"
+    );
+    assert_eq!(body["goals"], draft["goals"]);
     assert_eq!(body["requirements"][0]["status"], "Proposed");
     assert_eq!(
         body["requirements"][0]["coveredByTaskIds"],

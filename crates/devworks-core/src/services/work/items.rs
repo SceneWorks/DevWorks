@@ -916,12 +916,22 @@ impl WorkService {
             brief.description = d.0.clone();
             changed.push("description");
         }
-        if let Some(s) = &c.status_id
+        let status_changed = if let Some(s) = &c.status_id
             && Some(s) != before.status_id.as_ref()
         {
             let (status, _) = status_of(tx, &before.project_id, s)?;
             after.status_id = Some(status.id);
             changed.push("statusId");
+            true
+        } else {
+            false
+        };
+        if let Some(results) = &c.acceptance_evidence {
+            if schema_revision < 2 {
+                return Err(invalid("acceptance_evidence", None));
+            }
+            record_feature_results(tx, &before, &mut brief, &results.0)?;
+            changed.push("acceptance");
         }
         // An approved feature's effective scope changes only through its pending plan.
         if let Some(r) = &c.repository_ids {
@@ -971,6 +981,27 @@ impl WorkService {
                     value: tx_record(tx, &before)?,
                 },
             });
+        }
+        // A feature in a Done status is Verified only when its active acceptance is met with
+        // evidence; a Done label alone is Manual and satisfies no dependent.
+        let semantic = {
+            let statuses = tx.work().statuses(&before.project_id)?;
+            after
+                .status_id
+                .as_ref()
+                .and_then(|s| semantic_of(&statuses, s))
+                .unwrap_or("")
+                .to_owned()
+        };
+        after.completion = feature_completion(tx, &before.id, &semantic, &brief)?;
+        if status_changed {
+            if semantic == DONE {
+                brief.completed_by = Some(ctx.principal().clone());
+                brief.completed_at_ms = Some(tx.now_ms());
+            } else {
+                brief.completed_by = None;
+                brief.completed_at_ms = None;
+            }
         }
         after.search_key = model::search_key(&after.title, &brief.description);
         after.brief = brief.value();
@@ -1553,6 +1584,73 @@ impl WorkService {
             },
         })
     }
+}
+
+/// The completion of a feature in a status of `semantic`: Verified when its active acceptance
+/// (criteria and tests) is met with evidence, Manual otherwise; none outside a Done status.
+pub(crate) fn feature_completion(
+    tx: &mut dyn WriteTransaction,
+    feature: &Id,
+    semantic: &str,
+    brief: &WorkBrief,
+) -> R<Option<String>> {
+    if semantic != DONE {
+        return Ok(None);
+    }
+    let active = active_of(
+        tx.work()
+            .feature_plan(feature)?
+            .as_ref()
+            .and_then(|s| s.approved.as_ref()),
+    );
+    Ok(Some(if model::feature_verified(active.as_ref(), brief) {
+        VERIFIED.to_owned()
+    } else {
+        MANUAL.to_owned()
+    }))
+}
+
+/// Records results of a feature's active-plan acceptance criteria or tests: each names one
+/// criterion by ID at its approved text, and its evidence IDs are recorded history links of the
+/// project. A criterion met without evidence stays a manual judgment.
+fn record_feature_results(
+    tx: &mut dyn WriteTransaction,
+    feature: &StoredWork,
+    brief: &mut WorkBrief,
+    results: &[AcceptanceCriterion],
+) -> R<()> {
+    let ids: Vec<Id> = results.iter().map(|c| c.id.clone()).collect();
+    id_set(&ids, "acceptance_evidence")?;
+    let Some(active) = tx
+        .work()
+        .feature_plan(&feature.id)?
+        .and_then(|s| active_of(s.approved.as_ref()))
+    else {
+        return Err(conflict("no_active_plan", &feature.id));
+    };
+    for r in results {
+        let in_acceptance = active.draft.acceptance.0.iter().find(|c| c.id == r.id);
+        let in_tests = active
+            .draft
+            .acceptance_tests
+            .0
+            .iter()
+            .find(|c| c.id == r.id);
+        let (approved, list) = match (in_acceptance, in_tests) {
+            (Some(c), None) => (c, &mut brief.acceptance),
+            (None, Some(c)) => (c, &mut brief.acceptance_tests),
+            (Some(_), Some(_)) => return Err(invalid("ambiguous_criterion", Some(&r.id))),
+            (None, None) => return Err(not_found("criterion", &r.id).into()),
+        };
+        if approved.text.0 != r.text.0 {
+            return Err(conflict("criterion_text", &r.id));
+        }
+        id_set(&r.evidence_ids.0, "evidence_ids")?;
+        check_evidence(tx, &feature.project_id, &r.evidence_ids.0)?;
+        list.retain(|x| x.id != r.id);
+        list.push(r.clone());
+    }
+    Ok(())
 }
 
 /// The acceptance criteria after an edit: a criterion keeping its ID and text keeps its stored

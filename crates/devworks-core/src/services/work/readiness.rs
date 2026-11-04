@@ -168,8 +168,12 @@ pub fn scope_plan(
         let readiness = match &assessment {
             None => Readiness::Missing,
             Some((r, a)) => {
+                // A finding that names the work it gates holds only that work (enforced at
+                // dispatch by [`gating_finding`], AGENT-19); only a finding of a whole scope
+                // (or of the feature-wide outcome) holds a scope unit.
                 let blocking = a.findings.iter().find(|f| {
                     open_blocking(f)
+                        && f.affected_work_ids.0.is_empty()
                         && (f.scope_key.is_none()
                             || f.scope_key.as_ref().is_some_and(|k| k.as_str() == key))
                 });

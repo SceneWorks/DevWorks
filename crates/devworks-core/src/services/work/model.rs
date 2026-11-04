@@ -48,8 +48,11 @@ pub struct Noted<T> {
 pub struct WorkBrief {
     pub description: String,
     pub goals: Vec<String>,
-    /// A card's acceptance criteria (a feature's come from its active plan).
+    /// A card's acceptance criteria. For a feature, the recorded results (state and evidence)
+    /// of its active plan's acceptance criteria, by ID at their approved text.
     pub acceptance: Vec<AcceptanceCriterion>,
+    /// A feature's recorded results of its active plan's acceptance tests.
+    pub acceptance_tests: Vec<AcceptanceCriterion>,
     pub inherits: Vec<Id>,
     pub touches: Vec<TouchRef>,
     pub links: Vec<WorkLink>,
@@ -145,6 +148,42 @@ pub fn link_id(l: &WorkLink) -> Id {
     Id::new(format!("lnk-{}", &digest_of(&basis)[..32])).expect("derived identifier")
 }
 
+/// The active plan's criteria with the results recorded for them: a recorded result applies
+/// while its ID and text match the approved criterion; otherwise the plan's own statement
+/// stands.
+pub fn overlay(
+    plan: &[AcceptanceCriterion],
+    recorded: &[AcceptanceCriterion],
+) -> Vec<AcceptanceCriterion> {
+    plan.iter()
+        .map(|c| match recorded.iter().find(|r| r.id == c.id) {
+            Some(r) if r.text.0 == c.text.0 => r.clone(),
+            _ => c.clone(),
+        })
+        .collect()
+}
+/// A feature's effective acceptance criteria and acceptance tests: its active plan's, with the
+/// results recorded for them (none before its first approval).
+pub fn feature_criteria(
+    active: Option<&ActivePlan>,
+    brief: &WorkBrief,
+) -> (Vec<AcceptanceCriterion>, Vec<AcceptanceCriterion>) {
+    match active {
+        None => (Vec::new(), Vec::new()),
+        Some(a) => (
+            overlay(&a.draft.acceptance.0, &brief.acceptance),
+            overlay(&a.draft.acceptance_tests.0, &brief.acceptance_tests),
+        ),
+    }
+}
+/// Whether a feature's active acceptance (criteria and tests together) is verified: at least
+/// one, and every one met with evidence.
+pub fn feature_verified(active: Option<&ActivePlan>, brief: &WorkBrief) -> bool {
+    let (a, t) = feature_criteria(active, brief);
+    let all: Vec<AcceptanceCriterion> = a.into_iter().chain(t).collect();
+    verified(&all)
+}
+
 /// Whether every criterion is met with evidence (and there is at least one).
 pub fn verified(criteria: &[AcceptanceCriterion]) -> bool {
     !criteria.is_empty()
@@ -207,8 +246,15 @@ pub fn record(
     let mut dependent_ids = read.dependents(&w.id)?;
     dependent_ids.truncate(128);
     let (mut plan, mut approval, mut pending_plan) = (None, None, None);
-    let (mut goals, mut requirements, mut acceptance) =
-        (brief.goals.clone(), Vec::new(), brief.acceptance.clone());
+    let (mut goals, mut requirements, mut acceptance) = (
+        brief.goals.clone(),
+        Vec::new(),
+        if feature {
+            Vec::new()
+        } else {
+            brief.acceptance.clone()
+        },
+    );
     let mut acceptance_tests: Option<Vec<AcceptanceCriterion>> = feature.then(Vec::new);
     if feature && let Some(slot) = read.feature_plan(&w.id)? {
         if let Some(a) = active_of(slot.approved.as_ref()) {
@@ -223,8 +269,9 @@ pub fn record(
                 });
             goals = a.draft.goals.0.iter().map(|g| g.0.clone()).collect();
             requirements = a.draft.requirements.0.clone();
-            acceptance = a.draft.acceptance.0.clone();
-            acceptance_tests = Some(a.draft.acceptance_tests.0.clone());
+            let (criteria, tests) = feature_criteria(Some(&a), &brief);
+            acceptance = criteria;
+            acceptance_tests = Some(tests);
         }
         if let (Some(p), Some(prev)) = (pending_of(slot.pending.as_ref()), slot.pending_revision) {
             let latest = read.latest_proposal(&w.id)?;

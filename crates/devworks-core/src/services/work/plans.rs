@@ -1025,7 +1025,7 @@ pub fn decide_plan_approval(
     decided.decided_by = Some(ctx.principal().clone());
     decided.decided_at_ms = Some(now);
     tx.work().put_proposal(&decided, Some(p.revision))?;
-    let after = touch(tx, ctx, &f)?;
+    let mut after = touch(tx, ctx, &f)?;
     if approve {
         let previous = active_of(s.approved.as_ref());
         let active = ActivePlan {
@@ -1046,6 +1046,26 @@ pub fn decide_plan_approval(
         let repos = id_set(&pending.draft.repository_ids.0, "repository_ids")?;
         tx.work().set_work_repositories(&f.id, &repos)?;
         super::readiness::record_adoption(tx, ctx, &after)?;
+        // A Done feature's completion follows its adopted acceptance (a changed criterion's
+        // earlier result no longer applies).
+        let brief = WorkBrief::of(&after)?;
+        let semantic = {
+            let statuses = tx.work().statuses(&after.project_id)?;
+            after
+                .status_id
+                .as_ref()
+                .and_then(|s| workflow::semantic_of(&statuses, s))
+                .unwrap_or("")
+                .to_owned()
+        };
+        let completion = super::items::feature_completion(tx, &after.id, &semantic, &brief)?;
+        if completion != after.completion {
+            let mut next = after.clone();
+            next.completion = completion;
+            next.revision = after.revision + 1;
+            tx.work().update_work(&next, after.revision)?;
+            after = next;
+        }
         event(
             tx,
             ctx,

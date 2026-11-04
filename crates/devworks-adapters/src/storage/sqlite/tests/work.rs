@@ -1106,13 +1106,13 @@ fn readiness_is_bound_to_the_plan_and_invalidates_only_changed_units() {
     let f = fx.feature(&p, "Checkout", &[]);
     let doc = fx.artifact(&p, 1);
     let f = fx.plan(&f, &doc, &[("E1", "pay"), ("E2", "refund")]);
-    let t = fx.task(&fx.user(), &p, Some(&f), "Refund API", 0);
+    fx.task(&fx.user(), &p, Some(&f), "Refund API", 0);
     let f = fx.fresh(&f);
     let pending = f.pending_plan.clone().unwrap();
     let finding = |fid: &str, scope: &str, evidence: Vec<ArtifactRef>| {
         json!({"id": fid, "disposition": "NeedsUserDecision", "blocking": true,
             "prerequisite": false, "state": "Open", "requirementIds": [scope], "scopeKey": scope,
-            "affectedWorkIds": [t.id.as_str()], "summary": "processor unknown",
+            "affectedWorkIds": [], "summary": "processor unknown",
             "missing": "which payment processor", "consequence": "cannot verify refunds",
             "attempts": ["read the repository conventions"],
             "insufficiency": "a product choice", "closureCondition": "the processor is named",
@@ -1911,6 +1911,15 @@ fn plan_revisions_keep_criterion_state_requirements_and_acceptance_tests() {
 
 /// A worker assignment of `work` under the root `root` (as delegation records it).
 fn assign(fx: &Fx, root: &Id, work: &Id, n: u32) -> devworks_core::protocol::AssignmentId {
+    assign_under(fx, root, work, n, None)
+}
+fn assign_under(
+    fx: &Fx,
+    root: &Id,
+    work: &Id,
+    n: u32,
+    parent: Option<devworks_core::protocol::AssignmentId>,
+) -> devworks_core::protocol::AssignmentId {
     let (root, work) = (root.clone(), work.clone());
     fx.write(move |tx| {
         let session = id(&format!("session-{n}"));
@@ -1934,7 +1943,7 @@ fn assign(fx: &Fx, root: &Id, work: &Id, n: u32) -> devworks_core::protocol::Ass
             id: devworks_core::protocol::AssignmentId(id(&format!("assignment-{n}"))),
             root_id: RootId(root),
             work_id: RootId(work),
-            parent_id: None,
+            parent_id: parent,
             session_id: session,
             execution_id: None,
             state: AssignmentState::Ready,
@@ -2136,4 +2145,291 @@ fn full_detail_in_a_list_never_claims_more_without_a_cursor() {
     };
     assert_eq!(rest.comments.0.len(), 1);
     assert!(rest.detail_cursor.is_none());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Round 3: feature completion, work-specific gates, linked running agents
+
+#[test]
+fn a_feature_completes_verified_only_with_evidence_for_its_active_acceptance() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let pre = fx.feature(&p, "Payments", &[]);
+    let dep = fx.feature(&p, "Refunds", &[]);
+    applied(fx.command(
+        &fx.agent(),
+        "features.dependencies",
+        json!({"featureId": dep.id.as_str(), "expectedRevision": dep.revision.as_str(),
+            "replacement": {"edges": [{"predecessor": pre.id.as_str(),
+                "successor": dep.id.as_str()}]}}),
+    ));
+    let held = |fx: &Fx| {
+        fx.eligible(&dep.id, Target::Root)
+            .iter()
+            .any(|r| r.contains(pre.id.as_str()))
+    };
+    // Recording results needs an active plan.
+    let early = fx.command_at(
+        &fx.user(),
+        "features.edit",
+        json!({"workId": pre.id.as_str(), "expectedRevision": pre.revision.as_str(),
+            "changes": {"acceptanceEvidence": [{"id": "A1", "text": "works", "evidenceIds": [],
+                "state": "Met"}]}}),
+        Some(2),
+    );
+    assert_eq!(kind_of(&refused(early)), "no_active_plan");
+    let doc = fx.artifact(&p, 1);
+    let mut plan = draft(&doc, &[("E1", "pay")], &[]);
+    plan["acceptanceTests"] =
+        json!([{"id": "T1", "text": "checkout e2e", "evidenceIds": [], "state": "Unmet"}]);
+    let pre = work_of(applied(fx.command(
+        &fx.user(),
+        "features.edit_plan",
+        json!({"featureId": pre.id.as_str(), "expectedRevision": pre.revision.as_str(),
+            "plan": plan}),
+    )));
+    let pre = fx.approve(&pre);
+    let completion = |fx: &Fx| {
+        let i = pre.id.clone();
+        fx.read(move |s| s.work().work(&i)).unwrap().completion
+    };
+    let edit = |fx: &Fx, w: &WorkRecord, changes: Value| {
+        fx.command_at(
+            &fx.user(),
+            "features.edit",
+            json!({"workId": w.id.as_str(), "expectedRevision": w.revision.as_str(),
+                "changes": changes}),
+            Some(2),
+        )
+    };
+    // A Done label alone is a manual completion: the dependent stays held.
+    let pre = work_of(applied(edit(
+        &fx,
+        &pre,
+        json!({"statusId": Fx::status(&p, "done")}),
+    )));
+    assert_eq!(completion(&fx).as_deref(), Some(MANUAL));
+    assert!(held(&fx));
+    // Results bind the approved criterion text and recorded evidence.
+    let fault = refused(edit(
+        &fx,
+        &pre,
+        json!({"acceptanceEvidence": [{"id": "A1", "text": "something else", "evidenceIds": [],
+            "state": "Met"}]}),
+    ));
+    assert_eq!(kind_of(&fault), "criterion_text");
+    let fault = refused(edit(
+        &fx,
+        &pre,
+        json!({"acceptanceEvidence": [{"id": "A9", "text": "works", "evidenceIds": [],
+            "state": "Met"}]}),
+    ));
+    assert_eq!(fault.code, DomainErrorCode::NotFound);
+    // Revision 1 does not carry the member.
+    let r1 = fx.command(
+        &fx.user(),
+        "features.edit",
+        json!({"workId": pre.id.as_str(), "expectedRevision": pre.revision.as_str(),
+            "changes": {"acceptanceEvidence": [{"id": "A1", "text": "works", "evidenceIds": [],
+                "state": "Met"}]}}),
+    );
+    assert!(!matches!(r1, CommandReply::Recorded { .. }));
+    // The criterion with evidence, the test met without evidence: still manual.
+    let ev = fx.evidence(&pre.id);
+    let pre = work_of(applied(edit(
+        &fx,
+        &pre,
+        json!({"acceptanceEvidence": [
+            {"id": "A1", "text": "works", "evidenceIds": [ev.as_str()], "state": "Met"},
+            {"id": "T1", "text": "checkout e2e", "evidenceIds": [], "state": "Met"}]}),
+    )));
+    assert_eq!(completion(&fx).as_deref(), Some(MANUAL));
+    assert!(held(&fx));
+    assert!(matches!(
+        pre.acceptance.0[0].state,
+        devworks_core::protocol::records::CriterionState::Met
+    ));
+    // Every active criterion and test met with evidence: verified, and the dependent is free.
+    work_of(applied(edit(
+        &fx,
+        &pre,
+        json!({"acceptanceEvidence": [
+            {"id": "T1", "text": "checkout e2e", "evidenceIds": [ev.as_str()], "state": "Met"}]}),
+    )));
+    assert_eq!(completion(&fx).as_deref(), Some(VERIFIED));
+    assert!(!held(&fx));
+}
+
+#[test]
+fn a_finding_that_names_its_work_gates_only_that_work() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let f = fx.feature(&p, "Checkout", &[]);
+    let doc = fx.artifact(&p, 1);
+    let f = fx.plan(&f, &doc, &[("E1", "pay")]);
+    let a = fx.task(&fx.user(), &p, Some(&f), "Card A", 0);
+    let b = fx.task(&fx.user(), &p, Some(&f), "Card B", 0);
+    let f = fx.approve(&f);
+    let f = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+    let active = f.approval.clone().unwrap();
+    // A blocking investigation of requirement E1 that names only card A, and one with no
+    // scope key that names card A as well.
+    let investigation = |id: &str, scope: Option<&str>| {
+        let mut x = json!({"id": id, "disposition": "BoundedInvestigation", "blocking": true,
+            "prerequisite": false, "state": "Open", "requirementIds": ["E1"],
+            "affectedWorkIds": [a.id.as_str()], "summary": "which API version",
+            "missing": "the supported API version", "consequence": "the client may break",
+            "attempts": ["read the changelog"], "insufficiency": "needs a probe",
+            "closureCondition": "a probe passes", "evidence": [],
+            "objective": "probe the sandbox", "limits": "one hour, read-only",
+            "closureEvidence": []});
+        if let Some(k) = scope {
+            x["scopeKey"] = json!(k);
+        }
+        x
+    };
+    applied(fx.command_at(
+        &fx.agent(),
+        "features.edit",
+        json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "changes": {"readiness": {"kind": "Assess",
+                "planRevision": active.plan_revision.as_str(),
+                "planDigest": String::from(active.plan_digest.clone()), "summary": "probe first",
+                "findings": [investigation("I1", Some("E1")), investigation("I2", None)]}}}),
+        Some(2),
+    ));
+    // No scope unit is held by work-specific findings.
+    let plan = {
+        let (runs, fid) = (fx.runs.clone(), RootId(f.id.clone()));
+        fx.read(move |s| {
+            let w = s.sessions().work_root(&fid)?.unwrap();
+            runs.scope().plan(s.runs(), &w)
+        })
+    };
+    assert!(plan.unit(Some("E1")).unwrap().readiness.is_current());
+    assert!(plan.unit(None).unwrap().readiness.is_current());
+    // Card A's assignment is gated; card B's is not.
+    let ga = assign(&fx, &f.id, &a.id, 931);
+    let gb = assign_under(&fx, &f.id, &b.id, 932, Some(ga.clone()));
+    let gated = |x| {
+        fx.eligible(&f.id, Target::Assignment(x))
+            .iter()
+            .any(|r| r.contains("gates this work"))
+    };
+    assert!(gated(ga));
+    assert!(!gated(gb));
+}
+
+#[test]
+fn an_issue_linked_while_running_keeps_its_activation_to_finish_and_archival_stops_it() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let f = fx.feature(&p, "Checkout", &[]);
+    let issue = fx.task(&fx.user(), &p, None, "Hotfix", 0);
+    // The issue runs as a root of its own.
+    let control = {
+        let r = RootId(issue.id.clone());
+        fx.read(move |s| devworks_core::services::runs::control_of(s.runs(), &r))
+    };
+    let frame = json!({"protocol": "1.0-draft.1", "requestKey": "start-hotfix", "command": {
+        "kind": "runs.start", "rootId": issue.id.as_str(), "expectedWorkRevision": "1",
+        "expectedControlRevision": control.revision.to_string()}});
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.h.ids,
+    };
+    let started = fx
+        .cases
+        .command(
+            &gateway,
+            &fx.user(),
+            "runs.start",
+            frame.to_string().as_bytes(),
+        )
+        .unwrap();
+    assert!(matches!(recorded(started), DomainDecision::Applied { .. }));
+    let runs = fx.runs.clone();
+    let (execution, epoch) = fx.write(move |tx| {
+        let a = runs
+            .claim_activation(tx, &id("supervisor-1"))?
+            .expect("claimable");
+        let _ = runs.start_activation(tx, &a.id, a.owner_epoch)?;
+        Ok((a.id, a.owner_epoch))
+    });
+    // Linked to a feature while its agent runs (WORK-11: it continues).
+    applied(fx.command(
+        &fx.user(),
+        "tasks.set_feature",
+        json!({"taskId": issue.id.as_str(), "expectedRevision": issue.revision.as_str(),
+            "featureId": f.id.as_str(), "clearFeature": false}),
+    ));
+    let (runs, e) = (fx.runs.clone(), execution.clone());
+    let renewed = fx.write(move |tx| Ok(runs.renew_activation(tx, &e, epoch)?.is_ok()));
+    assert!(renewed, "the running agent keeps its lease");
+    let (runs, e, root) = (fx.runs.clone(), execution.clone(), RootId(issue.id.clone()));
+    let dispatch = fx.write(move |tx| {
+        Ok(
+            match runs.begin_dispatch(
+                tx,
+                &devworks_core::services::runs::substrate::DispatchRequest {
+                    root,
+                    execution_id: e,
+                    owner_epoch: epoch,
+                    target: Target::Root,
+                    purpose: ActivationPurpose::Implementation,
+                },
+            )? {
+                Ok(_) => "admitted".to_owned(),
+                Err(devworks_core::services::runs::substrate::Fenced::Blocked(b)) => format!(
+                    "held: {}",
+                    b.conditions
+                        .iter()
+                        .map(|c| c.reason.clone())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+                Err(other) => format!("{other:?}"),
+            },
+        )
+    });
+    // Its dispatch is decided by the feature's gates (no approved plan yet), not refused as a
+    // missing root.
+    assert!(
+        dispatch.starts_with("held: ") && dispatch.contains("feature"),
+        "{dispatch}"
+    );
+    let (runs, e) = (fx.runs.clone(), execution.clone());
+    let finished = fx.write(move |tx| {
+        Ok(runs
+            .finish_activation(tx, &e, epoch, ActivationOutcome::Completed, None)?
+            .is_ok())
+    });
+    assert!(finished, "the running agent finishes normally");
+    // The project's archival stops a linked card that keeps controls of its own.
+    let project = match fx.query(
+        &fx.user(),
+        "projects.get",
+        json!({"projectId": p.0.as_str()}),
+    ) {
+        DomainQueryReply::Result {
+            result: OperationResult::ProjectsGet { value },
+            ..
+        } => value,
+        other => panic!("{other:?}"),
+    };
+    applied(fx.command(
+        &fx.user(),
+        "projects.archive",
+        json!({"projectId": p.0.as_str(), "expectedRevision": project.revision.as_str()}),
+    ));
+    let control = {
+        let r = RootId(issue.id.clone());
+        fx.read(move |s| devworks_core::services::runs::control_of(s.runs(), &r))
+    };
+    assert!(
+        control.stop_operation_id.is_some(),
+        "the archival stopped it"
+    );
 }

@@ -6242,6 +6242,13 @@ pub struct FeaturePatch {
     )]
     #[schemars(with = "ReadinessChange", extend("x-since" = 2))]
     pub readiness: Option<ReadinessChange>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "NonEmpty<AcceptanceCriterion>", extend("x-since" = 2))]
+    pub acceptance_evidence: Option<NonEmpty<AcceptanceCriterion>>,
 }
 impl Check for FeaturePatch {
     fn check(&self) -> Result<(), String> {
@@ -6254,6 +6261,7 @@ impl Check for FeaturePatch {
         self.remove_link_ids.check()?;
         self.add_comment.check()?;
         self.readiness.check()?;
+        self.acceptance_evidence.check()?;
         super::domain_rules::record(
             "FeaturePatch",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -6266,6 +6274,9 @@ impl Revisioned for FeaturePatch {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 2 {
             self.readiness = None;
+        }
+        if revision < 2 {
+            self.acceptance_evidence = None;
         }
     }
 }

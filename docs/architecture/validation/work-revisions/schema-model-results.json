@@ -63,10 +63,10 @@
     "github.account",
     "browser.sessions"
   ],
-  "allMessageFixtures": 1322,
-  "newMessageFixtures": 993,
-  "newPositiveFixtures": 813,
-  "newNegativeFixtures": 180,
+  "allMessageFixtures": 1324,
+  "newMessageFixtures": 995,
+  "newPositiveFixtures": 814,
+  "newNegativeFixtures": 181,
   "coreAndPriorMessagesRerun": 329,
   "historicalHelperFramesReplayed": 55,
   "newHelperExecutionClaimed": false,
@@ -440,7 +440,8 @@
       "inputFixtureIds": [
         "r2-input-features.edit",
         "r2-input-features.edit-assess",
-        "r2-input-features.edit-close-finding"
+        "r2-input-features.edit-close-finding",
+        "r2-input-features.edit-acceptance-evidence"
       ],
       "resultFixtureIds": [
         "r2-result-features.edit"
@@ -16033,6 +16034,20 @@
       "passed": true
     },
     {
+      "id": "r2-input-features.edit-acceptance-evidence",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-features.edit-acceptance-evidence",
+      "entry": "domain-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
       "id": "reject-r1-features.edit-readiness",
       "entry": "domain-request",
       "schemaValid": false,
@@ -16217,20 +16232,20 @@
     "docs/architecture/contracts/provider-package-fixtures.json": "2646790fe630e1a84514bb48e49d787fcd056e093bcd8a46f92a943dda821b97",
     "docs/architecture/validation/provider-package-contracts/actual-frame-fixtures.json": "a8e38cbf3a4ccf3b957a32b2733b3db1e98ae9ee12b97d339447d51f73ab729e",
     "docs/architecture/contracts/data-delivery-fixtures.json": "54fc2fac8841b1591c0f2653f7548dbf5a79a16b4e4958b194be739d277083b6",
-    "docs/architecture/contracts/domain-fixtures.json": "803b5c5d772064219730e85564b3e8303b215a29e103e5e9ace1dde81aeae98e",
-    "docs/architecture/contracts/family-coverage.json": "39d0f5e45d8df0e539d92725261dc026eea55d8cea5d7a8fee1285a62c85503e",
-    "docs/architecture/contracts/manifest.json": "7c26b7a0adef4ff055582639cf97d5f1d085009ac418bb25425cf582671c4e9f",
+    "docs/architecture/contracts/domain-fixtures.json": "f8b351104cf707115a9139f41e06e13c027ba014c247dd0b1f6a33e49222e995",
+    "docs/architecture/contracts/family-coverage.json": "1908d5f60913fa8a85113997318d7e5bbb9224fc8dd4231486d55941e1e1f233",
+    "docs/architecture/contracts/manifest.json": "3cc08b11a7c16a64cbd29378f6f88fe57a1235ecaea165e3c5e19da255abf02f",
     "docs/architecture/devworks-capability-catalog.json": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
     "tools/contracts-eval/Cargo.lock": "cfb646cd5e037f4a97b1686830e7a582228b29c4ff3ba0ebcbc559b69786b34b",
     "tools/contracts-eval/domain_spec.py": "47e2e840854e19020b5f67066b128778d09b4b1a1c8670b0ba6f7351e3dc3d8f",
-    "tools/contracts-eval/domain-spec.json": "ddc8bf2b7ef88a6094466bdddd8aaa107894e3af203e15a5fc2cf6458198886f",
+    "tools/contracts-eval/domain-spec.json": "37b95ab803d5c2b774dca9f9431001e8fdcce450243be3193f9c39578e25424e",
     "tools/contracts-eval/build_domain_contracts.py": "a4fc1eea7f7992744ff5f615bea538c80ed7505673e1696afaeb7037db9071b7",
     "tools/contracts-eval/build_register.py": "bab0f304b09de7a66b5f646fbc47cd08e43466e374d70dc71e62c8fa4dd65667",
     "tools/contracts-eval/build_domain_reference.py": "3e68b03c0124fc8744050889db7153903bb3b4f6e42b01c6caa8e0f5d939da5f",
-    "tools/contracts-eval/make_domain_fixtures.py": "f22813c45dba4493643ad9fc10d3a1b2d1f3c7906404dbf6813f7ab64bd80059",
+    "tools/contracts-eval/make_domain_fixtures.py": "1017e81de68d713d224280ab61c0f25311f5df515547bb978219b8c480a61b6f",
     "tools/contracts-eval/verify_domain_contracts.py": "03d811606ca9d92e6e61eb45b2b2c5d9c7b1ba9a038598121a861d43b554cec9",
     "tools/contracts-eval/src/data_delivery.rs": "f62c3062a84633fba38a16dc699a1cc58d131f6899757c76acd3e00a0c3d0d68",
-    "tools/contracts-eval/src/domain_generated.rs": "928230394e5b720b2fafda1281885a193581603bf565e949418ea15920d40661",
+    "tools/contracts-eval/src/domain_generated.rs": "a4a93a8b27884c37c9b0f66b61c6a38957ffb9ee001042f6f8bc5fd883f37420",
     "tools/contracts-eval/src/domain_rules.rs": "a260d76d635a6ad0ec1ad1695c69c2e2ba5370a367183172db5bb33c5cc0a197",
     "tools/contracts-eval/src/domain_support.rs": "4082061615ab8dfd7fb53c09c00e786cbae372df26f55c93634aaa56a49d123e",
     "tools/contracts-eval/src/lib.rs": "bee52b2eda05d91b44088ebfc8680245d5d33f7d84041be381eaa3a3a07d69b8",
@@ -16258,7 +16273,7 @@
     "docs/architecture/contracts/domain-command-reply.schema.json": "e04158c2b557d3d51a76fbb16530c736c9ee38163693bdde7aaf2e235ab8d9ed",
     "docs/architecture/contracts/domain-query-reply.r2.schema.json": "8ef617903d4a237e2a5ef4d9b1c66a4a921ff0090224fc00a8606af16a477699",
     "docs/architecture/contracts/domain-query-reply.schema.json": "c28423264a36d66d72f867b88360cec8d6f013c48e2bcb1114ea91a7baa0a03f",
-    "docs/architecture/contracts/domain-request.r2.schema.json": "3716dca73beebff234ec1ac809d9a6ba5d507bf9221c3f735cbb3dfaa26eb564",
+    "docs/architecture/contracts/domain-request.r2.schema.json": "68d1f437a1e0b5cb8ed7b7a32dedf09c00bab021ff95665587309e9092406c90",
     "docs/architecture/contracts/domain-request.schema.json": "20fc9c1487c441454a04ba4e25835e662b85196914157e703efbfac2ec6da5bb",
     "docs/architecture/contracts/event.r2.schema.json": "ce845cc2bfb0d1adcf2f89dd76f6a08d6f8798d7026c1ab75146c0daffd2290a",
     "docs/architecture/contracts/event.schema.json": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc",

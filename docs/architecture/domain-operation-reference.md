@@ -2758,6 +2758,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `removeLinkIds` | `?Items<Id>` |
 | `addComment` | `?WorkComment` |
 | `readiness` | `?ReadinessChange` · *revision 2+* |
+| `acceptanceEvidence` | `?NonEmpty<AcceptanceCriterion>` · *revision 2+* |
 
 ### IssuePatch
 

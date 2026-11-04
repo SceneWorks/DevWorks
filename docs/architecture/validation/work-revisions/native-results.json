@@ -24009,7 +24009,7 @@
     },
     {
       "entry": "domain-request",
-      "error": "unknown field `inheritsRequirementIds`, expected one of `title`, `description`, `statusId`, `repositoryIds`, `goals`, `addLinks`, `removeLinkIds`, `addComment`, `readiness`",
+      "error": "unknown field `inheritsRequirementIds`, expected one of `title`, `description`, `statusId`, `repositoryIds`, `goals`, `addLinks`, `removeLinkIds`, `addComment`, `readiness`, `acceptanceEvidence`",
       "expectedSchemaValid": false,
       "id": "reject-feature-task-only-patch",
       "normalized": null,
@@ -29071,6 +29071,46 @@
       },
       "passed": true,
       "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-features.edit-acceptance-evidence",
+      "normalized": {
+        "body": {
+          "changes": {
+            "acceptanceEvidence": [
+              {
+                "evidenceIds": [
+                  "link-a"
+                ],
+                "id": "A1",
+                "state": "Met",
+                "text": "works"
+              }
+            ]
+          },
+          "expectedRevision": "1",
+          "kind": "features.edit",
+          "workId": "id-a"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-features.edit-acceptance-evidence",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
     },
     {
       "entry": "domain-request",

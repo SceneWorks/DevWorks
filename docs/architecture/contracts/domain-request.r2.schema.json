@@ -9855,6 +9855,10 @@
     "FeaturePatch": {
       "additionalProperties": false,
       "properties": {
+        "acceptanceEvidence": {
+          "$ref": "#/$defs/List_AcceptanceCriterion_1_128",
+          "x-since": 2
+        },
         "addComment": {
           "anyOf": [
             {

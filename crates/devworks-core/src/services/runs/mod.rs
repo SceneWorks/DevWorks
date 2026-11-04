@@ -1560,7 +1560,8 @@ impl ControlService {
         ctx: &InvocationContext,
         input: &ops::RedirectInput,
     ) -> Result<DomainDecision, Fail> {
-        let root = run_root(tx.sessions(), ctx, &input.root_id)?;
+        // A linked card's own running agent stays redirectable.
+        let root = controlled_root_tx(tx, ctx, &input.root_id)?;
         let control = ensure_control(tx, &root.id)?;
         control_conflict(&control, input.expected_control_revision.get())?;
         for a in &input.attachments.0 {

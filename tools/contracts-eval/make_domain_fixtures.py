@@ -482,6 +482,12 @@ case('r2-input-features.edit-assess','domain-request.r2',edit)
 close=command_at('features.edit')
 close['body']['changes']={'readiness':{'kind':'CloseFinding','expectedAssessmentRevision':'1','findingId':'F1','note':'the user chose Stripe','evidence':[ART]}}
 case('r2-input-features.edit-close-finding','domain-request.r2',close)
+evidence_edit=command_at('features.edit')
+evidence_edit['body']['changes']={'acceptanceEvidence':[{'id':'A1','text':'works','evidenceIds':['link-a'],'state':'Met'}]}
+case('r2-input-features.edit-acceptance-evidence','domain-request.r2',evidence_edit)
+r1evidence=command_at('features.edit',None)
+r1evidence['body']['changes']={'acceptanceEvidence':[{'id':'A1','text':'works','evidenceIds':[],'state':'Met'}]}
+case('reject-r1-features.edit-acceptance-evidence','domain-request',r1evidence,False,False)
 r1edit=command_at('features.edit',None)
 r1edit['body']['changes']={'readiness':assess}
 case('reject-r1-features.edit-readiness','domain-request',r1edit,False,False)

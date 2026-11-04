@@ -2572,10 +2572,12 @@
         "add_links": "?Items<WorkLink>",
         "remove_link_ids": "?Items<Id>",
         "add_comment": "?WorkComment",
-        "readiness": "?ReadinessChange"
+        "readiness": "?ReadinessChange",
+        "acceptance_evidence": "?NonEmpty<AcceptanceCriterion>"
       },
       "since": {
-        "readiness": 2
+        "readiness": 2,
+        "acceptance_evidence": 2
       }
     },
     "IssuePatch": {
@@ -2913,7 +2915,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings."
+      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents."
     },
     "issues.list": {
       "operation": "issues.list",
