@@ -150,7 +150,15 @@ impl SettingsScreen {
     }
 
     /// The whole screen: categories and search on the left, the selected category on the right.
-    pub fn ui(&mut self, ui: &mut Ui, online: Result<(), &str>, actions: &mut Vec<SettingsAction>) {
+    /// `general` renders host sections that belong with the repository paths (repository
+    /// indexing sources) after the General settings, in the same scrolled list.
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        online: Result<(), &str>,
+        actions: &mut Vec<SettingsAction>,
+        general: &mut dyn FnMut(&mut Ui),
+    ) {
         let full = ui.available_rect_before_wrap();
         let nav_width = 230.0_f32.min(full.width() * 0.35);
         let gap = 16.0;
@@ -180,7 +188,7 @@ impl SettingsScreen {
                         st.1.push(SettingsAction::OpenAddOns);
                     }
                 },
-                |ui, st, _| st.0.body(ui, online, st.1),
+                |ui, st, _| st.0.body(ui, online, st.1, general),
             );
         });
         ui.allocate_rect(full, egui::Sense::hover());
@@ -236,7 +244,13 @@ impl SettingsScreen {
         }
     }
 
-    fn body(&mut self, ui: &mut Ui, online: Result<(), &str>, actions: &mut Vec<SettingsAction>) {
+    fn body(
+        &mut self,
+        ui: &mut Ui,
+        online: Result<(), &str>,
+        actions: &mut Vec<SettingsAction>,
+        general: &mut dyn FnMut(&mut Ui),
+    ) {
         if let Err(reason) = online {
             widgets::state_block(
                 ui,
@@ -301,6 +315,11 @@ impl SettingsScreen {
             for key in keys {
                 self.item_ui(ui, key, actions);
                 ui.add_space(8.0);
+            }
+            if matches!(self.category, None | Some(Category::General))
+                && self.query.trim().is_empty()
+            {
+                general(ui);
             }
         });
         scrolls.record("settings-items", out.state.clamped_offset().y);

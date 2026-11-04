@@ -45,6 +45,14 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// The index source configuration of the workspace (or a project) section, read for the
+    /// form that edits it through `indexing.configure_sources` (none without indexing).
+    fn index_sources(
+        &self,
+        _project: Option<&str>,
+    ) -> Result<devworks_core::ports::storage::StoredSourceConfig, String> {
+        Err("repository indexing is not available".into())
+    }
 }
 
 /// Who is waiting for a reply. Equal slots supersede each other.
@@ -97,6 +105,20 @@ pub enum Slot {
     /// The artifact content of a repository's README (`true`) or summary.
     RepositoryContent(String, bool),
     RemoveIndex(String),
+    /// A repository's index status (repository ID).
+    IndexStatus(String),
+    /// Index runs (repository ID, or `*` for the selected scope).
+    IndexRuns(String),
+    /// An index, rebuild or overlay command of one repository (repository ID).
+    IndexCommand(String),
+    /// A run cancellation (run ID).
+    IndexCancel(String),
+    /// An overlay retirement (overlay ID).
+    IndexRetire(String),
+    /// The section configuration save.
+    IndexSourcesSave,
+    /// A discovery scan.
+    IndexDiscover,
 }
 
 /// A finished request.

@@ -1,0 +1,1703 @@
+//! Repository discovery, structural indexing, runs and overlays (DW-023) over the real SQLite
+//! store, the native process owner (Git runs as owned trees), the Tree-sitter parser and real
+//! Git repositories created in temporary directories. No network, no inference.
+//!
+//! Tests spawn processes, so they run serialized (see `processes.rs`).
+#![allow(clippy::result_large_err)]
+use devworks_adapters::fs::NativeFilesystem;
+use devworks_adapters::fs::artifacts::NativeArtifactFiles;
+use devworks_adapters::fs::sources::HostArtifactSources;
+use devworks_adapters::index::NativeSourceTree;
+use devworks_adapters::index::treesitter::TreeSitterParser;
+use devworks_adapters::process::NativeProcessHost;
+use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
+use devworks_core::authority::HostAuthority;
+use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
+use devworks_core::gateway::Gateway;
+use devworks_core::ports::indexing::{ExtractFault, FileExtract, LanguageInfo, StructuralParser};
+use devworks_core::ports::storage::*;
+use devworks_core::ports::{Clock, IdKind, IdSource};
+use devworks_core::protocol::records::{
+    IndexFreshnessState, IndexRunRecord, LanguageCoverageMode, OverlayState, RepositoryIndexStatus,
+    RepositoryRecord,
+};
+use devworks_core::protocol::results::{
+    DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
+};
+use devworks_core::protocol::support::Page;
+use devworks_core::protocol::{
+    ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, OperationState, Revision,
+};
+use devworks_core::services::UseCases;
+use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::indexing::discover::{self, worktree_id};
+use devworks_core::services::indexing::helper::SupervisedHelpers;
+use devworks_core::services::indexing::worker::IndexWorker;
+use devworks_core::services::indexing::{IndexCoordinator, IndexEnv, IndexSettings, views};
+use devworks_core::services::process::ProcessSupervisor;
+use devworks_core::services::projects::{ProjectService, RepositoryService};
+use devworks_core::services::resources::ResourceService;
+use devworks_core::services::runs::ControlService;
+use devworks_core::settings::catalog::descriptor;
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+const T0: i64 = 1_800_000_000_000;
+
+fn serial() -> MutexGuard<'static, ()> {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+}
+struct TestClock(AtomicI64);
+impl Clock for TestClock {
+    fn now_ms(&self) -> Counter {
+        Counter::new(self.0.load(Ordering::SeqCst)).unwrap()
+    }
+}
+struct TestIds(AtomicU64);
+impl IdSource for TestIds {
+    fn next_id(&self, kind: IdKind) -> Id {
+        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+        Id::new(format!("{kind:?}-{n}").to_lowercase()).unwrap()
+    }
+}
+fn id(s: &str) -> Id {
+    Id::new(s).unwrap()
+}
+
+/// A removed-on-drop temporary directory.
+struct Temp(PathBuf);
+impl Temp {
+    fn new(tag: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "devworks-index-{tag}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Canonical, so locations compare with what discovery records (macOS /private/var).
+        Self(std::fs::canonicalize(&dir).unwrap())
+    }
+    fn join(&self, p: &str) -> PathBuf {
+        self.0.join(p)
+    }
+}
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Git fixtures
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "core.autocrlf=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+fn write(dir: &Path, rel: &str, text: &str) {
+    let p = dir.join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, text).unwrap();
+}
+/// A repository with one commit of `files`.
+fn repo(dir: &Path, files: &[(&str, &str)]) -> String {
+    std::fs::create_dir_all(dir).unwrap();
+    git(dir, &["init", "-q"]);
+    for (p, t) in files {
+        write(dir, p, t);
+    }
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+    git(dir, &["rev-parse", "HEAD"])
+}
+fn commit(dir: &Path, message: &str) -> String {
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", message]);
+    git(dir, &["rev-parse", "HEAD"])
+}
+
+// ---------------------------------------------------------------------------------------------
+// The fixture
+
+/// A hook run at the n-th extraction.
+type Hook = (usize, Box<dyn Fn() + Send + Sync>);
+
+/// A parser that counts extractions and can run a hook after the n-th one.
+struct Counting {
+    inner: TreeSitterParser,
+    count: AtomicUsize,
+    hook: Mutex<Option<Hook>>,
+}
+impl StructuralParser for Counting {
+    fn languages(&self) -> &[LanguageInfo] {
+        self.inner.languages()
+    }
+    fn language_of(&self, path: &str) -> Option<&LanguageInfo> {
+        self.inner.language_of(path)
+    }
+    fn extract(
+        &self,
+        language: &str,
+        path: &str,
+        source: &[u8],
+        stop: &(dyn Fn() -> bool + Sync),
+        budget_ms: u64,
+    ) -> Result<FileExtract, ExtractFault> {
+        let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some((at, f)) = &*self.hook.lock().unwrap()
+            && *at == n
+        {
+            f();
+        }
+        self.inner.extract(language, path, source, stop, budget_ms)
+    }
+}
+
+struct Fx {
+    root: Temp,
+    clock: Arc<TestClock>,
+    ids: Arc<TestIds>,
+    store: Arc<SqliteStore>,
+    env: Arc<IndexEnv>,
+    parser: Arc<Counting>,
+    worker: Arc<IndexWorker>,
+    cases: UseCases,
+    n: AtomicU64,
+}
+
+impl Fx {
+    fn new(tweak: impl FnOnce(&mut IndexSettings)) -> Self {
+        let root = Temp::new("store");
+        let clock = Arc::new(TestClock(AtomicI64::new(T0)));
+        let ids = Arc::new(TestIds(AtomicU64::new(0)));
+        let mut settings = IndexSettings {
+            retry_base_ms: 1_000,
+            ..IndexSettings::default()
+        };
+        tweak(&mut settings);
+        Self::open(root, clock, ids, settings, "owner-a")
+    }
+    fn open(
+        root: Temp,
+        clock: Arc<TestClock>,
+        ids: Arc<TestIds>,
+        settings: IndexSettings,
+        owner: &str,
+    ) -> Self {
+        let store = Arc::new(
+            SqliteStore::open(SqliteConfig::new(
+                root.join("data"),
+                clock.clone(),
+                ids.clone(),
+                ActorId(id("host")),
+            ))
+            .expect("open store"),
+        );
+        let dyn_store: Arc<dyn ApplicationStore> = store.clone();
+        let resources = Arc::new(ResourceService::new(ids.clone(), clock.clone()));
+        let supervisor = Arc::new(ProcessSupervisor::new(
+            dyn_store.clone(),
+            Arc::new(NativeProcessHost),
+            resources,
+        ));
+        let artifacts = Arc::new(ArtifactService::new(
+            Arc::new(NativeArtifactFiles::new(
+                root.join("data"),
+                root.join("data/cache"),
+            )),
+            Arc::new(HostArtifactSources::new(clock.clone(), ids.clone())),
+            Arc::new(NativeFilesystem::new()),
+            clock.clone(),
+            ids.clone(),
+        ));
+        let parser = Arc::new(Counting {
+            inner: TreeSitterParser::new(),
+            count: AtomicUsize::new(0),
+            hook: Mutex::new(None),
+        });
+        let env = Arc::new(IndexEnv {
+            store: dyn_store.clone(),
+            parser: parser.clone(),
+            source: Arc::new(NativeSourceTree::new()),
+            helpers: Arc::new(SupervisedHelpers {
+                supervisor,
+                store: dyn_store.clone(),
+                fs: Arc::new(NativeFilesystem::new()),
+            }),
+            clock: clock.clone(),
+            ids: ids.clone(),
+            artifacts: Some(artifacts.clone()),
+            diagnostics: None,
+            enrichers: Default::default(),
+            settings,
+        });
+        let worker = Arc::new(IndexWorker::new(env.clone(), owner.into()));
+        let control = Arc::new(ControlService::new(ids.clone()));
+        let cases = UseCases::new()
+            .with_indexing(Arc::new(IndexCoordinator::new(env.clone())))
+            .with_projects(Arc::new(ProjectService::new(ids.clone(), control.clone())))
+            .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
+            .with_artifacts(artifacts);
+        let fx = Self {
+            root,
+            clock,
+            ids,
+            store,
+            env,
+            parser,
+            worker,
+            cases,
+            n: AtomicU64::new(0),
+        };
+        fx.write(|tx| {
+            tx.actors()
+                .register(&ActorId(id("user")), PrincipalKind::Human, "User")
+        });
+        fx
+    }
+    /// A new boot over the same data root (every handle of the old one dropped).
+    fn restart(self, owner: &str) -> Self {
+        let settings = self.env.settings.clone();
+        self.reopen(settings, owner)
+    }
+    /// Drops every handle of this boot (the data root is released), then opens a new one.
+    fn reopen(self, settings: IndexSettings, owner: &str) -> Self {
+        let Fx {
+            root,
+            clock,
+            ids,
+            store,
+            env,
+            parser,
+            worker,
+            cases,
+            n,
+        } = self;
+        drop((cases, worker, parser, env, store));
+        let fx = Self::open(root, clock, ids, settings, owner);
+        // Request keys stay unique across boots (a reused key would replay its receipt).
+        fx.n.store(n.load(Ordering::SeqCst), Ordering::SeqCst);
+        fx
+    }
+    fn user(&self) -> InvocationContext {
+        let info = self.store.info();
+        HostIngress::new(&*self.store).context(
+            ActorId(id("user")),
+            PrincipalKind::Human,
+            id("invocation-1"),
+            id("ui-main"),
+            Counter::new(info.restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+    }
+    fn now(&self, ms: i64) {
+        self.clock.0.store(ms, Ordering::SeqCst);
+    }
+    fn write<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
+    ) -> T {
+        run_write(&*self.store, WriteOptions::default(), f).expect("write")
+    }
+    fn read<T>(&self, f: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>) -> T {
+        read_snapshot(&*self.store, &ReadOptions::default(), f).expect("read")
+    }
+    fn gateway_auth(&self) -> HostAuthority<'_> {
+        HostAuthority {
+            store: &*self.store,
+            clock: &*self.clock,
+            protected_branches: &[],
+        }
+    }
+    fn command_frame(&self, ctx: &InvocationContext, op: &str, frame: Value) -> DomainCommandReply {
+        let authority = self.gateway_auth();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*self.store,
+            ids: &*self.ids,
+        };
+        self.cases
+            .command(&gateway, ctx, op, frame.to_string().as_bytes())
+            .expect("addressable")
+    }
+    fn command(&self, op: &str, mut body: Value) -> DomainCommandReply {
+        body["kind"] = json!(op);
+        let key = format!("key-{}", self.n.fetch_add(1, Ordering::SeqCst));
+        self.command_frame(
+            &self.user(),
+            op,
+            json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key, "body": body}),
+        )
+    }
+    fn index_command(&self, op: &str, command: Value) -> DomainCommandReply {
+        let key = format!("key-{}", self.n.fetch_add(1, Ordering::SeqCst));
+        self.command_frame(
+            &self.user(),
+            op,
+            json!({"protocol": "1.0-draft.1", "requestKey": key, "command": command}),
+        )
+    }
+    fn query(&self, op: &str, mut body: Value, revision: Option<u32>) -> DomainQueryReply {
+        body["kind"] = json!(op);
+        let mut frame =
+            json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-1", "body": body});
+        if let Some(r) = revision {
+            frame["schemaRevision"] = json!(r);
+        }
+        let authority = self.gateway_auth();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*self.store,
+            ids: &*self.ids,
+        };
+        self.cases
+            .query(&gateway, &self.user(), op, frame.to_string().as_bytes())
+            .expect("addressable")
+    }
+    /// Sets the workspace repository base directory (SET-07/08).
+    fn base_directory(&self, dir: &Path) {
+        let d = descriptor(discover::BASE_DIRECTORY_KEY).unwrap();
+        let assignment = serde_json::from_value(json!({
+            "key": discover::BASE_DIRECTORY_KEY,
+            "value": {"schema": d.schema_ref(), "value": dir.display().to_string()},
+        }))
+        .unwrap();
+        let ctx = self.user();
+        self.write(move |tx| {
+            devworks_core::settings::service::apply_human_assignments(
+                tx,
+                &ctx,
+                &ConfigScope::Workspace,
+                &[assignment],
+                json!({"test": true}),
+            )
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        });
+    }
+    fn scan(&self) -> discover::DiscoveryReport {
+        discover::scan(&self.env, &self.user(), None, &|| false).expect("scan")
+    }
+    fn repository_at(&self, dir: &Path) -> Id {
+        let loc = dir.display().to_string();
+        self.read(|s| s.indexing().repository_at(&loc))
+            .expect("registered")
+    }
+    fn index(&self, repo: &Id, rebuild: bool, expected: &str) -> DomainCommandReply {
+        self.command(
+            if rebuild { "indexing.reindex" } else { "indexing.index" },
+            json!({"scope": {"kind": "Workspace"}, "repositoryIds": [repo], "expectedSourceRevision": expected,
+                "views": {"kind": "Published", "repositoryIds": [repo]}}),
+        )
+    }
+    /// Claims and executes every claimable run (bounded).
+    fn drain(&self) -> usize {
+        let mut n = 0;
+        while let Some(run) = self.worker.claim().expect("claim") {
+            self.worker.execute(run);
+            n += 1;
+            assert!(n < 50, "runs keep coming");
+        }
+        n
+    }
+    fn status(&self, repo: &Id) -> RepositoryIndexStatus {
+        match result(self.query("indexing.status", json!({"repositoryId": repo}), Some(2))) {
+            OperationResult::IndexingStatus { value } => value,
+            other => panic!("{other:?}"),
+        }
+    }
+    fn run(&self, run: &Id) -> StoredIndexRun {
+        let r = run.clone();
+        self.read(move |s| s.indexing().run(&r)).expect("run")
+    }
+    fn published(&self, repo: &Id) -> views::ViewLayers {
+        let r = repo.clone();
+        let ctx = self.user();
+        read_snapshot(&*self.store, &ReadOptions::default(), |s| {
+            views::select(
+                s,
+                &ctx,
+                &devworks_core::protocol::data::ViewSelection::Published {
+                    repository_ids: vec![r],
+                },
+            )
+            .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
+        })
+        .expect("published view")
+        .remove(0)
+    }
+    fn nodes(&self, view: &views::ViewLayers, key: &str) -> Vec<StoredNode> {
+        let (v, k) = (view.clone(), key.to_owned());
+        self.read(move |s| views::unit_nodes(s.indexing(), &v, &k))
+    }
+    fn unit(&self, view: &views::ViewLayers, key: &str) -> Option<(Id, StoredUnit)> {
+        let (v, k) = (view.clone(), key.to_owned());
+        self.read(move |s| views::resolve_unit(s.indexing(), &v, &k))
+    }
+}
+
+fn result(r: DomainQueryReply) -> OperationResult {
+    match r {
+        DomainQueryReply::Result { result, .. } => result,
+        DomainQueryReply::Rejected { fault, .. } => panic!("rejected: {fault:?}"),
+    }
+}
+fn fault(r: DomainQueryReply) -> DomainFault {
+    match r {
+        DomainQueryReply::Rejected { fault, .. } => fault,
+        other => panic!("expected a fault: {other:?}"),
+    }
+}
+fn decision(r: DomainCommandReply) -> DomainDecision {
+    match r {
+        CommandReply::Recorded { receipt, .. } => receipt.decision,
+        other => panic!("not recorded: {other:?}"),
+    }
+}
+fn run_of(d: DomainDecision) -> IndexRunRecord {
+    match d {
+        DomainDecision::Applied { result } | DomainDecision::NoChange { result } => match result {
+            OperationResult::IndexingIndex { value }
+            | OperationResult::IndexingReindex { value }
+            | OperationResult::IndexingCancel { value }
+            | OperationResult::IndexingRefreshOverlay { value } => value,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}
+fn refused(d: DomainDecision) -> DomainFault {
+    match d {
+        DomainDecision::Refused { fault } => fault,
+        other => panic!("expected a refusal: {other:?}"),
+    }
+}
+fn has_node(nodes: &[StoredNode], kind: &str, qn: &str) -> bool {
+    nodes.iter().any(|n| {
+        n.kind == kind && n.payload.get("qualifiedName").and_then(Value::as_str) == Some(qn)
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Discovery
+
+#[test]
+fn discovery_registers_checkouts_with_exact_identity_without_following_links() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let a = src.join("team/app");
+    let head = repo(&a, &[("src/lib.rs", "pub fn a() {}\n")]);
+    git(
+        &a,
+        &["remote", "add", "origin", "git@github.com:acme/app.git"],
+    );
+    // A nested repository inside a found one is not a separate registration.
+    repo(&a.join("vendor/inner"), &[("x.rs", "fn x() {}\n")]);
+    // A linked worktree (a `.git` file) is recorded through its primary, never on its own.
+    git(
+        &a,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "topic",
+            src.join("app-topic").to_str().unwrap(),
+        ],
+    );
+    // A link to a checkout is never followed.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&a, src.join("link-to-app")).unwrap();
+    let excluded = src.join("legacy-tool");
+    repo(&excluded, &[("a.py", "x = 1\n")]);
+    let credentials = src.join("secret");
+    repo(&credentials, &[("a.py", "x = 1\n")]);
+    git(
+        &credentials,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://user:ghp_token@github.com/acme/s.git",
+        ],
+    );
+    fx.base_directory(&src.0);
+    let ex = fx.command(
+        "indexing.configure_sources",
+        json!({"scope": {"kind": "Workspace"}, "expectedRevision": "1", "config": {
+            "structuralLanguages": [], "semanticPackageIds": [], "excludePatterns": ["repository:legacy-*", "**/node_modules/**"],
+            "maxFileBytes": "524288"}}),
+    );
+    assert!(matches!(decision(ex), DomainDecision::Applied { .. }));
+
+    let report = fx.scan();
+    assert_eq!(report.found.len(), 2, "{report:?}");
+    assert_eq!(report.registered.len(), 2);
+    assert_eq!(report.excluded, vec![excluded.display().to_string()]);
+    let app = fx.repository_at(&a);
+    let r = app.clone();
+    let (source, worktrees, registration) = fx.read(move |s| {
+        Ok((
+            s.indexing().repository_source(&r)?,
+            s.indexing().worktrees(&r)?,
+            s.projects().repository(&r)?,
+        ))
+    });
+    let source = source.unwrap();
+    assert_eq!(
+        source.location,
+        a.display().to_string(),
+        "the exact canonical location"
+    );
+    assert_eq!(source.head_oid.as_deref(), Some(head.as_str()));
+    assert_eq!(source.head_ref.as_deref(), Some("refs/heads/main"));
+    assert_eq!(
+        source.remote_url.as_deref(),
+        Some("git@github.com:acme/app.git")
+    );
+    assert_eq!(source.object_format, "Sha1");
+    assert_eq!(source.state, SOURCE_PRESENT);
+    assert_eq!(registration.unwrap().name, "app");
+    assert_eq!(worktrees.len(), 2);
+    assert!(worktrees[0].main && !worktrees[1].main);
+    assert_eq!(worktrees[1].head_ref.as_deref(), Some("refs/heads/topic"));
+    // Credentials are never recorded.
+    let secret = fx.repository_at(&credentials);
+    let s2 = secret.clone();
+    let secret_source = fx
+        .read(move |s| s.indexing().repository_source(&s2))
+        .unwrap();
+    assert!(secret_source.remote_url.is_none());
+
+    // The discover query answers with the registrations of the section, paged.
+    let page = match result(fx.query(
+        "indexing.discover",
+        json!({"scope": {"kind": "Workspace"}, "roots": ["workspace"], "page": {"limit": 1}}),
+        None,
+    )) {
+        OperationResult::IndexingDiscover { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(page.items.0.len(), 1);
+    assert!(page.has_more);
+    let cursor = page.next_cursor_text();
+    let rest: Page<RepositoryRecord> = match result(fx.query(
+        "indexing.discover",
+        json!({"scope": {"kind": "Workspace"}, "roots": ["workspace"], "page": {"limit": 5, "cursor": cursor}}),
+        None,
+    )) {
+        OperationResult::IndexingDiscover { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(rest.items.0.len(), 1);
+    assert!(!rest.has_more);
+    // A cursor of another root set is expired, never reinterpreted.
+    let expired = fault(fx.query(
+        "indexing.discover",
+        json!({"scope": {"kind": "Workspace"}, "roots": [], "page": {"limit": 5, "cursor": page.next_cursor_text()}}),
+        None,
+    ));
+    assert_eq!(expired.code, DomainErrorCode::CursorExpired);
+
+    // A new commit advances the source revision; a vanished checkout is recorded missing.
+    write(&a, "src/b.rs", "pub fn b() {}\n");
+    let head2 = commit(&a, "b");
+    let report = fx.scan();
+    assert!(report.changed.contains(&app));
+    let r = app.clone();
+    let after = fx
+        .read(move |s| s.indexing().repository_source(&r))
+        .unwrap();
+    assert_eq!(after.head_oid.as_deref(), Some(head2.as_str()));
+    assert_eq!(after.revision, source.revision + 1);
+    std::fs::remove_dir_all(&credentials).unwrap();
+    let report = fx.scan();
+    assert!(report.missing.contains(&secret), "{report:?}");
+}
+
+trait NextCursor {
+    fn next_cursor_text(&self) -> String;
+}
+impl NextCursor for Page<RepositoryRecord> {
+    fn next_cursor_text(&self) -> String {
+        self.next_cursor
+            .as_ref()
+            .map(|c| c.0.clone())
+            .unwrap_or_default()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Baseline indexing
+
+fn sample_repo(dir: &Path) -> String {
+    repo(
+        dir,
+        &[
+            ("README.md", "# Sample\n\nA test repository.\n"),
+            (
+                "src/lib.rs",
+                "mod util;\npub fn main() {\n    helper();\n    util::shared();\n}\nfn helper() {}\n",
+            ),
+            ("src/util.rs", "pub fn shared() {}\n"),
+            (
+                "tools/run.py",
+                "import os\nfrom tools import helpers\n\ndef go():\n    shared_helper()\n",
+            ),
+            ("tools/helpers.py", "def shared_helper():\n    pass\n"),
+            ("app/Main.kt", "fun main() {}\n"),
+            ("web/node_modules/dep/index.js", "module.exports = 1;\n"),
+            ("big/data.rs", &"// filler\n".repeat(100_000)),
+            ("docs/guide.md", "Guide\n"),
+        ],
+    )
+}
+
+#[test]
+fn baseline_indexes_the_exact_commit_with_spans_relationships_coverage_and_texts() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("sample");
+    let head = sample_repo(&dir);
+    // Uncommitted edits never enter the baseline.
+    write(
+        &dir,
+        "src/util.rs",
+        "pub fn shared() {}\npub fn uncommitted() {}\n",
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let queued = run_of(decision(fx.index(&repo_id, false, "1")));
+    assert!(matches!(queued.state, OperationState::IntentRecorded));
+    assert_eq!(queued.stage.0, "queued");
+    // A second request while one is queued reuses it.
+    let again = decision(fx.index(&repo_id, false, "1"));
+    assert!(matches!(again, DomainDecision::NoChange { .. }));
+    assert_eq!(fx.drain(), 1);
+    let run = fx.run(&queued.id);
+    assert_eq!(run.state, RUN_SUCCEEDED, "{run:?}");
+    assert_eq!(run.source_oid.as_deref(), Some(head.as_str()));
+    assert_eq!(Some(run.completed_units), run.total_units);
+
+    let status = fx.status(&repo_id);
+    let fresh = status.freshness.clone().unwrap();
+    assert!(matches!(fresh.state, IndexFreshnessState::Current));
+    assert_eq!(
+        fresh.indexed_commit.as_ref().map(|c| c.0.as_str()),
+        Some(head.as_str())
+    );
+    let gaps: Vec<&str> = status.coverage.gaps.iter().map(Id::as_str).collect();
+    assert!(gaps.contains(&"text-fallback-kotlin"), "{gaps:?}");
+    assert!(gaps.contains(&"oversize-files"), "{gaps:?}");
+    let languages = status.languages.clone().unwrap().0;
+    let rust = languages
+        .iter()
+        .find(|l| l.language_id.0 == "rust")
+        .unwrap();
+    assert!(matches!(rust.mode, LanguageCoverageMode::Structural));
+    assert_eq!(
+        (
+            rust.files.get(),
+            rust.structural_files.get(),
+            rust.skipped_files.get()
+        ),
+        (3, 2, 1)
+    );
+    assert!(
+        rust.grammar
+            .as_ref()
+            .is_some_and(|g| g.0 == "tree-sitter-rust 0.24.2")
+    );
+    let kotlin = languages
+        .iter()
+        .find(|l| l.language_id.0 == "kotlin")
+        .unwrap();
+    assert!(matches!(kotlin.mode, LanguageCoverageMode::TextFallback));
+    assert!(status.semantic_packs.as_ref().unwrap().0.is_empty());
+    // Revision 1 of status carries none of the revision 2 members.
+    let r1 = match result(fx.query("indexing.status", json!({"repositoryId": repo_id}), None)) {
+        OperationResult::IndexingStatus { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert!(r1.freshness.is_none() && r1.languages.is_none());
+
+    let view = fx.published(&repo_id);
+    assert_eq!(view.layers.len(), 1);
+    let lib = fx.nodes(&view, "src/lib.rs");
+    let main = lib.iter().find(|n| n.name == "main").unwrap();
+    assert_eq!(main.kind, "Function");
+    assert_eq!(main.payload["span"]["startLine"], json!(2));
+    assert_eq!(main.payload["span"]["endLine"], json!(5));
+    assert_eq!(
+        main.payload["provenance"]["grammar"],
+        json!("tree-sitter-rust 0.24.2")
+    );
+    let (_, util_unit) = fx.unit(&view, "src/util.rs").unwrap();
+    let util_nodes = fx.nodes(&view, "src/util.rs");
+    assert!(
+        !util_nodes.iter().any(|n| n.name == "uncommitted"),
+        "the baseline is the commit"
+    );
+    assert_eq!(util_unit.payload["mode"], json!("Structural"));
+    let v = view.clone();
+    let edges = fx.read(move |s| views::unit_edges(s.indexing(), &v, "src/lib.rs"));
+    let call = |name: &str| {
+        edges
+            .iter()
+            .find(|(e, _)| {
+                e.kind == "CALLS"
+                    && e.payload
+                        .get("targetName")
+                        .and_then(Value::as_str)
+                        .is_some_and(|t| t.ends_with(name))
+                    || e.kind == "CALLS"
+                        && lib
+                            .iter()
+                            .any(|n| n.node_id == e.target_node_id && n.name == name)
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("no call of {name}: {edges:?}"))
+    };
+    let (local, resolves) = call("helper");
+    assert_eq!(local.payload["resolution"], json!("Inferred"));
+    assert!(resolves);
+    // A cross-file call is linked by name (a unique candidate), inferred, and resolves.
+    let (cross, resolves) = call("shared");
+    assert_eq!(cross.payload["resolution"], json!("Inferred"), "{cross:?}");
+    assert_eq!(cross.payload["targetUnit"], json!("src/util.rs"));
+    assert!(resolves);
+    // Python: an absolute import of a repository module resolves; `os` stays unresolved.
+    let v = view.clone();
+    let py = fx.read(move |s| views::unit_edges(s.indexing(), &v, "tools/run.py"));
+    let os = py
+        .iter()
+        .find(|(e, _)| e.payload.get("targetName") == Some(&json!("os")))
+        .unwrap();
+    assert_eq!(os.0.payload["resolution"], json!("Unresolved"));
+    assert!(!os.1);
+    let helpers = py
+        .iter()
+        .find(|(e, _)| e.payload.get("targetName") == Some(&json!("tools")))
+        .unwrap();
+    let _ = helpers;
+    // Excluded paths are not part of the index; oversize and text-only files are honest units.
+    assert!(fx.unit(&view, "web/node_modules/dep/index.js").is_none());
+    let (_, big) = fx.unit(&view, "big/data.rs").unwrap();
+    assert_eq!(big.payload["mode"], json!("Oversize"));
+    let (_, kt) = fx.unit(&view, "app/Main.kt").unwrap();
+    assert_eq!(kt.payload["mode"], json!("TextFallback"));
+    assert!(
+        fx.nodes(&view, "app/Main.kt")
+            .iter()
+            .all(|n| n.kind == "File"),
+        "no definition is claimed"
+    );
+    // Directory structure: the repository contains its folders and files.
+    let root = fx.nodes(&view, "/");
+    assert_eq!(root[0].kind, "Repository");
+    assert!(has_node(&fx.nodes(&view, "/src"), "Folder", "src"));
+
+    // README and the structural summary are published texts of the view.
+    for (op, expected) in [
+        (
+            "repositories.readme",
+            Some("# Sample\n\nA test repository.\n"),
+        ),
+        ("repositories.summary", None),
+    ] {
+        let text = match result(fx.query(op, json!({"repositoryId": repo_id, "views": {"kind": "Published", "repositoryIds": [repo_id]}}), None)) {
+            OperationResult::RepositoriesReadme { value } | OperationResult::RepositoriesSummary { value } => value,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(text.view_id, view.view.view_id);
+        if let Some(e) = expected {
+            assert_eq!(
+                String::from(text.content.sha256.clone()),
+                devworks_core::fingerprint::sha256_hex(e.as_bytes())
+            );
+        }
+    }
+}
+
+#[test]
+fn incremental_runs_reconcile_edits_deletions_and_renames_and_stale_never_reads_current() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("inc");
+    repo(
+        &dir,
+        &[
+            ("a.rs", "fn a() {}\n"),
+            ("b.py", "def b():\n    pass\n"),
+            ("c.rs", "pub fn c() {}\n"),
+            ("d.rs", "fn d() { c(); }\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let first = fx.published(&repo_id);
+    let extracted_first = fx.parser.count.load(Ordering::SeqCst);
+
+    write(&dir, "a.rs", "fn a() {}\nfn a2() {}\n");
+    std::fs::remove_file(dir.join("b.py")).unwrap();
+    git(&dir, &["mv", "c.rs", "e.rs"]);
+    let head2 = commit(&dir, "edit, delete, rename");
+    fx.scan();
+    let stale = fx.status(&repo_id);
+    let f = stale.freshness.unwrap();
+    assert!(matches!(f.state, IndexFreshnessState::Stale));
+    assert_eq!(
+        f.reasons.0.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        vec!["head-moved"]
+    );
+    assert!(
+        stale
+            .coverage
+            .gaps
+            .iter()
+            .any(|g| g.as_str() == "stale-head-moved")
+    );
+    assert!(!matches!(
+        stale.coverage.state,
+        devworks_core::protocol::data::CoverageState::Complete
+    ));
+
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let second = fx.published(&repo_id);
+    assert_ne!(first.view.view_id, second.view.view_id);
+    // Only the changed and renamed files were parsed again; d.rs was inherited.
+    let extracted = fx.parser.count.load(Ordering::SeqCst) - extracted_first;
+    assert_eq!(extracted, 2, "a.rs and e.rs");
+    assert!(fx.unit(&second, "b.py").is_none(), "deleted");
+    assert!(fx.unit(&second, "c.rs").is_none(), "renamed away");
+    let (_, e) = fx.unit(&second, "e.rs").unwrap();
+    assert_eq!(e.payload["previousPath"], json!("c.rs"));
+    assert!(fx.nodes(&second, "a.rs").iter().any(|n| n.name == "a2"));
+    // d.rs calls c(): after the rename it links to e.rs's definition.
+    let v = second.clone();
+    let d = fx.read(move |s| views::unit_edges(s.indexing(), &v, "d.rs"));
+    let call = d.iter().find(|(e, _)| e.kind == "CALLS").unwrap();
+    assert_eq!(call.0.payload["targetUnit"], json!("e.rs"));
+    assert!(call.1);
+    assert!(matches!(
+        fx.status(&repo_id).freshness.unwrap().state,
+        IndexFreshnessState::Current
+    ));
+    // The previous baseline stays readable by its exact view (retained), the one before it goes.
+    assert!(
+        fx.unit(&first, "b.py").is_some(),
+        "an exact older view keeps its own facts"
+    );
+    write(&dir, "f.rs", "fn f() {}\n");
+    commit(&dir, "third");
+    run_of(decision(fx.index(&repo_id, true, "1")));
+    let before = fx.parser.count.load(Ordering::SeqCst);
+    fx.drain();
+    assert!(
+        fx.parser.count.load(Ordering::SeqCst) - before >= 4,
+        "a rebuild parses everything"
+    );
+    let gone = first.view.view_id.clone();
+    assert!(
+        fx.read(move |s| s.indexing().view(&gone)).is_none(),
+        "beyond retention"
+    );
+    let reclaimed = fx.worker.housekeeping(false, &|| false).unwrap();
+    assert!(reclaimed.reclaimed_rows > 0);
+    let _ = head2;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Runs: cancellation, failures, retries, resume
+
+#[test]
+fn cancellation_is_bound_to_the_run_and_kills_its_helper_tree() {
+    let _s = serial();
+    let bin = Temp::new("bin");
+    let fake = bin.join("slow-git");
+    std::fs::write(&fake, "#!/bin/sh\nsleep 30 &\nwait\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("c");
+    repo(&dir, &[("a.rs", "fn a() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    // A queued run cancels at once and is never claimed.
+    let q = run_of(decision(fx.index(&repo_id, false, "1")));
+    let c = run_of(decision(fx.index_command(
+        "indexing.cancel",
+        json!({"kind": "Cancel", "operationId": q.id}),
+    )));
+    assert!(matches!(c.state, OperationState::CancelledBeforeDispatch));
+    assert!(fx.worker.claim().unwrap().is_none());
+    // Cancelling it again changes nothing.
+    assert!(matches!(
+        decision(fx.index_command(
+            "indexing.cancel",
+            json!({"kind": "Cancel", "operationId": q.id})
+        )),
+        DomainDecision::NoChange { .. }
+    ));
+    // A running run whose Git hangs: the cancellation kills the tree within the bound.
+    let fx = {
+        let mut s = fx.env.settings.clone();
+        s.git_program = fake.display().to_string();
+        fx.reopen(s, "owner-b")
+    };
+    let r = run_of(decision(fx.index(&repo_id, false, "1")));
+    let claimed = fx.worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.id, r.id);
+    let w = fx.worker.clone();
+    let started = Instant::now();
+    let t = std::thread::spawn(move || w.execute(claimed));
+    std::thread::sleep(Duration::from_millis(300));
+    run_of(decision(fx.index_command(
+        "indexing.cancel",
+        json!({"kind": "Cancel", "operationId": r.id}),
+    )));
+    fx.worker.cancel_local(&r.id);
+    t.join().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "the tree was killed, not waited for"
+    );
+    let done = fx.run(&r.id);
+    assert_eq!(done.state, RUN_CANCELLED);
+    assert!(done.output_view_id.is_none(), "nothing was published");
+    let unsettled = fx.read(|s| s.resources().processes(&ProcessFilter::Unsettled, None, 50));
+    assert!(unsettled.is_empty(), "no orphan helper: {unsettled:?}");
+    // A later run is untouched by the earlier cancellation.
+    let later = run_of(decision(fx.index(&repo_id, false, "1")));
+    assert_ne!(later.id, r.id);
+    assert_eq!(fx.run(&later.id).cancel_requested_at_ms, None);
+}
+
+#[test]
+fn a_cancel_recorded_without_a_local_signal_stops_the_run_at_its_next_checkpoint() {
+    let _s = serial();
+    let fx = Fx::new(|s| s.batch_units = 2);
+    let src = Temp::new("src");
+    let dir = src.join("durable-cancel");
+    let files: Vec<(String, String)> = (0..10)
+        .map(|i| (format!("m{i}.rs"), format!("fn f{i}() {{}}\n")))
+        .collect();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    repo(&dir, &refs);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let r = run_of(decision(fx.index(&repo_id, false, "1")));
+    // The cancellation is recorded durably (as another process would) and the worker is never
+    // signalled: its next fenced write observes it.
+    let (store, run_id) = (fx.store.clone(), r.id.clone());
+    *fx.parser.hook.lock().unwrap() = Some((
+        3,
+        Box::new(move || {
+            let run_id = run_id.clone();
+            run_write(&*store, WriteOptions::default(), move |tx| {
+                let cur = tx.indexing().run(&run_id)?.expect("run");
+                let mut next = cur.clone();
+                next.revision += 1;
+                next.cancel_requested_at_ms = Some(tx.now_ms());
+                next.stage = "cancelling".into();
+                tx.indexing().update_run(&next, cur.revision)
+            })
+            .expect("record the cancellation");
+        }),
+    ));
+    let claimed = fx.worker.claim().unwrap().unwrap();
+    fx.worker.execute(claimed);
+    *fx.parser.hook.lock().unwrap() = None;
+    let done = fx.run(&r.id);
+    assert_eq!(done.state, RUN_CANCELLED, "{done:?}");
+    assert!(done.output_view_id.is_none(), "nothing was published");
+    assert!(
+        fx.parser.count.load(Ordering::SeqCst) < 10,
+        "stopped at the next checkpoint, not run to the end"
+    );
+    let pointer = fx.read({
+        let repo = repo_id.clone();
+        move |s| s.indexing().published(&repo)
+    });
+    assert!(pointer.is_none(), "{pointer:?}");
+}
+
+#[test]
+fn deterministic_failures_fail_once_and_transient_ones_back_off_then_stop() {
+    let _s = serial();
+    let bin = Temp::new("bin");
+    let fake = bin.join("slow-git");
+    std::fs::write(&fake, "#!/bin/sh\nsleep 5\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let empty = src.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    git(&empty, &["init", "-q"]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&empty);
+    let r = run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let done = fx.run(&r.id);
+    assert_eq!(
+        (done.state.as_str(), done.attempt, done.deterministic),
+        (RUN_FAILED, 1, true)
+    );
+    assert_eq!(done.error_code.as_deref(), Some("no_commit"));
+    let status = fx.status(&repo_id);
+    assert!(matches!(
+        status.freshness.unwrap().state,
+        IndexFreshnessState::Failed
+    ));
+    assert!(matches!(
+        status.last_run.unwrap().state,
+        OperationState::Failed
+    ));
+
+    // Git that never answers in time: transient, retried with backoff, then failed.
+    let mut s = fx.env.settings.clone();
+    s.git_program = fake.display().to_string();
+    s.git_deadline = Duration::from_millis(200);
+    let fx = fx.reopen(s, "owner-b");
+    write(&empty, "a.rs", "fn a() {}\n");
+    commit(&empty, "now with a commit");
+    let r = run_of(decision(fx.index(&repo_id, false, "1")));
+    assert_eq!(fx.drain(), 1);
+    let first = fx.run(&r.id);
+    assert_eq!(
+        (first.state.as_str(), first.attempt, first.deterministic),
+        (RUN_QUEUED, 1, false)
+    );
+    assert_eq!(first.stage, "retry-pending");
+    assert!(fx.worker.claim().unwrap().is_none(), "backoff holds it");
+    for attempt in 2..=3 {
+        fx.now(fx.clock.0.load(Ordering::SeqCst) + 60_000);
+        assert_eq!(fx.drain(), 1);
+        assert_eq!(fx.run(&r.id).attempt, attempt);
+    }
+    let last = fx.run(&r.id);
+    assert_eq!(last.state, RUN_FAILED, "{last:?}");
+    fx.now(fx.clock.0.load(Ordering::SeqCst) + 600_000);
+    assert_eq!(fx.drain(), 0, "never retried forever");
+}
+
+#[test]
+fn an_interrupted_run_resumes_from_its_checkpoint_at_the_next_boot() {
+    let _s = serial();
+    let fx = Fx::new(|s| s.batch_units = 2);
+    let src = Temp::new("src");
+    let dir = src.join("resume");
+    let files: Vec<(String, String)> = (0..10)
+        .map(|i| (format!("m{i}.rs"), format!("fn f{i}() {{}}\n")))
+        .collect();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    repo(&dir, &refs);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let r = run_of(decision(fx.index(&repo_id, false, "1")));
+    // Shutdown mid-run (after the fifth file): the run keeps its claim and checkpoint.
+    let w = fx.worker.clone();
+    *fx.parser.hook.lock().unwrap() = Some((5, Box::new(move || w.stop_all())));
+    let claimed = fx.worker.claim().unwrap().unwrap();
+    fx.worker.execute(claimed);
+    let interrupted = fx.run(&r.id);
+    assert_eq!(interrupted.state, RUN_RUNNING, "{interrupted:?}");
+    let checkpoint = interrupted.generation_id.clone().unwrap();
+    assert!(
+        interrupted.completed_units > 0
+            && interrupted.completed_units < interrupted.total_units.unwrap()
+    );
+    // The next boot resumes it: the same staging generation, only the rest is parsed.
+    *fx.parser.hook.lock().unwrap() = None;
+    let fx = fx.restart("owner-next-boot");
+    assert_eq!(fx.worker.recover().unwrap(), 1);
+    assert_eq!(fx.drain(), 1);
+    let done = fx.run(&r.id);
+    assert_eq!(
+        (done.state.as_str(), done.attempt),
+        (RUN_SUCCEEDED, 2),
+        "{done:?}"
+    );
+    assert_eq!(done.generation_id, Some(checkpoint));
+    assert!(
+        fx.parser.count.load(Ordering::SeqCst) < 10,
+        "resumed, not restarted"
+    );
+    let view = fx.published(&repo_id);
+    for i in 0..10 {
+        assert!(fx.unit(&view, &format!("m{i}.rs")).is_some());
+    }
+}
+
+#[test]
+fn a_slower_builder_never_overwrites_a_newer_publication() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("race");
+    repo(&dir, &[("a.rs", "fn a() {}\n"), ("b.rs", "fn b() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let first = fx.published(&repo_id);
+    // While the next run builds, another publication moves the pointer.
+    let (store, r2, v2) = (fx.store.clone(), repo_id.clone(), first.view.clone());
+    *fx.parser.hook.lock().unwrap() = Some((
+        3,
+        Box::new(move || {
+            let (r, v) = (r2.clone(), v2.clone());
+            run_write(&*store, WriteOptions::default(), move |tx| {
+                let current = tx.indexing().published(&r)?.unwrap().revision;
+                let mut other = v.clone();
+                other.view_id = Id::new("view-concurrent").unwrap();
+                other.view_digest = "f".repeat(64);
+                tx.indexing().insert_view(&other)?;
+                tx.indexing().publish(&r, &other.view_id, current)
+            })
+            .unwrap();
+        }),
+    ));
+    write(&dir, "a.rs", "fn a() {}\nfn a3() {}\n");
+    write(&dir, "c.rs", "fn c() {}\n");
+    commit(&dir, "next");
+    let r = run_of(decision(fx.index(&repo_id, false, "1")));
+    let claimed = fx.worker.claim().unwrap().unwrap();
+    fx.worker.execute(claimed);
+    let moved = fx.run(&r.id);
+    assert_eq!(moved.state, RUN_QUEUED, "{moved:?}");
+    assert_eq!(moved.error_code.as_deref(), Some("pointer_moved"));
+    let p = repo_id.clone();
+    assert_eq!(
+        fx.read(move |s| s.indexing().published(&p))
+            .unwrap()
+            .view_id
+            .as_str(),
+        "view-concurrent"
+    );
+    // Its retry re-plans over the current pointer and publishes.
+    fx.now(fx.clock.0.load(Ordering::SeqCst) + 60_000);
+    fx.drain();
+    assert_eq!(fx.run(&r.id).state, RUN_SUCCEEDED);
+    let p = repo_id.clone();
+    let published = fx.read(move |s| s.indexing().published(&p)).unwrap();
+    assert_eq!(published.revision, 3);
+    // The repository refuses a publication from a stale pointer revision.
+    let r3 = repo_id.clone();
+    let stale = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+        tx.indexing()
+            .publish(&r3, &Id::new("view-concurrent").unwrap(), 1)
+    });
+    assert!(matches!(stale, Err(StorageError::RevisionConflict(_))));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Configuration, scope and removal
+
+#[test]
+fn sections_validate_fence_by_revision_and_apply_exclusions_and_languages() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("cfg");
+    repo(
+        &dir,
+        &[
+            ("a.rs", "fn a() {}\n"),
+            ("gen/b.rs", "fn b() {}\n"),
+            ("c.py", "def c():\n    pass\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let configure = |expected: &str, config: Value| {
+        decision(fx.command(
+            "indexing.configure_sources",
+            json!({"scope": {"kind": "Workspace"}, "expectedRevision": expected, "config": config}),
+        ))
+    };
+    let cfg = |langs: Value, ex: Value| json!({"structuralLanguages": langs, "semanticPackageIds": [], "excludePatterns": ex, "maxFileBytes": "1000000"});
+    assert_eq!(
+        refused(configure("1", cfg(json!(["cobol"]), json!([])))).code,
+        DomainErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        refused(configure("1", cfg(json!([]), json!(["a[b"])))).code,
+        DomainErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        refused(configure("1", cfg(json!([]), json!(["../escape/**"])))).code,
+        DomainErrorCode::InvalidArgument
+    );
+    assert!(matches!(
+        configure("1", cfg(json!(["rust"]), json!(["gen/**"]))),
+        DomainDecision::Applied { .. }
+    ));
+    assert_eq!(
+        refused(configure("1", cfg(json!([]), json!([])))).code,
+        DomainErrorCode::RevisionConflict
+    );
+    assert!(matches!(
+        configure("2", cfg(json!(["rust"]), json!(["gen/**"]))),
+        DomainDecision::NoChange { .. }
+    ));
+    // A run is fenced by the section revision its caller saw.
+    assert_eq!(
+        refused(decision(fx.index(&repo_id, false, "1"))).code,
+        DomainErrorCode::RevisionConflict
+    );
+    run_of(decision(fx.index(&repo_id, false, "2")));
+    fx.drain();
+    let view = fx.published(&repo_id);
+    assert!(fx.unit(&view, "gen/b.rs").is_none(), "excluded");
+    let (_, py) = fx.unit(&view, "c.py").unwrap();
+    assert_eq!(
+        py.payload["mode"],
+        json!("NotSelected"),
+        "an unselected language is text only"
+    );
+    // A configuration change after publication shows the index stale.
+    configure("2", cfg(json!([]), json!([])));
+    let status = fx.status(&repo_id);
+    let f = status.freshness.unwrap();
+    assert!(!f.configuration_current);
+    assert!(matches!(f.state, IndexFreshnessState::Stale));
+    assert!(f.reasons.0.iter().any(|r| r.0 == "configuration-changed"));
+}
+
+#[test]
+fn archived_projects_accept_no_runs_and_their_queued_runs_cancel() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("p");
+    repo(&dir, &[("a.rs", "fn a() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let created = decision(fx.command(
+        "projects.create",
+        json!({"name": "P", "description": "", "repositoryIds": [repo_id]}),
+    ));
+    let project = match created {
+        DomainDecision::Applied {
+            result: OperationResult::ProjectsCreate { value },
+        } => value,
+        other => panic!("{other:?}"),
+    };
+    let index_in_project = || {
+        decision(fx.command(
+            "indexing.index",
+            json!({"scope": {"kind": "Project", "projectId": project.id}, "repositoryIds": [repo_id], "expectedSourceRevision": "1",
+                "views": {"kind": "Published", "repositoryIds": [repo_id]}}),
+        ))
+    };
+    let queued = run_of(index_in_project());
+    let p = project.id.clone();
+    fx.write(move |tx| {
+        let mut stored = tx.projects().project(&p)?.unwrap();
+        let expected = stored.revision;
+        stored.lifecycle = ARCHIVED.into();
+        stored.revision += 1;
+        tx.projects().update_project(&stored, expected)
+    });
+    assert_eq!(fx.drain(), 0);
+    let cancelled = fx.run(&queued.id);
+    assert_eq!(cancelled.state, RUN_CANCELLED);
+    assert_eq!(cancelled.error_code.as_deref(), Some("project_archived"));
+    let refusal = refused(index_in_project());
+    assert_eq!(refusal.code, DomainErrorCode::Conflict);
+    assert_eq!(
+        refusal.target_kind.map(|k| k.0).as_deref(),
+        Some("project_archived")
+    );
+}
+
+#[test]
+fn removing_an_index_drops_views_and_payload_but_keeps_registration_and_records() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("rm");
+    repo(&dir, &[("README.md", "hi\n"), ("a.rs", "fn a() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let r = run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let reg = {
+        let id = repo_id.clone();
+        fx.read(move |s| s.projects().repository(&id)).unwrap()
+    };
+    let removed = decision(fx.command(
+        "repositories.remove_index",
+        json!({"repositoryId": repo_id, "expectedRevision": reg.revision.to_string()}),
+    ));
+    assert!(
+        matches!(removed, DomainDecision::Applied { .. }),
+        "{removed:?}"
+    );
+    let readme = fault(fx.query("repositories.readme", json!({"repositoryId": repo_id, "views": {"kind": "Published", "repositoryIds": [repo_id]}}), None));
+    assert_eq!(readme.code, DomainErrorCode::ViewUnavailable);
+    let status = fx.status(&repo_id);
+    assert!(matches!(
+        status.freshness.unwrap().state,
+        IndexFreshnessState::NotIndexed
+    ));
+    assert!(status.current_view_ids.0.is_empty());
+    let id2 = repo_id.clone();
+    assert!(
+        fx.read(move |s| s.projects().repository(&id2)).is_some(),
+        "the registration stays"
+    );
+    assert_eq!(fx.run(&r.id).state, RUN_SUCCEEDED, "run history stays");
+    let reclaimed = fx.worker.housekeeping(false, &|| false).unwrap();
+    assert!(reclaimed.reclaimed_rows > 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Overlays
+
+#[test]
+fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
+    let _s = serial();
+    let fx = Fx::new(|s| s.overlay_ttl_ms = 3_600_000);
+    let src = Temp::new("src");
+    let dir = src.join("ov");
+    repo(
+        &dir,
+        &[
+            (".gitignore", "ignored.rs\n"),
+            ("a.rs", "fn a() {}\n"),
+            ("b.py", "def b():\n    pass\n"),
+            ("c.rs", "pub fn c() {}\n"),
+            ("d.rs", "fn d() {}\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    // Worktree one: a branch commit, then staged, unstaged, untracked and ignored changes.
+    let wt1 = src.join("ov-topic");
+    git(
+        &dir,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "topic",
+            wt1.to_str().unwrap(),
+        ],
+    );
+    write(&wt1, "a.rs", "fn a() {}\nfn branch_a() {}\n");
+    write(&wt1, "e.rs", "fn e() {}\n");
+    std::fs::remove_file(wt1.join("b.py")).unwrap();
+    let topic = commit(&wt1, "branch");
+    write(&wt1, "e.rs", "fn e() {}\nfn staged_e() {}\n");
+    git(&wt1, &["add", "e.rs"]);
+    write(
+        &wt1,
+        "a.rs",
+        "fn a() {}\nfn branch_a() {}\nfn unstaged_a() {}\n",
+    );
+    write(&wt1, "f.rs", "fn untracked_f() { c(); }\n");
+    std::fs::remove_file(wt1.join("d.rs")).unwrap();
+    write(&wt1, "ignored.rs", "fn ignored() {}\n");
+    // Worktree two, with its own change.
+    let wt2 = src.join("ov-other");
+    git(
+        &dir,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "other",
+            wt2.to_str().unwrap(),
+        ],
+    );
+    write(&wt2, "g.rs", "fn other_g() {}\n");
+    fx.scan();
+    let w1 = worktree_id(&repo_id, &wt1.display().to_string());
+    let w2 = worktree_id(&repo_id, &wt2.display().to_string());
+    let refresh = |w: &Id| {
+        decision(fx.index_command(
+            "indexing.refresh_overlay",
+            json!({"kind": "RefreshOverlay", "repositoryId": repo_id, "worktreeId": w, "expectedSourceRevision": "1"}),
+        ))
+    };
+    let r1 = run_of(refresh(&w1));
+    let r2 = run_of(refresh(&w2));
+    assert_eq!(fx.drain(), 2);
+    assert_eq!(fx.run(&r1.id).state, RUN_SUCCEEDED, "{:?}", fx.run(&r1.id));
+    let ctx = fx.user();
+    let (repo2, w1c) = (repo_id.clone(), w1.clone());
+    let now = fx.clock.0.load(Ordering::SeqCst);
+    let view1 = read_snapshot(&*fx.store, &ReadOptions::default(), |s| {
+        views::worktree_view(s, &ctx, &repo2, &w1c, now)
+            .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
+    })
+    .unwrap();
+    assert_eq!(view1.layers.len(), 3, "worktree, branch and baseline");
+    assert!(
+        fx.nodes(&view1, "a.rs")
+            .iter()
+            .any(|n| n.name == "unstaged_a"),
+        "unstaged"
+    );
+    assert!(
+        fx.nodes(&view1, "e.rs")
+            .iter()
+            .any(|n| n.name == "staged_e"),
+        "staged"
+    );
+    assert!(
+        fx.nodes(&view1, "f.rs")
+            .iter()
+            .any(|n| n.name == "untracked_f"),
+        "untracked"
+    );
+    assert!(fx.unit(&view1, "b.py").is_none(), "deleted on the branch");
+    assert!(fx.unit(&view1, "d.rs").is_none(), "deleted in the worktree");
+    assert!(
+        fx.unit(&view1, "ignored.rs").is_none(),
+        "ignored files never count"
+    );
+    let (layer, _) = fx.unit(&view1, "c.rs").unwrap();
+    assert_eq!(
+        layer, view1.layers[2],
+        "unchanged units come from the baseline"
+    );
+    assert!(
+        !fx.nodes(&view1, "g.rs").iter().any(|_| true),
+        "another worktree's changes are isolated"
+    );
+    // The untracked file's call links into the baseline.
+    let v = view1.clone();
+    let f_edges = fx.read(move |s| views::unit_edges(s.indexing(), &v, "f.rs"));
+    let call = f_edges.iter().find(|(e, _)| e.kind == "CALLS").unwrap();
+    assert_eq!(call.0.payload["targetUnit"], json!("c.rs"));
+    assert!(call.1);
+    // The baseline is untouched.
+    let base = fx.published(&repo_id);
+    assert!(fx.unit(&base, "b.py").is_some() && fx.unit(&base, "f.rs").is_none());
+    let status = fx.status(&repo_id);
+    let overlays = status.overlays.unwrap().0;
+    let o1 = overlays.iter().find(|o| o.worktree_id == w1).unwrap();
+    assert!(matches!(o1.state, OverlayState::Ready));
+    assert_eq!(
+        o1.head_commit.as_ref().map(|c| c.0.as_str()),
+        Some(topic.as_str())
+    );
+    assert!(o1.capture_digest.is_some());
+    assert!(matches!(
+        overlays.iter().find(|o| o.worktree_id == w2).unwrap().state,
+        OverlayState::Ready
+    ));
+    let _ = r2;
+
+    // The same snapshot is reused; a change is observed stale and rebuilt.
+    assert!(matches!(refresh(&w1), DomainDecision::NoChange { .. }));
+    write(&wt1, "f.rs", "fn untracked_f() { c(); }\nfn more() {}\n");
+    let hk = fx.worker.housekeeping(true, &|| false).unwrap();
+    assert_eq!((hk.stale_overlays, hk.refreshes_queued), (1, 1), "{hk:?}");
+    fx.drain();
+    let rebuilt = fx
+        .status(&repo_id)
+        .overlays
+        .unwrap()
+        .0
+        .into_iter()
+        .find(|o| o.worktree_id == w1)
+        .unwrap();
+    assert!(matches!(rebuilt.state, OverlayState::Ready));
+    assert_ne!(
+        rebuilt.capture_digest.clone().map(|c| c.0),
+        o1.capture_digest.clone().map(|c| c.0)
+    );
+    // A refresh observes the worktree itself: a change since the Ready build is never answered
+    // by reusing it.
+    write(
+        &wt1,
+        "f.rs",
+        "fn untracked_f() { c(); }\nfn more() {}\nfn again() {}\n",
+    );
+    let again = refresh(&w1);
+    assert!(matches!(again, DomainDecision::Applied { .. }), "{again:?}");
+    fx.drain();
+    // A new baseline makes every overlay over the old one stale.
+    write(&dir, "h.rs", "fn h() {}\n");
+    commit(&dir, "baseline moves");
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let after = fx.status(&repo_id).overlays.unwrap().0;
+    assert!(
+        after.iter().all(|o| matches!(o.state, OverlayState::Stale)),
+        "{after:?}"
+    );
+    // Retirement: the derived view goes, the record and history stay.
+    let o = after.iter().find(|o| o.worktree_id == w2).unwrap();
+    let revision = {
+        let oid = o.overlay_id.clone();
+        fx.read(move |s| s.indexing().overlay(&oid))
+            .unwrap()
+            .revision
+    };
+    let retired = decision(fx.command(
+        "indexing.retire_view",
+        json!({"viewId": o.overlay_id, "expectedRevision": revision.to_string()}),
+    ));
+    assert!(
+        matches!(retired, DomainDecision::Applied { .. }),
+        "{retired:?}"
+    );
+    let o2 = fx
+        .status(&repo_id)
+        .overlays
+        .unwrap()
+        .0
+        .into_iter()
+        .find(|o| o.worktree_id == w2)
+        .unwrap();
+    assert!(matches!(o2.state, OverlayState::Unavailable));
+    assert!(o2.view_id.is_none());
+    // Expiry: past its retention an overlay reads expired and its view is unavailable.
+    fx.now(fx.clock.0.load(Ordering::SeqCst) + 4_000_000);
+    let expired = fx
+        .status(&repo_id)
+        .overlays
+        .unwrap()
+        .0
+        .into_iter()
+        .find(|o| o.worktree_id == w1)
+        .unwrap();
+    assert!(matches!(expired.state, OverlayState::Expired));
+    fx.worker.housekeeping(false, &|| false).unwrap();
+    let ctx = fx.user();
+    let (repo2, w1c) = (repo_id.clone(), w1.clone());
+    let now = fx.clock.0.load(Ordering::SeqCst);
+    let gone = read_snapshot(&*fx.store, &ReadOptions::default(), |s| {
+        Ok(views::worktree_view(s, &ctx, &repo2, &w1c, now).is_err())
+    })
+    .unwrap();
+    assert!(
+        gone,
+        "a missing or expired view is unavailable, never the baseline"
+    );
+}
+
+#[test]
+fn links_in_a_repository_or_worktree_are_recorded_never_followed() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let outside = Temp::new("outside");
+    write(&outside.0, "secret.rs", "fn secret_outside() {}\n");
+    let dir = src.join("links");
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q"]);
+    write(&dir, "a.rs", "fn a() {}\n");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outside.join("secret.rs"), dir.join("escape.rs")).unwrap();
+    commit(&dir, "with a link");
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let view = fx.published(&repo_id);
+    #[cfg(unix)]
+    {
+        let (_, link) = fx.unit(&view, "escape.rs").unwrap();
+        assert_eq!(link.payload["mode"], json!("Link"));
+        assert!(
+            !fx.nodes(&view, "escape.rs")
+                .iter()
+                .any(|n| n.name == "secret_outside")
+        );
+    }
+    // An untracked link in the worktree is captured as a link, not read.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outside.join("secret.rs"), dir.join("escape2.rs")).unwrap();
+    let main = worktree_id(&repo_id, &dir.display().to_string());
+    run_of(decision(fx.index_command(
+        "indexing.refresh_overlay",
+        json!({"kind": "RefreshOverlay", "repositoryId": repo_id, "worktreeId": main, "expectedSourceRevision": "1"}),
+    )));
+    fx.drain();
+    let ctx = fx.user();
+    let (repo2, m) = (repo_id.clone(), main.clone());
+    let now = fx.clock.0.load(Ordering::SeqCst);
+    let v = read_snapshot(&*fx.store, &ReadOptions::default(), |s| {
+        views::worktree_view(s, &ctx, &repo2, &m, now)
+            .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
+    })
+    .unwrap();
+    #[cfg(unix)]
+    assert!(
+        !fx.nodes(&v, "escape2.rs")
+            .iter()
+            .any(|n| n.name == "secret_outside")
+    );
+    let _ = v;
+}

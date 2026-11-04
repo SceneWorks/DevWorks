@@ -202,7 +202,27 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0014_projects.sql"),
         rebuilds_tables: false,
     },
+    // Additive (DW-023): index source configuration, observed source identity, worktrees, index
+    // runs and overlays (five tables), defaulted payload columns on the migration 1 unit and edge
+    // tables, and six indexes. Versions 15-19 are reserved for other open items; gaps are
+    // allowed and the integrator renumbers. The writer floor rises to 20 (at least migration 14's
+    // floor): an earlier writer's `repositories.remove_index` removes only the migration 14
+    // registry rows, so it would leave this build's published pointer, views and graph payload
+    // describing an index the registry no longer lists (a removed index that still reads as
+    // current). The reader floor stays at 8: no earlier build reads the new tables or columns,
+    // and every query an earlier reader makes returns the same rows (the added columns are
+    // defaulted). Both are at least every earlier floor.
+    Migration {
+        version: 20,
+        minimum_reader: 8,
+        minimum_writer: 20,
+        sql: include_str!("migrations/0020_indexing.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 20; a test fails if the shipped text changes.
+pub const MIGRATION_0020_SHA256: &str =
+    "54748ae65fa82d315c79b064486c4387f001e98f3b02a45cd6efcd8e108958a0";
 /// Recorded checksum of migration 14; a test fails if the shipped text changes.
 pub const MIGRATION_0014_SHA256: &str =
     "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";

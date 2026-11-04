@@ -1056,6 +1056,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn projects(&self) -> &dyn ProjectRead {
         self
     }
+    fn indexing(&self) -> &dyn IndexRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1270,6 +1273,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn projects(&mut self) -> &mut dyn ProjectRepository {
+        self
+    }
+    fn indexing(&mut self) -> &mut dyn IndexRepository {
         self
     }
 }

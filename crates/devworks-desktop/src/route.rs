@@ -321,7 +321,8 @@ pub static SCREENS: [Screen; 19] = [
         subviews: &["Runs", "Logs"],
         inner_sidebar: None,
         summary_strip: &[],
-        pending: pending("repository discovery and index publication", "DW-23"),
+        // Runs, their diagnostics and the indexing sources (DW-23).
+        pending: None,
         link: None,
     },
     Screen {

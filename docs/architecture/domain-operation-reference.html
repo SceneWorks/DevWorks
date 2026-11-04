@@ -633,7 +633,7 @@
 </tr>
 <tr>
 <td><code>indexing.status</code></td>
-<td><strong>Query</strong><br><code>repositoryId</code>: <code>Id</code></td>
+<td><strong>Query</strong><br><code>repositoryId</code>: <code>Id</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>RepositoryIndexStatus</code></td>
 </tr>
 <tr>
@@ -7078,6 +7078,206 @@
 <tr>
 <td><code>lastRun</code></td>
 <td><code>?IndexRunRecord</code></td>
+</tr>
+<tr>
+<td><code>freshness</code></td>
+<td><code>?IndexFreshness</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>languages</code></td>
+<td><code>?Items&lt;LanguageCoverage&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>semanticPacks</code></td>
+<td><code>?Items&lt;SemanticPackStatus&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>overlays</code></td>
+<td><code>?Items&lt;OverlayStatus&gt;</code> · <em>revision 2+</em></td>
+</tr>
+</tbody></table>
+<h3 id="indexfreshnessstate">IndexFreshnessState</h3>
+<p><code>Current</code>, <code>Stale</code>, <code>Indexing</code>, <code>NotIndexed</code>, <code>Failed</code>.</p>
+<h3 id="indexfreshness">IndexFreshness</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>state</code></td>
+<td><code>IndexFreshnessState</code></td>
+</tr>
+<tr>
+<td><code>indexedCommit</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>headCommit</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>headRef</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>indexedAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>observedAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>configurationCurrent</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>reasons</code></td>
+<td><code>Items&lt;Label&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="languagecoveragemode">LanguageCoverageMode</h3>
+<p><code>Structural</code>, <code>TextFallback</code>, <code>NotSelected</code>.</p>
+<h3 id="languagecoverage">LanguageCoverage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>languageId</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>mode</code></td>
+<td><code>LanguageCoverageMode</code></td>
+</tr>
+<tr>
+<td><code>grammar</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>files</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>structuralFiles</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>textFiles</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>parseErrorFiles</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>skippedFiles</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>note</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="semanticpackstate">SemanticPackState</h3>
+<p><code>NotInstalled</code>, <code>Unavailable</code>, <code>Enabled</code>, <code>Applied</code>, <code>Disabled</code>.</p>
+<h3 id="semanticpackstatus">SemanticPackStatus</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>packId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>SemanticPackState</code></td>
+</tr>
+<tr>
+<td><code>languages</code></td>
+<td><code>Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>note</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="overlaystate">OverlayState</h3>
+<p><code>Queued</code>, <code>Indexing</code>, <code>Ready</code>, <code>Failed</code>, <code>Stale</code>, <code>Expired</code>, <code>Unavailable</code>.</p>
+<h3 id="overlaystatus">OverlayStatus</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>overlayId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>revision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>worktreeId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>OverlayState</code></td>
+</tr>
+<tr>
+<td><code>viewId</code></td>
+<td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>baseCommit</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>headCommit</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>headRef</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>captureDigest</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>runId</code></td>
+<td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>updatedAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>expiresAtMs</code></td>
+<td><code>Counter</code></td>
 </tr>
 </tbody></table>
 <h3 id="consumerstatus">ConsumerStatus</h3>

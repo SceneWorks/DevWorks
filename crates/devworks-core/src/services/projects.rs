@@ -58,8 +58,10 @@
 //! # Repository indexes and texts
 //!
 //! `repositories.remove_index` removes only the app index views published for a repository and
-//! their README/summary texts (`MutationSummary.changed` says whether there was one); the
-//! registration, memberships, work history and artifacts stay. `repositories.readme` and
+//! their README/summary texts (`MutationSummary.changed` says whether there was one), with the
+//! graph pointer, views and generations of the indexing item (retired, then reclaimed in bounded
+//! batches); its active index runs are cancelled and its overlays become unavailable. The
+//! registration, memberships, work history, run and overlay records and artifacts stay. `repositories.readme` and
 //! `.summary` return the text of the selected published view as an artifact reference; without
 //! one the honest answer is `ViewUnavailable` (views are published by the indexing item).
 //!
@@ -1239,7 +1241,9 @@ impl RepositoryService {
             )));
         }
         let removed = tx.projects().remove_index(&r.id)?;
-        if removed == 0 {
+        // The index's runs and overlays end with it (their records and history stay).
+        let ended = crate::services::indexing::index_removed(tx, &r.id)?;
+        if removed == 0 && ended == 0 {
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::RepositoriesRemoveIndex {
                     value: MutationSummary {

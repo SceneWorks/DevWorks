@@ -103,6 +103,7 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
             diagnostics: diagnostics.clone(),
             use_cases: UseCases::new().with_queue(),
             consumers,
+            indexing: None,
             config,
         },
         Parts {

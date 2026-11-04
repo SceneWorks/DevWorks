@@ -7,6 +7,7 @@
 //! across threads. Core stays runtime-agnostic (no async runtime dependency).
 pub mod diagnostics;
 pub mod files;
+pub mod indexing;
 pub mod process;
 pub mod router;
 pub mod storage;
@@ -57,6 +58,14 @@ pub enum IdKind {
     /// Router session pins.
     RoutePin,
     Project,
+    /// Repository registrations (discovery).
+    Repository,
+    /// Index graph generations.
+    Generation,
+    /// Immutable index views.
+    View,
+    /// Worktree overlays.
+    Overlay,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

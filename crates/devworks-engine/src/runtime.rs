@@ -6,6 +6,7 @@
 //! sequence") for the order and why each step sits where it does.
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
+use crate::indexing::{IndexSupervisor, IndexingConfig};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use crate::runs::{ActivationLauncher, RunGate, RunSupervisor};
@@ -46,6 +47,24 @@ const RECORDS_DIAGNOSTIC: &str = "workspace.record_diagnostic";
 /// The operation whose commit fences a project and journals its root stops; the engine then
 /// kills the project's owned trees at once and executes those stops.
 const ARCHIVES_PROJECT: &str = "projects.archive";
+/// The operation whose commit cancels an index run (the run it names is signalled at once).
+const CANCELS_INDEX_RUN: &str = "indexing.cancel";
+/// The query answered after a discovery scan.
+const DISCOVERS_REPOSITORIES: &str = "indexing.discover";
+
+/// Repository indexing as composed (DW-023): the parser, the source tree access, the path
+/// resolver of helper launches, the indexing bounds and any installed semantic packs. [`boot`]
+/// builds the indexing environment over the runtime's store, process supervisor, artifact and
+/// diagnostics services, registers the `indexing.*` use cases and starts index supervision.
+#[derive(Clone)]
+pub struct IndexComposition {
+    pub parser: Arc<dyn devworks_core::ports::indexing::StructuralParser>,
+    pub source: Arc<dyn devworks_core::ports::indexing::SourceTree>,
+    pub fs: Arc<dyn devworks_core::authority::destructive::FilesystemResolver>,
+    pub settings: devworks_core::services::indexing::IndexSettings,
+    pub config: IndexingConfig,
+    pub enrichers: Vec<Arc<dyn devworks_core::ports::indexing::SemanticEnricher>>,
+}
 
 /// Run root control as composed: the one control service (its plan/readiness port inside), the
 /// coordinator launcher (none until the agent supervisor exists: accepted activations then stay
@@ -100,6 +119,8 @@ pub struct Composition {
     pub use_cases: UseCases,
     /// Consumers besides the required ones [`boot`] registers itself (package handlers, ...).
     pub consumers: Vec<Consumer>,
+    /// Repository indexing (none: the `indexing.*` operations have no use case).
+    pub indexing: Option<IndexComposition>,
     pub config: RuntimeConfig,
 }
 
@@ -155,6 +176,8 @@ pub struct BootReport {
     pub runs: BootRecovery,
     /// The keep-awake setting as applied at boot.
     pub keep_awake: KeepAwakeStatus,
+    /// Index runs of earlier boots made claimable to resume from their checkpoints.
+    pub index_runs_resumed: usize,
 }
 
 /// Why boot stopped; nothing was started and no command can be admitted.
@@ -232,6 +255,9 @@ pub struct Runtime {
     /// The Tokio runtime [`boot`] was awaited on: post-commit work of a synchronous command
     /// (the immediate stop of an archived project) runs there.
     handle: tokio::runtime::Handle,
+    /// Index supervision (none when indexing is not composed).
+    indexing: Option<Arc<IndexSupervisor>>,
+    indexing_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// Boots the runtime (see the crate documentation, "Boot sequence"):
@@ -272,6 +298,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         diagnostics,
         use_cases,
         mut consumers,
+        indexing,
         config,
     } = composition;
     let use_cases = use_cases
@@ -324,6 +351,46 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         process_host,
         resources.clone(),
     ));
+    // Indexing runs its Git helpers through this same process owner.
+    let index_supervisor = indexing.map(|ix| {
+        let env = Arc::new(devworks_core::services::indexing::IndexEnv {
+            store: store.clone(),
+            parser: ix.parser,
+            source: ix.source,
+            helpers: Arc::new(
+                devworks_core::services::indexing::helper::SupervisedHelpers {
+                    supervisor: supervisor.clone(),
+                    store: store.clone(),
+                    fs: ix.fs,
+                },
+            ),
+            clock: clock.clone(),
+            ids: ids.clone(),
+            artifacts: Some(artifacts.clone()),
+            diagnostics: Some(diagnostics.clone()),
+            enrichers: std::sync::RwLock::new(ix.enrichers),
+            settings: ix.settings,
+        });
+        let worker = Arc::new(devworks_core::services::indexing::worker::IndexWorker::new(
+            env,
+            // Unique per boot: a claim of an earlier boot is always another owner.
+            format!(
+                "index-{}-{}",
+                run_owner.as_str(),
+                store
+                    .info()
+                    .boot_id
+                    .map_or_else(String::new, |b| b.as_str().to_owned())
+            ),
+        ));
+        IndexSupervisor::new(worker, ix.config)
+    });
+    let use_cases = match &index_supervisor {
+        Some(ix) => use_cases.with_indexing(Arc::new(
+            devworks_core::services::indexing::IndexCoordinator::new(ix.env().clone()),
+        )),
+        None => use_cases,
+    };
     let booted_at_ms = clock.now_ms().get();
     let housekeeper = Arc::new(Housekeeper::new(
         store.clone(),
@@ -367,12 +434,17 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     .unwrap_or_else(|_| Err(panicked("keep-awake")))
     .map_err(BootError::Settings)
     .map_err(failed)?;
+    let index_runs_resumed = match &index_supervisor {
+        Some(ix) => ix.recover().await.unwrap_or(0),
+        None => 0,
+    };
     let report = BootReport {
         queue,
         artifacts: recovered,
         resources: recovered_resources,
         runs: recovered_runs,
         keep_awake: applied,
+        index_runs_resumed,
     };
     let (svc, recovered) = (diagnostics.clone(), report.clone());
     let _ = tokio::task::spawn_blocking(move || diag::record_boot(&svc, &recovered)).await;
@@ -409,6 +481,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         config.diagnostics_interval,
     );
     let monitoring = tokio::spawn(async move { watcher.run(svc, every).await });
+    let indexing_task = index_supervisor
+        .clone()
+        .map(|ix| tokio::spawn(async move { ix.run().await }));
     Ok(Runtime {
         store,
         ids,
@@ -432,6 +507,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         supervision: Mutex::new(Some(supervision)),
         monitoring: Mutex::new(Some(monitoring)),
         handle: tokio::runtime::Handle::current(),
+        indexing: index_supervisor,
+        indexing_task: Mutex::new(indexing_task),
     })
 }
 
@@ -537,6 +614,10 @@ impl Runtime {
         self.dispatcher.wakeup().wake();
         stopped
     }
+    /// Index supervision, when indexing is composed.
+    pub fn indexing(&self) -> Option<&Arc<IndexSupervisor>> {
+        self.indexing.as_ref()
+    }
     /// The keep-awake request as last applied (re-checking a held request).
     pub fn keep_awake(&self) -> KeepAwakeStatus {
         self.keep_awake.status()
@@ -579,6 +660,17 @@ impl Runtime {
     }
 
     pub fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome {
+        if operation == DISCOVERS_REPOSITORIES
+            && let Some(ix) = &self.indexing
+            && self.use_cases.has_query(operation)
+        {
+            // Discovery answers from a fresh scan of the invocation's sections (registrations
+            // and source identity are host-derived from the configured base directories); a
+            // scan that fails leaves the recorded registrations to answer.
+            let env = ix.env().clone();
+            let never = || false;
+            let _ = devworks_core::services::indexing::discover::scan(&env, ctx, None, &never);
+        }
         self.use_cases.query(&self.gateway(), ctx, operation, raw)
     }
 
@@ -644,6 +736,27 @@ impl Runtime {
                     wakeup.wake();
                 });
             }
+        }
+        if committed
+            && let Some(ix) = &self.indexing
+            && (operation.starts_with("indexing.") || operation == "repositories.remove_index")
+        {
+            if operation == CANCELS_INDEX_RUN
+                && let Some(run) = cancelled_run(raw)
+            {
+                ix.cancelled(&run);
+            }
+            if operation == "indexing.configure_sources" {
+                ix.request_discovery();
+            }
+            ix.notify();
+        }
+        if released
+            && operation == SAVES_SETTINGS
+            && let Some(ix) = &self.indexing
+        {
+            // A section's base directory may have changed: rescan it.
+            ix.request_discovery();
         }
         if released && operation == SAVES_SETTINGS {
             // A read failure leaves the previous request in place; the next save or explicit
@@ -714,6 +827,22 @@ impl Runtime {
             task.abort();
         }
         self.dispatcher.idle().await;
+        // Index runs are signalled and waited for within the same deadline; their Git trees
+        // are owned trees, so the stop below kills any that remain.
+        if let Some(ix) = &self.indexing {
+            ix.stop(deadline).await;
+            let task = self
+                .indexing_task
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
+            if let Some(mut task) = task
+                && let dispatch::Either::Left(()) =
+                    dispatch::first(tokio::time::sleep(left()), &mut task).await
+            {
+                task.abort();
+            }
+        }
         let bound = left();
         let stopped = self
             .housekeeper
@@ -727,6 +856,9 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        if let Some(ix) = &self.indexing {
+            ix.worker().stop_all();
+        }
         self.dispatcher.stop();
         self.collector.stop();
         self.housekeeper.stop();
@@ -758,6 +890,13 @@ impl ShutdownStage {
             _ => Self::Done,
         }
     }
+}
+
+/// The run an `indexing.cancel` frame names.
+fn cancelled_run(raw: &[u8]) -> Option<Id> {
+    let v = serde_json::from_slice::<serde_json::Value>(raw).ok()?;
+    let id = v.get("command")?.get("operationId")?.as_str()?;
+    Id::new(id).ok()
 }
 
 /// The project a `projects.archive` frame names.

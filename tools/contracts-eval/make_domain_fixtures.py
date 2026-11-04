@@ -468,5 +468,19 @@ case('r2-result-router.availability','operation-result.r2',{'kind':'router.avail
 case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
 case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
 case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
+# Schema revision 2 (indexing status): freshness, per-language coverage, semantic pack state and
+# every overlay with its lifecycle state and snapshot provenance.
+oid='0123456789abcdef0123456789abcdef01234567'
+freshness={'state':'Stale','indexedCommit':oid,'headCommit':oid,'headRef':'refs/heads/main','indexedAtMs':'1','observedAtMs':'2','configurationCurrent':True,'reasons':['head-moved']}
+language={'languageId':'rust','name':'Rust','mode':'Structural','grammar':'tree-sitter-rust 0.24.2','files':'3','structuralFiles':'2','textFiles':'0','parseErrorFiles':'1','skippedFiles':'0'}
+pack={'packId':'rust','state':'NotInstalled','languages':['rust'],'note':'the managed Rust pack is not installed'}
+overlay={'overlayId':'overlay-a','revision':'3','worktreeId':'worktree-a','state':'Ready','viewId':'view-a','baseCommit':oid,'headCommit':oid,'headRef':'refs/heads/topic','captureDigest':'a'*64,'runId':'operation-a','updatedAtMs':'3','expiresAtMs':'4'}
+status_r2={**sample('RepositoryIndexStatus'),'freshness':freshness,'languages':[language],'semanticPacks':[pack],'overlays':[overlay]}
+case('r2-input-indexing.status','domain-request.r2',domain('indexing.status'))
+case('r2-result-indexing.status','operation-result.r2',{'kind':'indexing.status','value':status_r2})
+case('r2-result-indexing.status-plain','operation-result.r2',{'kind':'indexing.status','value':sample('RepositoryIndexStatus')})
+case('reject-r1-result-indexing-status-freshness','operation-result',{'kind':'indexing.status','value':status_r2},False,False)
+case('reject-r2-result-overlay-unknown-state','operation-result.r2',{'kind':'indexing.status','value':{**status_r2,'overlays':[{**overlay,'state':'Warm'}]}},False,False)
+case('reject-r2-result-language-unknown-mode','operation-result.r2',{'kind':'indexing.status','value':{**status_r2,'languages':[{**language,'mode':'Semantic'}]}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

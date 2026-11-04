@@ -16,6 +16,28 @@ serde_json.workspace = true
 sha2.workspace = true
 sqlite-vec = "=0.1.7"
 tokio = { version = "=1.54.1", default-features = false, features = ["sync"] }
+# Structural indexing (DW-23, CODE-01/02): the tree-sitter runtime and one grammar crate per
+# language the retained CodeGraph LanguageSpecs and frozen adapter surface cover. Every grammar
+# crate depends only on `tree-sitter-language` (the ABI shim), so the runtime and the grammars
+# version independently; each compiles its generated C parser with `cc`. Pinned exactly.
+tree-sitter = "=0.27.1"
+tree-sitter-bash = "=0.25.1"
+tree-sitter-c = "=0.24.2"
+tree-sitter-c-sharp = "=0.23.5"
+tree-sitter-cfml = "=0.26.44"
+tree-sitter-cpp = "=0.23.4"
+tree-sitter-go = "=0.25.0"
+tree-sitter-hcl = "=1.1.0"
+tree-sitter-java = "=0.23.5"
+tree-sitter-javascript = "=0.25.0"
+tree-sitter-php = "=0.25.1"
+tree-sitter-python = "=0.25.0"
+tree-sitter-ruby = "=0.23.1"
+tree-sitter-rust = "=0.24.2"
+tree-sitter-sequel = "=0.3.11"
+tree-sitter-swift = "=0.7.4"
+tree-sitter-typescript = "=0.23.2"
+tree-sitter-yaml = "=0.7.2"
 
 [dev-dependencies]
 devworks-core = { path = "../devworks-core", features = ["contract-suite"] }

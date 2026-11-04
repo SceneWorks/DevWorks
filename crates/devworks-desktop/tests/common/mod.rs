@@ -57,6 +57,8 @@ pub fn config(root: &Path) -> DesktopConfig {
     let mut c = DesktopConfig::new(root);
     c.user_name = "Test user".into();
     c.shutdown_bound = Duration::from_secs(5);
+    // Tests never scan the user's real repository base directory.
+    c.indexing.discover_at_boot = false;
     c
 }
 

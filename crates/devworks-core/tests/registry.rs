@@ -258,6 +258,7 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "history.git_links",
             "history.tool_usage",
             "history.work_lineage",
+            "indexing.status",
             "resources.acquire",
             "resources.holders",
             "resources.list",

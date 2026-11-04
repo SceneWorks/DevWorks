@@ -36,7 +36,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.list', 'resources.acquire', 'resources.renew', 'resources.release',
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
-            'workspace.logs', 'workspace.record_diagnostic', 'router.availability'})
+            'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'indexing.status'})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})

@@ -52,8 +52,8 @@
 //! artifact store records ([`ArtifactRepository`]), the session, transcript and lineage
 //! records ([`SessionRepository`]), the resource reservation and owned-process records
 //! ([`ResourceRepository`]), the run root control records ([`RunRepository`]) and the retained
-//! diagnostic log ([`DiagnosticRepository`]) and the project and repository registration
-//! records ([`ProjectRepository`]).
+//! diagnostic log ([`DiagnosticRepository`]), the project and repository registration
+//! records ([`ProjectRepository`]) and the repository indexing records ([`IndexRepository`]).
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -73,6 +73,7 @@ mod artifacts;
 mod authority;
 mod configuration;
 mod diagnostics;
+mod indexing;
 mod projects;
 mod resources;
 mod router;
@@ -82,6 +83,7 @@ pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
 pub use diagnostics::*;
+pub use indexing::*;
 pub use projects::*;
 pub use resources::*;
 pub use router::*;
@@ -479,6 +481,7 @@ pub trait WriteTransaction {
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
     fn projects(&mut self) -> &mut dyn ProjectRepository;
+    fn indexing(&mut self) -> &mut dyn IndexRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -521,6 +524,7 @@ pub trait ReadSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead;
     fn router(&self) -> &dyn RouterRead;
     fn projects(&self) -> &dyn ProjectRead;
+    fn indexing(&self) -> &dyn IndexRead;
 }
 
 // ---------------------------------------------------------------------------------------------

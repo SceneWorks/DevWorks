@@ -381,6 +381,9 @@ impl ReadSnapshot for MemSnapshot {
     fn projects(&self) -> &dyn ProjectRead {
         &self.unsupported
     }
+    fn indexing(&self) -> &dyn IndexRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -458,6 +461,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn projects(&mut self) -> &mut dyn ProjectRepository {
+        &mut self.unsupported
+    }
+    fn indexing(&mut self) -> &mut dyn IndexRepository {
         &mut self.unsupported
     }
 }
@@ -1531,6 +1537,146 @@ impl ProjectRepository for Unsupported {
         nope()
     }
     fn finish_archive_stop(&mut self, _: &ProjectId, _: i64) -> Result<bool, StorageError> {
+        nope()
+    }
+}
+impl IndexRead for Unsupported {
+    fn source_config(&self, _: &str) -> Result<Option<StoredSourceConfig>, StorageError> {
+        nope()
+    }
+    fn repository_source(&self, _: &Id) -> Result<Option<StoredRepositorySource>, StorageError> {
+        nope()
+    }
+    fn repository_at(&self, _: &str) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
+    fn worktrees(&self, _: &Id) -> Result<Vec<StoredWorktree>, StorageError> {
+        nope()
+    }
+    fn run(&self, _: &Id) -> Result<Option<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn runs(
+        &self,
+        _: &RunFilter,
+        _: Option<&RunPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn active_run(&self, _: &Id, _: Option<&Id>) -> Result<Option<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn batch_runs(&self, _: &Id) -> Result<Vec<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn latest_run(&self, _: &Id, _: Option<&Id>) -> Result<Option<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn claimable_runs(&self, _: i64, _: u16) -> Result<Vec<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn running_runs(&self, _: u16) -> Result<Vec<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn generation(&self, _: &Id) -> Result<Option<StoredGeneration>, StorageError> {
+        nope()
+    }
+    fn generations(&self, _: &Id) -> Result<Vec<StoredGeneration>, StorageError> {
+        nope()
+    }
+    fn generation_in_view(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn generations_in_state(&self, _: &str, _: u16) -> Result<Vec<StoredGeneration>, StorageError> {
+        nope()
+    }
+    fn units(&self, _: &Id, _: Option<&str>, _: u16) -> Result<Vec<StoredUnit>, StorageError> {
+        nope()
+    }
+    fn unit(&self, _: &Id, _: &str) -> Result<Option<StoredUnit>, StorageError> {
+        nope()
+    }
+    fn nodes(&self, _: &Id, _: &str) -> Result<Vec<StoredNode>, StorageError> {
+        nope()
+    }
+    fn edges(&self, _: &Id, _: &str) -> Result<Vec<StoredEdge>, StorageError> {
+        nope()
+    }
+    fn nodes_named(&self, _: &Id, _: &str, _: u16) -> Result<Vec<StoredNode>, StorageError> {
+        nope()
+    }
+    fn published(&self, _: &Id) -> Result<Option<StoredPublished>, StorageError> {
+        nope()
+    }
+    fn view(&self, _: &Id) -> Result<Option<StoredView>, StorageError> {
+        nope()
+    }
+    fn live_pins(&self, _: &Id, _: i64) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn overlay(&self, _: &Id) -> Result<Option<StoredOverlay>, StorageError> {
+        nope()
+    }
+    fn overlay_for(&self, _: &Id, _: &Id) -> Result<Option<StoredOverlay>, StorageError> {
+        nope()
+    }
+    fn overlays(&self, _: &Id) -> Result<Vec<StoredOverlay>, StorageError> {
+        nope()
+    }
+    fn overlays_due(&self, _: i64, _: u16) -> Result<Vec<StoredOverlay>, StorageError> {
+        nope()
+    }
+}
+impl IndexRepository for Unsupported {
+    fn put_source_config(&mut self, _: &StoredSourceConfig, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_repository_source(&mut self, _: &StoredRepositorySource) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_worktrees(&mut self, _: &Id, _: &[StoredWorktree]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_run(&mut self, _: &StoredIndexRun) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_run(&mut self, _: &StoredIndexRun, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_generation(&mut self, _: &StoredGeneration) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_generation(&mut self, _: &StoredGeneration) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_unit(
+        &mut self,
+        _: &StoredUnit,
+        _: &[StoredNode],
+        _: &[StoredEdge],
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn inherit_units(&mut self, _: &Id, _: &Id, _: &[String]) -> Result<u64, StorageError> {
+        nope()
+    }
+    fn set_edge_targets(&mut self, _: &Id, _: &[EdgeTargetUpdate]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn reclaim_generation(&mut self, _: &Id, _: u32) -> Result<u64, StorageError> {
+        nope()
+    }
+    fn insert_view(&mut self, _: &StoredView) -> Result<(), StorageError> {
+        nope()
+    }
+    fn publish(&mut self, _: &Id, _: &Id, _: i64) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn remove_view(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_overlay(&mut self, _: &StoredOverlay, _: Option<i64>) -> Result<(), StorageError> {
         nope()
     }
 }

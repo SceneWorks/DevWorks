@@ -6620,5 +6620,47 @@
     "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[],\"pin\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"Low\",\"pinId\":\"id-a\",\"pinRevision\":\"1\"},\"pinEligible\":true,\"pinReason\":\"Failover\"}}",
     "typedValid": false,
     "schemaValid": true
+  },
+  {
+    "id": "r2-input-indexing.status",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.status\",\"repositoryId\":\"id-a\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-indexing.status",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"indexing.status\",\"value\":{\"repositoryId\":\"id-a\",\"currentViewIds\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"freshness\":{\"state\":\"Stale\",\"indexedCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/main\",\"indexedAtMs\":\"1\",\"observedAtMs\":\"2\",\"configurationCurrent\":true,\"reasons\":[\"head-moved\"]},\"languages\":[{\"languageId\":\"rust\",\"name\":\"Rust\",\"mode\":\"Structural\",\"grammar\":\"tree-sitter-rust 0.24.2\",\"files\":\"3\",\"structuralFiles\":\"2\",\"textFiles\":\"0\",\"parseErrorFiles\":\"1\",\"skippedFiles\":\"0\"}],\"semanticPacks\":[{\"packId\":\"rust\",\"state\":\"NotInstalled\",\"languages\":[\"rust\"],\"note\":\"the managed Rust pack is not installed\"}],\"overlays\":[{\"overlayId\":\"overlay-a\",\"revision\":\"3\",\"worktreeId\":\"worktree-a\",\"state\":\"Ready\",\"viewId\":\"view-a\",\"baseCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/topic\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"runId\":\"operation-a\",\"updatedAtMs\":\"3\",\"expiresAtMs\":\"4\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-indexing.status-plain",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"indexing.status\",\"value\":{\"repositoryId\":\"id-a\",\"currentViewIds\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-indexing-status-freshness",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"indexing.status\",\"value\":{\"repositoryId\":\"id-a\",\"currentViewIds\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"freshness\":{\"state\":\"Stale\",\"indexedCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/main\",\"indexedAtMs\":\"1\",\"observedAtMs\":\"2\",\"configurationCurrent\":true,\"reasons\":[\"head-moved\"]},\"languages\":[{\"languageId\":\"rust\",\"name\":\"Rust\",\"mode\":\"Structural\",\"grammar\":\"tree-sitter-rust 0.24.2\",\"files\":\"3\",\"structuralFiles\":\"2\",\"textFiles\":\"0\",\"parseErrorFiles\":\"1\",\"skippedFiles\":\"0\"}],\"semanticPacks\":[{\"packId\":\"rust\",\"state\":\"NotInstalled\",\"languages\":[\"rust\"],\"note\":\"the managed Rust pack is not installed\"}],\"overlays\":[{\"overlayId\":\"overlay-a\",\"revision\":\"3\",\"worktreeId\":\"worktree-a\",\"state\":\"Ready\",\"viewId\":\"view-a\",\"baseCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/topic\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"runId\":\"operation-a\",\"updatedAtMs\":\"3\",\"expiresAtMs\":\"4\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-overlay-unknown-state",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"indexing.status\",\"value\":{\"repositoryId\":\"id-a\",\"currentViewIds\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"freshness\":{\"state\":\"Stale\",\"indexedCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/main\",\"indexedAtMs\":\"1\",\"observedAtMs\":\"2\",\"configurationCurrent\":true,\"reasons\":[\"head-moved\"]},\"languages\":[{\"languageId\":\"rust\",\"name\":\"Rust\",\"mode\":\"Structural\",\"grammar\":\"tree-sitter-rust 0.24.2\",\"files\":\"3\",\"structuralFiles\":\"2\",\"textFiles\":\"0\",\"parseErrorFiles\":\"1\",\"skippedFiles\":\"0\"}],\"semanticPacks\":[{\"packId\":\"rust\",\"state\":\"NotInstalled\",\"languages\":[\"rust\"],\"note\":\"the managed Rust pack is not installed\"}],\"overlays\":[{\"overlayId\":\"overlay-a\",\"revision\":\"3\",\"worktreeId\":\"worktree-a\",\"state\":\"Warm\",\"viewId\":\"view-a\",\"baseCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/topic\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"runId\":\"operation-a\",\"updatedAtMs\":\"3\",\"expiresAtMs\":\"4\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-language-unknown-mode",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"indexing.status\",\"value\":{\"repositoryId\":\"id-a\",\"currentViewIds\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"freshness\":{\"state\":\"Stale\",\"indexedCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/main\",\"indexedAtMs\":\"1\",\"observedAtMs\":\"2\",\"configurationCurrent\":true,\"reasons\":[\"head-moved\"]},\"languages\":[{\"languageId\":\"rust\",\"name\":\"Rust\",\"mode\":\"Semantic\",\"grammar\":\"tree-sitter-rust 0.24.2\",\"files\":\"3\",\"structuralFiles\":\"2\",\"textFiles\":\"0\",\"parseErrorFiles\":\"1\",\"skippedFiles\":\"0\"}],\"semanticPacks\":[{\"packId\":\"rust\",\"state\":\"NotInstalled\",\"languages\":[\"rust\"],\"note\":\"the managed Rust pack is not installed\"}],\"overlays\":[{\"overlayId\":\"overlay-a\",\"revision\":\"3\",\"worktreeId\":\"worktree-a\",\"state\":\"Ready\",\"viewId\":\"view-a\",\"baseCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/topic\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"runId\":\"operation-a\",\"updatedAtMs\":\"3\",\"expiresAtMs\":\"4\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

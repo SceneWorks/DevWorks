@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+pub mod indexing;
 pub mod projects;
 
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
@@ -405,6 +406,15 @@ impl Shell {
             Route::Repositories => {
                 self.load_projects();
                 self.load_repositories();
+                if self.projects.indexing.sources.is_none() {
+                    self.load_index_sources();
+                }
+            }
+            Route::Indexing => {
+                if self.projects.indexing.sources.is_none() {
+                    self.load_index_sources();
+                }
+                self.index_act(vec![indexing::IndexAction::Runs]);
             }
             _ => {}
         }
@@ -1061,6 +1071,9 @@ impl Shell {
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
         let Some((slot, reply)) = self.apply_projects(slot, reply) else {
+            return;
+        };
+        let Some((slot, reply)) = self.apply_indexing(slot, reply) else {
             return;
         };
         match (slot, reply) {
@@ -2705,13 +2718,39 @@ impl Shell {
             Route::Settings => {
                 let online = self.online();
                 let mut actions = Vec::new();
+                // Repository indexing sources sit with the repository paths (General).
+                let mut index_actions = Vec::new();
+                let up = online.is_ok();
+                let indexing = &mut self.projects.indexing;
+                let mut general = |ui: &mut Ui| {
+                    ui.add_space(8.0);
+                    indexing::sources_panel(ui, indexing, up, &mut index_actions);
+                    if widgets::secondary_button(ui, "Open indexing runs").clicked() {
+                        index_actions.push(indexing::IndexAction::Runs);
+                    }
+                };
                 self.settings.ui(
                     ui,
                     online.as_ref().map(|_| ()).map_err(String::as_str),
                     &mut actions,
+                    &mut general,
                 );
                 self.settings_actions(actions);
+                if index_actions
+                    .iter()
+                    .any(|a| matches!(a, indexing::IndexAction::Runs))
+                {
+                    self.route = Route::Indexing;
+                }
+                if self.projects.indexing.sources.is_none()
+                    && self.projects.indexing.sources_error.is_none()
+                    && online.is_ok()
+                {
+                    self.load_index_sources();
+                }
+                self.index_act(index_actions);
             }
+            Route::Indexing => self.indexing_screen(ui),
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
             Route::Portfolio => self.portfolio_screen(ui),

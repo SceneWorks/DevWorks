@@ -641,3 +641,154 @@ pub fn project_settings_validate(
             "expectedRevision": revision.to_string(), "entries": entries}),
     )
 }
+
+// ---------------------------------------------------------------------------------------------
+// Repository indexing (DW-23)
+
+/// `indexing.status` of one repository at schema revision 2 (freshness, languages, packs,
+/// overlays).
+pub fn index_status(backend: &dyn Backend, repository: &str) -> Vec<u8> {
+    at_revision(
+        query_frame(
+            backend,
+            "indexing.status",
+            json!({"repositoryId": repository}),
+        ),
+        2,
+    )
+}
+pub fn index_status_result(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::RepositoryIndexStatus, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::IndexingStatus { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("indexing.status", &other)),
+    }
+}
+/// The newest index runs of the workspace or a project (one repository, when named).
+pub fn index_runs(
+    backend: &dyn Backend,
+    project: Option<&str>,
+    repository: Option<&str>,
+) -> Vec<u8> {
+    let scope = match project {
+        Some(p) => json!({"kind": "Project", "projectId": p}),
+        None => json!({"kind": "Workspace"}),
+    };
+    let mut body = json!({"scope": scope, "page": {"limit": 50}});
+    if let Some(r) = repository {
+        body["repositoryId"] = json!(r);
+    }
+    query_frame(backend, "indexing.runs", body)
+}
+pub fn index_runs_result(
+    outcome: QueryOutcome,
+) -> Result<(Vec<devworks_core::protocol::records::IndexRunRecord>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::IndexingRuns { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("indexing.runs", &other)),
+    }
+}
+/// `indexing.index` (or `.reindex`, a manual rebuild) of one repository's baseline under the
+/// section configuration revision the caller saw.
+pub fn index_repository(
+    backend: &dyn Backend,
+    repository: &str,
+    rebuild: bool,
+    section_revision: i64,
+) -> Vec<u8> {
+    command_frame(
+        backend,
+        if rebuild {
+            "indexing.reindex"
+        } else {
+            "indexing.index"
+        },
+        json!({"scope": {"kind": "Workspace"}, "repositoryIds": [repository],
+            "expectedSourceRevision": section_revision.max(1).to_string(),
+            "views": {"kind": "Published", "repositoryIds": [repository]}}),
+    )
+}
+/// `indexing.cancel` of a run (or of every run of the request batch it opened).
+pub fn cancel_index_run(backend: &dyn Backend, run: &str) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
+        "command": {"kind": "Cancel", "operationId": run}})
+    .to_string()
+    .into_bytes()
+}
+/// `indexing.refresh_overlay` of one worktree.
+pub fn refresh_overlay(
+    backend: &dyn Backend,
+    repository: &str,
+    worktree: &str,
+    section_revision: i64,
+) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
+        "command": {"kind": "RefreshOverlay", "repositoryId": repository, "worktreeId": worktree,
+            "expectedSourceRevision": section_revision.max(1).to_string()}})
+    .to_string()
+    .into_bytes()
+}
+/// `indexing.retire_view` of an overlay at its revision.
+pub fn retire_view(backend: &dyn Backend, view: &str, revision: &str) -> Vec<u8> {
+    command_frame(
+        backend,
+        "indexing.retire_view",
+        json!({"viewId": view, "expectedRevision": revision}),
+    )
+}
+pub fn index_run_result(
+    outcome: CommandOutcome,
+) -> Result<devworks_core::protocol::records::IndexRunRecord, Failure> {
+    match command_result(outcome)? {
+        OperationResult::IndexingIndex { value }
+        | OperationResult::IndexingReindex { value }
+        | OperationResult::IndexingCancel { value }
+        | OperationResult::IndexingRefreshOverlay { value } => Ok(value),
+        other => Err(unexpected("indexing", &other)),
+    }
+}
+pub fn index_mutation_result(outcome: CommandOutcome) -> Result<MutationSummary, Failure> {
+    match command_result(outcome)? {
+        OperationResult::IndexingConfigureSources { value }
+        | OperationResult::IndexingRetireView { value } => Ok(value),
+        other => Err(unexpected("indexing", &other)),
+    }
+}
+/// `indexing.configure_sources` of the workspace (or a project) section.
+#[allow(clippy::too_many_arguments)]
+pub fn configure_sources(
+    backend: &dyn Backend,
+    project: Option<&str>,
+    expected_revision: i64,
+    languages: &[String],
+    packages: &[String],
+    excludes: &[String],
+    max_file_bytes: i64,
+) -> Vec<u8> {
+    let scope = match project {
+        Some(p) => json!({"kind": "Project", "projectId": p}),
+        None => json!({"kind": "Workspace"}),
+    };
+    command_frame(
+        backend,
+        "indexing.configure_sources",
+        json!({"scope": scope, "expectedRevision": expected_revision.max(1).to_string(), "config": {
+            "structuralLanguages": languages, "semanticPackageIds": packages,
+            "excludePatterns": excludes, "maxFileBytes": max_file_bytes.max(1).to_string()}}),
+    )
+}
+/// `indexing.discover` of every visible section (the runtime scans before answering).
+pub fn discover(backend: &dyn Backend) -> Vec<u8> {
+    query_frame(
+        backend,
+        "indexing.discover",
+        json!({"scope": {"kind": "Workspace"}, "roots": [], "page": {"limit": PAGE_LIMIT}}),
+    )
+}
+pub fn discover_result(outcome: QueryOutcome) -> Result<(Vec<RepositoryRecord>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::IndexingDiscover { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("indexing.discover", &other)),
+    }
+}

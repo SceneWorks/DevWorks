@@ -2157,7 +2157,112 @@
         "repository_id": "Id",
         "current_view_ids": "Items<Id>",
         "coverage": "Coverage",
-        "last_run": "?IndexRunRecord"
+        "last_run": "?IndexRunRecord",
+        "freshness": "?IndexFreshness",
+        "languages": "?Items<LanguageCoverage>",
+        "semantic_packs": "?Items<SemanticPackStatus>",
+        "overlays": "?Items<OverlayStatus>"
+      },
+      "since": {
+        "freshness": 2,
+        "languages": 2,
+        "semantic_packs": 2,
+        "overlays": 2
+      }
+    },
+    "IndexFreshnessState": {
+      "kind": "enum",
+      "values": [
+        "Current",
+        "Stale",
+        "Indexing",
+        "NotIndexed",
+        "Failed"
+      ]
+    },
+    "IndexFreshness": {
+      "kind": "record",
+      "fields": {
+        "state": "IndexFreshnessState",
+        "indexed_commit": "?Label",
+        "head_commit": "?Label",
+        "head_ref": "?Label",
+        "indexed_at_ms": "?Counter",
+        "observed_at_ms": "?Counter",
+        "configuration_current": "bool",
+        "reasons": "Items<Label>"
+      }
+    },
+    "LanguageCoverageMode": {
+      "kind": "enum",
+      "values": [
+        "Structural",
+        "TextFallback",
+        "NotSelected"
+      ]
+    },
+    "LanguageCoverage": {
+      "kind": "record",
+      "fields": {
+        "language_id": "Label",
+        "name": "Label",
+        "mode": "LanguageCoverageMode",
+        "grammar": "?Label",
+        "files": "Counter",
+        "structural_files": "Counter",
+        "text_files": "Counter",
+        "parse_error_files": "Counter",
+        "skipped_files": "Counter",
+        "note": "?Content"
+      }
+    },
+    "SemanticPackState": {
+      "kind": "enum",
+      "values": [
+        "NotInstalled",
+        "Unavailable",
+        "Enabled",
+        "Applied",
+        "Disabled"
+      ]
+    },
+    "SemanticPackStatus": {
+      "kind": "record",
+      "fields": {
+        "pack_id": "Id",
+        "state": "SemanticPackState",
+        "languages": "Items<Label>",
+        "note": "?Content"
+      }
+    },
+    "OverlayState": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Indexing",
+        "Ready",
+        "Failed",
+        "Stale",
+        "Expired",
+        "Unavailable"
+      ]
+    },
+    "OverlayStatus": {
+      "kind": "record",
+      "fields": {
+        "overlay_id": "Id",
+        "revision": "Revision",
+        "worktree_id": "Id",
+        "state": "OverlayState",
+        "view_id": "?Id",
+        "base_commit": "?Label",
+        "head_commit": "?Label",
+        "head_ref": "?Label",
+        "capture_digest": "?Label",
+        "run_id": "?Id",
+        "reason": "?Content",
+        "updated_at_ms": "Counter",
+        "expires_at_ms": "Counter"
       }
     },
     "ConsumerStatus": {
@@ -3532,7 +3637,7 @@
       "result": "RepositoryIndexStatus",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: freshness (the indexed and observed HEAD commits, configuration currency and stale reasons), per-language structural/text coverage with grammar identity, semantic pack state, and every overlay of the repository with its lifecycle state (Queued, Indexing, Ready, Failed, Stale, Expired, Unavailable) and snapshot provenance."
     },
     "indexing.runs": {
       "operation": "indexing.runs",
@@ -6806,6 +6911,10 @@
       2
     ],
     "router.availability": [
+      1,
+      2
+    ],
+    "indexing.status": [
       1,
       2
     ]

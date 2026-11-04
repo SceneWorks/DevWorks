@@ -1,0 +1,1215 @@
+//! Worktree overlays (CODE-09/10/11): the view of one worktree composed over its repository's
+//! published baseline, without changing the baseline.
+//!
+//! # Snapshot identity
+//!
+//! An overlay snapshot is identified by repository, baseline generation and commit, the
+//! worktree's `HEAD` commit, the worktree, and a capture digest over its staged, unstaged and
+//! indexable untracked changes (every changed path with its action and content digest; ignored
+//! and excluded files never count). [`observe`] computes it without writing; the refresh command
+//! decides reuse against it, and the build re-captures it and checks every file it stages still
+//! has the captured content, so a concurrent edit makes the build retry rather than publish a
+//! mix.
+//!
+//! # Layers
+//!
+//! The branch layer holds the units that differ between the baseline commit and `HEAD`
+//! (`git diff -M base head`: a direct diff, as the retained overlay did), read from the commit;
+//! the worktree layer holds the units the worktree changes against `HEAD`, read from the
+//! worktree (no-follow, bounded). Deletions are `Delete` units and renames are a delete of the
+//! old path plus a replacement recording the previous path, so renamed-away and deleted data is
+//! hidden. Directory units of affected directories are rebuilt from the composed tree. A layer
+//! links its unresolved references against itself first and then the lower layers, skipping
+//! units a higher layer replaced.
+//!
+//! # Lifecycle
+//!
+//! `Queued` → `Indexing` → `Ready`, or `Failed` (with its reason; a transient failure returns it
+//! to `Queued` for the retry). A ready overlay becomes `Stale` when its baseline is republished or
+//! its worktree changes (observed by housekeeping, which queues the rebuild), `Expired` once its
+//! retention passes (its view and layers go; the record stays), and `Unavailable` when retired
+//! or when its index is removed. Only the run an overlay names can change its state.
+use super::config::EffectiveConfig;
+use super::git::{Change, EMPTY_TREE_SHA1, EMPTY_TREE_SHA256, TreeEntry};
+use super::worker::{
+    Exec, PlanUnit, Stop, build_unit, coverage_of, dir_key, link_generation, plan, push_warning,
+    retire_unused, staged_keys,
+};
+use super::{
+    IndexEnv, OVERLAY_AGGREGATE, RUN_AGGREGATE, digest, effective_config, effective_config_tx,
+    history, new_run, record_of, section_config, section_key,
+};
+use crate::context::InvocationContext;
+use crate::fingerprint::sha256_hex;
+use crate::ports::IdKind;
+use crate::ports::indexing::SourceFault;
+use crate::ports::storage::*;
+use crate::protocol::records::Severity;
+use crate::protocol::results::{DomainDecision, OperationResult};
+use crate::protocol::{DomainErrorCode, Id, RevisionDimension};
+use crate::services::projects::visible_repository;
+use crate::services::sessions::{Failure, Refusal, rev};
+use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
+
+/// Most changed paths one worktree capture reads (each bounded by the size limit).
+pub const MAX_LOCAL_CHANGES: usize = 20_000;
+/// Overlays observed per housekeeping pass (the next pass continues after the last one).
+pub const OBSERVED_PER_PASS: usize = 64;
+
+/// The observed snapshot of one worktree (or why it could not be observed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Observed(pub Result<Snapshot, String>);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    pub worktree_path: String,
+    pub base_generation: Id,
+    pub base_oid: String,
+    pub head_oid: Option<String>,
+    pub head_ref: Option<String>,
+    pub capture_digest: String,
+    pub local: Vec<LocalChange>,
+    pub refused: Vec<String>,
+}
+
+/// One captured worktree change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalChange {
+    pub path: String,
+    /// `None`: deleted.
+    pub content: Option<Captured>,
+    pub previous: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Captured {
+    /// `sha256:<hex>` of the bytes, or an `oversize:`/`link:` marker for content not read.
+    pub digest: String,
+    pub size: u64,
+    pub link: bool,
+}
+
+fn refuse(code: DomainErrorCode, kind: &'static str, id: Option<&Id>) -> Failure {
+    Refusal::new(code, kind, id.cloned()).into()
+}
+
+/// Reads one worktree file for capture.
+fn capture_file(env: &IndexEnv, root: &Path, path: &str, max: i64) -> Option<Captured> {
+    match env.source.read_file(root, path, max.max(0) as u64) {
+        Ok(bytes) => Some(Captured {
+            digest: format!("sha256:{}", sha256_hex(&bytes)),
+            size: bytes.len() as u64,
+            link: false,
+        }),
+        Err(SourceFault::TooLarge { size }) => Some(Captured {
+            digest: format!("oversize:{size}"),
+            size,
+            link: false,
+        }),
+        // A link is recorded as a link, never followed; anything else that cannot be read
+        // safely (a hard link, a device, an unsupported identity) is recorded unreadable.
+        Err(SourceFault::Refused(why)) => Some(Captured {
+            digest: if why.contains("LinkRefused") {
+                "link:".into()
+            } else {
+                "unreadable:".into()
+            },
+            size: 0,
+            link: true,
+        }),
+        // Vanished since Git listed it: a deletion.
+        Err(_) => None,
+    }
+}
+
+/// Observes the worktree's snapshot (Git and bounded file reads; nothing is written).
+pub fn observe(
+    env: &IndexEnv,
+    _ctx: &InvocationContext,
+    repository: &Id,
+    worktree: &Id,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Observed {
+    Observed(observe_inner(env, repository, worktree, stop))
+}
+fn observe_inner(
+    env: &IndexEnv,
+    repository: &Id,
+    worktree: &Id,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<Snapshot, String> {
+    let (wt, base, cfg) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        let wt = s
+            .indexing()
+            .worktrees(repository)?
+            .into_iter()
+            .find(|w| &w.worktree_id == worktree);
+        let base = match s.indexing().published(repository)? {
+            Some(p) => match s.indexing().view(&p.view_id)? {
+                Some(v) => s.indexing().generation(&v.baseline_id)?,
+                None => None,
+            },
+            None => None,
+        };
+        let cfg = effective_config(s.indexing(), s.projects(), repository)?;
+        Ok((wt, base, cfg))
+    })
+    .map_err(|e| e.to_string())?;
+    let wt = wt.ok_or("the worktree is not a recorded worktree of this repository")?;
+    let base = base.ok_or("the repository has no published baseline")?;
+    let ctx = env.host_context(None);
+    let git = super::git::Git {
+        runner: &*env.helpers,
+        ctx: &ctx,
+        program: &env.settings.git_program,
+        deadline: env.settings.git_deadline,
+        stop,
+    };
+    let root = PathBuf::from(&wt.path);
+    // The recorded path must still be a checkout (its own `.git` directory or a linked
+    // worktree's `.git` file), never an arbitrary directory.
+    match env.source.git_marker(&root) {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err("the worktree is no longer a checkout".into()),
+        Err(e) => return Err(format!("the worktree cannot be read: {e}")),
+    }
+    let head = git.head(&root).map_err(|e| e.to_string())?;
+    let head_ref = git.branch(&root).map_err(|e| e.to_string())?;
+    let against = head.clone().unwrap_or_else(|| {
+        if base.source_digest.len() == 64 {
+            EMPTY_TREE_SHA256.into()
+        } else {
+            EMPTY_TREE_SHA1.into()
+        }
+    });
+    let (changes, refused) = git
+        .local_changes(&root, &against)
+        .map_err(|e| e.to_string())?;
+    if changes.len() > MAX_LOCAL_CHANGES {
+        return Err(format!(
+            "the worktree has {} changed paths (more than {MAX_LOCAL_CHANGES}); exclude generated files or commit them",
+            changes.len()
+        ));
+    }
+    let mut local: BTreeMap<String, LocalChange> = BTreeMap::new();
+    for c in changes {
+        if stop() {
+            return Err("cancelled".into());
+        }
+        let (path, previous) = match c {
+            Change::Deleted(p) => {
+                if !cfg.path_excluded(&p) {
+                    local.insert(
+                        p.clone(),
+                        LocalChange {
+                            path: p,
+                            content: None,
+                            previous: None,
+                        },
+                    );
+                }
+                continue;
+            }
+            Change::Added(p) | Change::Modified(p) => (p, None),
+            Change::Renamed { from, to } => {
+                if !cfg.path_excluded(&from) {
+                    local.insert(
+                        from.clone(),
+                        LocalChange {
+                            path: from.clone(),
+                            content: None,
+                            previous: None,
+                        },
+                    );
+                }
+                (to, Some(from))
+            }
+        };
+        if cfg.path_excluded(&path) {
+            continue;
+        }
+        let content = capture_file(env, &root, &path, cfg.max_bytes_for(&path));
+        local.insert(
+            path.clone(),
+            LocalChange {
+                path,
+                content,
+                previous,
+            },
+        );
+    }
+    let local: Vec<LocalChange> = local.into_values().collect();
+    let mut basis = format!("{}\u{0}", head.as_deref().unwrap_or("unborn"));
+    for l in &local {
+        basis.push_str(&format!(
+            "{}\u{0}{}\u{0}{}\u{1}",
+            l.path,
+            l.content.as_ref().map_or("deleted", |c| c.digest.as_str()),
+            l.previous.as_deref().unwrap_or("")
+        ));
+    }
+    Ok(Snapshot {
+        worktree_path: wt.path.clone(),
+        base_generation: base.id.clone(),
+        base_oid: base.source_digest.clone(),
+        head_oid: head,
+        head_ref,
+        capture_digest: sha256_hex(basis.as_bytes()),
+        local,
+        refused,
+    })
+}
+
+/// Whether a stored overlay holds exactly this snapshot.
+fn same_snapshot(o: &StoredOverlay, s: &Snapshot) -> bool {
+    o.base_generation_id.as_ref() == Some(&s.base_generation)
+        && o.head_oid == s.head_oid
+        && o.capture_digest.as_deref() == Some(s.capture_digest.as_str())
+}
+
+/// `indexing.refresh_overlay`: reuse a live overlay of the same snapshot, otherwise queue its
+/// build.
+pub(crate) fn refresh(
+    env: &IndexEnv,
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    repository: &Id,
+    worktree: &Id,
+    expected: i64,
+    observed: Option<&Observed>,
+) -> Result<DomainDecision, Failure> {
+    let r = visible_repository(tx.projects(), ctx, repository)?;
+    if let Some(own) = ctx.project_id() {
+        let p = tx.projects().project(own)?;
+        if p.as_ref()
+            .is_none_or(|p| crate::services::runs::closed_to_work(&p.lifecycle))
+        {
+            return Err(refuse(
+                DomainErrorCode::Conflict,
+                "project_archived",
+                Some(&own.0),
+            ));
+        }
+        if !tx.projects().members(own)?.contains(&r.id) {
+            return Err(refuse(
+                DomainErrorCode::NotFound,
+                "repository",
+                Some(repository),
+            ));
+        }
+    }
+    if r.lifecycle != ACTIVE {
+        return Err(refuse(
+            DomainErrorCode::Conflict,
+            "repository_archived",
+            Some(repository),
+        ));
+    }
+    let section = section_key(ctx.project_id());
+    let current = section_config(tx.indexing(), &section)?;
+    if current.revision != expected {
+        return Err(Failure::Storage(StorageError::conflict(
+            RevisionDimension::Configuration,
+            "index_source_config",
+            Id::new(section).expect("valid section key"),
+            rev(expected),
+            rev(current.revision),
+        )));
+    }
+    let Some(wt) = tx
+        .indexing()
+        .worktrees(&r.id)?
+        .into_iter()
+        .find(|w| &w.worktree_id == worktree)
+    else {
+        return Err(refuse(
+            DomainErrorCode::NotFound,
+            "worktree",
+            Some(worktree),
+        ));
+    };
+    let Some(published) = tx.indexing().published(&r.id)? else {
+        return Err(refuse(
+            DomainErrorCode::ViewUnavailable,
+            "repository_view",
+            Some(&r.id),
+        ));
+    };
+    let base = tx
+        .indexing()
+        .view(&published.view_id)?
+        .map(|v| v.baseline_id);
+    let snapshot = observed.and_then(|o| o.0.as_ref().ok());
+    let now = tx.now_ms();
+    let existing = tx.indexing().overlay_for(&r.id, worktree)?;
+    if let Some(o) = &existing {
+        if let Some(active) = tx.indexing().active_run(&r.id, Some(&o.id))? {
+            // A build is queued or running: it captures the worktree when it runs.
+            return Ok(DomainDecision::NoChange {
+                result: OperationResult::IndexingRefreshOverlay {
+                    value: record_of(&active),
+                },
+            });
+        }
+        let state = super::status::effective_overlay_state(o, base.as_ref(), now);
+        if state == OVERLAY_READY
+            && snapshot.is_some_and(|s| same_snapshot(o, s))
+            && let Some(run) = o
+                .run_id
+                .as_ref()
+                .map(|id| tx.indexing().run(id))
+                .transpose()?
+                .flatten()
+        {
+            // The same snapshot is live: reused, never rebuilt.
+            return Ok(DomainDecision::NoChange {
+                result: OperationResult::IndexingRefreshOverlay {
+                    value: record_of(&run),
+                },
+            });
+        }
+    }
+    let effective = effective_config_tx(tx, &r.id)?;
+    let overlay_id = existing
+        .as_ref()
+        .map_or_else(|| tx.new_id(IdKind::Overlay), |o| o.id.clone());
+    let run = new_run(
+        tx,
+        RUN_OVERLAY,
+        &r.id,
+        ctx.project_id(),
+        Some(&overlay_id),
+        &effective,
+        current.revision,
+        ctx.principal(),
+        env.settings.max_attempts,
+    );
+    tx.indexing().insert_run(&run)?;
+    let ttl = env.settings.overlay_ttl_ms;
+    let next = match existing {
+        None => StoredOverlay {
+            id: overlay_id.clone(),
+            repository_id: r.id.clone(),
+            worktree_id: worktree.clone(),
+            worktree_path: wt.path.clone(),
+            state: OVERLAY_QUEUED.into(),
+            revision: 1,
+            base_generation_id: None,
+            base_oid: None,
+            head_oid: None,
+            head_ref: None,
+            capture_digest: None,
+            branch_generation_id: None,
+            worktree_generation_id: None,
+            view_id: None,
+            run_id: Some(run.id.clone()),
+            reason: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+            expires_at_ms: now + ttl,
+        },
+        Some(o) => StoredOverlay {
+            state: OVERLAY_QUEUED.into(),
+            revision: o.revision + 1,
+            worktree_path: wt.path.clone(),
+            run_id: Some(run.id.clone()),
+            reason: None,
+            updated_at_ms: now,
+            expires_at_ms: now + ttl,
+            ..o
+        },
+    };
+    let expected_overlay = (next.revision > 1).then_some(next.revision - 1);
+    tx.indexing().put_overlay(&next, expected_overlay)?;
+    history(
+        tx,
+        ctx.principal(),
+        ctx.project_id(),
+        (OVERLAY_AGGREGATE, &overlay_id, next.revision),
+        "IndexOverlayRequested",
+        json!({
+            "repositoryId": r.id.as_str(), "worktreeId": worktree.as_str(), "runId": run.id.as_str(),
+            "observedCapture": snapshot.map(|s| s.capture_digest.clone()),
+            "observedHead": snapshot.and_then(|s| s.head_oid.clone()),
+            "principalKind": format!("{:?}", ctx.principal_kind()),
+        }),
+    )?;
+    history(
+        tx,
+        ctx.principal(),
+        ctx.project_id(),
+        (RUN_AGGREGATE, &run.id, run.revision),
+        "IndexRunQueued",
+        json!({"kind": RUN_OVERLAY, "repositoryId": r.id.as_str(), "overlayId": overlay_id.as_str(),
+            "principalKind": format!("{:?}", ctx.principal_kind())}),
+    )?;
+    Ok(DomainDecision::Applied {
+        result: OperationResult::IndexingRefreshOverlay {
+            value: record_of(&run),
+        },
+    })
+}
+
+/// Sets an overlay's state on behalf of the run it names (a stale run changes nothing).
+pub(crate) fn settle_overlay(
+    tx: &mut dyn WriteTransaction,
+    overlay: &Id,
+    run: &Id,
+    state: &str,
+    reason: Option<&str>,
+) -> Result<(), StorageError> {
+    let Some(mut o) = tx.indexing().overlay(overlay)? else {
+        return Ok(());
+    };
+    if o.run_id.as_ref() != Some(run)
+        || matches!(o.state.as_str(), OVERLAY_EXPIRED | OVERLAY_UNAVAILABLE)
+    {
+        return Ok(());
+    }
+    let expected = o.revision;
+    o.revision += 1;
+    o.state = state.into();
+    o.reason = reason.map(|r| r.chars().take(4096).collect());
+    o.updated_at_ms = tx.now_ms();
+    tx.indexing().put_overlay(&o, Some(expected))
+}
+
+/// The claimed run's overlay is now indexing.
+pub(crate) fn mark_indexing(
+    tx: &mut dyn WriteTransaction,
+    overlay: &Id,
+    run: &Id,
+) -> Result<(), StorageError> {
+    settle_overlay(tx, overlay, run, OVERLAY_INDEXING, None)
+}
+
+/// Ends an overlay's derived data: its active run is cancelled, its view removed and its layers
+/// retired; the record (and history) stays with `state`. Returns the new revision.
+fn end_overlay(
+    tx: &mut dyn WriteTransaction,
+    o: &StoredOverlay,
+    state: &str,
+    reason: &str,
+) -> Result<i64, StorageError> {
+    let now = tx.now_ms();
+    if let Some(mut run) = tx.indexing().active_run(&o.repository_id, Some(&o.id))? {
+        let expected = run.revision;
+        run.revision += 1;
+        run.cancel_requested_at_ms = Some(now);
+        if run.state == RUN_QUEUED {
+            run.state = RUN_CANCELLED.into();
+            run.stage = "cancelled".into();
+            run.finished_at_ms = Some(now);
+        } else {
+            run.stage = "cancelling".into();
+        }
+        tx.indexing().update_run(&run, expected)?;
+    }
+    if let Some(v) = &o.view_id {
+        let named = tx
+            .indexing()
+            .published(&o.repository_id)?
+            .is_some_and(|p| &p.view_id == v);
+        if !named && tx.indexing().view(v)?.is_some() {
+            tx.indexing().remove_view(v)?;
+        }
+    }
+    for g in [
+        o.branch_generation_id.as_ref(),
+        o.worktree_generation_id.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        retire_unused(tx, g)?;
+    }
+    let mut next = o.clone();
+    next.revision += 1;
+    next.state = state.into();
+    next.reason = Some(reason.into());
+    next.view_id = None;
+    next.updated_at_ms = now;
+    tx.indexing().put_overlay(&next, Some(o.revision))?;
+    Ok(next.revision)
+}
+
+/// `indexing.retire_view` of an overlay.
+pub(crate) fn retire_overlay(
+    tx: &mut dyn WriteTransaction,
+    o: &StoredOverlay,
+    reason: &str,
+) -> Result<i64, StorageError> {
+    end_overlay(tx, o, OVERLAY_UNAVAILABLE, reason)
+}
+
+/// Retention expiry of an overlay (housekeeping).
+pub(crate) fn expire_overlay(
+    tx: &mut dyn WriteTransaction,
+    o: &StoredOverlay,
+) -> Result<(), StorageError> {
+    let revision = end_overlay(tx, o, OVERLAY_EXPIRED, "the overlay retention expired")?;
+    let host = tx.store().host_actor.clone();
+    history(
+        tx,
+        &host,
+        None,
+        (OVERLAY_AGGREGATE, &o.id, revision),
+        "IndexOverlayExpired",
+        json!({"worktreeId": o.worktree_id.as_str(), "principalKind": "Host"}),
+    )
+}
+
+/// Housekeeping observation: ready overlays whose worktree or baseline moved are marked stale
+/// and rebuilt; stale ones without a build get one. Returns (marked stale, builds queued).
+pub(crate) fn observe_all(
+    env: &IndexEnv,
+    cursor: &std::sync::Mutex<Option<Id>>,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<(usize, usize), StorageError> {
+    // A bounded slice per pass, continuing after the overlay the previous pass ended at (and
+    // wrapping around), so every live overlay is observed in turn.
+    let start = cursor.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let mut all = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        let mut out = Vec::new();
+        let mut after = None;
+        loop {
+            let page = s.projects().repositories(
+                &RepositoryFilter::default(),
+                after.as_ref(),
+                MAX_PAGE,
+            )?;
+            for r in &page {
+                for o in s.indexing().overlays(&r.id)? {
+                    if matches!(o.state.as_str(), OVERLAY_READY | OVERLAY_STALE) {
+                        out.push(o);
+                    }
+                }
+            }
+            if page.len() < MAX_PAGE as usize {
+                return Ok(out);
+            }
+            after = page.last().map(|r| r.id.clone());
+        }
+    })?;
+    all.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+    let split = start
+        .as_ref()
+        .map_or(0, |c| all.partition_point(|o| o.id.as_str() <= c.as_str()));
+    let split = split.min(all.len());
+    all.rotate_left(split);
+    all.truncate(OBSERVED_PER_PASS);
+    let next = all.last().map(|o| o.id.clone());
+    let overlays = all;
+    *cursor.lock().unwrap_or_else(|p| p.into_inner()) = next;
+    let (mut stale, mut queued) = (0, 0);
+    let ctx = env.host_context(None);
+    for o in overlays {
+        if stop() {
+            break;
+        }
+        let moved = match observe(env, &ctx, &o.repository_id, &o.worktree_id, stop).0 {
+            Ok(s) => !same_snapshot(&o, &s),
+            // Unobservable (the worktree went away): leave it for retirement or expiry.
+            Err(_) => false,
+        };
+        if o.state == OVERLAY_READY && !moved {
+            continue;
+        }
+        let ttl = env.settings.overlay_ttl_ms;
+        let max = env.settings.max_attempts;
+        let did = run_write(&*env.store, WriteOptions::default(), move |tx| {
+            let Some(cur) = tx.indexing().overlay(&o.id)? else {
+                return Ok((false, false));
+            };
+            if cur.revision != o.revision
+                || tx
+                    .indexing()
+                    .active_run(&cur.repository_id, Some(&cur.id))?
+                    .is_some()
+            {
+                return Ok((false, false));
+            }
+            let section = section_config(tx.indexing(), WORKSPACE_SCOPE_KEY)?;
+            let effective = effective_config_tx(tx, &cur.repository_id)?;
+            let host = tx.store().host_actor.clone();
+            let run = new_run(
+                tx,
+                RUN_OVERLAY,
+                &cur.repository_id,
+                None,
+                Some(&cur.id),
+                &effective,
+                section.revision,
+                &host,
+                max,
+            );
+            tx.indexing().insert_run(&run)?;
+            let now = tx.now_ms();
+            let mut next = cur.clone();
+            next.revision += 1;
+            next.state = OVERLAY_STALE.into();
+            next.reason = Some(
+                if moved {
+                    "the worktree changed"
+                } else {
+                    "the repository baseline moved"
+                }
+                .into(),
+            );
+            next.run_id = Some(run.id.clone());
+            next.updated_at_ms = now;
+            next.expires_at_ms = next.expires_at_ms.max(now + ttl.min(60_000));
+            tx.indexing().put_overlay(&next, Some(cur.revision))?;
+            history(
+                tx,
+                &host,
+                None,
+                (OVERLAY_AGGREGATE, &cur.id, next.revision),
+                "IndexOverlayStale",
+                json!({"reason": next.reason, "runId": run.id.as_str(), "principalKind": "Host"}),
+            )?;
+            Ok((cur.state == OVERLAY_READY, true))
+        })?;
+        stale += usize::from(did.0);
+        queued += usize::from(did.1);
+    }
+    Ok((stale, queued))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The build
+
+/// Builds and publishes the overlay of a claimed overlay run.
+pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
+    let env = exec.w.env.clone();
+    let Some(overlay_id) = exec.run.overlay_id.clone() else {
+        return Err(Stop::det(
+            "overlay_missing",
+            "an overlay run names no overlay",
+        ));
+    };
+    let repo_id = exec.run.repository_id.clone();
+    let (overlay, repo) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        Ok((
+            s.indexing().overlay(&overlay_id)?,
+            s.projects().repository(&repo_id)?,
+        ))
+    })
+    .map_err(Stop::storage)?;
+    let Some(overlay) = overlay else {
+        return Err(Stop::det("overlay_missing", "the overlay record is gone"));
+    };
+    let Some(repo) = repo.filter(|r| r.lifecycle == ACTIVE) else {
+        return Err(Stop::det(
+            "repository_unavailable",
+            "the repository is not an active registration",
+        ));
+    };
+    exec.stage("capturing")?;
+    let stop_flag = exec.stop.clone();
+    let stopping = &exec.w.stopping;
+    let stop = move || stop_flag.load(Ordering::SeqCst) || stopping.load(Ordering::SeqCst);
+    let snap = observe_inner(&env, &repo_id, &overlay.worktree_id, &stop).map_err(|e| {
+        if stop() {
+            Stop::Cancelled
+        } else if e.contains("no published baseline") {
+            Stop::det("not_indexed", e)
+        } else if e.contains("not a recorded worktree") {
+            Stop::det("worktree_missing", e)
+        } else {
+            Stop::transient("capture", e)
+        }
+    })?;
+    for p in snap.refused.iter().take(16) {
+        push_warning(
+            &mut exec.warnings,
+            "path_refused",
+            format!("{p:?} is not a safe relative UTF-8 path; skipped"),
+        );
+    }
+    let (cfg, base_view) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        Ok((
+            effective_config(s.indexing(), s.projects(), &repo_id)?,
+            s.indexing().published(&repo_id)?,
+        ))
+    })
+    .map_err(Stop::storage)?;
+    let base_pointer = base_view.map_or(0, |p| p.revision);
+    let root = PathBuf::from(&snap.worktree_path);
+    let head = snap.head_oid.clone();
+    if let Some(h) = &head {
+        let h = h.clone();
+        exec.fenced(WritePriority::Authoritative, move |_, r| {
+            r.source_oid = Some(h);
+            Ok(())
+        })?;
+    }
+
+    // The branch layer: base..HEAD.
+    let mut layers: Vec<Id> = vec![snap.base_generation.clone()];
+    let mut head_entries: Vec<TreeEntry> = Vec::new();
+    let mut branch_generation: Option<Id> = None;
+    let git = exec.git(&stop);
+    if let Some(h) = &head {
+        let (entries, _) = git.tree(&root, h).map_err(Stop::git)?;
+        head_entries = entries;
+    }
+    if let Some(h) = head.as_ref().filter(|h| **h != snap.base_oid) {
+        exec.stage("branch")?;
+        let git = exec.git(&stop);
+        let (changes, _) = match git.diff(&root, &snap.base_oid, h) {
+            Ok(c) => c,
+            Err(e) if e.cancelled() => return Err(Stop::Cancelled),
+            Err(e) => {
+                return Err(Stop::det(
+                    "base_unavailable",
+                    format!("the baseline commit cannot be compared: {e}"),
+                ));
+            }
+        };
+        let units = layer_units(
+            &env,
+            &cfg,
+            &head_entries,
+            &changes,
+            &mut exec.warnings,
+            env.source.case_insensitive(&root),
+        );
+        let stored = new_layer(exec, &repo_id, LAYER_BRANCH, h, &snap, &layers)?;
+        stage_layer(exec, &root, &repo.name, &stored, &units, None, &stop)?;
+        link_generation(exec, &stored, &layers, &stop)?;
+        seal_layer(exec, &stored)?;
+        layers.insert(0, stored.clone());
+        branch_generation = Some(stored);
+    }
+
+    // The worktree layer: staged, unstaged and untracked changes against HEAD.
+    exec.stage("worktree")?;
+    let local_changes: Vec<Change> = snap
+        .local
+        .iter()
+        .flat_map(|l| match (&l.content, &l.previous) {
+            (None, _) => vec![Change::Deleted(l.path.clone())],
+            (Some(_), Some(prev)) => vec![Change::Renamed {
+                from: prev.clone(),
+                to: l.path.clone(),
+            }],
+            (Some(_), None) => vec![Change::Modified(l.path.clone())],
+        })
+        .collect();
+    // The composed tree: HEAD's entries with the worktree's adds and deletes applied.
+    let mut composed: BTreeMap<String, TreeEntry> = head_entries
+        .iter()
+        .map(|e| (e.path.clone(), e.clone()))
+        .collect();
+    for l in &snap.local {
+        match &l.content {
+            None => {
+                composed.remove(&l.path);
+            }
+            Some(c) => {
+                composed.insert(
+                    l.path.clone(),
+                    TreeEntry {
+                        mode: match (c.link, c.digest.as_str()) {
+                            (true, "unreadable:") => super::worker::UNREADABLE_MODE.into(),
+                            (true, _) => "120000".into(),
+                            _ => "100644".into(),
+                        },
+                        oid: c.digest.clone(),
+                        size: c.size,
+                        path: l.path.clone(),
+                    },
+                );
+            }
+        }
+    }
+    let composed: Vec<TreeEntry> = composed.into_values().collect();
+    let units = layer_units(
+        &env,
+        &cfg,
+        &composed,
+        &local_changes,
+        &mut exec.warnings,
+        env.source.case_insensitive(&root),
+    );
+    let capture = snap.capture_digest.clone();
+    let wgen = new_layer(exec, &repo_id, LAYER_WORKTREE, &capture, &snap, &layers)?;
+    let expected: BTreeMap<String, String> = snap
+        .local
+        .iter()
+        .filter_map(|l| {
+            l.content
+                .as_ref()
+                .map(|c| (l.path.clone(), c.digest.clone()))
+        })
+        .collect();
+    stage_layer(
+        exec,
+        &root,
+        &repo.name,
+        &wgen,
+        &units,
+        Some(&expected),
+        &stop,
+    )?;
+    link_generation(exec, &wgen, &layers, &stop)?;
+    seal_layer(exec, &wgen)?;
+
+    // Publication: the view of exactly these layers, while the baseline is still the one it
+    // composes over.
+    exec.stage("publishing")?;
+    let view_id = env.ids.next_id(IdKind::View);
+    let (o_id, base_gen, repo2) = (
+        overlay_id.clone(),
+        snap.base_generation.clone(),
+        repo_id.clone(),
+    );
+    let snap2 = snap.clone();
+    let ttl = env.settings.overlay_ttl_ms;
+    let published = exec.fenced(WritePriority::Authoritative, move |tx, r| {
+        let current = tx.indexing().published(&repo2)?;
+        if current.as_ref().map_or(0, |p| p.revision) != base_pointer {
+            return Ok(Err(
+                "the repository baseline moved while the overlay was built",
+            ));
+        }
+        let Some(mut o) = tx.indexing().overlay(&o_id)? else {
+            return Ok(Err("the overlay record is gone"));
+        };
+        if o.run_id.as_ref() != Some(&r.id)
+            || matches!(o.state.as_str(), OVERLAY_EXPIRED | OVERLAY_UNAVAILABLE)
+        {
+            return Ok(Err("the overlay was retired or rebuilt by another run"));
+        }
+        let view = StoredView {
+            view_id: view_id.clone(),
+            repository_id: repo2.clone(),
+            view_digest: digest(&[
+                repo2.as_str(),
+                base_gen.as_str(),
+                branch_generation.as_ref().map_or("", Id::as_str),
+                wgen.as_str(),
+                o.worktree_id.as_str(),
+                &snap2.capture_digest,
+            ]),
+            baseline_id: base_gen.clone(),
+            branch_id: branch_generation.clone(),
+            worktree_id: Some(wgen.clone()),
+            coverage: json!({
+                "base": snap2.base_oid, "head": snap2.head_oid, "headRef": snap2.head_ref,
+                "worktreeId": o.worktree_id.as_str(), "captureDigest": snap2.capture_digest,
+            }),
+        };
+        tx.indexing().insert_view(&view)?;
+        // The previous view of this overlay and its layers go.
+        let previous = o.clone();
+        if let Some(v) = &previous.view_id
+            && tx.indexing().view(v)?.is_some()
+        {
+            tx.indexing().remove_view(v)?;
+        }
+        let now = tx.now_ms();
+        let expected = o.revision;
+        o.revision += 1;
+        o.state = OVERLAY_READY.into();
+        o.base_generation_id = Some(base_gen.clone());
+        o.base_oid = Some(snap2.base_oid.clone());
+        o.head_oid = snap2.head_oid.clone();
+        o.head_ref = snap2.head_ref.clone();
+        o.capture_digest = Some(snap2.capture_digest.clone());
+        o.branch_generation_id = branch_generation.clone();
+        o.worktree_generation_id = Some(wgen.clone());
+        o.view_id = Some(view_id.clone());
+        o.reason = None;
+        o.updated_at_ms = now;
+        o.expires_at_ms = now + ttl;
+        tx.indexing().put_overlay(&o, Some(expected))?;
+        for g in [
+            previous.branch_generation_id.as_ref(),
+            previous.worktree_generation_id.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if Some(g) != o.branch_generation_id.as_ref()
+                && Some(g) != o.worktree_generation_id.as_ref()
+            {
+                retire_unused(tx, g)?;
+            }
+        }
+        r.state = RUN_SUCCEEDED.into();
+        r.stage = "published".into();
+        r.output_view_id = Some(view_id.clone());
+        r.finished_at_ms = Some(now);
+        r.owner = None;
+        r.lease_until_ms = None;
+        let host = tx.store().host_actor.clone();
+        history(
+            tx,
+            &host,
+            r.project_id.as_ref(),
+            (OVERLAY_AGGREGATE, &o.id, o.revision),
+            "IndexOverlayReady",
+            json!({
+                "viewId": view_id.as_str(), "base": snap2.base_oid, "head": snap2.head_oid,
+                "captureDigest": snap2.capture_digest, "worktreeId": o.worktree_id.as_str(),
+                "principalKind": "Host",
+            }),
+        )?;
+        Ok(Ok(()))
+    })?;
+    match published {
+        Ok(()) => {
+            exec.log("published", Severity::Info, "overlay ready", None);
+            Ok(())
+        }
+        Err(why) if why.contains("baseline moved") => Err(Stop::transient("base_moved", why)),
+        Err(why) => Err(Stop::det("overlay_superseded", why)),
+    }
+}
+
+/// The units of one layer: changed files (replaced or deleted) and the directories they affect,
+/// planned over the layer's full tree.
+fn layer_units(
+    env: &IndexEnv,
+    cfg: &EffectiveConfig,
+    tree: &[TreeEntry],
+    changes: &[Change],
+    warnings: &mut Vec<RunWarning>,
+    case_insensitive: bool,
+) -> Vec<LayerUnit> {
+    let mut renamed: BTreeMap<String, String> = BTreeMap::new();
+    let mut changed: BTreeSet<String> = BTreeSet::new();
+    for c in changes {
+        match c {
+            Change::Added(p) | Change::Modified(p) | Change::Deleted(p) => {
+                changed.insert(p.clone());
+            }
+            Change::Renamed { from, to } => {
+                changed.insert(from.clone());
+                changed.insert(to.clone());
+                renamed.insert(to.clone(), from.clone());
+            }
+        }
+    }
+    let (planned, _) = plan(env, cfg, tree, &renamed, warnings, case_insensitive);
+    let by_key: BTreeMap<String, PlanUnit> =
+        planned.into_iter().map(|u| (u.key.clone(), u)).collect();
+    // Affected directories: every ancestor of a changed path.
+    let mut dirs: BTreeSet<String> = BTreeSet::new();
+    for p in &changed {
+        let mut d = super::paths::parent(p).to_owned();
+        loop {
+            dirs.insert(dir_key(&d));
+            if d.is_empty() {
+                break;
+            }
+            d = super::paths::parent(&d).to_owned();
+        }
+    }
+    let mut out = Vec::new();
+    for key in changed.iter().chain(dirs.iter()) {
+        match by_key.get(key) {
+            Some(u) => out.push(LayerUnit::Replace(u.clone())),
+            // Deleted, renamed away or now excluded: masks the lower layers.
+            None => out.push(LayerUnit::Delete(key.clone())),
+        }
+    }
+    out
+}
+
+#[derive(Clone, Debug)]
+enum LayerUnit {
+    Replace(PlanUnit),
+    Delete(String),
+}
+
+fn new_layer(
+    exec: &mut Exec<'_>,
+    repository: &Id,
+    layer: &str,
+    source: &str,
+    snap: &Snapshot,
+    lower: &[Id],
+) -> Result<Id, Stop> {
+    let env = exec.w.env.clone();
+    let stored = StoredGeneration {
+        id: env.ids.next_id(IdKind::Generation),
+        repository_id: repository.clone(),
+        layer: layer.into(),
+        state: GEN_STAGING.into(),
+        source_digest: source.into(),
+        watermark: 0,
+        manifest: json!({
+            "runId": exec.run.id.as_str(),
+            "parentGenerationId": lower.first().map(Id::as_str),
+            "base": snap.base_oid, "head": snap.head_oid, "captureDigest": snap.capture_digest,
+            "extractorVersion": super::config::EXTRACTOR_VERSION,
+        }),
+    };
+    let id = stored.id.clone();
+    exec.fenced(WritePriority::Authoritative, move |tx, r| {
+        tx.indexing().insert_generation(&stored)?;
+        if let Some(o) = &r.overlay_id
+            && let Some(mut ov) = tx.indexing().overlay(o)?
+            && ov.run_id.as_ref() == Some(&r.id)
+        {
+            // Recorded on the overlay so an abandoned build's layers are retired with its run.
+            let expected = ov.revision;
+            ov.revision += 1;
+            if stored.layer == LAYER_BRANCH {
+                ov.branch_generation_id = Some(stored.id.clone());
+            } else {
+                ov.worktree_generation_id = Some(stored.id.clone());
+            }
+            tx.indexing().put_overlay(&ov, Some(expected))?;
+        }
+        Ok(())
+    })?;
+    Ok(id)
+}
+
+/// Stages one layer's units: replacements read from the commit (`expected` `None`) or from the
+/// worktree (each checked against its captured digest), and deletions.
+fn stage_layer(
+    exec: &mut Exec<'_>,
+    root: &Path,
+    name: &str,
+    generation: &Id,
+    units: &[LayerUnit],
+    expected: Option<&BTreeMap<String, String>>,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<(), Stop> {
+    let env = exec.w.env.clone();
+    let staged = staged_keys(&env, generation).map_err(Stop::storage)?;
+    let total = units.len() as i64;
+    let mut done = staged.len() as i64;
+    let mut deletes = Vec::new();
+    let mut from_commit: Vec<&PlanUnit> = Vec::new();
+    let mut from_worktree: Vec<&PlanUnit> = Vec::new();
+    for u in units {
+        match u {
+            LayerUnit::Delete(k) if !staged.contains(k) => deletes.push(StoredUnit {
+                generation_id: generation.clone(),
+                unit_key: k.clone(),
+                content_digest: "deleted".into(),
+                action: UNIT_DELETE.into(),
+                payload: json!({"mode": "Deleted"}),
+            }),
+            LayerUnit::Replace(p) if !staged.contains(&p.key) => {
+                if expected.is_some() && p.mode != super::worker::MODE_DIRECTORY {
+                    from_worktree.push(p);
+                } else {
+                    from_commit.push(p);
+                }
+            }
+            _ => {}
+        }
+    }
+    for chunk in deletes.chunks(500) {
+        let chunk = chunk.to_vec();
+        let n = chunk.len() as i64;
+        exec.fenced(WritePriority::Bulk, move |tx, r| {
+            for u in &chunk {
+                tx.indexing().put_unit(u, &[], &[])?;
+            }
+            r.completed_units += n;
+            Ok(())
+        })?;
+        done += n;
+    }
+    exec.stage_units(root, name, generation, &from_commit, &mut done, total, stop)?;
+    // Worktree content, in bounded batches, verified against the capture.
+    let mut i = 0;
+    while i < from_worktree.len() {
+        if exec.stopped() {
+            return Err(Stop::Cancelled);
+        }
+        let mut rows = Vec::new();
+        let mut bytes = 0usize;
+        while i < from_worktree.len()
+            && rows.len() < env.settings.batch_units
+            && bytes < env.settings.batch_bytes
+        {
+            let u = from_worktree[i];
+            i += 1;
+            let captured = expected.and_then(|e| e.get(&u.key));
+            let content = if u.mode == super::worker::MODE_STRUCTURAL {
+                match env.source.read_file(root, &u.key, u.size.max(1)) {
+                    Ok(b) => {
+                        let d = format!("sha256:{}", sha256_hex(&b));
+                        if captured != Some(&d) {
+                            return Err(Stop::transient(
+                                "worktree_changed",
+                                format!("{} changed during capture", u.key),
+                            ));
+                        }
+                        bytes += b.len();
+                        Some(b)
+                    }
+                    Err(_) => {
+                        return Err(Stop::transient(
+                            "worktree_changed",
+                            format!("{} changed during capture", u.key),
+                        ));
+                    }
+                }
+            } else {
+                None
+            };
+            rows.push(build_unit(
+                &env,
+                &exec.run.repository_id,
+                name,
+                generation,
+                u,
+                content.as_deref(),
+                stop,
+                &mut exec.warnings,
+            )?);
+        }
+        let n = rows.len() as i64;
+        exec.fenced(WritePriority::Bulk, move |tx, r| {
+            for (unit, nodes, edges) in &rows {
+                tx.indexing().put_unit(unit, nodes, edges)?;
+            }
+            r.completed_units += n;
+            Ok(())
+        })?;
+        done += n;
+        exec.log(
+            "worktree",
+            Severity::Info,
+            "batch staged",
+            Some((done, total)),
+        );
+    }
+    let _ = done;
+    Ok(())
+}
+
+fn seal_layer(exec: &mut Exec<'_>, generation: &Id) -> Result<(), Stop> {
+    let env = exec.w.env.clone();
+    let (coverage, count) =
+        coverage_of(&env, generation, &BTreeMap::new()).map_err(Stop::storage)?;
+    let g = generation.clone();
+    let now = env.now();
+    exec.fenced(WritePriority::Authoritative, move |tx, _| {
+        let mut stored = tx
+            .indexing()
+            .generation(&g)?
+            .ok_or(StorageError::NotFound {
+                kind: "index_generation",
+                id: g.as_str().to_owned(),
+            })?;
+        stored.state = GEN_SEALED.into();
+        stored.watermark = count;
+        stored.manifest["coverage"] = coverage;
+        stored.manifest["units"] = json!(count);
+        stored.manifest["indexedAtMs"] = json!(now);
+        tx.indexing().update_generation(&stored)
+    })
+}

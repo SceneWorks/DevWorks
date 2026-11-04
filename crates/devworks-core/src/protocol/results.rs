@@ -1472,6 +1472,7 @@ impl Revisioned for OperationResult {
             Self::HistoryGitLinks { value } => value.retain_revision(revision),
             Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
             Self::HistoryToolUsage { value } => value.retain_revision(revision),
+            Self::IndexingStatus { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),

@@ -2282,7 +2282,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "RepositoryIndexStatus",
         result_schema: schema_of::<RepositoryIndexStatus>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "indexing.runs",

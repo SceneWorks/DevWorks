@@ -5238,6 +5238,34 @@ pub struct RepositoryIndexStatus {
     pub coverage: Coverage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<IndexRunRecord>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "IndexFreshness", extend("x-since" = 2))]
+    pub freshness: Option<IndexFreshness>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<LanguageCoverage>", extend("x-since" = 2))]
+    pub languages: Option<Items<LanguageCoverage>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<SemanticPackStatus>", extend("x-since" = 2))]
+    pub semantic_packs: Option<Items<SemanticPackStatus>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<OverlayStatus>", extend("x-since" = 2))]
+    pub overlays: Option<Items<OverlayStatus>>,
 }
 impl Check for RepositoryIndexStatus {
     fn check(&self) -> Result<(), String> {
@@ -5245,8 +5273,226 @@ impl Check for RepositoryIndexStatus {
         self.current_view_ids.check()?;
         self.coverage.check()?;
         self.last_run.check()?;
+        self.freshness.check()?;
+        self.languages.check()?;
+        self.semantic_packs.check()?;
+        self.overlays.check()?;
         crate::protocol::rules::record(
             "RepositoryIndexStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for RepositoryIndexStatus {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.freshness = None;
+        }
+        if revision < 2 {
+            self.languages = None;
+        }
+        if revision < 2 {
+            self.semantic_packs = None;
+        }
+        if revision < 2 {
+            self.overlays = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexFreshnessState {
+    Current,
+    Stale,
+    Indexing,
+    NotIndexed,
+    Failed,
+}
+impl Check for IndexFreshnessState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IndexFreshness {
+    pub state: IndexFreshnessState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_ms: Option<Counter>,
+    pub configuration_current: bool,
+    pub reasons: Items<Label>,
+}
+impl Check for IndexFreshness {
+    fn check(&self) -> Result<(), String> {
+        self.state.check()?;
+        self.indexed_commit.check()?;
+        self.head_commit.check()?;
+        self.head_ref.check()?;
+        self.indexed_at_ms.check()?;
+        self.observed_at_ms.check()?;
+        self.configuration_current.check()?;
+        self.reasons.check()?;
+        crate::protocol::rules::record(
+            "IndexFreshness",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum LanguageCoverageMode {
+    Structural,
+    TextFallback,
+    NotSelected,
+}
+impl Check for LanguageCoverageMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LanguageCoverage {
+    pub language_id: Label,
+    pub name: Label,
+    pub mode: LanguageCoverageMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grammar: Option<Label>,
+    pub files: Counter,
+    pub structural_files: Counter,
+    pub text_files: Counter,
+    pub parse_error_files: Counter,
+    pub skipped_files: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Content>,
+}
+impl Check for LanguageCoverage {
+    fn check(&self) -> Result<(), String> {
+        self.language_id.check()?;
+        self.name.check()?;
+        self.mode.check()?;
+        self.grammar.check()?;
+        self.files.check()?;
+        self.structural_files.check()?;
+        self.text_files.check()?;
+        self.parse_error_files.check()?;
+        self.skipped_files.check()?;
+        self.note.check()?;
+        crate::protocol::rules::record(
+            "LanguageCoverage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SemanticPackState {
+    NotInstalled,
+    Unavailable,
+    Enabled,
+    Applied,
+    Disabled,
+}
+impl Check for SemanticPackState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SemanticPackStatus {
+    pub pack_id: Id,
+    pub state: SemanticPackState,
+    pub languages: Items<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Content>,
+}
+impl Check for SemanticPackStatus {
+    fn check(&self) -> Result<(), String> {
+        self.pack_id.check()?;
+        self.state.check()?;
+        self.languages.check()?;
+        self.note.check()?;
+        crate::protocol::rules::record(
+            "SemanticPackStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OverlayState {
+    Queued,
+    Indexing,
+    Ready,
+    Failed,
+    Stale,
+    Expired,
+    Unavailable,
+}
+impl Check for OverlayState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OverlayStatus {
+    pub overlay_id: Id,
+    pub revision: Revision,
+    pub worktree_id: Id,
+    pub state: OverlayState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_digest: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    pub updated_at_ms: Counter,
+    pub expires_at_ms: Counter,
+}
+impl Check for OverlayStatus {
+    fn check(&self) -> Result<(), String> {
+        self.overlay_id.check()?;
+        self.revision.check()?;
+        self.worktree_id.check()?;
+        self.state.check()?;
+        self.view_id.check()?;
+        self.base_commit.check()?;
+        self.head_commit.check()?;
+        self.head_ref.check()?;
+        self.capture_digest.check()?;
+        self.run_id.check()?;
+        self.reason.check()?;
+        self.updated_at_ms.check()?;
+        self.expires_at_ms.check()?;
+        crate::protocol::rules::record(
+            "OverlayStatus",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())

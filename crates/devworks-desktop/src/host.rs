@@ -14,6 +14,8 @@ use devworks_adapters::diagnostics::DiagnosticExports;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_adapters::fs::sources::{HostArtifactSources, IssueRefusal};
+use devworks_adapters::index::NativeSourceTree;
+use devworks_adapters::index::treesitter::TreeSitterParser;
 use devworks_adapters::paths::FsPathProbe;
 use devworks_adapters::power::NativePower;
 use devworks_adapters::process::NativeProcessHost;
@@ -30,6 +32,7 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
+use devworks_core::services::indexing::IndexSettings;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::resources::ResourceService;
 use devworks_core::services::router::InferenceRouter;
@@ -38,7 +41,8 @@ use devworks_core::services::sessions::SessionService;
 use devworks_core::settings::service::SettingsService;
 use devworks_core::settings::view::Health;
 use devworks_engine::{
-    BootError, BootReport, Composition, RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
+    BootError, BootReport, Composition, IndexComposition, IndexingConfig, RunComposition, Runtime,
+    RuntimeConfig, ShutdownStage, boot,
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -70,6 +74,8 @@ pub struct DesktopConfig {
     /// sign-in exist (DW-18) nothing is connected ([`NoConnections`]), so every route reports
     /// `NoConnection` truthfully.
     pub connections: Arc<dyn ConnectionDirectory>,
+    /// Index supervision bounds (run concurrency, discovery and housekeeping intervals).
+    pub indexing: IndexingConfig,
 }
 impl std::fmt::Debug for DesktopConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -89,6 +95,7 @@ impl DesktopConfig {
             app_build: concat!("devworks-desktop/", env!("CARGO_PKG_VERSION")).to_owned(),
             shutdown_bound: Duration::from_secs(30),
             connections: Arc::new(NoConnections),
+            indexing: IndexingConfig::default(),
         }
     }
 }
@@ -223,6 +230,17 @@ async fn compose(
         diagnostics,
         use_cases,
         consumers: Vec::new(),
+        // Repository discovery and structural indexing (DW-23): Tree-sitter grammars, native
+        // no-follow source reads and Git through the process owner. Semantic packs register
+        // with the indexing environment when installed (DW-24..27).
+        indexing: Some(IndexComposition {
+            parser: Arc::new(TreeSitterParser::new()),
+            source: Arc::new(NativeSourceTree::new()),
+            fs: Arc::new(NativeFilesystem::new()),
+            settings: IndexSettings::default(),
+            config: config.indexing.clone(),
+            enrichers: Vec::new(),
+        }),
         config: runtime_config,
     };
     // Recovery and every required consumer start here, before any request below is admitted.
@@ -491,6 +509,21 @@ impl Backend for DesktopBackend {
     }
     fn scratch_dir(&self) -> PathBuf {
         self.host.data_root.join("staging-ui")
+    }
+    fn index_sources(
+        &self,
+        project: Option<&str>,
+    ) -> Result<devworks_core::ports::storage::StoredSourceConfig, String> {
+        let key = project.map_or_else(
+            || devworks_core::ports::storage::WORKSPACE_SCOPE_KEY.to_owned(),
+            str::to_owned,
+        );
+        devworks_core::ports::storage::read_snapshot(
+            &**self.host.runtime.store(),
+            &Default::default(),
+            |s| devworks_core::services::indexing::section_config(s.indexing(), &key),
+        )
+        .map_err(|e| e.to_string())
     }
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
         use std::io::Read;

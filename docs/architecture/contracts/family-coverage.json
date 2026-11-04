@@ -1,6 +1,6 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-03",
+  "date": "2026-11-04",
   "catalogSha256": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
   "familyCount": 48,
   "operationCount": 354,
@@ -4675,11 +4675,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Schema revision 2: freshness (the indexed and observed HEAD commits, configuration currency and stale reasons), per-language structural/text coverage with grammar identity, semantic pack state, and every overlay of the repository with its lifecycle state (Queued, Indexing, Ready, Failed, Stale, Expired, Unavailable) and snapshot provenance.",
           "familyRules": "Immutable staged views and current source fences; partial/canceled output cannot publish complete. Structural baseline survives optional semantic-tool absence.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
