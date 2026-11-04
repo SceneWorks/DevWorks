@@ -67,32 +67,32 @@
 </thead>
 <tbody><tr>
 <td><code>features.list</code></td>
-<td><strong>Query</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>page</code>: <code>PageRequest</code><br><code>statusIds</code>: <code>Items&lt;Id&gt;</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>text</code>: <code>?Text</code><br><code>detailLevel</code>: <code>DetailLevel</code></td>
+<td><strong>Query</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>page</code>: <code>PageRequest</code><br><code>statusIds</code>: <code>Items&lt;Id&gt;</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>text</code>: <code>?Text</code><br><code>detailLevel</code>: <code>DetailLevel</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;WorkRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>features.get</code></td>
-<td><strong>Query</strong><br><code>workId</code>: <code>Id</code><br><code>detailLevel</code>: <code>DetailLevel</code><br><code>detailPage</code>: <code>?PageRequest</code></td>
+<td><strong>Query</strong><br><code>workId</code>: <code>Id</code><br><code>detailLevel</code>: <code>DetailLevel</code><br><code>detailPage</code>: <code>?PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>features.create</code></td>
-<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>creation</code>: <code>FeatureCreation</code></td>
+<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>creation</code>: <code>FeatureCreation</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;WorkRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>features.edit_plan</code></td>
-<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>plan</code>: <code>PlanDraft</code></td>
+<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>plan</code>: <code>PlanDraft</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>features.prioritize</code></td>
-<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>expectedQueueRevision</code>: <code>Revision</code><br><code>orderedWorkIds</code>: <code>NonEmpty&lt;Id&gt;</code></td>
+<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>expectedQueueRevision</code>: <code>Revision</code><br><code>orderedWorkIds</code>: <code>?NonEmpty&lt;Id&gt;</code><br><code>placement</code>: <code>?QueuePlacement</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>MutationSummary</code></td>
 </tr>
 <tr>
 <td><code>features.dependencies</code></td>
-<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>replacement</code>: <code>DependencyReplacement</code></td>
+<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>replacement</code>: <code>DependencyReplacement</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
@@ -102,7 +102,7 @@
 </tr>
 <tr>
 <td><code>features.edit</code></td>
-<td><strong>Command</strong><br><code>workId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>changes</code>: <code>FeaturePatch</code></td>
+<td><strong>Command</strong><br><code>workId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>changes</code>: <code>FeaturePatch</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 </tbody></table>
@@ -118,27 +118,27 @@
 </thead>
 <tbody><tr>
 <td><code>issues.list</code></td>
-<td><strong>Query</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>page</code>: <code>PageRequest</code><br><code>statusIds</code>: <code>Items&lt;Id&gt;</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>text</code>: <code>?Text</code><br><code>detailLevel</code>: <code>DetailLevel</code></td>
+<td><strong>Query</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>page</code>: <code>PageRequest</code><br><code>statusIds</code>: <code>Items&lt;Id&gt;</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>text</code>: <code>?Text</code><br><code>detailLevel</code>: <code>DetailLevel</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;WorkRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>issues.get</code></td>
-<td><strong>Query</strong><br><code>workId</code>: <code>Id</code><br><code>detailLevel</code>: <code>DetailLevel</code><br><code>detailPage</code>: <code>?PageRequest</code></td>
+<td><strong>Query</strong><br><code>workId</code>: <code>Id</code><br><code>detailLevel</code>: <code>DetailLevel</code><br><code>detailPage</code>: <code>?PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>issues.create</code></td>
-<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>title</code>: <code>Label</code><br><code>description</code>: <code>Content</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>statusId</code>: <code>Id</code><br><code>priority</code>: <code>i32</code><br><code>featureId</code>: <code>?RootId</code></td>
+<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>title</code>: <code>Label</code><br><code>description</code>: <code>Content</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>statusId</code>: <code>Id</code><br><code>priority</code>: <code>i32</code><br><code>featureId</code>: <code>?RootId</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>issues.edit</code></td>
-<td><strong>Command</strong><br><code>workId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>changes</code>: <code>IssuePatch</code></td>
+<td><strong>Command</strong><br><code>workId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>changes</code>: <code>IssuePatch</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>issues.prioritize</code></td>
-<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>expectedQueueRevision</code>: <code>Revision</code><br><code>orderedWorkIds</code>: <code>NonEmpty&lt;Id&gt;</code></td>
+<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>expectedQueueRevision</code>: <code>Revision</code><br><code>orderedWorkIds</code>: <code>?NonEmpty&lt;Id&gt;</code><br><code>placement</code>: <code>?QueuePlacement</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>MutationSummary</code></td>
 </tr>
 <tr>
@@ -164,57 +164,57 @@
 </thead>
 <tbody><tr>
 <td><code>tasks.list</code></td>
-<td><strong>Query</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>page</code>: <code>PageRequest</code><br><code>statusIds</code>: <code>Items&lt;Id&gt;</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>text</code>: <code>?Text</code><br><code>detailLevel</code>: <code>DetailLevel</code></td>
+<td><strong>Query</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>page</code>: <code>PageRequest</code><br><code>statusIds</code>: <code>Items&lt;Id&gt;</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>text</code>: <code>?Text</code><br><code>detailLevel</code>: <code>DetailLevel</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;WorkRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>tasks.get</code></td>
-<td><strong>Query</strong><br><code>workId</code>: <code>Id</code><br><code>detailLevel</code>: <code>DetailLevel</code><br><code>detailPage</code>: <code>?PageRequest</code></td>
+<td><strong>Query</strong><br><code>workId</code>: <code>Id</code><br><code>detailLevel</code>: <code>DetailLevel</code><br><code>detailPage</code>: <code>?PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>tasks.create</code></td>
-<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>title</code>: <code>Label</code><br><code>description</code>: <code>Content</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>parentId</code>: <code>?RootId</code><br><code>statusId</code>: <code>Id</code><br><code>priority</code>: <code>i32</code></td>
+<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>title</code>: <code>Label</code><br><code>description</code>: <code>Content</code><br><code>repositoryIds</code>: <code>Items&lt;Id&gt;</code><br><code>parentId</code>: <code>?RootId</code><br><code>statusId</code>: <code>Id</code><br><code>priority</code>: <code>i32</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>tasks.edit</code></td>
-<td><strong>Command</strong><br><code>workId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>changes</code>: <code>TaskPatch</code></td>
+<td><strong>Command</strong><br><code>workId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>changes</code>: <code>TaskPatch</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>tasks.prioritize</code></td>
-<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>featureId</code>: <code>?RootId</code><br><code>expectedQueueRevision</code>: <code>Revision</code><br><code>priority</code>: <code>i32</code><br><code>orderedTaskIds</code>: <code>NonEmpty&lt;Id&gt;</code></td>
+<td><strong>Command</strong><br><code>projectId</code>: <code>ProjectId</code><br><code>featureId</code>: <code>?RootId</code><br><code>expectedQueueRevision</code>: <code>Revision</code><br><code>priority</code>: <code>i32</code><br><code>orderedTaskIds</code>: <code>?NonEmpty&lt;Id&gt;</code><br><code>placement</code>: <code>?QueuePlacement</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>MutationSummary</code></td>
 </tr>
 <tr>
 <td><code>tasks.move</code></td>
-<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>statusId</code>: <code>Id</code><br><code>expectedWorkflowRevision</code>: <code>Revision</code></td>
+<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>statusId</code>: <code>Id</code><br><code>expectedWorkflowRevision</code>: <code>Revision</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>tasks.assign</code></td>
-<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>assignmentId</code>: <code>?AssignmentId</code><br><code>clearAssignment</code>: <code>bool</code></td>
+<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>assignmentId</code>: <code>?AssignmentId</code><br><code>clearAssignment</code>: <code>bool</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>tasks.dependency_links</code></td>
-<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>replacement</code>: <code>DependencyReplacement</code></td>
+<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>replacement</code>: <code>DependencyReplacement</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>tasks.acceptance_evidence</code></td>
-<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>criteria</code>: <code>NonEmpty&lt;AcceptanceCriterion&gt;</code></td>
+<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>criteria</code>: <code>NonEmpty&lt;AcceptanceCriterion&gt;</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
 <td><code>tasks.sync_plan</code></td>
-<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedPlanRevision</code>: <code>Revision</code><br><code>expectedTaskSetRevision</code>: <code>Revision</code><br><code>tasks</code>: <code>PlanItems&lt;TaskPlanEntry&gt;</code><br><code>projectPlan</code>: <code>?AtomicWorkPlan</code><br><code>stagedProjectPlan</code>: <code>?ArtifactRef</code></td>
+<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedPlanRevision</code>: <code>Revision</code><br><code>expectedTaskSetRevision</code>: <code>Revision</code><br><code>tasks</code>: <code>PlanItems&lt;TaskPlanEntry&gt;</code><br><code>projectPlan</code>: <code>?AtomicWorkPlan</code><br><code>stagedProjectPlan</code>: <code>?ArtifactRef</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;WorkRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>tasks.set_feature</code></td>
-<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>featureId</code>: <code>?RootId</code><br><code>clearFeature</code>: <code>bool</code></td>
+<td><strong>Command</strong><br><code>taskId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>featureId</code>: <code>?RootId</code><br><code>clearFeature</code>: <code>bool</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 </tbody></table>
@@ -1679,12 +1679,12 @@
 </thead>
 <tbody><tr>
 <td><code>web.search</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>Text</code><br><code>providerId</code>: <code>Id</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>Text</code><br><code>providerId</code>: <code>Id</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;WebResult&gt;</code></td>
 </tr>
 <tr>
 <td><code>web.fetch</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>url</code>: <code>Url</code><br><code>maxBytes</code>: <code>ByteLimit</code><br><code>timeoutMs</code>: <code>PositiveCounter</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>url</code>: <code>Url</code><br><code>maxBytes</code>: <code>ByteLimit</code><br><code>timeoutMs</code>: <code>PositiveCounter</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>WebDocument</code></td>
 </tr>
 </tbody></table>
@@ -1843,12 +1843,12 @@
 </thead>
 <tbody><tr>
 <td><code>router.catalog</code></td>
-<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><code>includeDisabled</code>: <code>bool</code></td>
+<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><code>includeDisabled</code>: <code>bool</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;RouteModel&gt;</code></td>
 </tr>
 <tr>
 <td><code>router.connections</code></td>
-<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;ConnectionRecord&gt;</code></td>
 </tr>
 <tr>
@@ -1893,7 +1893,7 @@
 </tr>
 <tr>
 <td><code>router.configure</code></td>
-<td><strong>Command</strong><br><code>action</code>: <code>RouterConfigAction</code></td>
+<td><strong>Command</strong><br><code>action</code>: <code>RouterConfigAction</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>MutationSummary</code></td>
 </tr>
 <tr>
@@ -2697,6 +2697,209 @@
 <tr>
 <td><code>githubIssue</code></td>
 <td><code>?GithubIssueTracking</code></td>
+</tr>
+<tr>
+<td><code>readiness</code></td>
+<td><code>?ReadinessAssessment</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>queueRevision</code></td>
+<td><code>?Revision</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>workflowRevision</code></td>
+<td><code>?Revision</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>acceptanceTests</code></td>
+<td><code>?Items&lt;AcceptanceCriterion&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>pendingReadiness</code></td>
+<td><code>?ReadinessAssessment</code> · <em>revision 2+</em></td>
+</tr>
+</tbody></table>
+<h3 id="readinessdisposition">ReadinessDisposition</h3>
+<p><code>ResolvedDecision</code>, <code>BoundedInvestigation</code>, <code>NeedsUserDecision</code>.</p>
+<h3 id="findingstate">FindingState</h3>
+<p><code>Open</code>, <code>Resolved</code>, <code>RiskAccepted</code>.</p>
+<h3 id="confidencelevel">ConfidenceLevel</h3>
+<p><code>High</code>, <code>Medium</code>, <code>Low</code>.</p>
+<h3 id="readinessfreshness">ReadinessFreshness</h3>
+<p><code>Current</code>, <code>Stale</code>.</p>
+<h3 id="readinessfinding">ReadinessFinding</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>disposition</code></td>
+<td><code>ReadinessDisposition</code></td>
+</tr>
+<tr>
+<td><code>blocking</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>prerequisite</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>FindingState</code></td>
+</tr>
+<tr>
+<td><code>requirementIds</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>scopeKey</code></td>
+<td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>affectedWorkIds</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>missing</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>consequence</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>attempts</code></td>
+<td><code>Items&lt;Content&gt;</code></td>
+</tr>
+<tr>
+<td><code>insufficiency</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>closureCondition</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>decision</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>confidence</code></td>
+<td><code>?ConfidenceLevel</code></td>
+</tr>
+<tr>
+<td><code>evidence</code></td>
+<td><code>Items&lt;ArtifactRef&gt;</code></td>
+</tr>
+<tr>
+<td><code>objective</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>limits</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>question</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>recommendation</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>closureNote</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>closureEvidence</code></td>
+<td><code>Items&lt;ArtifactRef&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="readinessassessment">ReadinessAssessment</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>revision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>planRevision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>planDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>reviewedPending</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>freshness</code></td>
+<td><code>ReadinessFreshness</code></td>
+</tr>
+<tr>
+<td><code>staleScopeKeys</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>ready</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>findings</code></td>
+<td><code>Items&lt;ReadinessFinding&gt;</code></td>
+</tr>
+<tr>
+<td><code>assessedBy</code></td>
+<td><code>ActorId</code></td>
+</tr>
+<tr>
+<td><code>assessedAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="readinesschange">ReadinessChange</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Assess</code></td>
+<td><code>expectedAssessmentRevision</code>: <code>?Revision</code><br><code>planRevision</code>: <code>Revision</code><br><code>planDigest</code>: <code>Digest</code><br><code>summary</code>: <code>Content</code><br><code>findings</code>: <code>Items&lt;ReadinessFinding&gt;</code></td>
+</tr>
+<tr>
+<td><code>CloseFinding</code></td>
+<td><code>expectedAssessmentRevision</code>: <code>Revision</code><br><code>findingId</code>: <code>Id</code><br><code>note</code>: <code>Content</code><br><code>evidence</code>: <code>Items&lt;ArtifactRef&gt;</code></td>
 </tr>
 </tbody></table>
 <h3 id="plandraft">PlanDraft</h3>
@@ -5198,6 +5401,31 @@
 <td><code>observedAtMs</code></td>
 <td><code>Counter</code></td>
 </tr>
+<tr>
+<td><code>trust</code></td>
+<td><code>?TrustLevel</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>providerId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+</tbody></table>
+<h3 id="webredirect">WebRedirect</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>url</code></td>
+<td><code>Url</code></td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>i32</code></td>
+</tr>
 </tbody></table>
 <h3 id="webdocument">WebDocument</h3>
 <table>
@@ -5230,6 +5458,26 @@
 <tr>
 <td><code>truncated</code></td>
 <td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>trust</code></td>
+<td><code>?TrustLevel</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>?i32</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>redirects</code></td>
+<td><code>?Items&lt;WebRedirect&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>sourceSha256</code></td>
+<td><code>?Digest</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>sourceByteLength</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="containercapability">ContainerCapability</h3>
@@ -5644,6 +5892,214 @@
 <td><code>revision</code></td>
 <td><code>Revision</code></td>
 </tr>
+<tr>
+<td><code>contextTokens</code></td>
+<td><code>?PositiveCounter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>connectionId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+</tbody></table>
+<h3 id="openrouterdatacollection">OpenRouterDataCollection</h3>
+<p><code>allow</code>, <code>deny</code>.</p>
+<h3 id="openrouterquantization">OpenRouterQuantization</h3>
+<p><code>int4</code>, <code>int8</code>, <code>fp4</code>, <code>mxfp4</code>, <code>nvfp4</code>, <code>fp6</code>, <code>fp8</code>, <code>mxfp8</code>, <code>fp16</code>, <code>bf16</code>, <code>fp32</code>, <code>unknown</code>.</p>
+<h3 id="openroutersortby">OpenRouterSortBy</h3>
+<p><code>price</code>, <code>throughput</code>, <code>latency</code>.</p>
+<h3 id="openrouterpartition">OpenRouterPartition</h3>
+<p><code>model</code>, <code>none</code>.</p>
+<h3 id="openroutercosttier">OpenRouterCostTier</h3>
+<p><code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>.</p>
+<h3 id="openroutersort">OpenRouterSort</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>by</code></td>
+<td><code>OpenRouterSortBy</code></td>
+</tr>
+<tr>
+<td><code>partition</code></td>
+<td><code>?OpenRouterPartition</code></td>
+</tr>
+</tbody></table>
+<h3 id="openrouterpercentiles">OpenRouterPercentiles</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>p50</code></td>
+<td><code>?Finite</code></td>
+</tr>
+<tr>
+<td><code>p75</code></td>
+<td><code>?Finite</code></td>
+</tr>
+<tr>
+<td><code>p90</code></td>
+<td><code>?Finite</code></td>
+</tr>
+<tr>
+<td><code>p99</code></td>
+<td><code>?Finite</code></td>
+</tr>
+</tbody></table>
+<h3 id="openroutermaxprice">OpenRouterMaxPrice</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>prompt</code></td>
+<td><code>?Money</code></td>
+</tr>
+<tr>
+<td><code>completion</code></td>
+<td><code>?Money</code></td>
+</tr>
+<tr>
+<td><code>request</code></td>
+<td><code>?Money</code></td>
+</tr>
+<tr>
+<td><code>image</code></td>
+<td><code>?Money</code></td>
+</tr>
+</tbody></table>
+<h3 id="openrouterproviderrouting">OpenRouterProviderRouting</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>order</code></td>
+<td><code>?Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>allowFallbacks</code></td>
+<td><code>?bool</code></td>
+</tr>
+<tr>
+<td><code>requireParameters</code></td>
+<td><code>?bool</code></td>
+</tr>
+<tr>
+<td><code>dataCollection</code></td>
+<td><code>?OpenRouterDataCollection</code></td>
+</tr>
+<tr>
+<td><code>zdr</code></td>
+<td><code>?bool</code></td>
+</tr>
+<tr>
+<td><code>enforceDistillableText</code></td>
+<td><code>?bool</code></td>
+</tr>
+<tr>
+<td><code>only</code></td>
+<td><code>?Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>ignore</code></td>
+<td><code>?Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>quantizations</code></td>
+<td><code>?Items&lt;OpenRouterQuantization&gt;</code></td>
+</tr>
+<tr>
+<td><code>sort</code></td>
+<td><code>?OpenRouterSort</code></td>
+</tr>
+<tr>
+<td><code>preferredMinThroughput</code></td>
+<td><code>?OpenRouterPercentiles</code></td>
+</tr>
+<tr>
+<td><code>preferredMaxLatency</code></td>
+<td><code>?OpenRouterPercentiles</code></td>
+</tr>
+<tr>
+<td><code>maxPrice</code></td>
+<td><code>?OpenRouterMaxPrice</code></td>
+</tr>
+</tbody></table>
+<h3 id="openrouterconstraints">OpenRouterConstraints</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>allowedModels</code></td>
+<td><code>Items&lt;Text&gt;</code></td>
+</tr>
+<tr>
+<td><code>excludedModels</code></td>
+<td><code>Items&lt;Text&gt;</code></td>
+</tr>
+<tr>
+<td><code>costTier</code></td>
+<td><code>?OpenRouterCostTier</code></td>
+</tr>
+<tr>
+<td><code>provider</code></td>
+<td><code>?OpenRouterProviderRouting</code></td>
+</tr>
+</tbody></table>
+<h3 id="connectionlifecycle">ConnectionLifecycle</h3>
+<p><code>Disconnected</code>, <code>Authorizing</code>, <code>Connected</code>, <code>Refreshing</code>, <code>ReauthenticationRequired</code>, <code>Unavailable</code>, <code>Disabled</code>.</p>
+<h3 id="signinmethod">SignInMethod</h3>
+<p><code>DeviceCode</code>, <code>AuthorizationCode</code>.</p>
+<h3 id="signinchallenge">SignInChallenge</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>flowId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>method</code></td>
+<td><code>SignInMethod</code></td>
+</tr>
+<tr>
+<td><code>userCode</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>verificationUrl</code></td>
+<td><code>?Url</code></td>
+</tr>
+<tr>
+<td><code>authorizeUrl</code></td>
+<td><code>?Url</code></td>
+</tr>
+<tr>
+<td><code>expiresAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
 </tbody></table>
 <h3 id="connectionrecord">ConnectionRecord</h3>
 <table>
@@ -5684,6 +6140,58 @@
 <tr>
 <td><code>riskNoticeSha256</code></td>
 <td><code>?Digest</code></td>
+</tr>
+<tr>
+<td><code>endpoint</code></td>
+<td><code>?Url</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>lifecycle</code></td>
+<td><code>?ConnectionLifecycle</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>stateReason</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>credentialRevision</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>healthy</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>checkedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>discoveredAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>discoveredModelCount</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>discoveredModelIds</code></td>
+<td><code>?Items&lt;Text&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>accessExpiresAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>signIn</code></td>
+<td><code>?SignInChallenge</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>openRouter</code></td>
+<td><code>?OpenRouterConstraints</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="routechoice">RouteChoice</h3>
@@ -6882,7 +7390,7 @@
 </thead>
 <tbody><tr>
 <td><code>Connection</code></td>
-<td><code>connectionId</code>: <code>?Id</code><br><code>expectedRevision</code>: <code>?Revision</code><br><code>name</code>: <code>Label</code><br><code>profile</code>: <code>EndpointKind</code><br><code>endpoint</code>: <code>Url</code><br><code>credentialRef</code>: <code>?Id</code></td>
+<td><code>connectionId</code>: <code>?Id</code><br><code>expectedRevision</code>: <code>?Revision</code><br><code>name</code>: <code>Label</code><br><code>profile</code>: <code>EndpointKind</code><br><code>endpoint</code>: <code>Url</code><br><code>credentialRef</code>: <code>?Id</code><br><code>enabled</code>: <code>?bool</code><br><code>openRouter</code>: <code>?OpenRouterConstraints</code></td>
 </tr>
 <tr>
 <td><code>Model</code></td>
@@ -7754,6 +8262,14 @@
 <td><code>addComment</code></td>
 <td><code>?WorkComment</code></td>
 </tr>
+<tr>
+<td><code>readiness</code></td>
+<td><code>?ReadinessChange</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>acceptanceEvidence</code></td>
+<td><code>?NonEmpty&lt;AcceptanceCriterion&gt;</code> · <em>revision 2+</em></td>
+</tr>
 </tbody></table>
 <h3 id="issuepatch">IssuePatch</h3>
 <table>
@@ -8152,6 +8668,29 @@
 <td><code>Items&lt;ArtifactRef&gt;</code></td>
 </tr>
 </tbody></table>
+<h3 id="queueplacement">QueuePlacement</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>workId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>anchorId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>side</code></td>
+<td><code>QueueSide</code></td>
+</tr>
+</tbody></table>
+<h3 id="queueside">QueueSide</h3>
+<p><code>Before</code>, <code>After</code>.</p>
 <h2 id="machine-sources">Machine sources</h2>
 <ul>
 <li><a href="contracts/family-coverage.json">Input/result/mode/authority/effect/recovery bindings</a></li>
