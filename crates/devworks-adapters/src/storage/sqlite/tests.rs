@@ -108,6 +108,7 @@ impl StoreHarness for Harness {
 mod artifacts;
 mod authority;
 mod diagnostics;
+mod packages;
 mod replies;
 mod resources;
 mod runs;

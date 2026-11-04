@@ -358,7 +358,82 @@ fn resolve_stale(
     Ok(Some((op.id, published)))
 }
 
+/// Why [`ArtifactService::read_exact`] returned no bytes.
+#[derive(Clone, Debug)]
+pub enum ExactReadRefusal {
+    /// Unknown, deleted, not visible to the invocation, or not the referenced bytes (digest,
+    /// length or media type differ from the reference).
+    NotFound,
+    /// The version is larger than the caller's bound.
+    TooLarge {
+        bytes: u64,
+        max: u64,
+    },
+    /// The stored file is missing, corrupt or unreadable.
+    Unreadable,
+    Storage(StorageError),
+}
+
 impl ArtifactService {
+    /// Reads the whole content of exactly the referenced live version, visible to `ctx`, up to
+    /// `max` bytes, verified against the reference's digest and length. A reader holds the blob
+    /// while it is read, so a concurrent deletion defers its removal. Used by host services that
+    /// consume an artifact as input (for example a package bundle in `addons.install`).
+    /// Also returns the artifact's creation provenance.
+    pub fn read_exact(
+        &self,
+        store: &dyn ApplicationStore,
+        ctx: &InvocationContext,
+        reference: &ArtifactRef,
+        max: u64,
+    ) -> Result<(Vec<u8>, Value), ExactReadRefusal> {
+        let digest = String::from(reference.sha256.clone());
+        let length = reference.byte_length.get() as u64;
+        if length > max {
+            return Err(ExactReadRefusal::TooLarge { bytes: length, max });
+        }
+        let hold = self.readers.acquire(&digest);
+        let found = read_snapshot(store, &ReadOptions::default(), |s| {
+            let read = s.artifacts();
+            let viewer = Viewer::resolve(s.authority(), ctx)?;
+            let Some(a) = read.artifact(&reference.artifact_id)? else {
+                return Ok(None);
+            };
+            if a.state != ArtifactState::Live || !visible(read, &viewer, &a)? {
+                return Ok(None);
+            }
+            Ok(read
+                .version(&reference.version_id)?
+                .filter(|v| {
+                    v.live()
+                        && v.artifact_id == a.id
+                        && v.blob_digest == digest
+                        && v.byte_count as u64 == length
+                        && v.media_type == reference.media_type
+                })
+                .map(|v| (v.blob_generation, a.provenance)))
+        })
+        .map_err(ExactReadRefusal::Storage)?;
+        let Some((generation, provenance)) = found else {
+            return Err(ExactReadRefusal::NotFound);
+        };
+        let mut reader = self
+            .files
+            .open(&digest, &generation, length)
+            .map_err(|_| ExactReadRefusal::Unreadable)?;
+        let mut bytes = Vec::with_capacity(length as usize);
+        reader
+            .by_ref()
+            .take(max + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ExactReadRefusal::Unreadable)?;
+        drop(hold);
+        if bytes.len() as u64 != length || sha256_hex(&bytes) != digest {
+            return Err(ExactReadRefusal::Unreadable);
+        }
+        Ok((bytes, provenance))
+    }
+
     /// Opens a stream handle for its principal after re-authorizing the operation that issued
     /// it and re-checking that the version is still live and visible. The returned stream holds
     /// a reader on the blob until dropped.

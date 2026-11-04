@@ -171,7 +171,24 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0012_diagnostics.sql"),
         rebuilds_tables: false,
     },
+    // Additive: the package registry head, package records, verified versions, approval
+    // proposals and retained state generations (five tables and an index), independent of every
+    // table of migrations 11 and 12 (it references only its own tables). The floors stay 8/11,
+    // the highest so far: applying a migration overwrites both floors, so a lower writer floor
+    // would re-admit the build-10 writers migration 11 refuses. They need not rise: no earlier
+    // build reads or writes these tables, and the package handler state rows (migration 1) a
+    // generation publication rewrites were never written by an earlier build.
+    Migration {
+        version: 15,
+        minimum_reader: 8,
+        minimum_writer: 11,
+        sql: include_str!("migrations/0015_packages.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 15; a test fails if the shipped text changes.
+pub const MIGRATION_0015_SHA256: &str =
+    "7868e9c5f7d93ba390ec2b552af5a2c398748b7fdf7f1487e66ef185f3086502";
 /// Recorded checksum of migration 12; a test fails if the shipped text changes.
 pub const MIGRATION_0012_SHA256: &str =
     "dbcf28e8dc5a8eb6e4b801fb9f976021cd5e14cbf9e2b5b82af38f008c6cedba";

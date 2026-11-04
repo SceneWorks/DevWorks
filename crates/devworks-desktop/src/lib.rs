@@ -30,6 +30,7 @@
 // change only ergonomics, and none sits on a hot path.
 #![allow(clippy::large_enum_variant, clippy::result_large_err)]
 
+pub mod addons;
 pub mod attachments;
 pub mod backend;
 pub mod chat;

@@ -1122,3 +1122,154 @@ fn closing_the_window_with_an_active_root_leaves_it_held_for_continue_after_reop
     );
     assert!(again.contains("code: ContinueRequired"), "{again}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// ADDON-02 / EXT-05: Settings → Add-ons over the shared addons.* use cases
+
+/// An unsigned bundle for a platform this host is not (it installs, is never launched).
+fn foreign_bundle(dir: &std::path::Path) -> std::path::PathBuf {
+    foreign_bundle_with(dir, None)
+}
+/// [`foreign_bundle`], optionally shipping `config` as its configuration schema document.
+fn foreign_bundle_with(dir: &std::path::Path, config: Option<&[u8]>) -> std::path::PathBuf {
+    use devworks_core::fingerprint::sha256_hex;
+    let helper: &[u8] = b"not an executable for this platform";
+    let help: &[u8] = b"# Foreign pack\n";
+    let config_digest = config.map_or("b".repeat(64), sha256_hex);
+    let mut files = vec![
+        json!({"path": "bin/helper", "sha256": sha256_hex(helper), "byteLength": helper.len().to_string()}),
+        json!({"path": "help.md", "sha256": sha256_hex(help), "byteLength": help.len().to_string()}),
+    ];
+    let mut contents: Vec<(&str, &[u8])> = vec![("bin/helper", helper), ("help.md", help)];
+    let mut assets = vec![];
+    if let Some(c) = config {
+        files.push(json!({"path": "config.json", "sha256": sha256_hex(c), "byteLength": c.len().to_string()}));
+        contents.push(("config.json", c));
+        assets.push(
+            json!({"reference": {"schemaId": "foreign-pack/config", "revision": "1",
+            "sha256": config_digest}, "path": "config.json"}),
+        );
+    }
+    let manifest = json!({
+        "packageId": "foreign-pack", "version": "1.0.0", "publisherId": "acme",
+        "protocolMin": {"major": 1, "minor": 0}, "protocolMax": {"major": 1, "minor": 0},
+        "minimumHostVersion": "0.1.0", "dependencies": [], "runtimes": [], "schemaAssets": assets,
+        "requestedLimits": {"maxConcurrent": 1, "queueCapacity": 4,
+            "maxMemoryBytes": "1048576", "streamCreditBytes": 4096},
+        "targets": [{"targetTriple": "riscv64gc-unknown-none-elf", "entrypoint": "bin/helper"}],
+        "files": files,
+        "stateSchema": {"schemaId": "foreign-pack/state", "revision": "1", "sha256": "a".repeat(64)},
+        "configurationSchema": {"schemaId": "foreign-pack/config", "revision": "1",
+            "sha256": config_digest},
+        "helpFile": "help.md", "requestedPermissions": [{"kind": "WorktreeRead"}],
+        "contributions": [{"kind": "Semantic", "meta": {"id": "foreign-pack/index",
+            "inputSchema": {"schemaId": "foreign-pack/in", "revision": "1", "sha256": "c".repeat(64)},
+            "outputSchema": {"schemaId": "foreign-pack/out", "revision": "1", "sha256": "d".repeat(64)},
+            "helpTopic": "index", "required": true, "cancellation": "Cooperative"},
+            "languages": ["csharp"], "format": "Scip"}]
+    })
+    .to_string();
+    let bytes = devworks_adapters::packages::write_bundle(manifest.as_bytes(), &contents, None);
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join("foreign-pack.dwpkg");
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+#[test]
+fn the_add_ons_screen_installs_a_bundle_and_shows_availability_apart_from_enablement() {
+    let root = Root::new("addons");
+    let engine = start(&root);
+    let dialogs = Script::default();
+    let bundle = foreign_bundle(&root.0.with_extension("bundles"));
+    dialogs.files.lock().unwrap().push(vec![bundle]);
+    let mut h = harness(shell(&engine, &root, dialogs), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    assert!(has_text(&h, "No add-ons installed"));
+    click(&mut h, Role::Button, "Install from file…");
+    step_until(&mut h, "the installed pack is listed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack")
+    });
+    settle(&mut h);
+    // Configured enablement and effective availability are separate.
+    let rec = h.state().addons.items[0].clone();
+    assert!(rec.enabled);
+    assert_eq!(format!("{:?}", rec.availability.unwrap()), "Incompatible");
+    assert!(has_text(&h, "Incompatible"));
+    h.state_mut().addons.selected = Some("foreign-pack".into());
+    settle(&mut h);
+    assert!(has_text(&h, "Language pack"));
+    assert!(has_text(
+        &h,
+        "riscv64gc-unknown-none-elf · not this platform"
+    ));
+    click(&mut h, Role::Button, "Disable");
+    step_until(&mut h, "the pack is disabled", |s| {
+        s.addons.items.first().is_some_and(|r| !r.enabled)
+    });
+    settle(&mut h);
+    assert_eq!(
+        format!(
+            "{:?}",
+            h.state().addons.items[0].availability.clone().unwrap()
+        ),
+        "Disabled"
+    );
+    click(&mut h, Role::Button, "Logs");
+    step_until(&mut h, "the pack's logs arrive", |s| {
+        s.addons
+            .logs
+            .get("foreign-pack")
+            .is_some_and(|l| !l.is_empty())
+    });
+}
+
+#[test]
+fn the_add_ons_form_shows_configuration_field_errors_from_the_packages_schema() {
+    let root = Root::new("addons-config");
+    let engine = start(&root);
+    let dialogs = Script::default();
+    let schema = br#"{"type":"object","properties":{"threads":{"type":"integer","minimum":1}}}"#;
+    let bundle = foreign_bundle_with(&root.0.with_extension("bundles"), Some(schema));
+    dialogs.files.lock().unwrap().push(vec![bundle]);
+    // Tall enough that the expanded configuration form is laid out in full.
+    let mut h = harness(shell(&engine, &root, dialogs), 1440.0, 1400.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Install from file…");
+    step_until(&mut h, "the installed pack is listed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack")
+    });
+    h.state_mut().addons.selected = Some("foreign-pack".into());
+    settle(&mut h);
+    h.state_mut()
+        .addons
+        .config_text
+        .insert("foreign-pack".into(), r#"{"threads": 0}"#.into());
+    click(&mut h, Role::DisclosureTriangle, "Configuration");
+    click(&mut h, Role::Button, "Save configuration");
+    step_until(&mut h, "the field errors arrive", |s| {
+        s.addons.config_errors.contains_key("foreign-pack")
+    });
+    settle(&mut h);
+    assert!(h.state().addons.config_errors["foreign-pack"].contains("/threads"));
+    assert!(has_text(&h, "/threads"));
+    // A value the schema accepts is applied and clears the errors.
+    h.state_mut()
+        .addons
+        .config_text
+        .insert("foreign-pack".into(), r#"{"threads": 2}"#.into());
+    click(&mut h, Role::Button, "Save configuration");
+    step_until(&mut h, "the errors clear", |s| {
+        !s.addons.config_errors.contains_key("foreign-pack")
+    });
+}

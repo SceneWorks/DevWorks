@@ -45,6 +45,16 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// Probes package runtimes and refreshes the signed package indexes (blocking; off the UI
+    /// thread).
+    fn refresh_packages(&self) -> Result<(), String> {
+        Err("packages are not available here".into())
+    }
+    /// Downloads the bundle a verified index offers into the UI staging directory (verified
+    /// against the signed digests) and returns its path.
+    fn fetch_index_bundle(&self, _package: &str, _digest: &str) -> Result<PathBuf, String> {
+        Err("packages are not available here".into())
+    }
 }
 
 /// Who is waiting for a reply. Equal slots supersede each other.
@@ -67,6 +77,14 @@ pub enum Slot {
     DeleteAttachment(String),
     ArtifactsList,
     ResourcesList,
+    /// The Add-ons catalog.
+    AddonsList,
+    /// One package's logs.
+    AddonsLogs(String),
+    /// The Add-ons screen's one lifecycle command (or install-from-file task) at a time.
+    AddonsCommand,
+    /// The runtime probe and index refresh behind the Add-ons screen.
+    AddonsDiscovery,
 }
 
 /// A finished request.
@@ -89,6 +107,10 @@ pub enum TaskOutput {
     },
     /// A decoded preview image (RGBA, unmultiplied).
     Preview { size: [usize; 2], rgba: Vec<u8> },
+    /// An add-on install or update from a bundle file (its artifact saved first).
+    Package { outcome: CommandOutcome },
+    /// Package runtimes and indexes were refreshed.
+    Refreshed,
 }
 
 type Job = Box<dyn FnOnce(&dyn Backend) -> Reply + Send>;
@@ -127,11 +149,18 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 4] = [
+pub const COMMANDS: [&str; 11] = [
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
     "artifacts.delete",
+    "addons.install",
+    "addons.update",
+    "addons.enable",
+    "addons.disable",
+    "addons.rollback",
+    "addons.uninstall",
+    "addons.configure",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.

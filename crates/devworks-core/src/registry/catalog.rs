@@ -6944,7 +6944,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<PackageRecord>",
         result_schema: schema_of::<Page<PackageRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "addons.install",
@@ -6968,7 +6968,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "addons.configure",
@@ -6990,7 +6990,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "addons.enable",
@@ -7014,7 +7014,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "addons.disable",
@@ -7038,7 +7038,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "addons.update",
@@ -7062,7 +7062,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "addons.propose",
@@ -7130,7 +7130,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "addons.uninstall",
@@ -7154,7 +7154,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "PackageRecord",
         result_schema: schema_of::<PackageRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "help.search",

@@ -1,0 +1,2061 @@
+//! Managed executable packages end to end over the real store, runtime, process owner and a
+//! protocol-speaking fixture helper (`devworks-package-fixture`) inside signed test bundles:
+//! installation and verification, exact-version approval, publisher trust, quiescent
+//! publication, state generations and guarded rollback, availability, the process protocol and
+//! its failure handling, the broker's event-handler rule, disable/uninstall and boot recovery.
+//! No test runs inference or touches the network. These tests spawn processes, so they run
+//! serialized in their own binary.
+mod common;
+use common::*;
+use devworks_adapters::fs::NativeFilesystem;
+use devworks_adapters::fs::artifacts::NativeArtifactFiles;
+use devworks_adapters::packages::{BundleIndexVerifier, JsonSchemaValidator, write_index};
+use devworks_adapters::packages::{
+    BundleInspector, NativePackageFiles, host_target_triple, key_fingerprint, write_bundle,
+};
+use devworks_adapters::power::NativePower;
+use devworks_adapters::process::NativeProcessHost;
+use devworks_core::authority::destructive::{FileIdentity, ProtectedRoots};
+use devworks_core::authority::reads::ReadRoot;
+use devworks_core::authority::service::bind_principal;
+use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::fingerprint::sha256_hex;
+use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal};
+use devworks_core::ports::packages::HostPlatform;
+use devworks_core::ports::packages::{IndexTransport, RuntimeCache, RuntimeObservation};
+use devworks_core::ports::storage::*;
+use devworks_core::protocol::data::ArtifactSource;
+use devworks_core::protocol::records::{PackageAvailability, PackageRecord, ProposalRecord};
+use devworks_core::protocol::results::{
+    DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
+};
+use devworks_core::protocol::{ActorId, CommandReply, DomainErrorCode, ProjectId};
+use devworks_core::services::UseCases;
+use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::diagnostics::DiagnosticService;
+use devworks_core::services::packages::index::AVAILABILITY_CHANGED;
+use devworks_core::services::packages::{
+    PROJECT_ENABLEMENT_SCHEMA, PackageService, UPDATE_POLICY_SCHEMA, host_schema_ref,
+};
+use devworks_core::services::resources::ResourceService;
+use devworks_core::settings::catalog::AgentRole;
+use devworks_core::settings::catalog::{PACKAGE_INDEX_SOURCES_KEY, descriptor};
+use devworks_core::settings::model;
+use devworks_engine::package::PackageInvocation;
+use devworks_engine::package_host::{
+    HostConfig, IndexPorts, InvocationKind, InvokeOutcome, InvokeRefusal, InvokeRequest,
+    LaunchPorts, RuntimePorts,
+};
+use devworks_engine::{Composition, PackageComposition, Runtime, RuntimeConfig, boot};
+use devworks_extension_protocol::package::{InvocationOutcome, InvocationScope};
+use devworks_extension_protocol::scalars as wire;
+use ed25519_dalek::SigningKey;
+use serde_json::{Value, json};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+fn serial() -> MutexGuard<'static, ()> {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+const HELPER: &str = env!("CARGO_BIN_EXE_devworks-package-fixture");
+/// The consumer the tests register for availability announcements.
+const CODE_INTELLIGENCE: &str = "code-intelligence-test";
+
+fn key(seed: u8) -> SigningKey {
+    SigningKey::from_bytes(&[seed; 32])
+}
+
+/// What a fixture bundle declares.
+#[derive(Clone)]
+struct Spec {
+    package: String,
+    version: String,
+    mode: String,
+    contributions: Vec<&'static str>,
+    permissions: Vec<Value>,
+    state_schema: String,
+    targets: Vec<String>,
+    dependencies: Vec<Value>,
+    runtimes: Vec<Value>,
+    signer: Option<u8>,
+    publisher: String,
+    extra: Option<(String, Vec<u8>)>,
+    /// A configuration schema document the package ships as a schema asset.
+    config_schema: Option<Value>,
+}
+impl Spec {
+    fn new(package: &str, version: &str) -> Self {
+        Self {
+            package: package.into(),
+            version: version.into(),
+            mode: "normal".into(),
+            contributions: vec![
+                "echo", "wait", "sleep", "state", "event", "stubborn", "crash",
+            ],
+            permissions: vec![
+                json!({"kind": "StateWrite"}),
+                json!({"kind": "WorktreeRead"}),
+            ],
+            state_schema: "a".repeat(64),
+            targets: vec![host_target_triple()],
+            dependencies: vec![],
+            runtimes: vec![],
+            signer: Some(1),
+            publisher: "acme".into(),
+            extra: None,
+            config_schema: None,
+        }
+    }
+    fn ids(&self) -> Vec<String> {
+        self.contributions
+            .iter()
+            .map(|c| format!("{}/{c}", self.package))
+            .collect()
+    }
+}
+fn schema(id: &str, digest: &str) -> Value {
+    json!({"schemaId": id, "revision": "1", "sha256": digest})
+}
+fn helper_bytes() -> Vec<u8> {
+    static BYTES: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+    let mut b = BYTES.lock().unwrap();
+    if b.is_none() {
+        *b = Some(std::fs::read(HELPER).expect("fixture helper binary"));
+    }
+    b.clone().unwrap()
+}
+/// Manifest bytes and the bundle of `spec` (signed with its key, if any).
+fn bundle(spec: &Spec) -> (Vec<u8>, String) {
+    let helper = helper_bytes();
+    let fixture = json!({"mode": spec.mode, "inventory": spec.ids()})
+        .to_string()
+        .into_bytes();
+    let help = format!("# {}\n", spec.package).into_bytes();
+    let entry = if cfg!(windows) {
+        "bin/helper.exe"
+    } else {
+        "bin/helper"
+    };
+    let mut files: Vec<(String, Vec<u8>)> = vec![
+        (entry.into(), helper),
+        ("fixture.json".into(), fixture),
+        ("help.md".into(), help),
+    ];
+    if let Some(e) = &spec.extra {
+        files.push(e.clone());
+    }
+    let config_doc = spec
+        .config_schema
+        .as_ref()
+        .map(|d| d.to_string().into_bytes());
+    if let Some(d) = &config_doc {
+        files.push(("schemas/config.json".into(), d.clone()));
+    }
+    let config_ref = schema(
+        &format!("{}/config", spec.package),
+        &config_doc
+            .as_ref()
+            .map_or("d".repeat(64), |d| sha256_hex(d)),
+    );
+    let assets: Vec<Value> = config_doc
+        .iter()
+        .map(|_| json!({"reference": config_ref, "path": "schemas/config.json"}))
+        .collect();
+    let contributions: Vec<Value> = spec
+        .ids()
+        .iter()
+        .map(|id| {
+            json!({"kind": "Tool", "meta": {"id": id,
+                "inputSchema": schema(&format!("{}/input", spec.package), &"b".repeat(64)),
+                "outputSchema": schema(&format!("{}/output", spec.package), &"c".repeat(64)),
+                "helpTopic": "help", "required": false, "cancellation": "Cooperative"},
+                "requestedEffect": "ReadCandidate"})
+        })
+        .collect();
+    let manifest = json!({
+        "packageId": spec.package, "version": spec.version, "publisherId": spec.publisher,
+        "protocolMin": {"major": 1, "minor": 0}, "protocolMax": {"major": 1, "minor": 0},
+        "minimumHostVersion": "0.1.0",
+        "dependencies": spec.dependencies, "runtimes": spec.runtimes, "schemaAssets": assets,
+        "requestedLimits": {"maxConcurrent": 4, "queueCapacity": 16, "maxMemoryBytes": "1073741824", "streamCreditBytes": 65536},
+        "targets": spec.targets.iter().map(|t| json!({"targetTriple": t, "entrypoint": entry})).collect::<Vec<_>>(),
+        "files": files.iter().map(|(p, b)| json!({"path": p, "sha256": sha256_hex(b), "byteLength": b.len().to_string()})).collect::<Vec<_>>(),
+        "stateSchema": schema(&format!("{}/state", spec.package), &spec.state_schema),
+        "configurationSchema": config_ref,
+        "helpFile": "help.md",
+        "requestedPermissions": spec.permissions,
+        "contributions": contributions,
+    })
+    .to_string()
+    .into_bytes();
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_slice()))
+        .collect();
+    let signer = spec.signer.map(key);
+    (
+        write_bundle(&manifest, &refs, signer.as_ref()),
+        sha256_hex(&manifest),
+    )
+}
+
+/// Upload tickets naming files beneath one read root.
+struct Sources {
+    root: ReadRoot,
+}
+impl ArtifactSources for Sources {
+    fn resolve(
+        &self,
+        _: &InvocationContext,
+        source: &ArtifactSource,
+        _: Option<&ProjectId>,
+    ) -> Result<ResolvedSource, SourceRefusal> {
+        match source {
+            ArtifactSource::Upload { ticket_id } => Ok(ResolvedSource {
+                root: self.root.clone(),
+                relative: format!("{}.bin", ticket_id.as_str()),
+                origin: SourceOrigin::default(),
+            }),
+            _ => Err(SourceRefusal::NotFound),
+        }
+    }
+}
+#[cfg(unix)]
+fn identity(m: &std::fs::Metadata) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    Some(FileIdentity {
+        volume: m.dev(),
+        file: m.ino(),
+    })
+}
+#[cfg(not(unix))]
+fn identity(_: &std::fs::Metadata) -> Option<FileIdentity> {
+    None
+}
+
+/// Runtimes the tests declare available.
+/// Index documents and bundles served from memory (no network in tests).
+#[derive(Default)]
+struct FakeTransport(Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+impl FakeTransport {
+    fn serve(&self, location: &str, bytes: Vec<u8>) {
+        self.0.lock().unwrap().insert(location.into(), bytes);
+    }
+}
+impl IndexTransport for FakeTransport {
+    fn fetch(&self, location: &str, max: u64) -> Result<Vec<u8>, String> {
+        let b = self
+            .0
+            .lock()
+            .unwrap()
+            .get(location)
+            .cloned()
+            .ok_or_else(|| format!("{location}: not found"))?;
+        if b.len() as u64 > max {
+            return Err("too large".into());
+        }
+        Ok(b)
+    }
+}
+
+struct App {
+    h: Harness,
+    rt: tokio::runtime::Runtime,
+    app: Option<Runtime>,
+    store: Arc<dyn ApplicationStore>,
+    user: InvocationContext,
+    agent: InvocationContext,
+    sources: std::path::PathBuf,
+    keys: AtomicUsize,
+    /// The deadline the next invocations get (default 30 s).
+    deadline: Mutex<Option<Duration>>,
+    transport: Arc<FakeTransport>,
+    runtimes: Arc<RuntimeCache>,
+    /// Probe runtimes on this PATH (fake executables) instead of using a fixed cache.
+    probe_path: Option<String>,
+}
+fn config() -> HostConfig {
+    HostConfig {
+        handshake: Duration::from_millis(1500),
+        cancel_grace: Duration::from_millis(500),
+        admission_wait: Duration::from_secs(10),
+        restart_limit: 2,
+        restart_backoff: Duration::from_millis(20),
+        quiesce_attempt: Duration::from_millis(200),
+        stderr_tail: 4096,
+        max_concurrency: 16,
+        tick: Duration::from_millis(50),
+        runtime_timeout: Duration::from_millis(1500),
+        runtime_interval: Duration::from_secs(3600),
+        index_interval: Duration::from_secs(3600),
+    }
+}
+fn seed_project(h: &Harness) {
+    let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute_batch(
+        "INSERT OR IGNORE INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-a','A','Active',1,1,0);",
+    )
+    .unwrap();
+}
+impl App {
+    fn new() -> Self {
+        Self::over(Harness::new(), None)
+    }
+    fn probing(path: &std::path::Path) -> Self {
+        Self::over(Harness::new(), Some(path.display().to_string()))
+    }
+    fn over(h: Harness, probe_path: Option<String>) -> Self {
+        let rt = runtime();
+        let store = h.open();
+        seed_project(&h);
+        let user = principal(&*store, "user-a", PrincipalKind::Human);
+        let agent = principal(&*store, "agent-a", PrincipalKind::Agent);
+        let (u, b) = (
+            user.clone(),
+            NewPrincipalBinding {
+                actor: ActorId(id("agent-a")),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: None,
+                tool_families: None,
+                bound_by: ActorId(id("user-a")),
+            },
+        );
+        let _ = write(&*store, move |tx| {
+            bind_principal(tx, &u, b, None)
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        });
+        let sources = h.root.with_extension("sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        let mut me = Self {
+            h,
+            rt,
+            app: None,
+            store,
+            user,
+            agent,
+            sources,
+            keys: AtomicUsize::new(0),
+            deadline: Mutex::new(None),
+            transport: Arc::new(FakeTransport::default()),
+            runtimes: Arc::new(RuntimeCache::new()),
+            probe_path,
+        };
+        if me.probe_path.is_none() {
+            me.runtimes.set(std::collections::BTreeMap::from([(
+                "dotnet".to_owned(),
+                RuntimeObservation::Found("8.0.4".into()),
+            )]));
+        }
+        me.boot();
+        me
+    }
+    fn boot(&mut self) {
+        let h = &self.h;
+        let store = self.store.clone();
+        let location = self.sources.clone();
+        let src = Arc::new(Sources {
+            root: ReadRoot {
+                identity: identity(&std::fs::metadata(&location).unwrap()),
+                location,
+            },
+        });
+        let artifacts = Arc::new(ArtifactService::new(
+            Arc::new(NativeArtifactFiles::new(
+                h.root.clone(),
+                h.root.with_extension("cache"),
+            )),
+            src,
+            Arc::new(NativeFilesystem::new()),
+            h.clock(),
+            h.ids.clone(),
+        ));
+        let diagnostics = Arc::new(DiagnosticService::new(
+            store.clone(),
+            h.ids.clone(),
+            h.clock(),
+            None,
+        ));
+        let mut service = PackageService::new(
+            store.clone(),
+            h.ids.clone(),
+            artifacts.clone(),
+            Arc::new(BundleInspector),
+            Arc::new(NativePackageFiles::new(h.root.join("packages"))),
+            self.runtimes.clone(),
+            HostPlatform {
+                target_triple: host_target_triple(),
+                host_version: "0.1.0".into(),
+                protocol_major: 1,
+                protocol_minor: 0,
+            },
+            diagnostics.clone(),
+            Arc::new(JsonSchemaValidator),
+        );
+        service.quiesce_wait = Duration::from_millis(150);
+        service.set_availability_consumers(vec![CODE_INTELLIGENCE.into()]);
+        let mut config_rt = RuntimeConfig::new(id("dispatcher-1"));
+        config_rt.collect_interval = Duration::from_secs(3600);
+        config_rt.shutdown_bound = Duration::from_secs(10);
+        let composition = Composition {
+            store: store.clone(),
+            clock: h.clock(),
+            ids: h.ids.clone(),
+            authority: Arc::new(Authority),
+            artifacts,
+            resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+            process_host: Arc::new(NativeProcessHost),
+            runs: devworks_engine::RunComposition::new(Arc::new(
+                devworks_core::services::runs::ControlService::new(h.ids.clone()),
+            )),
+            power: Arc::new(NativePower),
+            diagnostics,
+            packages: Some(PackageComposition {
+                service: Arc::new(service),
+                launch: LaunchPorts {
+                    fs: Arc::new(NativeFilesystem::new()),
+                    roots: ProtectedRoots::new(vec![], vec![], None),
+                    protected_branches: vec![],
+                },
+                config: config(),
+                runtimes: self.probe_path.as_ref().map(|p| RuntimePorts {
+                    cache: self.runtimes.clone(),
+                    search_path: Some(p.clone()),
+                }),
+                index: Some(IndexPorts {
+                    transport: self.transport.clone(),
+                    verifier: Arc::new(BundleIndexVerifier),
+                }),
+            }),
+            use_cases: UseCases::new(),
+            consumers: Vec::new(),
+            config: config_rt,
+        };
+        self.app = Some(self.rt.block_on(boot(composition)).expect("boot"));
+    }
+    fn shutdown(&mut self) {
+        if let Some(app) = self.app.take() {
+            self.rt.block_on(app.shutdown());
+        }
+    }
+    fn app(&self) -> &Runtime {
+        self.app.as_ref().unwrap()
+    }
+    fn key(&self, prefix: &str) -> String {
+        format!("{prefix}-{}", self.keys.fetch_add(1, Ordering::SeqCst))
+    }
+    /// Saves `bytes` as a bundle artifact of project-a as `ctx`; returns its reference.
+    fn save(&self, ctx: &InvocationContext, bytes: &[u8]) -> Value {
+        let ticket = self.key("t");
+        std::fs::write(self.sources.join(format!("{ticket}.bin")), bytes).unwrap();
+        let frame = json!({"protocol": "1.0-draft.1", "requestKey": self.key("save"), "command": {
+            "kind": "Save", "projectId": "project-a", "title": "Bundle",
+            "mediaType": "application/vnd.devworks.package", "source": {"kind": "Upload", "ticketId": ticket},
+            "expectedDigest": sha256_hex(bytes), "expectedBytes": bytes.len().to_string()}});
+        match applied(
+            self.app()
+                .command(ctx, "artifacts.save", frame.to_string().as_bytes())
+                .unwrap(),
+        ) {
+            OperationResult::ArtifactsSave { value } => {
+                serde_json::to_value(&value.artifact).unwrap()
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    fn registry(&self) -> i64 {
+        read(&*self.store, |s| s.packages().registry_revision())
+    }
+    fn lifecycle(&self, ctx: &InvocationContext, op: &str, command: Value) -> DomainCommandReply {
+        let frame = json!({"protocol": "1.0-draft.1", "requestKey": self.key("addon"), "schemaRevision": 2, "command": command});
+        self.app()
+            .command(ctx, op, frame.to_string().as_bytes())
+            .expect("addressed")
+    }
+    fn install(&self, ctx: &InvocationContext, spec: &Spec) -> DomainCommandReply {
+        self.install_from(ctx, ctx, spec)
+    }
+    /// Installs a bundle `saver` saved (a person's download, an agent's build) as `ctx`.
+    fn install_from(
+        &self,
+        saver: &InvocationContext,
+        ctx: &InvocationContext,
+        spec: &Spec,
+    ) -> DomainCommandReply {
+        let (b, _) = bundle(spec);
+        let r = self.save(saver, &b);
+        self.lifecycle(ctx, "addons.install", json!({"kind": "Install", "bundle": r, "expectedRegistryRevision": self.registry().to_string()}))
+    }
+    fn update(&self, ctx: &InvocationContext, spec: &Spec) -> DomainCommandReply {
+        self.update_from(ctx, ctx, spec)
+    }
+    fn update_from(
+        &self,
+        saver: &InvocationContext,
+        ctx: &InvocationContext,
+        spec: &Spec,
+    ) -> DomainCommandReply {
+        let (b, _) = bundle(spec);
+        let r = self.save(saver, &b);
+        self.lifecycle(ctx, "addons.update", json!({"kind": "Update", "packageId": spec.package, "bundle": r, "expectedRegistryRevision": self.registry().to_string()}))
+    }
+    fn simple(
+        &self,
+        ctx: &InvocationContext,
+        op: &str,
+        kind: &str,
+        package: &str,
+    ) -> DomainCommandReply {
+        self.lifecycle(ctx, op, json!({"kind": kind, "packageId": package, "expectedRegistryRevision": self.registry().to_string()}))
+    }
+    fn domain(&self, ctx: &InvocationContext, op: &str, body: Value) -> DomainCommandReply {
+        // addons.propose returns a ProposalRecord and registers only revision 1.
+        let mut frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": self.key("cmd"), "body": body});
+        if op != "addons.propose" {
+            frame["schemaRevision"] = json!(2);
+        }
+        self.app()
+            .command(ctx, op, frame.to_string().as_bytes())
+            .expect("addressed")
+    }
+    fn catalog(&self, ctx: &InvocationContext) -> Vec<PackageRecord> {
+        let frame = json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-catalog", "schemaRevision": 2,
+            "body": {"kind": "addons.catalog", "page": {"limit": 100}}});
+        match self
+            .app()
+            .query(ctx, "addons.catalog", frame.to_string().as_bytes())
+            .unwrap()
+        {
+            DomainQueryReply::Result {
+                result: OperationResult::AddonsCatalog { value },
+                ..
+            } => value.items.0,
+            other => panic!("{other:?}"),
+        }
+    }
+    fn record(&self, package: &str) -> PackageRecord {
+        self.catalog(&self.user)
+            .into_iter()
+            .find(|p| p.id.as_str() == package)
+            .unwrap_or_else(|| panic!("{package} is not in the catalog"))
+    }
+    fn logs(&self, package: &str) -> Vec<String> {
+        let frame = json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-logs",
+            "body": {"kind": "addons.logs", "packageId": package, "afterSequence": "0", "page": {"limit": 200}}});
+        match self
+            .app()
+            .query(&self.user, "addons.logs", frame.to_string().as_bytes())
+            .unwrap()
+        {
+            DomainQueryReply::Result {
+                result: OperationResult::AddonsLogs { value },
+                ..
+            } => value.items.0.iter().map(|d| d.code.0.clone()).collect(),
+            other => panic!("{other:?}"),
+        }
+    }
+    fn invoke(
+        &self,
+        package: &str,
+        contribution: &str,
+        kind: InvocationKind,
+    ) -> Result<devworks_engine::package_host::InvocationHandle, InvokeRefusal> {
+        self.invoke_in(package, contribution, kind, InvocationScope::Workspace)
+    }
+    fn invoke_in(
+        &self,
+        package: &str,
+        contribution: &str,
+        kind: InvocationKind,
+        scope: InvocationScope,
+    ) -> Result<devworks_engine::package_host::InvocationHandle, InvokeRefusal> {
+        self.app().packages().unwrap().invoke(InvokeRequest {
+            package_id: package.into(),
+            contribution_id: format!("{package}/{contribution}"),
+            scope,
+            input: serde_json::from_value(json!({"artifactId": "input-a", "versionId": "v1", "sha256": "e".repeat(64), "byteLength": "4", "mediaType": "application/json"})).unwrap(),
+            operation_id: id(&self.key("op")),
+            deadline: self.deadline.lock().unwrap().unwrap_or(Duration::from_secs(30)),
+            allowed_operations: vec![],
+            kind,
+        })
+    }
+    /// Waits until `f` holds for the package's record.
+    fn until(
+        &self,
+        package: &str,
+        what: &str,
+        f: impl Fn(&PackageRecord) -> bool,
+    ) -> PackageRecord {
+        let until = Instant::now() + Duration::from_secs(20);
+        loop {
+            let r = self.record(package);
+            if f(&r) {
+                return r;
+            }
+            assert!(Instant::now() < until, "{what}: {r:?}");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    fn ready(&self, package: &str) {
+        let until = Instant::now() + Duration::from_secs(20);
+        loop {
+            let s = self.app().packages().unwrap().instance_status(package);
+            if s.iter()
+                .any(|(_, st)| *st == devworks_engine::package_host::InstanceStatus::Ready)
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < until,
+                "{package} never became ready: {s:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+impl Drop for App {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+fn applied(reply: DomainCommandReply) -> OperationResult {
+    match reply {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied { result } | DomainDecision::NoChange { result } => result,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}
+fn package(reply: DomainCommandReply) -> PackageRecord {
+    match applied(reply) {
+        OperationResult::AddonsInstall { value }
+        | OperationResult::AddonsUpdate { value }
+        | OperationResult::AddonsEnable { value }
+        | OperationResult::AddonsDisable { value }
+        | OperationResult::AddonsRollback { value }
+        | OperationResult::AddonsUninstall { value }
+        | OperationResult::AddonsConfigure { value } => value,
+        other => panic!("{other:?}"),
+    }
+}
+fn refused(reply: DomainCommandReply) -> (DomainErrorCode, Option<String>) {
+    match reply {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Refused { fault } => (fault.code, fault.target_kind.map(|t| t.0)),
+            other => panic!("expected a refusal, got {other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}
+fn waits(r: &PackageRecord) -> Vec<String> {
+    r.pending_waits
+        .as_ref()
+        .map(|w| w.0.iter().map(|w| format!("{w:?}")).collect())
+        .unwrap_or_default()
+}
+fn availability(r: &PackageRecord) -> String {
+    format!("{:?}", r.availability.clone().unwrap())
+}
+fn digest_of(r: &PackageRecord) -> String {
+    String::from(r.digest.clone())
+}
+fn finished(o: Option<InvokeOutcome>) -> InvocationOutcome {
+    match o {
+        Some(InvokeOutcome::Finished(o)) => o,
+        other => panic!("{other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn a_person_installs_a_signed_pack_whose_helper_handshakes_and_serves_invocations() {
+    let _s = serial();
+    let a = App::new();
+    let before = a.registry();
+    let spec = Spec::new("fixture-pack", "1.0.0");
+    let rec = package(a.install(&a.user, &spec));
+    assert_eq!(availability(&rec), "Ready");
+    assert!(rec.enabled);
+    assert_eq!(rec.trust_state.0, "ApprovedSigned");
+    assert_eq!(
+        rec.signer_key.as_ref().unwrap().0,
+        key_fingerprint(&key(1).verifying_key())
+    );
+    assert_eq!(rec.state_generation.as_ref().unwrap().get(), 1);
+    assert_eq!(rec.registry_revision.as_ref().unwrap().get(), before + 1);
+    assert_eq!(rec.package_kind.as_ref().unwrap().0, "HarnessPackage");
+    assert!(rec.host_target_supported.unwrap());
+    assert_eq!(
+        rec.requested_access
+            .as_ref()
+            .unwrap()
+            .0
+            .iter()
+            .map(|l| l.0.clone())
+            .collect::<Vec<_>>(),
+        vec!["state.write", "worktree.read"]
+    );
+    assert_eq!(rec.contributions.as_ref().unwrap().0.len(), 7);
+    a.ready("fixture-pack");
+
+    let h = a
+        .invoke("fixture-pack", "echo", InvocationKind::Ordinary)
+        .unwrap();
+    match finished(h.wait(Duration::from_secs(10))) {
+        InvocationOutcome::Completed { artifacts } => {
+            assert_eq!(artifacts[0].artifact_id.as_str(), "input-a")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(h.progress().0, vec!["working".to_owned()]);
+    // An unknown contribution is refused before anything is sent.
+    assert!(matches!(
+        a.app().packages().unwrap().invoke(InvokeRequest {
+            package_id: "fixture-pack".into(),
+            contribution_id: "fixture-pack/missing".into(),
+            scope: InvocationScope::Workspace,
+            input: serde_json::from_value(json!({"artifactId": "i", "versionId": "v", "sha256": "e".repeat(64), "byteLength": "1", "mediaType": "a/b"})).unwrap(),
+            operation_id: id("op-x"),
+            deadline: Duration::from_secs(5),
+            allowed_operations: vec![],
+            kind: InvocationKind::Ordinary,
+        }),
+        Err(InvokeRefusal::NoSuchContribution)
+    ));
+    let logs = a.logs("fixture-pack");
+    assert!(logs.contains(&"PackageActivated".to_owned()), "{logs:?}");
+    assert!(logs.contains(&"PackageHelperReady".to_owned()), "{logs:?}");
+    // History attributes the activation to the person.
+    let events = read(&*a.store, |s| {
+        s.history().page(
+            &EventFilter::Aggregate {
+                kind: "package".into(),
+                id: "fixture-pack".into(),
+            },
+            0,
+            50,
+        )
+    })
+    .events;
+    assert!(
+        events
+            .iter()
+            .any(|e| e.kind == "PackageActivated" && e.actor.0.as_str() == "user-a")
+    );
+    // Every invocation is attributed to the exact version, generation and contribution it ran.
+    let digest = digest_of(&rec);
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let events = read(&*a.store, |s| {
+            s.history().page(
+                &EventFilter::Aggregate {
+                    kind: "package".into(),
+                    id: "fixture-pack".into(),
+                },
+                0,
+                100,
+            )
+        })
+        .events;
+        let ended = events.iter().find(|e| e.kind == "PackageInvocationEnded");
+        if let Some(e) = ended {
+            assert_eq!(e.payload["digest"], json!(digest));
+            assert_eq!(e.payload["stateGeneration"], json!(1));
+            assert_eq!(e.payload["contributionId"], json!("fixture-pack/echo"));
+            assert_eq!(e.payload["outcome"], json!("Completed"));
+            assert!(events.iter().any(|e| e.kind == "PackageInvoked"));
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "the invocation was never attributed"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // A second install of an installed package is a conflict; the registry is unchanged.
+    let r = a.registry();
+    assert_eq!(
+        refused(a.install(
+            &a.user,
+            &Spec {
+                version: "1.0.1".into(),
+                ..spec.clone()
+            }
+        ))
+        .0,
+        DomainErrorCode::Conflict
+    );
+    assert_eq!(a.registry(), r);
+}
+
+#[test]
+fn refused_bundles_change_nothing_and_say_why() {
+    let _s = serial();
+    let a = App::new();
+    let before = a.registry();
+    let spec = Spec::new("bad-pack", "1.0.0");
+    let (good, _) = bundle(&spec);
+    // A modified file breaks its manifest digest.
+    let mut tampered = good.clone();
+    let n = tampered.len();
+    tampered[n - 3] ^= 0x55;
+    // A valid signature by key 1 over another manifest, spliced onto this one.
+    let (other, _) = bundle(&Spec {
+        version: "9.9.9".into(),
+        ..spec.clone()
+    });
+    let forged = splice_signature(&good, &other);
+    for (bytes, code) in [
+        (tampered, "IntegrityMismatch"),
+        (forged, "InvalidSignature"),
+    ] {
+        let r = a.save(&a.user, &bytes);
+        let reply = a.lifecycle(
+            &a.user,
+            "addons.install",
+            json!({"kind": "Install", "bundle": r, "expectedRegistryRevision": before.to_string()}),
+        );
+        assert_eq!(
+            refused(reply),
+            (
+                DomainErrorCode::InvalidArgument,
+                Some("package_bundle".into())
+            )
+        );
+        assert!(
+            a.logs("bundle").contains(&code.to_owned()),
+            "{code}: {:?}",
+            a.logs("bundle")
+        );
+    }
+    assert_eq!(a.registry(), before);
+    assert!(a.catalog(&a.user).is_empty());
+    // A stale registry revision is a revision conflict that writes nothing.
+    let (b, _) = bundle(&spec);
+    let r = a.save(&a.user, &b);
+    let reply = a.lifecycle(&a.user, "addons.install", json!({"kind": "Install", "bundle": r, "expectedRegistryRevision": (before + 5).to_string()}));
+    assert_eq!(refused(reply).0, DomainErrorCode::RevisionConflict);
+    assert!(a.catalog(&a.user).is_empty());
+}
+
+/// Replaces the signature block of `bundle` with the one of `donor`.
+fn splice_signature(bundle: &[u8], donor: &[u8]) -> Vec<u8> {
+    let sig = |b: &[u8]| -> (usize, usize) {
+        let m = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
+        let at = 12 + m;
+        let s = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+        (at, 4 + s)
+    };
+    let (at, len) = sig(bundle);
+    let (dat, dlen) = sig(donor);
+    let mut out = bundle[..at].to_vec();
+    out.extend_from_slice(&donor[dat..dat + dlen]);
+    out.extend_from_slice(&bundle[at + len..]);
+    out
+}
+
+#[test]
+fn agents_cannot_activate_contents_a_person_did_not_approve() {
+    let _s = serial();
+    let a = App::new();
+    // A signed package from an untrusted publisher, installed by an agent, waits for trust.
+    let spec = Spec::new("agent-pack", "1.0.0");
+    let rec = package(a.install_from(&a.user, &a.agent, &spec));
+    assert_eq!(availability(&rec), "NotInstalled");
+    assert_eq!(waits(&rec), vec!["TrustApproval"]);
+    // A bundle an agent produced is agent-authored content: it waits for exact approval.
+    let built = package(a.install(
+        &a.agent,
+        &Spec {
+            version: "1.0.3".into(),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(waits(&built), vec!["ExactVersionApproval"]);
+    assert!(!rec.enabled);
+    assert!(
+        a.app()
+            .packages()
+            .unwrap()
+            .instance_status("agent-pack")
+            .is_empty()
+    );
+
+    // The agent proposes its own build; approval is bound to the exact digest it names.
+    let authored = Spec {
+        version: "1.0.1".into(),
+        ..spec.clone()
+    };
+    let (b, digest) = bundle(&authored);
+    let source = a.save(&a.agent, &b);
+    let wrong = a.domain(
+        &a.agent,
+        "addons.propose",
+        json!({"kind": "addons.propose", "source": source, "manifestDigest": "f".repeat(64)}),
+    );
+    assert_eq!(refused(wrong).0, DomainErrorCode::SourceChanged);
+    let proposal: ProposalRecord = match applied(a.domain(&a.agent, "addons.propose", json!({"kind": "addons.propose", "source": source, "manifestDigest": digest, "basePackageId": "agent-pack"}))) {
+        OperationResult::AddonsPropose { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(format!("{:?}", proposal.state), "Pending");
+    assert_eq!(String::from(proposal.content_digest.clone()), digest);
+    assert!(
+        proposal.summary.0.contains("state.write"),
+        "{}",
+        proposal.summary.0
+    );
+    let rec = a.record("agent-pack");
+    assert_eq!(rec.pending_proposal_id.as_ref().unwrap(), &proposal.id);
+    // The agent installing its own proposed contents still waits for a person, even signed.
+    let rec = package(a.lifecycle(&a.agent, "addons.install", json!({"kind": "Install", "bundle": source, "expectedRegistryRevision": a.registry().to_string()})));
+    assert_eq!(waits(&rec), vec!["ExactVersionApproval"]);
+    assert_eq!(availability(&rec), "NotInstalled");
+    // An agent cannot decide a proposal.
+    let svc = a.app().packages().unwrap().service().clone();
+    let pid = proposal.id.clone();
+    assert!(
+        svc.decide_proposal(&a.agent, &pid, 1, &digest, true, "self-approve")
+            .unwrap()
+            .is_err()
+    );
+
+    // The person installs exactly those contents: approved, active, the proposal settled.
+    let rec = package(a.lifecycle(&a.user, "addons.install", json!({"kind": "Install", "bundle": source, "expectedRegistryRevision": a.registry().to_string()})));
+    assert_eq!(availability(&rec), "Ready");
+    assert_eq!(digest_of(&rec), digest);
+    let stored = read(&*a.store, move |s| s.packages().proposal(&pid)).unwrap();
+    assert_eq!(stored.state, "Approved");
+    assert_eq!(stored.decided_by.unwrap().0.as_str(), "user-a");
+
+    // A rejected proposal never activates and leaves the active version unchanged.
+    let next = Spec {
+        version: "1.0.2".into(),
+        ..spec.clone()
+    };
+    let (b2, d2) = bundle(&next);
+    let src2 = a.save(&a.agent, &b2);
+    let p2: ProposalRecord = match applied(a.domain(
+        &a.agent,
+        "addons.propose",
+        json!({"kind": "addons.propose", "source": src2, "manifestDigest": d2}),
+    )) {
+        OperationResult::AddonsPropose { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let decided = svc
+        .decide_proposal(&a.user, &p2.id, 1, &d2, false, "not needed")
+        .unwrap()
+        .unwrap();
+    assert_eq!(decided.state, "Rejected");
+    let d2c = d2.clone();
+    let phase = read(&*a.store, move |s| {
+        s.packages().package_version("agent-pack", &d2c)
+    })
+    .unwrap()
+    .phase;
+    assert_eq!(phase, VersionPhase::Rejected);
+    let rec = a.record("agent-pack");
+    assert_eq!(digest_of(&rec), digest);
+    assert!(rec.pending_version.is_none());
+    let again = a.lifecycle(&a.user, "addons.update", json!({"kind": "Update", "packageId": "agent-pack", "bundle": src2, "expectedRegistryRevision": a.registry().to_string()}));
+    assert_eq!(
+        refused(again),
+        (DomainErrorCode::Conflict, Some("package_version".into()))
+    );
+}
+
+#[test]
+fn a_trusted_publishers_compatible_update_activates_and_anything_more_waits() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("trusted-pack", "1.0.0");
+    let rec = package(a.install(&a.user, &spec));
+    a.ready("trusted-pack");
+    // Only a person may trust a publisher.
+    let policy = |trust: bool| {
+        json!({"kind": "addons.configure", "packageId": "trusted-pack", "expectedRevision": a.record("trusted-pack").revision.get().to_string(),
+        "config": {"schema": host_schema_ref(UPDATE_POLICY_SCHEMA).unwrap(), "value": {"trustPublisherUpdates": trust}}})
+    };
+    assert_eq!(
+        refused(a.domain(&a.agent, "addons.configure", policy(true))).0,
+        DomainErrorCode::PermissionDenied
+    );
+    let trusted = package(a.domain(&a.user, "addons.configure", policy(true)));
+    assert!(trusted.publisher_trusted.unwrap());
+    assert_eq!(rec.digest, a.record("trusted-pack").digest);
+
+    // Same key, newer stable minor, same access: activates for an agent, at the boundary.
+    let rec = package(a.update_from(
+        &a.user,
+        &a.agent,
+        &Spec {
+            version: "1.1.0".into(),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(rec.version.0, "1.1.0", "{rec:?}");
+    assert_eq!(rec.trust_state.0, "TrustedPublisher");
+    a.ready("trusted-pack");
+    // Expanded access waits for access approval.
+    let more = Spec {
+        version: "1.2.0".into(),
+        permissions: vec![
+            json!({"kind": "StateWrite"}),
+            json!({"kind": "WorktreeRead"}),
+            json!({"kind": "Inference"}),
+        ],
+        ..spec.clone()
+    };
+    let rec = package(a.update_from(&a.user, &a.agent, &more));
+    assert_eq!(
+        (rec.version.0.as_str(), waits(&rec)),
+        ("1.1.0", vec!["AccessApproval".to_owned()])
+    );
+    // Another signing key waits for trust.
+    let rec = package(a.update_from(
+        &a.user,
+        &a.agent,
+        &Spec {
+            version: "1.3.0".into(),
+            signer: Some(2),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(waits(&rec), vec!["TrustApproval"]);
+    // A major version change needs a reviewed transition.
+    let rec = package(a.update_from(
+        &a.user,
+        &a.agent,
+        &Spec {
+            version: "2.0.0".into(),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(waits(&rec), vec!["ExactVersionApproval"]);
+    // Agent-authored contents need exact approval even when the trusted key signed them.
+    let authored = Spec {
+        version: "1.4.0".into(),
+        ..spec.clone()
+    };
+    let (b, d) = bundle(&authored);
+    let src = a.save(&a.agent, &b);
+    applied(a.domain(
+        &a.agent,
+        "addons.propose",
+        json!({"kind": "addons.propose", "source": src, "manifestDigest": d}),
+    ));
+    let rec = package(a.lifecycle(&a.agent, "addons.update", json!({"kind": "Update", "packageId": "trusted-pack", "bundle": src, "expectedRegistryRevision": a.registry().to_string()})));
+    assert_eq!(
+        (rec.version.0.as_str(), waits(&rec)),
+        ("1.1.0", vec!["ExactVersionApproval".to_owned()])
+    );
+    // Revoked trust: compatible updates wait again.
+    package(a.domain(&a.user, "addons.configure", policy(false)));
+    let rec = package(a.update_from(
+        &a.user,
+        &a.agent,
+        &Spec {
+            version: "1.5.0".into(),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(waits(&rec), vec!["TrustApproval"]);
+    assert_eq!(rec.version.0, "1.1.0");
+}
+
+#[test]
+fn an_update_waits_for_in_flight_work_and_publishes_exactly_once_at_the_boundary() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("busy-pack", "1.0.0");
+    let v1 = package(a.install(&a.user, &spec));
+    a.ready("busy-pack");
+    let running = a
+        .invoke("busy-pack", "wait", InvocationKind::Ordinary)
+        .unwrap();
+    let before = a.registry();
+    let rec = package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            ..spec.clone()
+        },
+    ));
+    // Still busy: staged, the active version and registry are unchanged, the invocation runs.
+    assert_eq!(waits(&rec), vec!["Quiescence"]);
+    assert_eq!(rec.digest, v1.digest);
+    assert_eq!(a.registry(), before);
+    assert!(running.wait(Duration::from_millis(100)).is_none());
+    // The pinned invocation finishes on its version; then the host publishes once.
+    assert!(matches!(
+        finished(Some(running.cancel())),
+        InvocationOutcome::CancelledBeforeEffect
+    ));
+    let rec = a.until("busy-pack", "the staged update activates", |r| {
+        r.version.0 == "1.1.0"
+    });
+    assert_eq!(a.registry(), before + 1);
+    assert!(rec.pending_version.is_none());
+    assert_eq!(rec.predecessor_version.as_ref().unwrap().0, "1.0.0");
+    assert_eq!(rec.state_generation.as_ref().unwrap().get(), 2);
+    a.ready("busy-pack");
+    let h = a
+        .invoke("busy-pack", "echo", InvocationKind::Ordinary)
+        .unwrap();
+    assert!(matches!(
+        finished(h.wait(Duration::from_secs(10))),
+        InvocationOutcome::Completed { .. }
+    ));
+}
+
+#[test]
+fn state_generations_carry_state_forward_and_rollback_never_loses_later_writes() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("state-pack", "1.0.0");
+    let v1 = package(a.install(&a.user, &spec));
+    a.ready("state-pack");
+    let h = a
+        .invoke("state-pack", "state", InvocationKind::Ordinary)
+        .unwrap();
+    finished(h.wait(Duration::from_secs(10)));
+    let (progress, _) = h.progress();
+    assert_eq!(
+        progress,
+        vec![
+            "read:StateSnapshot:1",
+            "cas:StateSnapshot:2",
+            "forged:PermissionDenied"
+        ]
+    );
+    let state = |a: &App| read(&*a.store, |s| s.packages().package_state("state-pack")).unwrap();
+    assert_eq!((state(&a).generation, state(&a).revision), (1, 2));
+
+    // Same state schema: the update carries the state into generation 2.
+    package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            ..spec.clone()
+        },
+    ));
+    a.until("state-pack", "v1.1 active", |r| r.version.0 == "1.1.0");
+    assert_eq!((state(&a).generation, state(&a).revision), (2, 2));
+    a.ready("state-pack");
+    // A wrong expected generation is a revision conflict.
+    let target = String::from(v1.digest.clone());
+    let wrong = a.lifecycle(&a.user, "addons.rollback", json!({"kind": "Rollback", "packageId": "state-pack", "targetManifestDigest": target, "expectedRegistryRevision": a.registry().to_string(), "expectedStateGeneration": "1"}));
+    assert_eq!(refused(wrong).0, DomainErrorCode::RevisionConflict);
+    // Rollback to v1 (same schema) keeps every later write.
+    let rec = package(a.lifecycle(&a.user, "addons.rollback", json!({"kind": "Rollback", "packageId": "state-pack", "targetManifestDigest": target, "expectedRegistryRevision": a.registry().to_string(), "expectedStateGeneration": "2"})));
+    assert_eq!(rec.version.0, "1.0.0");
+    assert_eq!((state(&a).generation, state(&a).revision), (3, 2));
+    a.ready("state-pack");
+
+    // A new state schema seeds generation 4 with the carried state; once v2 writes, a downgrade
+    // to the old schema is refused.
+    package(a.update(
+        &a.user,
+        &Spec {
+            version: "2.0.0".into(),
+            state_schema: "9".repeat(64),
+            ..spec.clone()
+        },
+    ));
+    let v2 = a.until("state-pack", "v2 active", |r| r.version.0 == "2.0.0");
+    assert_eq!(state(&a).generation, 4);
+    a.ready("state-pack");
+    let h = a
+        .invoke("state-pack", "state", InvocationKind::Ordinary)
+        .unwrap();
+    finished(h.wait(Duration::from_secs(10)));
+    assert_eq!(state(&a).revision, 3);
+    let back = a.lifecycle(&a.user, "addons.rollback", json!({"kind": "Rollback", "packageId": "state-pack", "targetManifestDigest": String::from(v1.digest.clone()), "expectedRegistryRevision": a.registry().to_string(), "expectedStateGeneration": v2.state_generation.unwrap().get().to_string()}));
+    assert_eq!(
+        refused(back),
+        (DomainErrorCode::Conflict, Some("package_state".into()))
+    );
+    assert_eq!(a.record("state-pack").version.0, "2.0.0");
+    assert_eq!(state(&a).revision, 3);
+}
+
+#[test]
+fn a_new_version_that_fails_to_start_is_rolled_back_before_any_work_was_admitted() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("flaky-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("flaky-pack");
+    package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            mode: "exit-on-activate".into(),
+            ..spec.clone()
+        },
+    ));
+    let rec = a.until("flaky-pack", "guarded rollback to 1.0.0", |r| {
+        r.version.0 == "1.0.0" && matches!(r.availability, Some(PackageAvailability::Ready))
+    });
+    assert_eq!(rec.predecessor_version.as_ref().unwrap().0, "1.1.0");
+    assert!(
+        a.logs("flaky-pack")
+            .contains(&"PackageRolledBack".to_owned())
+    );
+    a.ready("flaky-pack");
+
+    // Without a predecessor the failure is recorded and only this package is unavailable.
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "hang-initialize".into(),
+            ..Spec::new("hung-pack", "1.0.0")
+        },
+    ));
+    let rec = a.until("hung-pack", "startup failure recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    assert_eq!(rec.failure_code.unwrap().0, "StartupTimeout");
+    for (mode, code) in [
+        ("wrong-digest", "ManifestMismatch"),
+        ("wrong-inventory", "InventoryMismatch"),
+    ] {
+        let pkg = format!("{mode}-pack");
+        package(a.install(
+            &a.user,
+            &Spec {
+                mode: mode.into(),
+                ..Spec::new(&pkg, "1.0.0")
+            },
+        ));
+        let rec = a.until(&pkg, "handshake failure recorded", |r| {
+            matches!(r.availability, Some(PackageAvailability::Failed))
+        });
+        assert_eq!(rec.failure_code.unwrap().0, code);
+    }
+    // The other package still serves invocations.
+    let h = a
+        .invoke("flaky-pack", "echo", InvocationKind::Ordinary)
+        .unwrap();
+    assert!(matches!(
+        finished(h.wait(Duration::from_secs(10))),
+        InvocationOutcome::Completed { .. }
+    ));
+    // Enabling again is the explicit retry of a failed helper.
+    assert!(
+        package(a.simple(&a.user, "addons.enable", "Enable", "hung-pack"))
+            .failure_code
+            .is_none()
+    );
+}
+
+#[test]
+fn a_crashed_helper_leaves_unknown_outcomes_and_is_restarted() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(&a.user, &Spec::new("crash-pack", "1.0.0")));
+    a.ready("crash-pack");
+    let waiting = a
+        .invoke("crash-pack", "wait", InvocationKind::Ordinary)
+        .unwrap();
+    let crashing = a
+        .invoke("crash-pack", "crash", InvocationKind::Ordinary)
+        .unwrap();
+    assert!(matches!(
+        crashing.wait(Duration::from_secs(10)),
+        Some(InvokeOutcome::Unknown(_))
+    ));
+    // Its multiplexed sibling ends unknown too: never a fabricated success.
+    assert!(matches!(
+        waiting.wait(Duration::from_secs(10)),
+        Some(InvokeOutcome::Unknown(_))
+    ));
+    a.ready("crash-pack");
+    let h = a
+        .invoke("crash-pack", "echo", InvocationKind::Ordinary)
+        .unwrap();
+    assert!(matches!(
+        finished(h.wait(Duration::from_secs(10))),
+        InvocationOutcome::Completed { .. }
+    ));
+    assert!(a.logs("crash-pack").contains(&"HelperExited".to_owned()));
+}
+
+#[test]
+fn a_cancellation_the_helper_ignores_terminates_its_tree_and_reports_unknown() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(&a.user, &Spec::new("stubborn-pack", "1.0.0")));
+    a.ready("stubborn-pack");
+    let h = a
+        .invoke("stubborn-pack", "stubborn", InvocationKind::Ordinary)
+        .unwrap();
+    let started = Instant::now();
+    assert!(matches!(h.cancel(), InvokeOutcome::Unknown(_)));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    // The owned tree was stopped and recorded; the package recovers with a new helper, which is
+    // then the only unsettled tree.
+    a.ready("stubborn-pack");
+    let unsettled = read(&*a.store, |s| {
+        s.resources()
+            .processes(&ProcessFilter::Unsettled, None, 100)
+    });
+    assert_eq!(unsettled.len(), 1, "{unsettled:?}");
+    a.ready("stubborn-pack");
+}
+
+#[test]
+fn event_handlers_commit_only_through_commit_event() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(&a.user, &Spec::new("event-pack", "1.0.0")));
+    a.ready("event-pack");
+    // A claimed delivery of the package's subscription.
+    let consumer = "pkg-event-pack-sub-1";
+    let e = enqueue(&*a.store, consumer, None, json!({}));
+    let claimed = write(&*a.store, move |tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: consumer.into(),
+            owner: id("package-host"),
+            lease_ms: 60_000,
+            limit: 1,
+        })
+    })
+    .unwrap()
+    .remove(0);
+    assert_eq!(claimed.id, e.id);
+    let generation = read(&*a.store, |s| s.packages().package_state("event-pack")).unwrap();
+    let commit = json!({"subscriptionId": "sub-1", "eventId": claimed.event_id.0.as_str(), "expectedCheckpoint": "0",
+        "stateGeneration": generation.generation.to_string(), "expectedStateRevision": generation.revision.to_string(),
+        "stateProposal": {"artifactId": "state-b", "versionId": "v1", "sha256": "b".repeat(64), "byteLength": "2", "mediaType": "application/json"},
+        "intents": [{"actionKey": "notify", "call": {"kind": "ArtifactRead", "artifact": {"artifactId": "n", "versionId": "v1", "sha256": "c".repeat(64), "byteLength": "1", "mediaType": "text/plain"}}}]});
+    let path = std::env::temp_dir().join("devworks-fixture-event-pack-commit.json");
+    std::fs::write(&path, commit.to_string()).unwrap();
+    let inv = PackageInvocation {
+        package_id: String::new(),
+        subscription_id: id("sub-1"),
+        process_session_id: String::new(),
+        invocation_id: String::new(),
+        invocation_token: String::new(),
+        state_generation: 0,
+        delivery_id: claimed.id.clone(),
+        fence: claimed.fence().unwrap(),
+        cancellation_epoch: claimed.cancellation_epoch,
+        actor: a.store.info().host_actor,
+        broker_consumer: "package-broker".into(),
+    };
+    let h = a
+        .invoke("event-pack", "event", InvocationKind::Event(Box::new(inv)))
+        .unwrap();
+    finished(h.wait(Duration::from_secs(10)));
+    let _ = std::fs::remove_file(&path);
+    let (progress, _) = h.progress();
+    let next = generation.revision + 1;
+    assert_eq!(
+        progress,
+        vec![
+            "cas:PermissionDenied".to_owned(),
+            "call:PermissionDenied".to_owned(),
+            format!("commit:EventCommitAccepted:{next}"),
+            "replay:EventCommitAccepted:true".to_owned(),
+        ]
+    );
+    let state = read(&*a.store, |s| s.packages().package_state("event-pack")).unwrap();
+    assert_eq!(state.revision, next);
+    let processed = read(&*a.store, move |s| {
+        s.packages()
+            .processing("event-pack", &id("sub-1"), &claimed.event_id)
+    });
+    assert_eq!(processed.unwrap().intents.as_array().unwrap().len(), 1);
+    assert_eq!(
+        read(&*a.store, |s| s.queue().status("package-broker")).ready,
+        1
+    );
+    // An ordinary invocation may not commit events.
+    let h = a
+        .invoke("event-pack", "state", InvocationKind::Ordinary)
+        .unwrap();
+    finished(h.wait(Duration::from_secs(10)));
+}
+
+#[test]
+fn disable_cancels_and_retires_and_uninstall_keeps_state_for_a_reinstall() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("life-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("life-pack");
+    let h = a
+        .invoke("life-pack", "state", InvocationKind::Ordinary)
+        .unwrap();
+    finished(h.wait(Duration::from_secs(10)));
+    let running = a
+        .invoke("life-pack", "wait", InvocationKind::Ordinary)
+        .unwrap();
+    let rec = package(a.simple(&a.user, "addons.disable", "Disable", "life-pack"));
+    assert!(!rec.enabled);
+    assert_eq!(availability(&rec), "Disabled");
+    // Its invocation is cancelled with the retiring helper; nothing is invented about it.
+    assert!(matches!(
+        running.wait(Duration::from_secs(10)),
+        Some(InvokeOutcome::Unknown(_))
+    ));
+    let until = Instant::now() + Duration::from_secs(10);
+    while !a
+        .app()
+        .packages()
+        .unwrap()
+        .instance_status("life-pack")
+        .is_empty()
+    {
+        assert!(Instant::now() < until, "the helper was not retired");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(matches!(
+        a.invoke("life-pack", "echo", InvocationKind::Ordinary),
+        Err(InvokeRefusal::Unavailable(PackageAvailability::Disabled, _))
+    ));
+    package(a.simple(&a.user, "addons.enable", "Enable", "life-pack"));
+    a.ready("life-pack");
+
+    let digest = digest_of(&a.record("life-pack"));
+    let dir = a.h.root.join("packages").join("life-pack").join(&digest);
+    assert!(dir.exists());
+    let rec = package(a.simple(&a.user, "addons.uninstall", "Uninstall", "life-pack"));
+    assert_eq!(availability(&rec), "NotInstalled");
+    let until = Instant::now() + Duration::from_secs(10);
+    while dir.exists() {
+        assert!(
+            Instant::now() < until,
+            "uninstalled files were not removed after retirement"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let kept = read(&*a.store, |s| s.packages().package_state("life-pack")).unwrap();
+    assert_eq!(kept.revision, 2);
+    // Reinstalling continues from the retained state in a new generation.
+    package(a.install(&a.user, &spec));
+    let state = read(&*a.store, |s| s.packages().package_state("life-pack")).unwrap();
+    assert_eq!((state.generation, state.revision), (kept.generation + 1, 2));
+}
+
+#[test]
+fn availability_reports_dependencies_platforms_and_project_enablement() {
+    let _s = serial();
+    let a = App::new();
+    let base = Spec::new("base-pack", "1.2.0");
+    let (_, base_digest) = bundle(&base);
+    let dependent = Spec {
+        dependencies: vec![
+            json!({"packageId": "base-pack", "versionRequirement": "^1.2", "manifestDigest": base_digest, "required": true}),
+        ],
+        runtimes: vec![
+            json!({"runtimeId": "dotnet", "versionRequirement": ">=8", "required": true}),
+        ],
+        ..Spec::new("dependent-pack", "1.0.0")
+    };
+    let rec = package(a.install(&a.user, &dependent));
+    assert_eq!(availability(&rec), "MissingDependency");
+    let prereqs = rec.prerequisites.unwrap().0;
+    assert_eq!(
+        prereqs
+            .iter()
+            .map(|p| (p.kind.0.as_str(), p.satisfied))
+            .collect::<Vec<_>>(),
+        vec![("package", false), ("runtime", true)]
+    );
+    assert!(
+        a.app()
+            .packages()
+            .unwrap()
+            .instance_status("dependent-pack")
+            .is_empty()
+    );
+    package(a.install(&a.user, &base));
+    a.until("dependent-pack", "the dependency is satisfied", |r| {
+        matches!(r.availability, Some(PackageAvailability::Ready))
+    });
+    a.ready("dependent-pack");
+    // A missing runtime.
+    let rec = package(a.install(
+        &a.user,
+        &Spec {
+            runtimes: vec![
+                json!({"runtimeId": "node", "versionRequirement": ">=20", "required": true}),
+            ],
+            ..Spec::new("node-pack", "1.0.0")
+        },
+    ));
+    assert_eq!(availability(&rec), "MissingDependency");
+    // No prebuilt helper for this target: never launched.
+    let rec = package(a.install(
+        &a.user,
+        &Spec {
+            targets: vec!["riscv64gc-unknown-none-elf".into()],
+            ..Spec::new("other-pack", "1.0.0")
+        },
+    ));
+    assert_eq!(availability(&rec), "Incompatible");
+    assert!(!rec.host_target_supported.unwrap());
+    assert!(
+        a.app()
+            .packages()
+            .unwrap()
+            .instance_status("other-pack")
+            .is_empty()
+    );
+
+    // Project enablement: disabled for project-a only.
+    let body = json!({"kind": "addons.configure", "packageId": "base-pack", "expectedRevision": a.record("base-pack").revision.get().to_string(),
+        "config": {"schema": host_schema_ref(PROJECT_ENABLEMENT_SCHEMA).unwrap(), "value": {"disabledProjects": ["project-a"]}}});
+    package(a.domain(&a.user, "addons.configure", body));
+    a.ready("base-pack");
+    let scoped = InvocationScope::Project {
+        project_id: wire::ProjectId(wire::Id::try_from("project-a".to_owned()).unwrap()),
+    };
+    assert!(matches!(
+        a.invoke_in("base-pack", "echo", InvocationKind::Ordinary, scoped),
+        Err(InvokeRefusal::ProjectDisabled)
+    ));
+    let h = a
+        .invoke("base-pack", "echo", InvocationKind::Ordinary)
+        .unwrap();
+    assert!(matches!(
+        finished(h.wait(Duration::from_secs(10))),
+        InvocationOutcome::Completed { .. }
+    ));
+    let in_project = a
+        .user
+        .clone()
+        .with_lineage(Some(ProjectId(id("project-a"))), None, None);
+    let seen = a
+        .catalog(&in_project)
+        .into_iter()
+        .find(|p| p.id.as_str() == "base-pack")
+        .unwrap();
+    assert!(!seen.enabled);
+    assert_eq!(availability(&seen), "Disabled");
+    // A configuration against another schema is refused.
+    let body = json!({"kind": "addons.configure", "packageId": "base-pack", "expectedRevision": a.record("base-pack").revision.get().to_string(),
+        "config": {"schema": schema("base-pack/other", &"d".repeat(64)), "value": {}}});
+    assert_eq!(
+        refused(a.domain(&a.user, "addons.configure", body)).0,
+        DomainErrorCode::SchemaMismatch
+    );
+}
+
+#[test]
+fn boot_recovery_removes_orphans_and_restarts_helpers() {
+    let _s = serial();
+    let mut a = App::new();
+    package(a.install(&a.user, &Spec::new("boot-pack", "1.0.0")));
+    a.ready("boot-pack");
+    a.shutdown();
+    let root = a.h.root.join("packages");
+    std::fs::create_dir_all(root.join(".staging").join("interrupted")).unwrap();
+    std::fs::write(root.join(".staging").join("interrupted").join("half"), b"x").unwrap();
+    let orphan = root.join("boot-pack").join("0".repeat(64));
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(orphan.join("helper"), b"never committed").unwrap();
+    a.boot();
+    assert!(!orphan.exists());
+    assert!(!root.join(".staging").join("interrupted").exists());
+    a.ready("boot-pack");
+    let h = a
+        .invoke("boot-pack", "echo", InvocationKind::Ordinary)
+        .unwrap();
+    assert!(matches!(
+        finished(h.wait(Duration::from_secs(10))),
+        InvocationOutcome::Completed { .. }
+    ));
+    assert_eq!(availability(&a.record("boot-pack")), "Ready");
+}
+
+#[test]
+fn installed_files_are_reverified_before_every_launch() {
+    let _s = serial();
+    let mut a = App::new();
+    let rec = package(a.install(&a.user, &Spec::new("tamper-pack", "1.0.0")));
+    a.ready("tamper-pack");
+    a.shutdown();
+    let dir =
+        a.h.root
+            .join("packages")
+            .join("tamper-pack")
+            .join(digest_of(&rec));
+    std::fs::write(
+        dir.join("fixture.json"),
+        b"{\"mode\":\"normal\",\"inventory\":[]}",
+    )
+    .unwrap();
+    a.boot();
+    let rec = a.until("tamper-pack", "integrity failure recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    assert_eq!(rec.failure_code.unwrap().0, "InstallIntegrity");
+    assert!(
+        a.app()
+            .packages()
+            .unwrap()
+            .instance_status("tamper-pack")
+            .iter()
+            .all(|(_, s)| *s != devworks_engine::package_host::InstanceStatus::Ready)
+    );
+}
+
+#[test]
+fn the_host_enforces_deadlines_and_caps_concurrent_invocations() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(&a.user, &Spec::new("limits-pack", "1.0.0")));
+    a.ready("limits-pack");
+    // A deadline the invocation outlives is cancelled by the host itself.
+    *a.deadline.lock().unwrap() = Some(Duration::from_millis(200));
+    let h = a
+        .invoke("limits-pack", "wait", InvocationKind::Ordinary)
+        .unwrap();
+    assert!(matches!(
+        finished(h.wait(Duration::from_secs(10))),
+        InvocationOutcome::CancelledBeforeEffect
+    ));
+    *a.deadline.lock().unwrap() = None;
+    // The manifest declares four concurrent invocations: a fifth waits for a free slot.
+    let running: Vec<_> = (0..4)
+        .map(|_| {
+            a.invoke("limits-pack", "wait", InvocationKind::Ordinary)
+                .unwrap()
+        })
+        .collect();
+    let host = a.app().packages().unwrap().clone();
+    let fifth = std::thread::spawn(move || {
+        let started = Instant::now();
+        let r = host.invoke(InvokeRequest {
+            package_id: "limits-pack".into(),
+            contribution_id: "limits-pack/echo".into(),
+            scope: InvocationScope::Workspace,
+            input: serde_json::from_value(json!({"artifactId": "i", "versionId": "v", "sha256": "e".repeat(64), "byteLength": "1", "mediaType": "a/b"})).unwrap(),
+            operation_id: id("op-fifth"),
+            deadline: Duration::from_secs(10),
+            allowed_operations: vec![],
+            kind: InvocationKind::Ordinary,
+        });
+        (
+            r.map(|h| h.wait(Duration::from_secs(10)).is_some()),
+            started.elapsed(),
+        )
+    });
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        !fifth.is_finished(),
+        "a fifth invocation was admitted past the declared limit"
+    );
+    assert!(matches!(
+        finished(Some(running[0].cancel())),
+        InvocationOutcome::CancelledBeforeEffect
+    ));
+    let (admitted, waited) = fifth.join().unwrap();
+    assert!(admitted.unwrap());
+    assert!(waited >= Duration::from_millis(400));
+    for r in &running[1..] {
+        r.cancel();
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Available packs, runtime probes, configuration schemas and availability announcements
+
+/// Configures the index sources directly (as a person's settings save would have).
+fn set_index_sources(store: &dyn ApplicationStore, sources: Value) {
+    write(store, move |tx| {
+        let current = model::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
+        let schema = serde_json::to_value(descriptor(PACKAGE_INDEX_SOURCES_KEY).unwrap().schema_ref()).unwrap();
+        let a = serde_json::from_value(json!({"key": PACKAGE_INDEX_SOURCES_KEY, "value": {"schema": schema, "value": sources}})).unwrap();
+        let plan = model::plan(&current, &[a]);
+        let body = model::body(&plan, &ActorId(id("user-a")), tx.now_ms(), json!({"kind": "test"}));
+        tx.configuration().append_revision(&ConfigScope::Workspace, model::NAMESPACE, current.revision, model::BODY_SCHEMA_VERSION, body)?;
+        Ok(())
+    })
+    .unwrap();
+}
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+fn entry(spec: &Spec, bundle: &[u8], manifest: &str, location: &str) -> Value {
+    json!({"packageId": spec.package, "version": spec.version, "manifestDigest": manifest,
+        "bundleDigest": sha256_hex(bundle), "bundleBytes": bundle.len(), "targets": spec.targets,
+        "kind": "HarnessPackage", "languages": [], "bundle": location})
+}
+
+#[test]
+fn signed_indexes_offer_packs_that_install_through_the_inspector_and_approval_path() {
+    let _s = serial();
+    let a = App::new();
+    let dir = "/devworks-test-index";
+    let v1 = Spec::new("index-pack", "1.0.0");
+    let v2 = Spec {
+        version: "1.1.0".into(),
+        ..v1.clone()
+    };
+    let (b1, d1) = bundle(&v1);
+    let (b2, d2) = bundle(&v2);
+    let publisher = key(7);
+    let index = json!({"publisherId": "acme", "generatedAtMs": 1, "entries": [
+        entry(&v1, &b1, &d1, "index-pack-1.0.0.dwpkg"), entry(&v2, &b2, &d2, "index-pack-1.1.0.dwpkg")]});
+    a.transport.serve(
+        &format!("{dir}/devworks-index.json"),
+        write_index(&index, &publisher),
+    );
+    a.transport
+        .serve(&format!("{dir}/index-pack-1.0.0.dwpkg"), b1.clone());
+    // 1.1.0 is served with other bytes than the signed digest names.
+    a.transport
+        .serve(&format!("{dir}/index-pack-1.1.0.dwpkg"), b1.clone());
+    // No source is configured by default: nothing is offered.
+    let host = a.app().packages().unwrap().clone();
+    assert_eq!(host.refresh_indexes(), 0);
+    assert!(a.catalog(&a.user).is_empty());
+    set_index_sources(
+        &*a.store,
+        json!([
+            {"location": dir, "publicKey": hex(publisher.verifying_key().as_bytes())},
+            // The same document under a key it was not signed with is refused.
+            {"location": dir, "publicKey": hex(key(8).verifying_key().as_bytes())},
+        ]),
+    );
+    assert_eq!(host.refresh_indexes(), 1);
+    let offered = a.record("index-pack");
+    assert_eq!(availability(&offered), "NotInstalled");
+    assert_eq!(offered.trust_state.0, "Available");
+    let offers = offered.available.clone().unwrap().0;
+    assert_eq!(
+        offers
+            .iter()
+            .map(|o| o.version.0.clone())
+            .collect::<Vec<_>>(),
+        vec!["1.1.0", "1.0.0"]
+    );
+    assert!(offers.iter().all(|o| o.host_target_supported && o.newer));
+    let failed = read(&*a.store, |s| s.packages().indexes());
+    assert_eq!(
+        failed
+            .iter()
+            .map(|x| x.status.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["Failed", "Verified"].into()
+    );
+    assert!(a.logs("index").contains(&"IndexUnavailable".to_owned()));
+
+    // A download that does not hash to the signed digest is refused.
+    let staging = a.h.root.with_extension("downloads");
+    assert!(
+        host.fetch_bundle("index-pack", &d2, &staging)
+            .unwrap_err()
+            .contains("does not match")
+    );
+    assert!(
+        host.fetch_bundle("index-pack", &"0".repeat(64), &staging)
+            .is_err()
+    );
+    // The listed bundle downloads, verifies and installs as a person's install.
+    let path = host.fetch_bundle("index-pack", &d1, &staging).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let r = a.save(&a.user, &bytes);
+    let rec = package(a.lifecycle(&a.user, "addons.install", json!({"kind": "Install", "bundle": r, "expectedRegistryRevision": a.registry().to_string()})));
+    assert_eq!(
+        (rec.version.0.as_str(), availability(&rec)),
+        ("1.0.0", "Ready".to_owned())
+    );
+    let rec = a.record("index-pack");
+    let offers = rec.available.unwrap().0;
+    assert_eq!(
+        offers
+            .iter()
+            .filter(|o| o.newer)
+            .map(|o| o.version.0.clone())
+            .collect::<Vec<_>>(),
+        vec!["1.1.0"]
+    );
+}
+
+#[cfg(unix)]
+fn fake(dir: &std::path::Path, name: &str, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let p = dir.join(name);
+    std::fs::write(&p, format!("#!/bin/sh\n{script}\n")).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versions() {
+    let _s = serial();
+    let dir = std::env::temp_dir().join(format!("devworks-runtimes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    fake(&dir, "node", "echo v20.11.1");
+    fake(&dir, "dotnet", "echo 8.0.204");
+    fake(&dir, "swift", "exec /bin/sleep 20");
+    fake(&dir, "cargo", "echo 'cargo 1.82.0 (8f40fc59f 2024-08-21)'");
+    fake(&dir, "rustc", "echo broken >&2; exit 1");
+    fake(&dir, "zig", "echo '0.13.0'");
+    let a = App::probing(&dir);
+    let host = a.app().packages().unwrap().clone();
+    // Booting probed already; a refresh probes again (and the declared zig once declared).
+    let seen = host.refresh_runtimes();
+    assert_eq!(seen["node"], RuntimeObservation::Found("20.11.1".into()));
+    assert_eq!(seen["dotnet"], RuntimeObservation::Found("8.0.204".into()));
+    assert_eq!(seen["cargo"], RuntimeObservation::Found("1.82.0".into()));
+    assert!(
+        matches!(&seen["swift"], RuntimeObservation::Missing(w) if w.contains("did not answer")),
+        "{:?}",
+        seen["swift"]
+    );
+    assert!(
+        matches!(&seen["rustc"], RuntimeObservation::Missing(w) if w.contains("failed")),
+        "{:?}",
+        seen["rustc"]
+    );
+    // A declared runtime outside the known set is probed with the generic form.
+    let needs = |pkg: &str, rt: &str, req: &str| Spec {
+        runtimes: vec![json!({"runtimeId": rt, "versionRequirement": req, "required": true})],
+        ..Spec::new(pkg, "1.0.0")
+    };
+    package(a.install(&a.user, &needs("zig-pack", "zig", ">=0.12")));
+    let seen = host.refresh_runtimes();
+    assert_eq!(seen["zig"], RuntimeObservation::Found("0.13.0".into()));
+    let ready = a.record("zig-pack");
+    assert_eq!(availability(&ready), "Ready");
+    let q = &ready.prerequisites.unwrap().0[0];
+    assert_eq!(
+        (
+            format!("{:?}", q.state.clone().unwrap()),
+            q.detected_version.as_ref().unwrap().0.as_str()
+        ),
+        ("Ready".into(), "0.13.0")
+    );
+    let old = package(a.install(&a.user, &needs("node-pack", "node", ">=21")));
+    assert_eq!(availability(&old), "MissingDependency");
+    let q = &old.prerequisites.unwrap().0[0];
+    assert_eq!(
+        (
+            format!("{:?}", q.state.clone().unwrap()),
+            q.detected_version.as_ref().unwrap().0.as_str()
+        ),
+        ("Incompatible".into(), "20.11.1")
+    );
+    let gone = package(a.install(&a.user, &needs("swift-pack", "swift", ">=5")));
+    let q = &gone.prerequisites.unwrap().0[0];
+    assert_eq!(format!("{:?}", q.state.clone().unwrap()), "Missing");
+    assert!(q.detected_version.is_none());
+    assert!(
+        gone.availability_reason
+            .unwrap()
+            .0
+            .contains("did not answer")
+    );
+    // Every probe ran as an owned process that is settled now.
+    let unsettled = read(&*a.store, |s| {
+        s.resources()
+            .processes(&ProcessFilter::Unsettled, None, 100)
+    });
+    assert!(
+        unsettled.iter().all(|p| p.program != "swift"),
+        "{unsettled:?}"
+    );
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn configuration_values_are_validated_against_the_packages_schema_with_field_errors() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec {
+        config_schema: Some(
+            json!({"type": "object", "additionalProperties": false, "required": ["threads"],
+            "properties": {"threads": {"type": "integer", "minimum": 1}, "mode": {"enum": ["fast", "thorough"]}}}),
+        ),
+        ..Spec::new("config-pack", "1.0.0")
+    };
+    let rec = package(a.install(&a.user, &spec));
+    let schema = serde_json::to_value(rec.configuration_schema.clone().unwrap()).unwrap();
+    let configure = |value: Value| {
+        let body = json!({"kind": "addons.configure", "packageId": "config-pack",
+            "expectedRevision": a.record("config-pack").revision.get().to_string(),
+            "config": {"schema": schema, "value": value}});
+        a.domain(&a.user, "addons.configure", body)
+    };
+    let reply = configure(json!({"threads": 0, "mode": "slow"}));
+    let CommandReply::Recorded { receipt, .. } = &reply else {
+        panic!("{reply:?}")
+    };
+    let DomainDecision::Refused { fault } = &receipt.decision else {
+        panic!("{receipt:?}")
+    };
+    assert_eq!(fault.code, DomainErrorCode::InvalidArgument);
+    assert_eq!(
+        fault.target_kind.as_ref().unwrap().0,
+        "package_configuration"
+    );
+    let diagnostic = fault
+        .diagnostic_id
+        .clone()
+        .expect("the field errors' diagnostic");
+    let frame = json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-l",
+        "body": {"kind": "addons.logs", "packageId": "config-pack", "afterSequence": "0", "page": {"limit": 200}}});
+    let entries = match a
+        .app()
+        .query(&a.user, "addons.logs", frame.to_string().as_bytes())
+        .unwrap()
+    {
+        DomainQueryReply::Result {
+            result: OperationResult::AddonsLogs { value },
+            ..
+        } => value.items.0,
+        other => panic!("{other:?}"),
+    };
+    let detail = entries
+        .iter()
+        .find(|d| d.id == diagnostic)
+        .expect("the refusal's diagnostic");
+    assert!(
+        detail.message.0.contains("/threads") && detail.message.0.contains("/mode"),
+        "{}",
+        detail.message.0
+    );
+    // Nothing changed; a value the schema accepts is applied.
+    assert_eq!(a.record("config-pack").revision, rec.revision);
+    let applied = package(configure(json!({"threads": 4, "mode": "fast"})));
+    assert!(applied.revision.get() > rec.revision.get());
+    // Host-defined schemas are validated the same way.
+    let body = json!({"kind": "addons.configure", "packageId": "config-pack", "expectedRevision": a.record("config-pack").revision.get().to_string(),
+        "config": {"schema": host_schema_ref(PROJECT_ENABLEMENT_SCHEMA).unwrap(), "value": {"disabledProjects": "all"}}});
+    let reply = a.domain(&a.user, "addons.configure", body);
+    assert_eq!(refused(reply).0, DomainErrorCode::InvalidArgument);
+}
+
+fn announcements(store: &dyn ApplicationStore, package: &str) -> Vec<Value> {
+    let p = package.to_owned();
+    read(store, move |s| {
+        s.history().page(
+            &EventFilter::Aggregate {
+                kind: "package_availability".into(),
+                id: p,
+            },
+            0,
+            100,
+        )
+    })
+    .events
+    .into_iter()
+    .filter(|e| e.kind == AVAILABILITY_CHANGED)
+    .map(|e| e.payload)
+    .collect()
+}
+
+#[test]
+fn availability_and_version_changes_are_announced_atomically_with_the_registry_change() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("watched-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    let first = announcements(&*a.store, "watched-pack");
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        (
+            first[0]["toAvailability"].as_str(),
+            first[0]["toVersion"].as_str(),
+            first[0]["reason"].as_str()
+        ),
+        (Some("Ready"), Some("1.0.0"), Some("addons.install"))
+    );
+    assert!(first[0]["fromVersion"].is_null());
+    // A refused change (stale registry revision) announces nothing.
+    let stale = a.lifecycle(
+        &a.user,
+        "addons.disable",
+        json!({"kind": "Disable", "packageId": "watched-pack", "expectedRegistryRevision": "1"}),
+    );
+    assert_eq!(refused(stale).0, DomainErrorCode::RevisionConflict);
+    assert_eq!(announcements(&*a.store, "watched-pack").len(), 1);
+    // Disable: availability changes, in the same unit of work as the registry head.
+    package(a.simple(&a.user, "addons.disable", "Disable", "watched-pack"));
+    let all = announcements(&*a.store, "watched-pack");
+    assert_eq!(all.len(), 2);
+    assert_eq!(
+        (
+            all[1]["fromAvailability"].as_str(),
+            all[1]["toAvailability"].as_str()
+        ),
+        (Some("Ready"), Some("Disabled"))
+    );
+    assert_eq!(all[1]["registryRevision"].as_i64(), Some(a.registry()));
+    package(a.simple(&a.user, "addons.enable", "Enable", "watched-pack"));
+    a.ready("watched-pack");
+    // An update announces the old and new version.
+    package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            ..spec.clone()
+        },
+    ));
+    a.until("watched-pack", "the update activates", |r| {
+        r.version.0 == "1.1.0"
+    });
+    let all = announcements(&*a.store, "watched-pack");
+    let last = all.last().unwrap();
+    assert_eq!(
+        (last["fromVersion"].as_str(), last["toVersion"].as_str()),
+        (Some("1.0.0"), Some("1.1.0"))
+    );
+    // Uninstall announces NotInstalled.
+    package(a.simple(&a.user, "addons.uninstall", "Uninstall", "watched-pack"));
+    let all = announcements(&*a.store, "watched-pack");
+    assert_eq!(
+        all.last().unwrap()["toAvailability"].as_str(),
+        Some("NotInstalled")
+    );
+    // Each announcement is one ordered delivery for the registered consumer.
+    let status = read(&*a.store, |s| s.queue().status(CODE_INTELLIGENCE));
+    assert_eq!(status.ready as usize, all.len());
+    // And none is written when the unit of work that would announce it rolls back.
+    let svc = a.app().packages().unwrap().service().clone();
+    let before = announcements(&*a.store, "watched-pack").len();
+    package(a.install(
+        &a.user,
+        &Spec {
+            version: "2.0.0".into(),
+            ..spec.clone()
+        },
+    ));
+    let after_install = announcements(&*a.store, "watched-pack").len();
+    assert_eq!(after_install, before + 1);
+    let rolled: Result<(), StorageError> = write(&*a.store, move |tx| {
+        tx.packages().put_observation(&StoredObservation {
+            package_id: "watched-pack".into(),
+            availability: "Failed".into(),
+            version: None,
+            digest: None,
+            revision: 0,
+        })?;
+        svc.observe(tx, "test")?;
+        Err(StorageError::InvalidRecord(
+            "abandon the unit of work".into(),
+        ))
+    });
+    assert!(rolled.is_err());
+    assert_eq!(
+        announcements(&*a.store, "watched-pack").len(),
+        after_install
+    );
+}

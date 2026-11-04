@@ -7,6 +7,7 @@
 //! across threads. Core stays runtime-agnostic (no async runtime dependency).
 pub mod diagnostics;
 pub mod files;
+pub mod packages;
 pub mod process;
 pub mod storage;
 
@@ -53,6 +54,12 @@ pub enum IdKind {
     Lease,
     Process,
     Diagnostic,
+    /// Exact-version package approval proposals.
+    Proposal,
+    /// Package process sessions (the protocol nonce of one helper instance).
+    PackageSession,
+    /// Package invocations and their short-lived tokens.
+    Invocation,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

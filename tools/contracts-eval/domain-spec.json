@@ -1830,7 +1830,59 @@
         "publisher_id": "?Id",
         "enabled": "bool",
         "trust_state": "Label",
-        "contribution_ids": "Items<Id>"
+        "contribution_ids": "Items<Id>",
+        "registry_revision": "?Revision",
+        "availability": "?PackageAvailability",
+        "availability_reason": "?Text",
+        "package_kind": "?Label",
+        "languages": "?Items<Label>",
+        "targets": "?Items<Label>",
+        "host_target_supported": "?bool",
+        "prerequisites": "?Items<PackagePrerequisite>",
+        "requested_access": "?Items<Label>",
+        "effective_access": "?Items<Label>",
+        "configuration_revision": "?Revision",
+        "configuration_schema": "?SchemaRef",
+        "state_generation": "?Counter",
+        "pending_version": "?Label",
+        "pending_digest": "?Digest",
+        "pending_waits": "?Items<PackageWaitReason>",
+        "pending_proposal_id": "?Id",
+        "predecessor_version": "?Label",
+        "predecessor_digest": "?Digest",
+        "publisher_trusted": "?bool",
+        "signer_key": "?Label",
+        "failure_code": "?Label",
+        "contributions": "?Rows<Label>",
+        "pending_bundle": "?ArtifactRef",
+        "available": "?Items<PackageOffer>"
+      },
+      "since": {
+        "registry_revision": 2,
+        "availability": 2,
+        "availability_reason": 2,
+        "package_kind": 2,
+        "languages": 2,
+        "targets": 2,
+        "host_target_supported": 2,
+        "prerequisites": 2,
+        "requested_access": 2,
+        "effective_access": 2,
+        "configuration_revision": 2,
+        "configuration_schema": 2,
+        "state_generation": 2,
+        "pending_version": 2,
+        "pending_digest": 2,
+        "pending_waits": 2,
+        "pending_proposal_id": 2,
+        "predecessor_version": 2,
+        "predecessor_digest": 2,
+        "publisher_trusted": 2,
+        "signer_key": 2,
+        "failure_code": 2,
+        "contributions": 2,
+        "pending_bundle": 2,
+        "available": 2
       }
     },
     "HelpTopic": {
@@ -2638,6 +2690,64 @@
         "zero_findings_confirmed": "bool",
         "findings_coverage": "Coverage",
         "evidence": "Items<ArtifactRef>"
+      }
+    },
+    "PackageAvailability": {
+      "kind": "enum",
+      "values": [
+        "NotInstalled",
+        "Disabled",
+        "MissingDependency",
+        "Incompatible",
+        "Ready",
+        "Failed"
+      ]
+    },
+    "PackageWaitReason": {
+      "kind": "enum",
+      "values": [
+        "TrustApproval",
+        "ExactVersionApproval",
+        "AccessApproval",
+        "Compatibility",
+        "Quiescence"
+      ]
+    },
+    "PackagePrerequisite": {
+      "kind": "record",
+      "fields": {
+        "kind": "Label",
+        "id": "Label",
+        "requirement": "Label",
+        "required": "bool",
+        "satisfied": "bool",
+        "state": "?PrerequisiteState",
+        "detected_version": "?Label"
+      },
+      "since": {
+        "state": 2,
+        "detected_version": 2
+      }
+    },
+    "PrerequisiteState": {
+      "kind": "enum",
+      "values": [
+        "Missing",
+        "Incompatible",
+        "Ready"
+      ]
+    },
+    "PackageOffer": {
+      "kind": "record",
+      "fields": {
+        "version": "Label",
+        "manifest_digest": "Digest",
+        "bundle_digest": "Digest",
+        "bundle_bytes": "Counter",
+        "publisher_id": "Id",
+        "source": "Label",
+        "host_target_supported": "bool",
+        "newer": "bool"
       }
     }
   },
@@ -6002,7 +6112,7 @@
       "result": "Page<PackageRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer."
     },
     "addons.configure": {
       "operation": "addons.configure",
@@ -6015,7 +6125,7 @@
       "result": "PackageRecord",
       "effect": "Local",
       "authority": "Configuration",
-      "rules": "Exact installed config schema and current authority; increased access/runtime closure requires approval before activation."
+      "rules": "Exact installed config schema and current authority; increased access/runtime closure requires approval before activation. Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer."
     },
     "addons.propose": {
       "operation": "addons.propose",
@@ -6790,6 +6900,38 @@
       2
     ],
     "workspace.record_diagnostic": [
+      1,
+      2
+    ],
+    "addons.catalog": [
+      1,
+      2
+    ],
+    "addons.install": [
+      1,
+      2
+    ],
+    "addons.configure": [
+      1,
+      2
+    ],
+    "addons.enable": [
+      1,
+      2
+    ],
+    "addons.disable": [
+      1,
+      2
+    ],
+    "addons.update": [
+      1,
+      2
+    ],
+    "addons.rollback": [
+      1,
+      2
+    ],
+    "addons.uninstall": [
       1,
       2
     ]

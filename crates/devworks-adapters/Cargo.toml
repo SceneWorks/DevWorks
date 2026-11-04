@@ -11,7 +11,17 @@ publish.workspace = true
 # again at startup together with compile options and the sqlite-vec identity.
 [dependencies]
 devworks-core = { path = "../devworks-core" }
+# Package bundles carry the public manifest DTOs; Ed25519 verifies (and the bundle writer signs)
+# their manifests. ed25519-dalek is the RustCrypto/dalek pure-Rust implementation.
+devworks-extension-protocol = { path = "../devworks-extension-protocol" }
+ed25519-dalek = "=2.2.0"
+# Package index fetching over https (rustls with the bundled Mozilla roots; no native TLS or
+# async runtime) and JSON Schema validation of package configuration values (no remote or
+# file schema resolution).
+ureq = { version = "=2.12.1", default-features = false, features = ["tls"] }
+jsonschema = { version = "=0.28.3", default-features = false }
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }
+semver.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlite-vec = "=0.1.7"

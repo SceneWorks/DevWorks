@@ -135,7 +135,7 @@ pub mod channels {
 
 /// Component prefixes only the host writes: a reported diagnostic naming one of them is refused
 /// (`PermissionDenied`, target kind [`RESERVED_TARGET`]).
-pub const RESERVED: [&str; 11] = [
+pub const RESERVED: [&str; 12] = [
     "host",
     "health",
     "storage",
@@ -147,6 +147,7 @@ pub const RESERVED: [&str; 11] = [
     "artifacts",
     "indexing",
     "provider",
+    "packages",
 ];
 /// Fault target kind of a reported diagnostic naming a host-reserved component.
 pub const RESERVED_TARGET: &str = "diagnostic_component";
@@ -873,8 +874,13 @@ impl DiagnosticService {
 
     /// Records a host diagnostic in its own unit of work and raises the live hint.
     pub fn log(&self, entry: LogEntry) -> Result<StoredDiagnostic, LogRefusal> {
+        self.log_with_id(self.ids.next_id(IdKind::Diagnostic), entry)
+    }
+
+    /// [`Self::log`] under an identity allocated earlier (a refusal that names the diagnostic
+    /// carrying its detail before the diagnostic can be written).
+    pub fn log_with_id(&self, id: Id, entry: LogEntry) -> Result<StoredDiagnostic, LogRefusal> {
         check_entry(&entry).map_err(LogRefusal::Invalid)?;
-        let id = self.ids.next_id(IdKind::Diagnostic);
         let actor = self.store.info().host_actor;
         let record = self.record(id, self.now(), actor, DiagnosticOrigin::Host, &entry);
         let stored = run_write(&*self.store, WriteOptions::default(), move |tx| {

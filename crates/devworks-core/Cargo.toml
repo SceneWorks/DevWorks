@@ -9,6 +9,7 @@ publish.workspace = true
 # Core stays free of UI, database-driver, HTTP and async-runtime dependencies (ARCH-07).
 [dependencies]
 schemars.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

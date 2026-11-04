@@ -36,8 +36,13 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.list', 'resources.acquire', 'resources.renew', 'resources.release',
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
-            'workspace.logs', 'workspace.record_diagnostic'})
+            'workspace.logs', 'workspace.record_diagnostic', 'addons.catalog', 'addons.install',
+            'addons.configure', 'addons.enable', 'addons.disable', 'addons.update',
+            'addons.rollback', 'addons.uninstall'})
         self.assertEqual(carried['resources.renew'], {2})
+        # The specialized lifecycle envelope introduces nothing; only its result record does.
+        self.assertEqual(carried['addons.install'], {2})
+        self.assertEqual(carried['addons.propose'], set())
         self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the

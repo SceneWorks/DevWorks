@@ -730,6 +730,104 @@ impl PackageHandlerRead for Unsupported {
         nope()
     }
 }
+impl PackageRegistryRead for Unsupported {
+    fn registry_revision(&self) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn package(&self, _: &str) -> Result<Option<StoredPackage>, StorageError> {
+        nope()
+    }
+    fn packages(&self, _: Option<&str>, _: u16) -> Result<Vec<StoredPackage>, StorageError> {
+        nope()
+    }
+    fn package_version(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<StoredPackageVersion>, StorageError> {
+        nope()
+    }
+    fn package_versions(&self, _: &str) -> Result<Vec<StoredPackageVersion>, StorageError> {
+        nope()
+    }
+    fn proposal(&self, _: &Id) -> Result<Option<StoredProposal>, StorageError> {
+        nope()
+    }
+    fn proposal_for(&self, _: &str, _: &str) -> Result<Option<StoredProposal>, StorageError> {
+        nope()
+    }
+    fn state_generation(
+        &self,
+        _: &str,
+        _: i64,
+    ) -> Result<Option<StoredStateGeneration>, StorageError> {
+        nope()
+    }
+    fn generation_state(
+        &self,
+        _: &str,
+        _: i64,
+    ) -> Result<Option<(i64, serde_json::Value)>, StorageError> {
+        nope()
+    }
+    fn indexes(&self) -> Result<Vec<StoredIndex>, StorageError> {
+        nope()
+    }
+    fn observation(&self, _: &str) -> Result<Option<StoredObservation>, StorageError> {
+        nope()
+    }
+}
+impl PackageRegistry for Unsupported {
+    fn advance_registry(&mut self, _: i64) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn insert_package(&mut self, _: &StoredPackage) -> Result<StoredPackage, StorageError> {
+        nope()
+    }
+    fn update_package(&mut self, _: &StoredPackage, _: i64) -> Result<StoredPackage, StorageError> {
+        nope()
+    }
+    fn insert_version(&mut self, _: &StoredPackageVersion) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_version(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: VersionPhase,
+        _: &[String],
+        _: Option<&serde_json::Value>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_proposal(&mut self, _: &StoredProposal) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_proposal(
+        &mut self,
+        _: &StoredProposal,
+        _: i64,
+    ) -> Result<StoredProposal, StorageError> {
+        nope()
+    }
+    fn publish_generation(
+        &mut self,
+        _: &StoredStateGeneration,
+        _: Option<&serde_json::Value>,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_index(&mut self, _: &StoredIndex) -> Result<(), StorageError> {
+        nope()
+    }
+    fn retain_indexes(&mut self, _: &[String]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_observation(&mut self, _: &StoredObservation) -> Result<(), StorageError> {
+        nope()
+    }
+}
 impl PackageHandlerLedger for Unsupported {
     fn compare_and_set_state(
         &mut self,

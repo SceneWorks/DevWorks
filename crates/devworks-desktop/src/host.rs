@@ -14,14 +14,20 @@ use devworks_adapters::diagnostics::DiagnosticExports;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_adapters::fs::sources::{HostArtifactSources, IssueRefusal};
+use devworks_adapters::packages::{
+    BundleIndexVerifier, BundleInspector, JsonSchemaValidator, NativeIndexTransport,
+    NativePackageFiles, host_target_triple,
+};
 use devworks_adapters::paths::FsPathProbe;
 use devworks_adapters::power::NativePower;
 use devworks_adapters::process::NativeProcessHost;
 use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
 use devworks_core::authority::HostRoles;
+use devworks_core::authority::destructive::ProtectedRoots;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::ports::diagnostics::StorageHealthProbe;
+use devworks_core::ports::packages::{HostPlatform, RuntimeCache};
 use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions, run_write};
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
@@ -29,14 +35,17 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
+use devworks_core::services::packages::PackageService;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::resources::ResourceService;
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::sessions::SessionService;
 use devworks_core::settings::service::SettingsService;
 use devworks_core::settings::view::Health;
+use devworks_engine::package_host::{HostConfig, IndexPorts, LaunchPorts, RuntimePorts};
 use devworks_engine::{
-    BootError, BootReport, Composition, RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
+    BootError, BootReport, Composition, PackageComposition, RunComposition, Runtime, RuntimeConfig,
+    ShutdownStage, boot,
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -177,6 +186,26 @@ async fn compose(
         config.data_root.join("diagnostics").join("exports"),
         sources.clone(),
     )));
+    // Managed executable packages (ADDON-01..04, EXT-01..07): verified bundles install into
+    // content-addressed directories under the data root; helpers launch through the process
+    // owner. No optional runtime is assumed present until a runtime probe is qualified.
+    let runtimes = Arc::new(RuntimeCache::new());
+    let packages = Arc::new(PackageService::new(
+        store.clone(),
+        id_source.clone(),
+        artifacts.clone(),
+        Arc::new(BundleInspector),
+        Arc::new(NativePackageFiles::new(config.data_root.join("packages"))),
+        runtimes.clone(),
+        HostPlatform {
+            target_triple: host_target_triple(),
+            host_version: env!("CARGO_PKG_VERSION").into(),
+            protocol_major: 1,
+            protocol_minor: 0,
+        },
+        diagnostics.clone(),
+        Arc::new(JsonSchemaValidator),
+    ));
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
     // The run-control quiesce (live work held for Continue) gets this cooperative period; it
@@ -197,6 +226,27 @@ async fn compose(
         runs: RunComposition::new(Arc::new(ControlService::new(id_source.clone()))),
         power: Arc::new(NativePower),
         diagnostics,
+        packages: Some(PackageComposition {
+            service: packages,
+            launch: LaunchPorts {
+                fs: Arc::new(NativeFilesystem::new()),
+                roots: ProtectedRoots::new(
+                    Vec::new(),
+                    Vec::new(),
+                    Some(config.data_root.display().to_string()),
+                ),
+                protected_branches: Vec::new(),
+            },
+            config: HostConfig::default(),
+            runtimes: Some(RuntimePorts {
+                cache: runtimes,
+                search_path: None,
+            }),
+            index: Some(IndexPorts {
+                transport: Arc::new(NativeIndexTransport::default()),
+                verifier: Arc::new(BundleIndexVerifier),
+            }),
+        }),
         use_cases,
         consumers: Vec::new(),
         config: runtime_config,
@@ -467,6 +517,25 @@ impl Backend for DesktopBackend {
     }
     fn scratch_dir(&self) -> PathBuf {
         self.host.data_root.join("staging-ui")
+    }
+    fn refresh_packages(&self) -> Result<(), String> {
+        let host = self
+            .host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?;
+        host.refresh_runtimes();
+        host.refresh_indexes();
+        host.reconcile();
+        Ok(())
+    }
+    fn fetch_index_bundle(&self, package: &str, digest: &str) -> Result<PathBuf, String> {
+        let host = self
+            .host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?;
+        host.fetch_bundle(package, digest, &self.scratch_dir().join("packages"))
     }
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
         use std::io::Read;

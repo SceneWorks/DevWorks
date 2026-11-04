@@ -364,7 +364,10 @@ mod tests {
                 assert_eq!(size, [3, 2]);
                 assert_eq!(&rgba[..4], &[255, 0, 0, 255]);
             }
-            TaskOutput::Stored { .. } | TaskOutput::Prepared { .. } => {
+            TaskOutput::Stored { .. }
+            | TaskOutput::Prepared { .. }
+            | TaskOutput::Package { .. }
+            | TaskOutput::Refreshed => {
                 panic!("expected a preview")
             }
         }

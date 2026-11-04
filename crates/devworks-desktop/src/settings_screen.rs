@@ -611,6 +611,44 @@ fn self_editor(
                 )
             })
         }
+        ValueKind::PackageIndexSources => {
+            let buffer = buffers.entry(d.key).or_insert_with(|| {
+                shown
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|s| {
+                                format!(
+                                    "{} {}",
+                                    s["location"].as_str().unwrap_or(""),
+                                    s["publicKey"].as_str().unwrap_or("")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default()
+            });
+            let r = ui.add(
+                egui::TextEdit::multiline(buffer)
+                    .hint_text("One source per line: https://… or /absolute/dir, then the publisher key (hex)")
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY),
+            );
+            named(r, egui::Role::TextInput).changed().then(|| {
+                json!(
+                    buffer
+                        .lines()
+                        .filter_map(|l| {
+                            let mut parts = l.split_whitespace();
+                            let location = parts.next()?;
+                            let key = parts.next().unwrap_or("");
+                            Some(json!({"location": location, "publicKey": key}))
+                        })
+                        .collect::<Vec<_>>()
+                )
+            })
+        }
         ValueKind::SecretRef => {
             let configured = shown.get("secretRef").is_some();
             ui.label(if configured {

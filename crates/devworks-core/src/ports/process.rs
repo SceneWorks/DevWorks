@@ -10,7 +10,7 @@
 //! is never mistaken for the recorded process. A process group or job is not an inescapable
 //! sandbox: a descendant that leaves it is not tracked, and the host reports what it could
 //! verify instead of claiming a stop from the root's exit.
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 /// What to launch. The program is resolved by the OS from `program` (a path or a name on
@@ -25,6 +25,9 @@ pub struct ProcessSpec {
     pub clear_env: bool,
     /// Capture stdout and stderr as pipes ([`ProcessTree::take_output`]); otherwise discard.
     pub capture_output: bool,
+    /// Give the child a stdin pipe ([`ProcessTree::take_input`]); otherwise stdin is null. A
+    /// package helper's control channel is its stdin and stdout.
+    pub pipe_stdin: bool,
 }
 impl ProcessSpec {
     pub fn new(argv: &[String]) -> Option<Self> {
@@ -36,6 +39,7 @@ impl ProcessSpec {
             env: Vec::new(),
             clear_env: false,
             capture_output: false,
+            pipe_stdin: false,
         })
     }
     /// The program followed by its arguments.
@@ -111,6 +115,10 @@ pub trait ProcessTree: Send {
     fn poll(&mut self) -> Result<TreeStatus, ProcessError>;
     /// The captured stdout and stderr pipes, once.
     fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)>;
+    /// The stdin pipe of a tree launched with `pipe_stdin`, once.
+    fn take_input(&mut self) -> Option<Box<dyn Write + Send>> {
+        None
+    }
 }
 
 /// The native launcher.
