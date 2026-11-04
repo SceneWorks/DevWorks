@@ -15,7 +15,7 @@ use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{ArtifactRecord, ResourceRecord};
+use devworks_core::protocol::records::{ArtifactRecord, ConnectionLifecycle, ResourceRecord};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
 use eframe::egui::{
@@ -97,6 +97,8 @@ pub enum Lifecycle {
 
 /// Longest wait for in-flight UI requests before shutdown proceeds anyway.
 pub const QUIESCE_BOUND: Duration = Duration::from_secs(10);
+/// How often Settings → Provider connections reloads while a sign-in is open.
+pub const CONNECTION_POLL: Duration = Duration::from_secs(3);
 /// Height of the global toolbar; the completion overlay anchors just below it.
 pub const TOOLBAR: f32 = 46.0;
 
@@ -1605,6 +1607,84 @@ impl Shell {
                 }
                 Err(e) => self.resources.error = Some(e.describe()),
             },
+            (Slot::Connections(g), Reply::Query(q)) => {
+                if g != self.settings.connections.generation {
+                    return;
+                }
+                match ops::connection_records(q) {
+                    Ok((items, next)) => {
+                        self.settings.connections.gathering.extend(items);
+                        match next {
+                            Some(cursor) => {
+                                if !self.query(
+                                    Slot::Connections(g),
+                                    "Loading provider connections",
+                                    "router.connections",
+                                    move |b| ops::router_connections(b, Some(&cursor)),
+                                ) {
+                                    self.settings.connections.loading = false;
+                                }
+                            }
+                            None => {
+                                let all = std::mem::take(&mut self.settings.connections.gathering);
+                                self.settings.connections.loaded(all);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.settings.connections.loading = false;
+                        self.settings.connections.error = Some(e.describe());
+                    }
+                }
+            }
+            (Slot::ConnectionCatalog(g), Reply::Query(q)) => {
+                if g != self.settings.connections.catalog_generation {
+                    return;
+                }
+                match ops::route_models(q) {
+                    Ok((items, next)) => {
+                        self.settings.connections.catalog_gathering.extend(items);
+                        match next {
+                            Some(cursor) => {
+                                self.query(
+                                    Slot::ConnectionCatalog(g),
+                                    "Loading models",
+                                    "router.catalog",
+                                    move |b| ops::router_catalog_all(b, Some(&cursor)),
+                                );
+                            }
+                            None => {
+                                let all = std::mem::take(
+                                    &mut self.settings.connections.catalog_gathering,
+                                );
+                                self.settings.connections.catalog_loaded(all);
+                            }
+                        }
+                    }
+                    Err(e) => self.settings.connections.catalog_error = Some(e.describe()),
+                }
+            }
+            (Slot::Configure(n), Reply::Task(t)) => {
+                let p = &mut self.settings.connections;
+                let label = p
+                    .busy
+                    .iter()
+                    .position(|(k, _)| *k == n)
+                    .map(|i| p.busy.remove(i).1)
+                    .unwrap_or_default();
+                p.message = Some(match t {
+                    Ok(TaskOutput::Stored { outcome, .. }) => match ops::configured(outcome) {
+                        Ok(true) => (Tone::Good, format!("{label}: done.")),
+                        Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
+                        Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
+                    },
+                    Ok(_) => (Tone::Bad, format!("{label}: unexpected reply.")),
+                    Err(e) => (Tone::Bad, format!("{label}: {e}")),
+                });
+                // Connections and the catalog changed: reload them, and what the composer shows.
+                self.load_connections();
+                self.invalidate_routing();
+            }
             (slot, Reply::Task(Err(e))) => {
                 self.announce(format!("A request for {slot:?} failed: {e}"));
             }
@@ -1853,6 +1933,8 @@ impl Shell {
                     }
                 }
                 SettingsAction::OpenAddOns => self.navigate(Route::AddOns),
+                SettingsAction::OpenConnections => self.load_connections(),
+                SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
             }
         }
@@ -1886,6 +1968,124 @@ impl Shell {
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Settings → Provider connections (DW-18)
+
+    /// Loads every connection and the whole catalog, page by page, as new loads.
+    fn load_connections(&mut self) {
+        if let Some(b) = self.backend() {
+            self.settings.connections.secret_store = Some(b.secret_store());
+        }
+        let p = &mut self.settings.connections;
+        p.generation += 1;
+        p.gathering.clear();
+        p.loading = true;
+        p.last_load = Some(Instant::now());
+        p.catalog_generation += 1;
+        p.catalog_gathering.clear();
+        let (g, cg) = (p.generation, p.catalog_generation);
+        if !self.query(
+            Slot::Connections(g),
+            "Loading provider connections",
+            "router.connections",
+            |b| ops::router_connections(b, None),
+        ) {
+            self.settings.connections.loading = false;
+        }
+        self.query(
+            Slot::ConnectionCatalog(cg),
+            "Loading models",
+            "router.catalog",
+            |b| ops::router_catalog_all(b, None),
+        );
+    }
+
+    fn connection_action(&mut self, action: crate::connections_screen::ConnectionAction) {
+        use crate::connections_screen::ConnectionAction as A;
+        match action {
+            A::Reload => self.load_connections(),
+            A::UseSessionOnly => {
+                if let Some(b) = self.backend() {
+                    match b.use_session_only_secrets() {
+                        Ok(()) => {
+                            self.settings.connections.message = Some((
+                                Tone::Attention,
+                                "Credentials are kept in memory for this session only; sign in \
+                                 again after a restart."
+                                    .into(),
+                            ));
+                            self.settings.connections.secret_store = Some(b.secret_store());
+                        }
+                        Err(e) => self.settings.connections.message = Some((Tone::Bad, e)),
+                    }
+                }
+            }
+            A::Configure {
+                label,
+                action,
+                key,
+                code,
+            } => {
+                if self.online().is_err() {
+                    self.settings.connections.message =
+                        Some((Tone::Bad, "DevWorks is offline or closing.".into()));
+                    return;
+                }
+                let p = &mut self.settings.connections;
+                p.sequence += 1;
+                let n = p.sequence;
+                let submitted = self.client.as_mut().is_some_and(|c| {
+                    c.task(Slot::Configure(n), &label, move |b| {
+                        let mut action = action;
+                        // The key goes to the OS secret store first; only its handle travels.
+                        if let Some(key) = key {
+                            let handle = b
+                                .stage_api_key(key)
+                                .map_err(|e| format!("the secret store refused the key: {e}"))?;
+                            action["credentialRef"] =
+                                serde_json::Value::String(handle.as_str().to_owned());
+                        }
+                        if let Some((flow, pasted)) = code {
+                            b.submit_sign_in_code(&flow, pasted)?;
+                        }
+                        let frame = ops::router_configure(b, action);
+                        let outcome =
+                            crate::backend::resolve_command(b, "router.configure", &frame);
+                        Ok(TaskOutput::Stored { outcome, frame })
+                    })
+                });
+                if submitted {
+                    self.settings.connections.busy.push((n, label));
+                } else {
+                    self.settings.connections.message =
+                        Some((Tone::Bad, "The change was not submitted.".into()));
+                }
+            }
+        }
+    }
+
+    /// Reloads the connections panel while a sign-in is open (a device code finishes in the
+    /// background), at most every few seconds.
+    fn poll_connections(&mut self, ctx: &egui::Context) {
+        let p = &self.settings.connections;
+        let signing_in = p.records.iter().any(|r| {
+            r.lifecycle.as_ref().is_some_and(|l| {
+                matches!(
+                    l,
+                    ConnectionLifecycle::Authorizing | ConnectionLifecycle::Refreshing
+                )
+            })
+        });
+        if !self.settings.show_connections || !signing_in {
+            return;
+        }
+        let due = !p.loading && p.last_load.is_none_or(|t| t.elapsed() >= CONNECTION_POLL);
+        if due {
+            self.load_connections();
+        }
+        ctx.request_repaint_after(CONNECTION_POLL);
     }
 
     // -----------------------------------------------------------------------------------------
@@ -2801,6 +3001,8 @@ impl Shell {
                     &mut actions,
                 );
                 self.settings_actions(actions);
+                let ctx = ui.ctx().clone();
+                self.poll_connections(&ctx);
             }
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),

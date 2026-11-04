@@ -13756,11 +13756,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it).",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13802,11 +13810,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Read-only provider connections in ID order; never a credential value, token or key (credentialRef is an opaque handle). subscriptionRiskAccepted is the effective acceptance: false once the notice, profile, endpoint, account or restore epoch changed. Schema revision 2: the endpoint, the authentication lifecycle (Disconnected, Authorizing, Connected, Refreshing, ReauthenticationRequired, Unavailable, Disabled) with a safe reason, the credential revision, the last connection test (healthy, checkedAtMs), the last successful model discovery (discoveredAtMs, discoveredModelCount and, for at most 128 models, discoveredModelIds), the access-token expiry and, for a human caller only, the open sign-in challenge (device user code and verification URL, or browser authorization URL). Revision 2 also reports whether the connection is enabled (a disabled connection keeps its credential and is never routed through) and, for an OpenRouter connection, its constraints: allowed and excluded model patterns (applied to discovery and routing eligibility), the auto-router cost tier and the OpenRouter provider-routing object sent with its requests.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -14224,11 +14240,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "HumanConfiguration",
           "effect": "External",
-          "semanticRules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound.",
+          "semanticRules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value).",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

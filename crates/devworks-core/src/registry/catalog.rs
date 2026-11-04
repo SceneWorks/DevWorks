@@ -6482,7 +6482,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<RouteModel>",
         result_schema: schema_of::<Page<RouteModel>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "router.connections",
@@ -6504,7 +6504,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<ConnectionRecord>",
         result_schema: schema_of::<Page<ConnectionRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "router.route",
@@ -6702,7 +6702,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "router.decision_models",

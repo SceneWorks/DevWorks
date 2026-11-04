@@ -1,9 +1,9 @@
 //! SQLite planned work records: `work_items`, `work_repositories`, `work_dependencies`,
 //! `workflow_statuses` and `feature_plans` (migration 1) with the side tables `work_details`,
-//! `work_queues`, `plan_proposals` and `feature_readiness` (migration 15).
+//! `work_queues`, `plan_proposals` and `feature_readiness` (migration 16).
 //!
 //! A work row without its detail row reads with the migration's defaults, so an item recorded
-//! before migration 15 (or by a fixture) stays readable. Text search compares a search key the
+//! before migration 16 (or by a fixture) stays readable. Text search compares a search key the
 //! service folded with a needle it folded the same way (`instr`, exact), so the comparison is
 //! symmetric whatever the script (SQLite's `lower()`/`LIKE` fold only ASCII).
 use super::conn::db;

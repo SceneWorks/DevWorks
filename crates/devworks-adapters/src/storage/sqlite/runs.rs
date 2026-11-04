@@ -1,6 +1,6 @@
 //! SQLite run root control records: `root_controls`, `executions` (activations), `assignments`
 //! and `blockers` (migration 1, extended by migration 11), `run_instructions` and
-//! `session_turns` (migration 11), `stop_coverage` (migration 15), plus the read-only views run
+//! `session_turns` (migration 11), `stop_coverage` (migration 16), plus the read-only views run
 //! control needs of `feature_plans`, `projects`, `work_items` and `queue_entries`.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};

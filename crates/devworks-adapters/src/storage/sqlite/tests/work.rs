@@ -6,9 +6,9 @@
 //! manual versus verified completion; membership link/unlink/transfer with the unlink pause; the
 //! feature plan slot, approval requests and the human decision seam; readiness assessments and
 //! unit-level invalidation feeding run control; re-planning by reference; atomic plans and a
-//! project's initial plan; repository-in-use; archived projects; and migration 15. No inference.
+//! project's initial plan; repository-in-use; archived projects; and migration 16. No inference.
 use super::{Harness, through};
-use crate::storage::sqlite::{MIGRATION_0015_SHA256, MIGRATIONS, SqliteStore};
+use crate::storage::sqlite::{MIGRATION_0016_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
@@ -2128,30 +2128,30 @@ fn work_names_block_repository_removal_and_archived_projects_close_to_work() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Migration 15
+// Migration 16
 
 #[test]
-fn migration_15_is_additive_and_closes_older_writers_out() {
+fn migration_16_is_additive_and_closes_older_writers_out() {
     let m = MIGRATIONS
         .iter()
-        .find(|m| m.version == 15)
-        .expect("migration 15");
+        .find(|m| m.version == 16)
+        .expect("migration 16");
     assert_eq!(
         m.checksum(),
-        MIGRATION_0015_SHA256,
+        MIGRATION_0016_SHA256,
         "an applied migration was edited"
     );
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 15));
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 16));
     assert!(
         MIGRATIONS
             .iter()
-            .filter(|e| e.version < 15)
+            .filter(|e| e.version < 16)
             .all(|e| e.minimum_reader <= m.minimum_reader && e.minimum_writer <= m.minimum_writer)
     );
     assert!(!m.rebuilds_tables);
     let h = Harness::new();
-    let old = SqliteStore::open_with(h.config(), &through(14)).unwrap();
-    // A work row recorded before migration 15 (a positional migration 1 fixture row).
+    let old = SqliteStore::open_with(h.config(), &through(15)).unwrap();
+    // A work row recorded before migration 16 (a positional migration 1 fixture row).
     old.with_writer_connection(|c| {
         super::super::conn::db(c.execute_batch(
             "INSERT INTO projects VALUES('project-old','Old','Active',1,1,5);
@@ -2160,7 +2160,7 @@ fn migration_15_is_additive_and_closes_older_writers_out() {
     })
     .unwrap();
     drop(old);
-    let s = SqliteStore::open_with(h.config(), &through(15)).unwrap();
+    let s = SqliteStore::open_with(h.config(), &through(16)).unwrap();
     let report = s.compatibility().unwrap();
     assert_eq!(
         (
@@ -2168,7 +2168,7 @@ fn migration_15_is_additive_and_closes_older_writers_out() {
             report.minimum_reader,
             report.minimum_writer
         ),
-        (15, 8, 15)
+        (16, 8, 16)
     );
     let s: Arc<dyn ApplicationStore> = Arc::new(s);
     let w = read_snapshot(&*s, &ReadOptions::default(), |snap| {

@@ -10,6 +10,7 @@
 //! overwrites fresher state. [`Client::wait_idle`] is the synchronization point tests use
 //! (a condition variable, never a sleep).
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::Id;
 use devworks_core::settings::view::Health;
@@ -53,6 +54,48 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// Writes an API key the user typed into the OS secret store and returns its opaque handle
+    /// for the user's `router.configure` `Connection` action (user ingress only; DW-18). The
+    /// key never passes through a frame, receipt or log.
+    fn stage_api_key(&self, _key: Secret) -> Result<Id, String> {
+        Err("credential entry is not available".into())
+    }
+    /// Attaches the `code#state` value the user pasted to their open browser sign-in, for the
+    /// `CompleteSignIn` command that follows (user ingress only; kept in memory).
+    fn submit_sign_in_code(&self, _flow: &Id, _pasted: Secret) -> Result<(), String> {
+        Err("sign-in is not available".into())
+    }
+    /// Writes a settings credential the user typed (a `{"secretRef": ...}` setting such as the web
+    /// search key) into the OS secret store and returns its reference (user ingress only).
+    fn stage_setting_secret(&self, _value: Secret) -> Result<String, String> {
+        Err("credential entry is not available".into())
+    }
+    /// The secret facility in use, whether credentials are kept for this session only, and
+    /// whether it refused its last request (structured, never parsed from a message).
+    fn secret_store(&self) -> SecretStoreStatus {
+        SecretStoreStatus {
+            name: "unavailable".into(),
+            session_only: false,
+            unavailable: None,
+        }
+    }
+    /// The user's explicit choice to keep credentials in memory for this session only (when
+    /// the OS facility is unavailable). Never a silent plaintext disk fallback.
+    fn use_session_only_secrets(&self) -> Result<(), String> {
+        Err("session-only credentials are not available".into())
+    }
+}
+
+/// The secret facility as Settings shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SecretStoreStatus {
+    /// The facility's name (for example "macOS Keychain").
+    pub name: String,
+    /// Credentials are kept in memory for this session only.
+    pub session_only: bool,
+    /// Why the facility refused its last request (locked, missing or denied), until a request
+    /// succeeds: staging a key, a sign-in exchange, a refresh or a credential read.
+    pub unavailable: Option<String>,
 }
 
 /// Who is waiting for a reply. Equal slots supersede each other.
@@ -136,6 +179,12 @@ pub enum Slot {
     ArchiveCount(String, bool),
     /// Work opened from elsewhere (a completion card): read as a card (`false`) or a feature.
     WorkOpen(String, bool),
+    /// A page of `router.connections` for Settings → Provider connections (load generation).
+    Connections(u64),
+    /// A page of the full catalog (disabled models included) for the connections panel.
+    ConnectionCatalog(u64),
+    /// One `router.configure` submission from the connections panel (its sequence number).
+    Configure(u64),
 }
 
 /// A finished request.

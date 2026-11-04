@@ -523,6 +523,34 @@ for name in WORK_R2:
  case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':work_r2(POS['result-'+name]['value'])})
 case('reject-r1-result-readiness','operation-result',{'kind':'features.get','value':feature_r2},False,False)
 case('reject-r2-result-readiness-freshness','operation-result.r2',{'kind':'features.get','value':{**feature_r2,'readiness':{**readiness,'freshness':'Fresh'}}},False,False)
+# Schema revision 2 (provider connections, DW-18): the connection's endpoint, lifecycle, health,
+# discovery and sign-in challenge; a catalog model's context window and serving connection.
+conn_r2={**sample('ConnectionRecord'),'endpoint':'https://api.example.invalid','lifecycle':'Authorizing','stateReason':'Waiting for the device code','credentialRevision':'2','healthy':True,'checkedAtMs':'10','discoveredAtMs':'9','discoveredModelCount':'1','discoveredModelIds':['gpt-6-luna'],'accessExpiresAtMs':'99','signIn':{'flowId':'flow-a','method':'DeviceCode','userCode':'ABCD-EFGH','verificationUrl':'https://auth.example.invalid/codex/device','expiresAtMs':'100'}}
+case('r2-result-router.connections','operation-result.r2',{'kind':'router.connections','value':{'items':[conn_r2],'hasMore':False}})
+case('r2-result-router.connections-plain','operation-result.r2',{'kind':'router.connections','value':{'items':[sample('ConnectionRecord')],'hasMore':False}})
+case('reject-r1-result-connections-lifecycle','operation-result',{'kind':'router.connections','value':{'items':[conn_r2],'hasMore':False}},False,False)
+case('reject-r2-result-connections-unknown-lifecycle','operation-result.r2',{'kind':'router.connections','value':{'items':[{**conn_r2,'lifecycle':'Pending'}],'hasMore':False}},False,False)
+case('reject-r2-result-connections-sign-in-method','operation-result.r2',{'kind':'router.connections','value':{'items':[{**conn_r2,'signIn':{**conn_r2['signIn'],'method':'Password'}}],'hasMore':False}},False,False)
+model_r2={**sample('RouteModel'),'contextTokens':'1000000','connectionId':'conn-a'}
+case('r2-result-router.catalog','operation-result.r2',{'kind':'router.catalog','value':{'items':[model_r2],'hasMore':False}})
+case('reject-r1-result-catalog-context','operation-result',{'kind':'router.catalog','value':{'items':[model_r2],'hasMore':False}},False,False)
+case('reject-r2-result-catalog-zero-context','operation-result.r2',{'kind':'router.catalog','value':{'items':[{**model_r2,'contextTokens':'0'}],'hasMore':False}},False,False)
+case('r2-input-router.configure','domain-request.r2',command_at('router.configure',action={'kind':'Model','model':model_r2}))
+case('r2-input-router.configure-plain','domain-request.r2',command_at('router.configure'))
+case('reject-r1-configure-model-context','domain-request',command_at('router.configure',None,action={'kind':'Model','model':model_r2}),False,False)
+case('r2-input-router.connections','domain-request.r2',domain('router.connections'))
+case('r2-input-router.catalog','domain-request.r2',domain('router.catalog'))
+case('r2-result-router.configure','operation-result.r2',{'kind':'router.configure','value':sample('MutationSummary')})
+# Revision 2 (DW-18): connection enable/disable and OpenRouter constraints.
+or_constraints={'allowedModels':['anthropic/*'],'excludedModels':['openai/gpt-4o'],'costTier':'low','provider':{'order':['anthropic'],'allowFallbacks':False,'requireParameters':True,'dataCollection':'deny','zdr':True,'enforceDistillableText':True,'only':['anthropic'],'ignore':['deepinfra'],'quantizations':['fp8','bf16'],'sort':{'by':'price','partition':'none'},'preferredMinThroughput':{'p50':50.0},'preferredMaxLatency':{'p90':2.5},'maxPrice':{'prompt':'3','completion':'15','request':'0.01','image':'0.002'}}}
+or_connection={'kind':'Connection','connectionId':'or','name':'OpenRouter','profile':'OpenRouterChat','endpoint':'https://openrouter.ai/api/v1','enabled':False,'openRouter':or_constraints}
+case('r2-input-router.configure-connection-constraints','domain-request.r2',command_at('router.configure',action=or_connection))
+case('reject-r1-configure-connection-enabled','domain-request',command_at('router.configure',None,action=or_connection),False,False)
+case('reject-r2-configure-unknown-data-collection','domain-request.r2',command_at('router.configure',action={**or_connection,'openRouter':{**or_constraints,'provider':{'dataCollection':'maybe'}}}),False,False)
+case('reject-r2-configure-negative-max-price','domain-request.r2',command_at('router.configure',action={**or_connection,'openRouter':{**or_constraints,'provider':{'maxPrice':{'prompt':'-1'}}}}),False,False)
+case('reject-r2-configure-null-enabled','domain-request.r2',command_at('router.configure',action={**or_connection,'enabled':None}),False,False)
+case('r2-result-router.connections-constraints','operation-result.r2',{'kind':'router.connections','value':{'items':[{**conn_r2,'enabled':False,'openRouter':or_constraints}],'hasMore':False}})
+case('reject-r1-result-connections-enabled','operation-result',{'kind':'router.connections','value':{'items':[{**sample('ConnectionRecord'),'enabled':True}],'hasMore':False}},False,False)
 # Schema revision 2 (web tools): untrusted results with their provider, and a fetched document's
 # trust, final 2xx status, 3xx redirect chain and the digest/length of the bytes received.
 case('r2-input-web.search','domain-request.r2',domain('web.search'))
