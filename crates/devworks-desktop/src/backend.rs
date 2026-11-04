@@ -384,18 +384,35 @@ impl Client {
         Some(ticket)
     }
 
-    pub fn query(&mut self, slot: Slot, label: &str, operation: &'static str, frame: Vec<u8>) {
+    /// Submits a query; `false` when the client is closed and nothing was submitted.
+    pub fn query(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        operation: &'static str,
+        frame: Vec<u8>,
+    ) -> bool {
         self.submit(
             slot,
             label,
             Box::new(move |b| Reply::Query(b.query(operation, &frame))),
             None,
-        );
+        )
+        .is_some()
     }
 
     /// Admits a command through [`resolve_command`]. If its outcome is still unknown, the exact
     /// frame is kept as [`Unresolved`] until [`Self::resubmit`] confirms it.
-    pub fn command(&mut self, slot: Slot, label: &str, operation: &'static str, frame: Vec<u8>) {
+    ///
+    /// Returns whether it was submitted now (`false`: the client is closed, and the command is
+    /// kept unresolved).
+    pub fn command(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        operation: &'static str,
+        frame: Vec<u8>,
+    ) -> bool {
         let kept = frame.clone();
         let job: Job = Box::new(move |b| Reply::Command(resolve_command(b, operation, &frame)));
         if self
@@ -403,6 +420,7 @@ impl Client {
             .is_some()
         {
             self.unresolved.retain(|u| u.slot != slot);
+            return true;
         } else if !self.unresolved.iter().any(|u| u.slot == slot) {
             // Closed: nothing ran, so an unknown outcome stays unresolved (never dropped).
             self.unresolved.push(Unresolved {
@@ -412,6 +430,7 @@ impl Client {
                 frame: kept,
             });
         }
+        false
     }
 
     /// Keeps an unresolved command restored from a previous run.
