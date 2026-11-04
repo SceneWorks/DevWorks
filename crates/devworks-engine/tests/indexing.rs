@@ -238,7 +238,11 @@ fn discovery_scans_only_after_admission_and_only_for_people() {
         .unwrap();
     let user = principal(&*store, "user", PrincipalKind::Human);
     base_directory(&store, &user, &src);
-    let location = repo.display().to_string();
+    // The stored identity of the checkout (the product's form for every lookup by location).
+    let location = devworks_core::services::indexing::paths::location_identity(
+        &NativeSourceTree::new(),
+        &repo,
+    );
     let registered = |store: &Arc<dyn ApplicationStore>| {
         let l = location.clone();
         read(&**store, move |s| s.indexing().repository_at(&l))

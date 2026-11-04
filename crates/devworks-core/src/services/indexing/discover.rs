@@ -15,7 +15,7 @@
 //! advances the source revision. Registration never adds project membership: that is the
 //! user's `projects.membership` decision.
 use super::git::Git;
-use super::paths::location_identity;
+use super::paths::{location_identity, native_location};
 use super::{IndexEnv, section_config};
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
@@ -92,18 +92,32 @@ pub fn group_path(
 }
 /// The directory segments between `root` and `location` (excluding the repository itself).
 pub fn groups(root: &str, location: &str) -> Vec<String> {
-    let root = Path::new(root);
-    let loc = Path::new(location);
-    match loc.strip_prefix(root) {
-        Ok(rel) => {
-            let parts: Vec<String> = rel
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect();
-            parts[..parts.len().saturating_sub(1)].to_vec()
-        }
-        Err(_) => Vec::new(),
-    }
+    groups_on(root, location, cfg!(windows))
+}
+
+/// [`groups`] under the path rules of `windows`: both paths are compared in their
+/// [`native_location`] identity form, so separators, the verbatim prefix, drive-letter case and
+/// a trailing separator never hide the relationship; the drive and the rest compare exactly
+/// otherwise (both come from the same file system's canonical spelling).
+pub fn groups_on(root: &str, location: &str, windows: bool) -> Vec<String> {
+    let sep = if windows { '\\' } else { '/' };
+    let (root, location) = (
+        native_location(root, windows),
+        native_location(location, windows),
+    );
+    let root = root.trim_end_matches(sep);
+    let Some(rel) = location
+        .strip_prefix(root)
+        .and_then(|r| r.strip_prefix(sep))
+    else {
+        return Vec::new();
+    };
+    let parts: Vec<String> = rel
+        .split(sep)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    parts[..parts.len().saturating_sub(1)].to_vec()
 }
 
 /// The stable worktree ID of a checkout path.
@@ -516,17 +530,47 @@ mod tests {
 
     #[test]
     fn groups_are_the_segments_between_root_and_repository() {
+        // POSIX rules.
         assert_eq!(
-            groups("/src", "/src/team/legacy/app"),
+            groups_on("/src", "/src/team/legacy/app", false),
             vec!["team", "legacy"]
         );
-        assert!(groups("/src", "/src/app").is_empty());
-        assert!(groups("/src", "/other/app").is_empty());
-        assert!(expand("relative/x", None).is_none());
+        assert!(groups_on("/src", "/src/app", false).is_empty());
+        assert!(groups_on("/src", "/other/app", false).is_empty());
+        assert!(groups_on("/src", "/srcx/team/app", false).is_empty());
+        assert_eq!(groups_on("/src/", "/src/team/app", false), vec!["team"]);
+        // Windows rules, on every platform: mixed separators, the verbatim prefix, drive case
+        // and a trailing separator all name the same directories.
+        for (root, location) in [
+            (r"C:\src", r"C:\src\team\legacy\app"),
+            ("C:/src", r"C:\src\team/legacy/app"),
+            (r"c:\src\", r"\\?\C:\src\team\legacy\app"),
+        ] {
+            assert_eq!(
+                groups_on(root, location, true),
+                vec!["team", "legacy"],
+                "{root} {location}"
+            );
+        }
+        assert!(groups_on(r"C:\src", r"C:\srcx\team\app", true).is_empty());
+        assert!(groups_on(r"C:\src", r"D:\src\team\app", true).is_empty());
+        // The host's own rules.
+        let base = std::env::temp_dir().join("src");
+        let repo = base.join("team").join("app");
         assert_eq!(
-            expand("~/x", Some(Path::new("/home/me"))),
-            Some(PathBuf::from("/home/me/x"))
+            groups(&base.display().to_string(), &repo.display().to_string()),
+            vec!["team"]
         );
+    }
+
+    #[test]
+    fn a_configured_base_directory_expands_home_and_must_be_absolute() {
+        // An absolute home on this platform (`/home/me` is not absolute on Windows).
+        let home = std::env::temp_dir().join("home-me");
+        assert!(expand("relative/x", None).is_none());
+        assert_eq!(expand("~/x", Some(&home)), Some(home.join("x")));
+        assert_eq!(expand("~\\x", Some(&home)), Some(home.join("x")));
+        assert_eq!(expand("~", Some(&home)), Some(home.clone()));
         assert!(expand("~/x", None).is_none());
     }
 
