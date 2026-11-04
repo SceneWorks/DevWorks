@@ -171,7 +171,7 @@ pub static SCREENS: [Screen; 19] = [
         group: NavGroup::Project,
         help_topic: "repositories",
         subviews: &["Overview", "Nodes", "Graph", "Health", "Reviews"],
-        inner_sidebar: None,
+        inner_sidebar: Some("Repository"),
         summary_strip: &[],
         // Registrations, texts and index removal are bound (DW-11); the Nodes, Graph, Health and
         // Reviews subviews show their owners (DW-28, DW-29).

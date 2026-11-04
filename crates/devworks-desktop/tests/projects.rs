@@ -393,3 +393,72 @@ fn a_form_opened_before_a_concurrent_change_is_refused_rather_than_overwriting_i
         "the concurrent membership is kept"
     );
 }
+
+fn publish_text(engine: &devworks_desktop::host::Engine, readme: bool) {
+    use devworks_core::ports::storage::{StoredIndexView, StoredRepositoryText, TextKind};
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        move |tx| {
+            let view = Id::new("view-1").unwrap();
+            if tx.projects().index_view(&view)?.is_none() {
+                tx.projects().publish_index_view(&StoredIndexView {
+                    view_id: view.clone(),
+                    repository_id: Id::new("repo-a").unwrap(),
+                    source_revision: "rev-1".into(),
+                    coverage: "Complete".into(),
+                    published_at_ms: 1,
+                })?;
+            }
+            tx.projects().put_repository_text(&StoredRepositoryText {
+                view_id: view,
+                repository_id: Id::new("repo-a").unwrap(),
+                kind: if readme {
+                    TextKind::Readme
+                } else {
+                    TextKind::Summary
+                },
+                artifact_id: Id::new(if readme {
+                    "artifact-readme"
+                } else {
+                    "artifact-summary"
+                })
+                .unwrap(),
+                version_id: Id::new("version-1").unwrap(),
+                sha256: "b".repeat(64),
+                byte_length: 12,
+                media_type: "text/markdown".into(),
+                coverage: "Complete".into(),
+            })
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_unavailable_repository_text_can_be_retried_and_refresh_reads_it_again() {
+    let root = Root::new("projects-texts");
+    let engine = start(&root);
+    register(&engine, "repo-a", "engine");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Repositories");
+    click_row(&mut h, "engine  ·");
+    assert!(has_text(&h, "Not indexed yet"));
+    // Indexing publishes the README; the unavailable state offers a retry.
+    publish_text(&engine, true);
+    click(&mut h, Role::Button, "Retry README");
+    let shown = |h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>| {
+        h.query_all_by_label_contains("View view-1 · 12 bytes")
+            .count()
+    };
+    assert_eq!(
+        shown(&h),
+        1,
+        "the README is read; the summary is still unavailable"
+    );
+    // Refresh reads the selected repository's texts again (the summary was published since).
+    publish_text(&engine, false);
+    click(&mut h, Role::Button, "Refresh");
+    assert_eq!(shown(&h), 2);
+}

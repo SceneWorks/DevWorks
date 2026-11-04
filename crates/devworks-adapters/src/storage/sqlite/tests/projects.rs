@@ -1070,6 +1070,141 @@ fn agents_archive_delete_and_remove_indexes_only_with_an_exact_approval() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Shared resources of an archived project
+
+impl Fx {
+    fn resource(&self, ctx: &InvocationContext, op: &str, body: Value) -> DomainCommandReply {
+        let mut body = body;
+        body["kind"] = json!(op);
+        let key = format!("res-{}", self.n.fetch_add(1, Ordering::SeqCst));
+        let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key,
+            "schemaRevision": 2, "body": body});
+        self.submit(ctx, op, &frame.to_string())
+    }
+    fn acquire(&self, ctx: &InvocationContext) -> devworks_core::protocol::records::LeaseRecord {
+        match recorded(self.resource(
+            ctx,
+            "resources.acquire",
+            json!({"resourceId": "pool", "expectedRevision": "1", "units": 1,
+                "leaseMs": "600000"}),
+        ))
+        .0
+        {
+            DomainDecision::Applied {
+                result: OperationResult::ResourcesAcquire { value },
+            }
+            | DomainDecision::NoChange {
+                result: OperationResult::ResourcesAcquire { value },
+            } => value,
+            other => panic!("{other:?}"),
+        }
+    }
+    fn lease_phase(&self, l: &devworks_core::protocol::records::LeaseRecord) -> String {
+        let id = l.id.clone();
+        let stored = self.read(move |s| s.resources().lease(&id)).expect("lease");
+        format!("{:?}/{:?}", stored.phase, stored.end_reason)
+    }
+}
+
+/// A shared machine resource (capacity one) held by project B, with project A waiting.
+fn queued(
+    fx: &Fx,
+) -> (
+    ProjectRecord,
+    devworks_core::protocol::records::LeaseRecord,
+    devworks_core::protocol::records::LeaseRecord,
+    InvocationContext,
+) {
+    let a = fx.create("A", &[]);
+    let b = fx.create("B", &[]);
+    fx.bind_agents(&a.id);
+    fx.write(|tx| {
+        devworks_core::services::resources::register_machine(
+            tx,
+            &devworks_core::services::resources::MachineResource {
+                name: "pool".into(),
+                capacity: 1,
+                physical: false,
+                labels: Vec::new(),
+            },
+        )
+    });
+    let in_b = fx.ctx("user-a", PrincipalKind::Human, Some(&b.id));
+    let held = fx.acquire(&in_b);
+    let waiting = fx.acquire(&fx.project_agent(&a.id));
+    assert_eq!(fx.lease_phase(&held), "Held/None");
+    assert_eq!(fx.lease_phase(&waiting), "Waiting/None");
+    (a, held, waiting, in_b)
+}
+
+#[test]
+fn archival_cancels_the_projects_waiting_leases_in_its_unit_of_work() {
+    let fx = Fx::new();
+    let (a, held, waiting, in_b) = queued(&fx);
+    let _ = applied(fx.lifecycle(&fx.user(), "projects.archive", &a));
+    assert_eq!(fx.lease_phase(&waiting), "Released/Some(Cancelled)");
+    // The holder's release grants nothing to the archived project.
+    let _ = recorded(fx.resource(
+        &in_b,
+        "resources.release",
+        json!({"leaseId": held.id.as_str(), "expectedFence": held.fence.as_str()}),
+    ));
+    assert_eq!(fx.lease_phase(&waiting), "Released/Some(Cancelled)");
+    assert_eq!(
+        fx.events("ProjectArchived")[0].payload["cancelledWaitingLeases"],
+        json!(1)
+    );
+}
+
+#[test]
+fn a_waiter_of_a_closed_project_is_never_promoted() {
+    let fx = Fx::new();
+    let (a, held, waiting, in_b) = queued(&fx);
+    // A waiter that is still queued when its project closes (here closed beneath the archival
+    // command, so nothing cancelled it) leaves the queue at the next promotion instead of being
+    // granted.
+    let pid = a.id.clone();
+    fx.write(move |tx| {
+        let mut p = tx.projects().project(&pid)?.expect("project");
+        let revision = p.revision;
+        p.revision += 1;
+        p.lifecycle = "Archived".into();
+        tx.projects().update_project(&p, revision)
+    });
+    let _ = recorded(fx.resource(
+        &in_b,
+        "resources.release",
+        json!({"leaseId": held.id.as_str(), "expectedFence": held.fence.as_str()}),
+    ));
+    assert_eq!(fx.lease_phase(&waiting), "Released/Some(Cancelled)");
+}
+
+#[test]
+fn a_hold_of_an_archived_project_is_not_renewed() {
+    let fx = Fx::new();
+    let (a, held, _, in_b) = queued(&fx);
+    let _ = recorded(fx.resource(
+        &in_b,
+        "resources.release",
+        json!({"leaseId": held.id.as_str(), "expectedFence": held.fence.as_str()}),
+    ));
+    // A now holds the resource; after its archival the hold is not extended.
+    let agent = fx.project_agent(&a.id);
+    let mine = fx.acquire(&agent);
+    assert_eq!(fx.lease_phase(&mine), "Held/None");
+    let _ = applied(fx.lifecycle(&fx.user(), "projects.archive", &a));
+    assert_eq!(
+        kind(&refused(fx.resource(
+            &agent,
+            "resources.renew",
+            json!({"leaseId": mine.id.as_str(), "expectedFence": mine.fence.as_str(),
+                "leaseMs": "600000"}),
+        ))),
+        (DomainErrorCode::Conflict, "archived_project".into())
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Repository texts, index removal, listing and search
 
 fn publish(fx: &Fx, view: &str, repo: &str, at: i64, readme: bool) {
@@ -1385,6 +1520,63 @@ fn repository_listing_and_search_filter_page_and_never_show_credentials() {
     ));
     assert_eq!(two.0, [p2.id.0.as_str()]);
     assert!(two.1.is_none());
+}
+
+#[test]
+fn a_membership_change_between_pages_expires_a_project_scoped_cursor() {
+    let fx = Fx::new();
+    let p = fx.create("A", &["repo-1", "repo-2"]);
+    let user = fx.user();
+    let scoped = json!({"kind": "Project", "projectId": p.id.0.as_str()});
+    let page = |op: &str, cursor: Option<&str>| {
+        let mut body = json!({"scope": scoped, "page": {"limit": 1}});
+        if op == "repositories.search" {
+            body["query"] = json!("repo");
+            body["languageIds"] = json!([]);
+        }
+        if let Some(c) = cursor {
+            body["page"]["cursor"] = json!(c);
+        }
+        fx.query(&user, op, body)
+    };
+    for op in ["repositories.list", "repositories.search"] {
+        let first = page(op, None);
+        let DomainQueryReply::Result { stamp, .. } = &first else {
+            panic!("{first:?}")
+        };
+        let at = stamp.scope_revision.get();
+        let (ids, cursor) = page_ids(first);
+        assert_eq!(ids, ["repo-1"]);
+        let cursor = cursor.expect("more");
+        // The same boundary continues ...
+        assert_eq!(page_ids(page(op, Some(&cursor))).0, ["repo-2"]);
+        // ... a changed one expires the cursor rather than continuing another list.
+        let current = fx.get(&user, &p.id).unwrap();
+        // Add a member the first time, take it away the second.
+        let repos: Vec<&str> = if members(&current).len() == 2 {
+            vec!["repo-1", "repo-2", "repo-3"]
+        } else {
+            vec!["repo-1", "repo-2"]
+        };
+        let _ = applied(fx.command(
+            &user,
+            "projects.membership",
+            json!({"projectId": p.id.0.as_str(), "expectedRevision": current.revision.as_str(),
+                "repositoryIds": repos}),
+        ));
+        assert_eq!(
+            query_fault(page(op, Some(&cursor))),
+            (DomainErrorCode::CursorExpired, "repository".into()),
+            "{op}"
+        );
+        let DomainQueryReply::Result { stamp, .. } = page(op, None) else {
+            panic!()
+        };
+        assert!(
+            stamp.scope_revision.get() > at,
+            "{op}: stamped with the scope revision"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

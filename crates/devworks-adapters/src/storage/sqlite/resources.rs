@@ -289,6 +289,11 @@ fn open_leases(
             "state<>'Released' AND root_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
             params![root.0.as_str(), after, n],
         ),
+        OpenLeaseFilter::Project(project) => leases(
+            conn,
+            "state<>'Released' AND project_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
+            params![project.0.as_str(), after, n],
+        ),
     }
 }
 fn check_lease(l: &StoredLease) -> Result<(), StorageError> {

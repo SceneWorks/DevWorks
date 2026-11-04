@@ -513,7 +513,8 @@ impl ProjectService {
         read: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         i: &pops::ListInput,
-    ) -> Result<OperationResult, Failure> {
+    ) -> Result<(OperationResult, i64), Failure> {
+        let mut scope_revision = 1;
         let only = match (&i.scope, ctx.project_id()) {
             (DataScope::Workspace, None) => None,
             (DataScope::Workspace, Some(_)) => {
@@ -524,7 +525,8 @@ impl ProjectService {
                 ));
             }
             (DataScope::Project { project_id }, _) => {
-                visible_project(read.projects(), ctx, project_id)?;
+                let p = visible_project(read.projects(), ctx, project_id)?;
+                scope_revision = p.scope_revision;
                 Some(project_id.clone())
             }
         };
@@ -535,7 +537,12 @@ impl ProjectService {
         let filter = ProjectFilter { only, lifecycles };
         let scope_part = filter.only.as_ref().map_or("*", |p| p.0.as_str());
         let life_part = filter.lifecycles.join(",");
-        let binding = CursorBinding::new(ctx, "projects.list", &[scope_part, &life_part], 1);
+        let binding = CursorBinding::new(
+            ctx,
+            "projects.list",
+            &[scope_part, &life_part],
+            scope_revision,
+        );
         let after = match &i.page.cursor {
             None => None,
             Some(c) => {
@@ -568,13 +575,16 @@ impl ProjectService {
             .iter()
             .map(|p| read_record(read.projects(), read.configuration(), p))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(OperationResult::ProjectsList {
-            value: Page {
-                items: BoundedList(items),
-                next_cursor: next,
-                has_more,
+        Ok((
+            OperationResult::ProjectsList {
+                value: Page {
+                    items: BoundedList(items),
+                    next_cursor: next,
+                    has_more,
+                },
             },
-        })
+            scope_revision,
+        ))
     }
 
     fn create(
@@ -808,6 +818,9 @@ impl ProjectService {
         // eligible, and each is paused under a new stop epoch with its stop journaled.
         tx.projects().update_project(&after, before.revision)?;
         let stopped = self.runs.stop_project(tx, ctx.principal(), &after.id)?;
+        // Its queued resource requests leave their queues: nothing is granted to it later.
+        let cancelled =
+            crate::services::resources::cancel_project_waiters(tx, ctx.principal(), &after.id)?;
         event(
             tx,
             ctx,
@@ -817,6 +830,7 @@ impl ProjectService {
             json!({
                 "stoppedRoots": stopped.iter().map(|(r, _)| r.0.as_str()).collect::<Vec<_>>(),
                 "stopOperations": stopped.iter().map(|(_, o)| o.0.as_str()).collect::<Vec<_>>(),
+                "cancelledWaitingLeases": cancelled,
             }),
         )?;
         Ok(DomainDecision::Applied {
@@ -1029,9 +1043,7 @@ impl QueryHandler for ProjectService {
         snapshot: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, DomainFault> {
         let answered = match query.input() {
-            OperationInput::Projects(pops::Input::List(i)) => {
-                self.list(snapshot, ctx, i).map(|r| (r, 1))
-            }
+            OperationInput::Projects(pops::Input::List(i)) => self.list(snapshot, ctx, i),
             OperationInput::Projects(pops::Input::Get(i)) => {
                 visible_project(snapshot.projects(), ctx, &i.project_id).and_then(|p| {
                     let value = read_record(snapshot.projects(), snapshot.configuration(), &p)?;
@@ -1105,9 +1117,11 @@ impl RepositoryService {
         text: Option<&str>,
         languages: &[String],
         page: &PageRequest,
-    ) -> Result<Page<RepositoryRecord>, Failure> {
-        let project = match (scope, ctx.project_id()) {
-            (DataScope::Workspace, None) => None,
+    ) -> Result<(Page<RepositoryRecord>, i64), Failure> {
+        // A project-scoped listing is bound to the project's scope revision: a membership change
+        // between pages expires its cursor, and its stamp carries that revision.
+        let (project, scope_revision) = match (scope, ctx.project_id()) {
+            (DataScope::Workspace, None) => (None, 1),
             (DataScope::Workspace, Some(_)) => {
                 return Err(refuse(
                     DomainErrorCode::PermissionDenied,
@@ -1116,8 +1130,8 @@ impl RepositoryService {
                 ));
             }
             (DataScope::Project { project_id }, _) => {
-                visible_project(read.projects(), ctx, project_id)?;
-                Some(project_id.clone())
+                let p = visible_project(read.projects(), ctx, project_id)?;
+                (Some(project_id.clone()), p.scope_revision)
             }
         };
         let mut languages: Vec<String> = languages.iter().map(|l| l.to_lowercase()).collect();
@@ -1132,8 +1146,12 @@ impl RepositoryService {
         let scope_part = filter.project.as_ref().map_or("*", |p| p.0.as_str());
         let text_part = filter.text.clone().unwrap_or_default();
         let language_part = filter.languages.join(",");
-        let binding =
-            CursorBinding::new(ctx, operation, &[scope_part, &text_part, &language_part], 1);
+        let binding = CursorBinding::new(
+            ctx,
+            operation,
+            &[scope_part, &text_part, &language_part],
+            scope_revision,
+        );
         let after = page
             .cursor
             .as_ref()
@@ -1157,11 +1175,14 @@ impl RepositoryService {
             .iter()
             .map(|r| repository_record(read.projects(), ctx, r))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Page {
-            items: BoundedList(items),
-            next_cursor: next,
-            has_more,
-        })
+        Ok((
+            Page {
+                items: BoundedList(items),
+                next_cursor: next,
+                has_more,
+            },
+            scope_revision,
+        ))
     }
 
     fn text(
@@ -1306,6 +1327,17 @@ impl QueryHandler for RepositoryService {
         query: &AdmittedQuery,
         snapshot: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, DomainFault> {
+        // A single-record read of a project invocation depends on its project's membership
+        // (visibility): it is stamped with that project's scope revision.
+        let own_scope = || -> Result<i64, Failure> {
+            Ok(match ctx.project_id() {
+                Some(p) => snapshot
+                    .projects()
+                    .project(p)?
+                    .map_or(1, |x| x.scope_revision),
+                None => 1,
+            })
+        };
         let answered = match query.input() {
             OperationInput::Repositories(rops::Input::List(i)) => self
                 .page(
@@ -1317,7 +1349,7 @@ impl QueryHandler for RepositoryService {
                     &[],
                     &i.page,
                 )
-                .map(|value| OperationResult::RepositoriesList { value }),
+                .map(|(value, scope)| (OperationResult::RepositoriesList { value }, scope)),
             OperationInput::Repositories(rops::Input::Search(i)) => {
                 let languages: Vec<String> = i.language_ids.0.iter().map(|l| l.0.clone()).collect();
                 self.page(
@@ -1329,32 +1361,36 @@ impl QueryHandler for RepositoryService {
                     &languages,
                     &i.page,
                 )
-                .map(|value| OperationResult::RepositoriesSearch { value })
+                .map(|(value, scope)| (OperationResult::RepositoriesSearch { value }, scope))
             }
             OperationInput::Repositories(rops::Input::Get(i)) => {
                 visible_repository(snapshot.projects(), ctx, &i.repository_id).and_then(|r| {
-                    Ok(OperationResult::RepositoriesGet {
-                        value: repository_record(snapshot.projects(), ctx, &r)?,
-                    })
+                    let value = repository_record(snapshot.projects(), ctx, &r)?;
+                    Ok((OperationResult::RepositoriesGet { value }, own_scope()?))
                 })
             }
             OperationInput::Repositories(rops::Input::Readme(i)) => self
                 .text(snapshot, ctx, &i.repository_id, &i.views, TextKind::Readme)
-                .map(|value| OperationResult::RepositoriesReadme { value }),
+                .and_then(|value| {
+                    Ok((OperationResult::RepositoriesReadme { value }, own_scope()?))
+                }),
             OperationInput::Repositories(rops::Input::Summary(i)) => self
                 .text(snapshot, ctx, &i.repository_id, &i.views, TextKind::Summary)
-                .map(|value| OperationResult::RepositoriesSummary { value }),
+                .and_then(|value| {
+                    Ok((OperationResult::RepositoriesSummary { value }, own_scope()?))
+                }),
             _ => Err(refuse(
                 DomainErrorCode::UnsupportedCapability,
                 "operation",
                 None,
             )),
         };
-        let result = answered.map_err(|f| query_fault(f, "repository", self.correlation()))?;
+        let (result, scope) =
+            answered.map_err(|f| query_fault(f, "repository", self.correlation()))?;
         Ok(QueryAnswer {
             stamp: snapshot
                 .stamp()
-                .read_stamp(ctx.policy_revision().clone(), rev(1)),
+                .read_stamp(ctx.policy_revision().clone(), rev(scope)),
             result,
         })
     }

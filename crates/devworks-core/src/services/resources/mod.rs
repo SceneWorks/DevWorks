@@ -800,6 +800,16 @@ impl ResourceService {
         if l.fence != i.expected_fence.get() {
             return Err(lease_lost(&l));
         }
+        // An archived (or deleted) project's work is stopping: its holds are not extended (they
+        // are released, or lapse; a physical one transfers only after its trees quiesce).
+        if project_closed(tx, l.project_id.as_ref())? {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "archived_project",
+                l.project_id.as_ref().map(|p| p.0.clone()),
+            )
+            .into());
+        }
         if l.phase != LeasePhase::Held {
             // A renewal never grants again: a lapsed, released or waiting lease is acquired anew.
             return Err(Refusal::new(
@@ -1159,6 +1169,54 @@ impl CommandHandler for ResourceService {
     }
 }
 
+/// Whether `project` is archived or deleted (closed to work).
+fn project_closed(
+    tx: &mut dyn WriteTransaction,
+    project: Option<&crate::protocol::ProjectId>,
+) -> Result<bool, StorageError> {
+    let Some(p) = project else {
+        return Ok(false);
+    };
+    Ok(tx
+        .runs()
+        .project_lifecycle(p)?
+        .is_some_and(|l| crate::services::runs::closed_to_work(&l)))
+}
+
+/// Cancels the waiting leases of a project being archived, in the archival's unit of work, and
+/// promotes the next waiters of each resource they left (other projects' work). Held leases are
+/// left to their stopping owners (released, lapsing, or transferred after quiescence).
+pub fn cancel_project_waiters(
+    tx: &mut dyn WriteTransaction,
+    actor: &ActorId,
+    project: &crate::protocol::ProjectId,
+) -> Result<usize, StorageError> {
+    let mut n = 0;
+    let mut touched = BTreeSet::new();
+    for mut l in open_leases(tx, &OpenLeaseFilter::Project(project.clone()))? {
+        if l.phase != LeasePhase::Waiting {
+            continue;
+        }
+        end(
+            tx,
+            actor,
+            &mut l,
+            LeaseEndReason::Cancelled,
+            "LeaseCancelled",
+            json!({"cause": "ProjectArchived"}),
+        )?;
+        n += 1;
+        touched.insert(l.resource_id.as_str().to_owned());
+    }
+    for id in touched {
+        let id = Id::new(id).map_err(|_| StorageError::InvalidRecord("lease resource".into()))?;
+        if let Some(res) = tx.resources().resource(&id)? {
+            promote(tx, actor, &res, &mut ReconcileReport::default())?;
+        }
+    }
+    Ok(n)
+}
+
 /// Ends the open leases of a session that just ended (CodeGraph: `end_session` frees its
 /// holds), in that unit of work. A physical lease still possibly in use becomes `Releasing` and
 /// transfers at the next reconciliation.
@@ -1490,6 +1548,19 @@ fn promote(
                 json!({"waiting": true}),
             )?;
             report.expired += 1;
+            continue;
+        }
+        // A waiter of an archived (or deleted) project is never granted, by any path that
+        // promotes (a release, housekeeping, a transfer): it leaves the queue.
+        if project_closed(tx, head.project_id.as_ref())? {
+            end(
+                tx,
+                actor,
+                &mut head,
+                LeaseEndReason::Cancelled,
+                "LeaseCancelled",
+                json!({"cause": "ProjectClosed", "waiting": true}),
+            )?;
             continue;
         }
         if head.units > res.capacity - used {

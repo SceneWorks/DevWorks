@@ -1057,149 +1057,193 @@ impl Shell {
             .iter()
             .map(|p| (p.id.0.as_str().to_owned(), p.name.0.clone()))
             .collect();
+        let source = match &project {
+            Some(p)
+                if self.projects.members_of.as_deref() == Some(p.id.0.as_str())
+                    || self.projects.members.error.is_some() =>
+            {
+                self.projects.members.clone_state()
+            }
+            Some(_) => ListState::default(),
+            None => self.projects.repositories.clone_state(),
+        };
         let projects = &mut self.projects;
         let scrolls = &mut self.scrolls;
-        let mut st = (
-            &mut *projects,
-            &mut mem,
-            &mut actions,
-            &mut reload,
-            &mut link,
-        );
-        let (_, new_tab) = widgets::pane(
-            ui,
-            Header {
-                title: screen.title,
-                summary: screen.summary,
-                tabs: screen.subviews,
-                tab,
-            },
-            &mut st,
-            |ui, st| {
-                if let Some((label, _)) = screen.link
-                    && widgets::secondary_button(ui, label).clicked()
-                {
-                    *st.4 = true;
-                }
-                if widgets::secondary_button(ui, "Refresh").clicked() {
-                    *st.3 = true;
-                }
-            },
-            |ui, st, tab| {
-                let (projects, mem, actions, reload) =
-                    (&mut *st.0, &mut *st.1, &mut *st.2, &mut *st.3);
-                if tab != 0 {
-                    let what = screen.subviews.get(tab).copied().unwrap_or("This view");
-                    widgets::state_block(
+        let mut new_tab = tab;
+        {
+            let mut st = (
+                &mut *projects,
+                &mut mem,
+                &mut actions,
+                &mut reload,
+                &mut link,
+            );
+            widgets::with_right_sidebar(
+                ui,
+                theme::SIDEBAR,
+                &mut st,
+                |ui, st| {
+                    let (_, t) = widgets::pane(
                         ui,
-                        &ViewState::Unavailable {
-                            what: format!("{what}: the code graph, health and review history"),
-                            owner: "DW-28, DW-29".into(),
+                        Header {
+                            title: screen.title,
+                            summary: screen.summary,
+                            tabs: screen.subviews,
+                            tab,
+                        },
+                        st,
+                        |ui, st| {
+                            if let Some((label, _)) = screen.link
+                                && widgets::secondary_button(ui, label).clicked()
+                            {
+                                *st.4 = true;
+                            }
+                            if widgets::secondary_button(ui, "Refresh").clicked() {
+                                *st.3 = true;
+                            }
+                        },
+                        |ui, st, tab| {
+                            let (projects, mem, actions, reload) =
+                                (&mut *st.0, &mut *st.1, &mut *st.2, &mut *st.3);
+                            if tab != 0 {
+                                let what = screen.subviews.get(tab).copied().unwrap_or("This view");
+                                widgets::state_block(
+                                    ui,
+                                    &ViewState::Unavailable {
+                                        what: format!(
+                                            "{what}: the code graph, health and review history"
+                                        ),
+                                        owner: "DW-28, DW-29".into(),
+                                    },
+                                );
+                                return;
+                            }
+                            if let Some((tone, text)) = &projects.message {
+                                chip(ui, text.clone(), *tone);
+                                ui.add_space(6.0);
+                            }
+                            widgets::caption(
+                                ui,
+                                match &project {
+                                    Some(p) => format!("Repositories of {}", p.name.0),
+                                    None => "Every registered repository (select a project to \
+                                             narrow this)"
+                                        .into(),
+                                },
+                            );
+                            let r = ui.add(
+                                egui::TextEdit::singleline(&mut mem.filter)
+                                    .hint_text("Filter repositories")
+                                    .desired_width(280.0),
+                            );
+                            r.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::Role::TextInput,
+                                    true,
+                                    "Filter repositories",
+                                )
+                            });
+                            let before = mem.selection.clone();
+                            let RouteMemory {
+                                filter, selection, ..
+                            } = mem;
+                            list_body(
+                                ui,
+                                &online,
+                                &source,
+                                ListText {
+                                    what: "repositories",
+                                    empty_title: "No repositories",
+                                    empty_body: "Registered repositories appear here once \
+                                                 repository discovery registers them (DW-23).",
+                                    id_salt: "repositories-list",
+                                },
+                                reload,
+                                scrolls,
+                                |r: &RepositoryRecord| {
+                                    format!(
+                                        "{} {}",
+                                        r.name.0,
+                                        r.remote_url.as_ref().map(|u| u.0.as_str()).unwrap_or("")
+                                    )
+                                },
+                                |r: &RepositoryRecord| r.id.as_str().to_owned(),
+                                filter,
+                                selection,
+                                |ui, r: &RepositoryRecord, selected| {
+                                    ui.selectable_label(
+                                        selected,
+                                        format!(
+                                            "{}  ·  {}  ·  {}",
+                                            r.name.0,
+                                            r.remote_url
+                                                .as_ref()
+                                                .map(|u| u.0.as_str())
+                                                .unwrap_or("no remote"),
+                                            coverage_label(r)
+                                        ),
+                                    )
+                                    .clicked()
+                                },
+                            );
+                            if mem.selection != before
+                                && let Some(id) = mem.selection.clone()
+                            {
+                                actions.push(Action::LoadTexts(id));
+                            }
                         },
                     );
-                    return;
-                }
-                if let Some((tone, text)) = &projects.message {
-                    chip(ui, text.clone(), *tone);
-                    ui.add_space(6.0);
-                }
-                widgets::caption(
-                    ui,
-                    match &project {
-                        Some(p) => format!("Repositories of {}", p.name.0),
-                        None => {
-                            "Every registered repository (select a project to narrow this)".into()
+                    new_tab = t;
+                },
+                |ui, st| {
+                    // The selected repository's detail sits in the right inner sidebar, beside
+                    // the list (never below it, where a long list would push it off screen).
+                    let (projects, mem, actions) = (&mut *st.0, &*st.1, &mut *st.2);
+                    widgets::secondary_pane(ui, "Repository", |ui| {
+                        let found = mem
+                            .selection
+                            .as_deref()
+                            .and_then(|id| source.items.iter().find(|r| r.id.as_str() == id));
+                        match found {
+                            None => {
+                                widgets::state_block(
+                                    ui,
+                                    &ViewState::Empty {
+                                        title: "Nothing selected".into(),
+                                        body: "Select a repository to see its texts here.".into(),
+                                    },
+                                );
+                            }
+                            Some(r) => {
+                                egui::ScrollArea::vertical()
+                                    .id_salt("repository-detail")
+                                    .show(ui, |ui| {
+                                        repository_detail(
+                                            ui,
+                                            projects,
+                                            r,
+                                            &names,
+                                            online.is_ok() && !removing.contains(r.id.as_str()),
+                                            actions,
+                                        );
+                                    });
+                            }
                         }
-                    },
-                );
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut mem.filter)
-                        .hint_text("Filter repositories")
-                        .desired_width(280.0),
-                );
-                r.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Filter repositories")
-                });
-                let source = match &project {
-                    Some(p)
-                        if projects.members_of.as_deref() == Some(p.id.0.as_str())
-                            || projects.members.error.is_some() =>
-                    {
-                        projects.members.clone_state()
-                    }
-                    Some(_) => ListState::default(),
-                    None => projects.repositories.clone_state(),
-                };
-                let before = mem.selection.clone();
-                let RouteMemory {
-                    filter, selection, ..
-                } = mem;
-                list_body(
-                    ui,
-                    &online,
-                    &source,
-                    ListText {
-                        what: "repositories",
-                        empty_title: "No repositories",
-                        empty_body: "Registered repositories appear here once repository \
-                                     discovery registers them (DW-23).",
-                        id_salt: "repositories-list",
-                    },
-                    reload,
-                    scrolls,
-                    |r: &RepositoryRecord| {
-                        format!(
-                            "{} {}",
-                            r.name.0,
-                            r.remote_url.as_ref().map(|u| u.0.as_str()).unwrap_or("")
-                        )
-                    },
-                    |r: &RepositoryRecord| r.id.as_str().to_owned(),
-                    filter,
-                    selection,
-                    |ui, r: &RepositoryRecord, selected| {
-                        ui.selectable_label(
-                            selected,
-                            format!(
-                                "{}  ·  {}  ·  {}",
-                                r.name.0,
-                                r.remote_url
-                                    .as_ref()
-                                    .map(|u| u.0.as_str())
-                                    .unwrap_or("no remote"),
-                                coverage_label(r)
-                            ),
-                        )
-                        .clicked()
-                    },
-                );
-                if mem.selection != before
-                    && let Some(id) = mem.selection.clone()
-                {
-                    actions.push(Action::LoadTexts(id));
-                }
-                if let Some(r) = mem
-                    .selection
-                    .as_deref()
-                    .and_then(|id| source.items.iter().find(|r| r.id.as_str() == id))
-                {
-                    ui.add_space(10.0);
-                    repository_detail(
-                        ui,
-                        projects,
-                        r,
-                        &names,
-                        online.is_ok() && !removing.contains(r.id.as_str()),
-                        actions,
-                    );
-                }
-            },
-        );
+                    });
+                },
+            );
+        }
         mem.tab = new_tab;
+        let selected = mem.selection.clone();
         self.routes.insert(Route::Repositories, mem);
         self.confirm_dialog(ui.ctx(), &mut actions);
         if reload {
             actions.push(Action::Reload);
+            // Refresh reads the selected repository's README and summary again too (a view
+            // published since, or a read that failed).
+            if let Some(r) = selected {
+                actions.push(Action::LoadTexts(r));
+            }
         }
         self.act(actions);
         if link && let Some((_, target)) = screen.link {
@@ -1698,9 +1742,17 @@ fn repository_detail(
                         }
                     }
                     Some(TextState::Loading) => widgets::caption(ui, "Loading…"),
-                    Some(TextState::Unavailable(why)) => widgets::caption(ui, why.clone()),
+                    Some(TextState::Unavailable(why)) => {
+                        widgets::caption(ui, why.clone());
+                        if widgets::secondary_button(ui, &format!("Retry {title}")).clicked() {
+                            actions.push(Action::LoadTexts(r.id.as_str().to_owned()));
+                        }
+                    }
                     Some(TextState::Failed(e)) => {
                         chip(ui, e.clone(), Tone::Bad);
+                        if widgets::secondary_button(ui, &format!("Retry {title}")).clicked() {
+                            actions.push(Action::LoadTexts(r.id.as_str().to_owned()));
+                        }
                     }
                     Some(TextState::Ready { text, content }) => {
                         widgets::caption(
