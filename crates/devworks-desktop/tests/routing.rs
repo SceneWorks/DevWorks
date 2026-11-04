@@ -779,6 +779,8 @@ struct Held {
     inner: Arc<dyn Backend>,
     state: std::sync::Mutex<HeldState>,
     changed: std::sync::Condvar,
+    /// Forward the runtime's change hints (off: only released replies reach the shell).
+    hints: bool,
 }
 #[derive(Default)]
 struct HeldState {
@@ -795,7 +797,20 @@ impl Held {
                 counts: Default::default(),
             }),
             changed: std::sync::Condvar::new(),
+            hints: false,
         })
+    }
+    /// Holds nothing until [`Self::hold`], and forwards the runtime's change hints.
+    fn with_hints(inner: Arc<dyn Backend>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            state: std::sync::Mutex::new(HeldState::default()),
+            changed: std::sync::Condvar::new(),
+            hints: true,
+        })
+    }
+    fn hold(&self, operation: &str) {
+        self.state.lock().unwrap().held.insert(operation.to_owned());
     }
     fn gated<T>(&self, operation: &str, call: impl FnOnce() -> T) -> T {
         let mut st = self.state.lock().unwrap();
@@ -859,8 +874,7 @@ impl Backend for Held {
         self.inner.keep_awake_health()
     }
     fn hints(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
-        // No change hints: only the replies the test releases reach the shell.
-        None
+        if self.hints { self.inner.hints() } else { None }
     }
     fn set_waker(&self, waker: devworks_desktop::backend::Waker) {
         self.inner.set_waker(waker)
@@ -984,4 +998,63 @@ fn a_waiting_first_route_is_sent_once_in_every_reply_order_after_a_relaunch() {
     ] {
         relaunch_in_order(order);
     }
+}
+
+#[test]
+fn refreshes_never_stack_availability_queries_on_a_slow_router() {
+    let root = Root::new("routing-slow-availability");
+    let engine = start_connected(&root);
+    let real = engine.backend();
+    let held = Held::with_hints(real.clone());
+    let mut h = harness(
+        shell_with(Ok(held.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    // The router stops answering availability.
+    held.hold("router.availability");
+    h.get_by_role_and_label(Role::Button, "New Chat").click();
+    step_until(&mut h, "the conversation starts", |s| {
+        s.chat.selected.is_some()
+    });
+    let session = h.state().chat.selected.clone().unwrap();
+    step_until(&mut h, "its availability is asked", |_| {
+        held.arrived("router.availability") >= 1
+    });
+    let asked = held.arrived("router.availability");
+    // Runtime changes elsewhere wake the shell's refreshes again and again.
+    for i in 0..6 {
+        ops::started(real.command(
+            "sessions.start",
+            &ops::session_start(&*real, &format!("Elsewhere {i}")),
+        ))
+        .unwrap();
+        for _ in 0..5 {
+            h.step();
+        }
+    }
+    assert_eq!(
+        held.arrived("router.availability"),
+        asked,
+        "the same question is not asked again while it is unanswered"
+    );
+    // So a worker is still free for the message's save.
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .type_text("while the router is slow");
+    h.step();
+    h.get_by_role_and_label(Role::Button, SEND_LABEL).click();
+    step_until(&mut h, "the message is saved", |s| {
+        s.chat.sending.is_none()
+            && s.chat
+                .drafts
+                .get(&session)
+                .is_some_and(|d| d.text.is_empty())
+    });
+    held.open_all();
+    settle(&mut h);
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
 }
