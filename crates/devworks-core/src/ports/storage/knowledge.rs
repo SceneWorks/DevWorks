@@ -705,7 +705,7 @@ pub trait KnowledgeRepository: KnowledgeRead {
         at_ms: i64,
     ) -> Result<bool, StorageError>;
     /// Marks every live relation whose subject or object is `id` removed (its endpoint was
-    /// deleted), returning how many.
+    /// deleted), its authored predicate scrubbed to `(deleted)`, returning how many.
     fn remove_knowledge_relations_of(&mut self, id: &Id, at_ms: i64) -> Result<i64, StorageError>;
     /// Records the current revision of a source; returns the claims whose stale status the
     /// observation changed (became stale, or current again), with their scopes.

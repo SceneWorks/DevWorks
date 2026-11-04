@@ -2525,9 +2525,18 @@ fn challenge(
 fn empty_applicability() -> Value {
     json!({"activities": [], "paths": [], "tools": [], "repositoryIds": []})
 }
+/// What an explicitly deleted record's authored labels read as (a predicate, an entity type).
+const DELETED_LABEL: &str = "(deleted)";
+
 fn retained(snapshot: &Value) -> Value {
     let mut v = snapshot.clone();
     if let Some(m) = v.as_object_mut() {
+        // Authored labels are content too: a claim's predicate, an entity's type.
+        for key in ["predicate", "entityType"] {
+            if m.contains_key(key) {
+                m.insert(key.into(), json!(DELETED_LABEL));
+            }
+        }
         for key in [
             "value",
             "valueJson",
@@ -2572,6 +2581,7 @@ fn tombstone_claim(
     let mut next = c.clone();
     next.lifecycle = "Deleted".into();
     next.deleted_at_ms = Some(w.now);
+    next.predicate = DELETED_LABEL.into();
     next.tags.clear();
     next.basis.clear();
     next.body.value = None;
@@ -2599,7 +2609,10 @@ fn tombstone_claim(
 fn tombstone_entity(w: &mut Writer<'_>, e: &StoredEntity) -> Result<(), Failure> {
     let mut next = e.clone();
     next.deleted_at_ms = Some(w.now);
-    next.label = "(deleted)".into();
+    next.label = DELETED_LABEL.into();
+    next.entity_type = DELETED_LABEL.into();
+    // The reuse key folds the type and name: it keeps neither (unique only among live ones).
+    next.canonical_key = format!("deleted|{}", e.id.as_str());
     next.aliases.clear();
     next.canonical_name = None;
     next.external_id = None;
@@ -2615,6 +2628,13 @@ fn purge_evidence(w: &mut Writer<'_>, e: &StoredEvidence) -> Result<(), Failure>
     next.snippet = String::new();
     next.metadata = None;
     next.locator = None;
+    // A source reference can be content (a review URL, a message): an opaque digest stays.
+    if !next.source_ref.starts_with("purged|") {
+        next.source_ref = format!(
+            "purged|{}",
+            crate::fingerprint::sha256_hex(next.source_ref.as_bytes())
+        );
+    }
     w.put_evidence(&next, true)
 }
 

@@ -1772,7 +1772,8 @@ impl KnowledgeRepository for Unit<'_> {
              locator,snippet,metadata_json,source_revision,author_id,recorded_at,deleted_at) \
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) ON CONFLICT(id) DO UPDATE SET \
              scope_key=excluded.scope_key, project_id=excluded.project_id, \
-             artifact_json=excluded.artifact_json, locator=excluded.locator, \
+             source_ref=excluded.source_ref, artifact_json=excluded.artifact_json, \
+             locator=excluded.locator, \
              snippet=excluded.snippet, metadata_json=excluded.metadata_json, \
              deleted_at=excluded.deleted_at",
             params![
@@ -2366,8 +2367,8 @@ impl KnowledgeRepository for Unit<'_> {
 
     fn remove_knowledge_relations_of(&mut self, id: &Id, at_ms: i64) -> Result<i64, StorageError> {
         Ok(db(self.conn.execute(
-            "UPDATE knowledge_relations SET removed_at=?2 WHERE (subject_id=?1 OR object_id=?1) \
-             AND removed_at IS NULL",
+            "UPDATE knowledge_relations SET removed_at=?2, predicate='(deleted)' WHERE \
+             (subject_id=?1 OR object_id=?1) AND removed_at IS NULL",
             params![id.as_str(), at_ms],
         ))? as i64)
     }

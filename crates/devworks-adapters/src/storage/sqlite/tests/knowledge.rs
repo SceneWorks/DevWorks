@@ -4162,3 +4162,136 @@ fn evidence_supplied_with_a_merge_brings_its_baseline_and_unmerge_takes_it_back(
     assert!(cited_snippets(&fx, &a, &lb).is_empty());
     assert_eq!(fx.claim(&a, proj("project-a"), &lb).stale, Some(false));
 }
+
+/// Every text value of every Knowledge table, its lexical projections included.
+fn every_knowledge_text(fx: &Fx) -> String {
+    fx.store
+        .with_writer_connection(|c| {
+            let mut tables = Vec::new();
+            {
+                let mut st = c
+                    .prepare(
+                        "SELECT name FROM sqlite_schema WHERE type='table' AND name LIKE \
+                         'knowledge\\_%' ESCAPE '\\'",
+                    )
+                    .unwrap();
+                let rows = st.query_map([], |r| r.get::<_, String>(0)).unwrap();
+                for r in rows {
+                    tables.push(r.unwrap());
+                }
+            }
+            let mut out = String::new();
+            for t in tables {
+                let mut st = c.prepare(&format!("SELECT * FROM \"{t}\"")).unwrap();
+                let n = st.column_count();
+                let mut rows = st.query([]).unwrap();
+                while let Some(row) = rows.next().unwrap() {
+                    for i in 0..n {
+                        if let Ok(rusqlite::types::ValueRef::Text(b)) = row.get_ref(i) {
+                            out.push_str(&format!("{t}: "));
+                            out.push_str(&String::from_utf8_lossy(b));
+                            out.push('\n');
+                        }
+                    }
+                }
+            }
+            Ok(out)
+        })
+        .unwrap()
+}
+
+/// A claim of source `run-<tag>` whose every authored field carries `secret-<tag>`: its
+/// subject entity (of the same source), evidence, tags, a revision, a challenge and a
+/// relation to a claim of no source. Returns the claim.
+fn secret_claim(fx: &Fx, user: &InvocationContext, tag: &str) -> Id {
+    let s = |what: &str| format!("{what}-secret-{tag}");
+    let source = format!("run-{tag}");
+    let r = receipt(fx.record(
+        user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": s("label"), "entityType": s("type"),
+            "aliases": [s("alias")], "canonicalName": s("canon"), "externalId": s("ext"),
+            "source": source}],
+        "evidence": [{"id": "e", "source": {"kind": "Observation", "sourceRef": s("ref"),
+            "locator": s("locator")}, "snippet": s("snippet")}],
+        "claims": [{"kind": "Fact", "subjectId": "s", "predicate": s("predicate"),
+            "value": s("value"), "confidence": 0.5, "evidenceIds": ["e"],
+            "tags": [s("tag")], "source": source}]}),
+    ));
+    let claim = r.claim_ids.0[0].clone();
+    let subject = r.entity_ids.0[0].clone();
+    let e = fx.read_claim(user, proj("project-a"), &claim).evidence.0[0]
+        .id
+        .clone();
+    receipt(fx.cmd(
+        user,
+        "knowledge.revise",
+        json!({"scope": proj("project-a"), "claimId": claim,
+        "expectedRevision": fx.revision(&claim).to_string(),
+        "replacement": {"kind": "Fact", "subjectId": subject, "predicate": s("predicate"),
+            "value": s("revised"), "confidence": 0.5, "evidenceIds": [e],
+            "tags": [s("tag")], "source": source}}),
+    ));
+    receipt(fx.cmd(
+        user,
+        "knowledge.challenge",
+        json!({"scope": proj("project-a"), "claimId": claim,
+        "expectedRevision": fx.revision(&claim).to_string(), "reason": s("challenge"),
+        "evidenceIds": []}),
+    ));
+    let other = fx.claim_id(user, proj("project-a"), "Other", draft("Fact", "other"));
+    relate_in_a(fx, user, &claim, &s("relation"), &other);
+    claim
+}
+
+#[test]
+fn deleting_a_claim_scrubs_its_predicate_and_every_authored_field_everywhere() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let selected = secret_claim(&fx, &user, "x");
+    let by_source = secret_claim(&fx, &user, "y");
+    let text = every_knowledge_text(&fx);
+    assert!(text.contains("predicate-secret-x") && text.contains("predicate-secret-y"));
+    delete_claim(&fx, &user, &selected);
+    delete_source(&fx, &user, "run-y");
+    for c in [&selected, &by_source] {
+        let read = fx.claim(&user, proj("project-a"), c);
+        assert_eq!(wire(read.lifecycle.as_ref().unwrap()), "Deleted");
+        assert_eq!(read.predicate.0, "(deleted)");
+    }
+    let text = every_knowledge_text(&fx);
+    // A selected deletion removes the claim only (its subject entity stays, as recorded); a
+    // delete by source removes the entity it no longer needs as well.
+    for what in [
+        "predicate",
+        "value",
+        "revised",
+        "tag",
+        "ref",
+        "locator",
+        "snippet",
+        "challenge",
+        "relation",
+    ] {
+        for tag in ["x", "y"] {
+            let secret = format!("{what}-secret-{tag}");
+            assert!(
+                !text.contains(&secret),
+                "{secret} survived the deletion: {}",
+                text.lines()
+                    .filter(|l| l.contains(&secret))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            );
+        }
+    }
+    for what in ["label", "type", "alias", "canon", "ext"] {
+        let secret = format!("{what}-secret-y");
+        assert!(!text.contains(&secret), "{secret} survived the deletion");
+        assert!(
+            text.contains(&format!("{what}-secret-x")),
+            "the kept entity keeps {what}"
+        );
+    }
+}
