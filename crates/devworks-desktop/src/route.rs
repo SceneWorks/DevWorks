@@ -117,13 +117,10 @@ pub static SCREENS: [Screen; 20] = [
         summary: "Every project in this workspace.",
         group: NavGroup::Global,
         help_topic: "projects",
-        subviews: &[],
-        inner_sidebar: None,
+        subviews: &["Active", "Archived", "Deleted"],
+        inner_sidebar: Some("Project"),
         summary_strip: &[],
-        pending: pending(
-            "projects, memberships and repository registrations",
-            "DW-11",
-        ),
+        pending: None,
         link: None,
     },
     Screen {
@@ -176,12 +173,11 @@ pub static SCREENS: [Screen; 20] = [
         group: NavGroup::Project,
         help_topic: "repositories",
         subviews: &["Overview", "Nodes", "Graph", "Health", "Reviews"],
-        inner_sidebar: None,
+        inner_sidebar: Some("Repository"),
         summary_strip: &[],
-        pending: pending(
-            "repository registrations, code graph and health",
-            "DW-11, DW-28, DW-29",
-        ),
+        // Registrations, texts and index removal are bound (DW-11); the Nodes, Graph, Health and
+        // Reviews subviews show their owners (DW-28, DW-29).
+        pending: None,
         link: Some(("Indexing logs", Route::Indexing)),
     },
     Screen {

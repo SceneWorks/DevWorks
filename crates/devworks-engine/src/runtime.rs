@@ -28,6 +28,7 @@ use devworks_core::services::browser::{BrowserRecovery, BrowserService};
 use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
 use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
+use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::resources::{MachineResource, ResourceService, desktop};
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks, NoLifecycleHooks};
@@ -44,6 +45,9 @@ const RELEASES_BLOBS: &str = "artifacts.delete";
 const SAVES_SETTINGS: &str = "settings.save_revision";
 /// The operation that records a reported diagnostic (its commit raises the live-log hint).
 const RECORDS_DIAGNOSTIC: &str = "workspace.record_diagnostic";
+/// The operation whose commit fences a project and journals its root stops; the engine then
+/// kills the project's owned trees at once and executes those stops.
+const ARCHIVES_PROJECT: &str = "projects.archive";
 
 /// Run root control as composed: the one control service (its plan/readiness port inside), the
 /// coordinator launcher (none until the agent supervisor exists: accepted activations then stay
@@ -83,7 +87,9 @@ pub struct Composition {
     /// The native process launcher every owned tree is spawned through.
     pub process_host: Arc<dyn ProcessHost>,
     /// Run root control: [`boot`] registers the `runs.*` use cases with its service (replacing
-    /// any the caller registered) and gates every consumer's root-scoped deliveries with it.
+    /// any the caller registered) and gates every consumer's root-scoped deliveries with it. It
+    /// also registers the `projects.*` and repository registration use cases, whose archival
+    /// stops roots through this same service.
     pub runs: RunComposition,
     /// The OS power facility the keep-awake setting is applied with.
     pub power: Arc<dyn PowerPort>,
@@ -241,6 +247,9 @@ pub struct Runtime {
     supervision: Mutex<Option<JoinHandle<()>>>,
     /// The diagnostics monitor task, stopped first at shutdown (see [`Runtime::shutdown`]).
     monitoring: Mutex<Option<JoinHandle<()>>>,
+    /// The Tokio runtime [`boot`] was awaited on: post-commit work of a synchronous command
+    /// (the immediate stop of an archived project) runs there.
+    handle: tokio::runtime::Handle,
 }
 
 /// Boots the runtime (see the crate documentation, "Boot sequence"):
@@ -314,6 +323,11 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .with_artifacts(artifacts.clone())
         .with_resources(resources.clone())
         .with_runs(runs.service.clone())
+        .with_projects(Arc::new(ProjectService::new(
+            ids.clone(),
+            runs.service.clone(),
+        )))
+        .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
         .with_diagnostics(diagnostics.clone());
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
@@ -485,6 +499,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         tasks: Mutex::new(tasks),
         supervision: Mutex::new(Some(supervision)),
         monitoring: Mutex::new(Some(monitoring)),
+        handle: tokio::runtime::Handle::current(),
     })
 }
 
@@ -690,6 +705,20 @@ impl Runtime {
         if committed && operation == RECORDS_DIAGNOSTIC {
             self.diagnostics.committed();
         }
+        if committed && operation == ARCHIVES_PROJECT {
+            // A recorded archival (new or replayed) or an unknown outcome: while the project is
+            // still closed to work, its trees are killed at once and its root stops executed.
+            // A crash before this runs leaves the stops journaled: the next boot reaps the
+            // earlier boot's trees and run supervision executes them.
+            if let Some(project) = archived_project(raw) {
+                let runs = self.runs.clone();
+                let wakeup = self.dispatcher.wakeup();
+                self.handle.spawn(async move {
+                    let _ = runs.stop_archived_project(&project).await;
+                    wakeup.wake();
+                });
+            }
+        }
         if released && operation == SAVES_SETTINGS {
             // A read failure leaves the previous request in place; the next save or explicit
             // refresh applies the setting again.
@@ -810,6 +839,13 @@ impl ShutdownStage {
             _ => Self::Done,
         }
     }
+}
+
+/// The project a `projects.archive` frame names.
+fn archived_project(raw: &[u8]) -> Option<devworks_core::protocol::ProjectId> {
+    let v = serde_json::from_slice::<serde_json::Value>(raw).ok()?;
+    let id = v.get("body")?.get("projectId")?.as_str()?;
+    Id::new(id).ok().map(devworks_core::protocol::ProjectId)
 }
 
 /// The reply to a command submitted after shutdown began: refused before admission (nothing is

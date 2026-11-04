@@ -1056,6 +1056,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn router(&self) -> &dyn RouterRead {
         self
     }
+    fn projects(&self) -> &dyn ProjectRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1270,6 +1273,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn router(&mut self) -> &mut dyn RouterRepository {
+        self
+    }
+    fn projects(&mut self) -> &mut dyn ProjectRepository {
         self
     }
 }

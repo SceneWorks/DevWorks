@@ -12,6 +12,7 @@ pub mod diagnostics;
 pub mod history;
 pub mod power;
 pub mod process;
+pub mod projects;
 pub mod queue;
 pub mod resources;
 pub mod router;
@@ -162,6 +163,22 @@ impl UseCases {
     /// Registers the browser family (`BrowserBackend`).
     pub fn with_browser(mut self, service: Arc<browser::BrowserService>) -> Self {
         for op in browser::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the projects family (`WorkService` projects).
+    pub fn with_projects(mut self, service: Arc<projects::ProjectService>) -> Self {
+        for op in projects::PROJECT_OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the repository registration operations (`RepositoryService`).
+    pub fn with_repositories(mut self, service: Arc<projects::RepositoryService>) -> Self {
+        for op in projects::REPOSITORY_OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

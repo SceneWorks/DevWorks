@@ -85,7 +85,8 @@ fn migration_16_adds_browser_sessions_on_top_of_version_12() {
         MIGRATION_0016_SHA256,
         "an applied migration was edited"
     );
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 11));
+    // The writer floor keeps migration 14's: applying 16 must not lower it.
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 14));
     assert!(!m.rebuilds_tables);
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(12)).unwrap());
@@ -97,7 +98,7 @@ fn migration_16_adds_browser_sessions_on_top_of_version_12() {
             report.minimum_reader,
             report.minimum_writer
         ),
-        (16, 8, 11)
+        (16, 8, 14)
     );
 }
 

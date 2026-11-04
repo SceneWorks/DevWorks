@@ -825,8 +825,18 @@ impl BrowserService {
         );
         let process = match launched {
             Ok(p) => p,
+            Err(LaunchRefusal::ProjectClosed) => {
+                // The project was archived or deleted: no browser starts, and the asset is fine.
+                let why = "the session's project is archived or deleted".to_owned();
+                let _ = self.platform.remove_profile(id);
+                self.fail_session(id, &why, BrowserPhase::Failed);
+                drop(guard);
+                self.forget(id);
+                return failed(DomainErrorCode::Conflict, "archived_project", &why);
+            }
             Err(r) => {
                 let why = match r {
+                    LaunchRefusal::ProjectClosed => unreachable!("handled above"),
                     LaunchRefusal::Blocked(_) => {
                         "the launch was blocked by the process preflight".to_owned()
                     }

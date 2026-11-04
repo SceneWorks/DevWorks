@@ -59,6 +59,7 @@ pub enum IdKind {
     BrowserSession,
     /// Router session pins.
     RoutePin,
+    Project,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {
