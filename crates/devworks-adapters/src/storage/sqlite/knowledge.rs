@@ -65,6 +65,14 @@ fn fts_query(words: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+/// One quoted FTS5 phrase per word, any one matching.
+fn fts_any(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|w| fts_query(std::slice::from_ref(w)))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
 fn rows<T>(
     conn: &Connection,
     sql: &str,
@@ -437,24 +445,32 @@ fn claims_page(
         ));
     }
     if !q.words.is_empty() {
-        let fts = fts_query(&q.words);
-        p.push(Sql::Text(fts.clone()));
-        let claim_match = p.len();
-        p.push(Sql::Text(fts));
-        let entity_match = p.len();
+        // The matching subjects: visible entities that match any word, limited after their
+        // scope filter, never before it.
+        p.push(Sql::Text(fts_any(&q.words)));
+        let any_match = p.len();
         let entity_scopes = placeholders(q.scopes.len(), &mut p, q.scopes.iter().cloned());
         p.push(Sql::Integer(i64::from(
             q.entity_limit.unwrap_or(KNOWLEDGE_PAGE_MAX),
         )));
         let entity_limit = p.len();
-        // Matching subjects are limited after their scope filter, never before it.
-        w.push(format!(
-            "(c.rowid IN (SELECT rowid FROM knowledge_claim_fts WHERE knowledge_claim_fts MATCH \
-             ?{claim_match}) OR c.subject_id IN (SELECT e.id FROM knowledge_entity_fts f JOIN \
-             knowledge_entities e ON e.rowid=f.rowid WHERE knowledge_entity_fts MATCH \
-             ?{entity_match} AND e.deleted_at IS NULL AND e.scope_key IN ({entity_scopes}) \
-             ORDER BY e.id LIMIT ?{entity_limit}))"
-        ));
+        let subjects = format!(
+            "SELECT e.id FROM knowledge_entity_fts f JOIN knowledge_entities e ON \
+             e.rowid=f.rowid WHERE knowledge_entity_fts MATCH ?{any_match} AND e.deleted_at IS \
+             NULL AND e.scope_key IN ({entity_scopes}) ORDER BY e.id LIMIT ?{entity_limit}"
+        );
+        // Every word is required, in the claim's own text or its subject's: a query may name
+        // the subject and say something about it ("router tiers" finds "tiers rotate" about
+        // Router).
+        for word in &q.words {
+            p.push(Sql::Text(fts_query(std::slice::from_ref(word))));
+            let m = p.len();
+            w.push(format!(
+                "(c.rowid IN (SELECT rowid FROM knowledge_claim_fts WHERE knowledge_claim_fts \
+                 MATCH ?{m}) OR c.subject_id IN (SELECT f.entity_id FROM knowledge_entity_fts f \
+                 WHERE knowledge_entity_fts MATCH ?{m} AND f.entity_id IN ({subjects})))"
+            ));
+        }
     }
     if let Some(stale) = q.stale {
         w.push(format!(
@@ -1354,6 +1370,24 @@ macro_rules! knowledge_reads {
                     |r| r.get(0),
                 ))
             }
+            fn knowledge_claim_referrer_outside(
+                &self,
+                claim: &Id,
+                except: &[Id],
+                scope: &KnowledgeScope,
+            ) -> Result<Option<Id>, StorageError> {
+                let found: Option<String> = db(self
+                    .conn
+                    .query_row(
+                        "SELECT c.id FROM knowledge_claims c WHERE c.object_id=?1 AND \
+                         c.lifecycle<>'Deleted' AND c.scope_key<>?2 AND c.id NOT IN \
+                         (SELECT value FROM json_each(?3)) ORDER BY c.id LIMIT 1",
+                        params![claim.as_str(), scope.key(), ids_json(except)],
+                        |r| r.get(0),
+                    )
+                    .optional())?;
+                found.map(id_of).transpose()
+            }
             fn knowledge_evidence_cited_beyond(
                 &self,
                 evidence: &Id,
@@ -2052,6 +2086,78 @@ impl KnowledgeRepository for Unit<'_> {
              (SELECT event_key FROM knowledge_lesson_events WHERE claim_id=?1)",
             params![from.as_str()],
         ))? as i64)
+    }
+
+    fn settle_knowledge_lesson_events(
+        &mut self,
+        deleted: &Id,
+        into: &Id,
+        live: &[Id],
+    ) -> Result<i64, StorageError> {
+        let held = rows(
+            self.conn,
+            "SELECT event_key, merge_path FROM knowledge_lesson_events WHERE claim_id=?1",
+            vec![Sql::Text(deleted.as_str().into())],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )?;
+        let path_of = |raw: &str| -> Result<Vec<String>, StorageError> {
+            serde_json::from_str(raw).map_err(|_| corrupt("stored lesson event merge path"))
+        };
+        let mut settled = 0;
+        for (key, own_path) in held {
+            // The copy `into` holds (or held, before merging on) through a live merge: its
+            // chain of holders passes through `into` right after that merge's lesson.
+            let copies = rows(
+                self.conn,
+                "SELECT claim_id, merge_path FROM knowledge_lesson_events WHERE event_key=?1 \
+                 AND claim_id<>?2",
+                vec![Sql::Text(key.clone()), Sql::Text(deleted.as_str().into())],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )?;
+            for (holder, path) in copies {
+                let mut chain = path_of(&path)?;
+                chain.push(holder.clone());
+                let Some(at) = chain.iter().position(|c| c == into.as_str()) else {
+                    continue;
+                };
+                let Some(owner) = at.checked_sub(1).map(|i| chain[i].clone()) else {
+                    continue;
+                };
+                if !live.iter().any(|l| l.as_str() == owner) {
+                    continue;
+                }
+                let owner_has: bool = db(self.conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM knowledge_lesson_events WHERE claim_id=?1 AND \
+                     event_key=?2)",
+                    params![owner, key],
+                    |r| r.get(0),
+                ))?;
+                if owner_has {
+                    continue;
+                }
+                // That merge's copy returns to its lesson (as its unmerge would move it) ...
+                let below =
+                    serde_json::to_string(&chain[..at - 1]).map_err(|x| invalid(x.to_string()))?;
+                db(self.conn.execute(
+                    "UPDATE knowledge_lesson_events SET claim_id=?3, merge_path=?4 WHERE \
+                     claim_id=?1 AND event_key=?2",
+                    params![holder, key, owner, below],
+                ))?;
+                // ... and the deleted lesson's copy takes its place, merged in for good.
+                let mut moved = path_of(&own_path)?;
+                moved.push(deleted.as_str().to_owned());
+                moved.extend(chain[at..chain.len() - 1].iter().cloned());
+                let moved = serde_json::to_string(&moved).map_err(|x| invalid(x.to_string()))?;
+                db(self.conn.execute(
+                    "UPDATE knowledge_lesson_events SET claim_id=?3, merge_path=?4 WHERE \
+                     claim_id=?1 AND event_key=?2",
+                    params![deleted.as_str(), key, holder, moved],
+                ))?;
+                settled += 1;
+                break;
+            }
+        }
+        Ok(settled)
     }
 
     fn remove_live_knowledge_relation(

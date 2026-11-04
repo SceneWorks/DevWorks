@@ -1890,6 +1890,14 @@ impl KnowledgeRead for Unsupported {
     ) -> Result<bool, StorageError> {
         nope()
     }
+    fn knowledge_claim_referrer_outside(
+        &self,
+        _: &Id,
+        _: &[Id],
+        _: &KnowledgeScope,
+    ) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
     fn knowledge_evidence_cited_beyond(
         &self,
         _: &Id,
@@ -1982,6 +1990,14 @@ impl KnowledgeRepository for Unsupported {
         nope()
     }
     fn unmerge_knowledge_lesson_events(&mut self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn settle_knowledge_lesson_events(
+        &mut self,
+        _: &Id,
+        _: &Id,
+        _: &[Id],
+    ) -> Result<i64, StorageError> {
         nope()
     }
     fn put_knowledge_challenge(&mut self, _: &StoredChallenge) -> Result<(), StorageError> {

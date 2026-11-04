@@ -38,7 +38,10 @@
 //! inferred is candidate evidence until it recurs across the configured number of distinct
 //! source events (`knowledge.lessonRecurrenceThreshold`), then takes effect automatically. No
 //! rule asks for approval; the user may promote a candidate early, challenge or retire any rule,
-//! or reject a proposal. Delivery of rules to sessions is recorded
+//! or reject a proposal. A `same_as` merge of a rule the user stated or promoted keeps the
+//! lesson it merges into in effect; an unmerge restores that lesson's prior rule once no
+//! remaining merge carries the user's effect, and keeps every event a remaining merge brought.
+//! Delivery of rules to sessions is recorded
 //! ([`KnowledgeService::record_delivery`]); addresses record where a lesson is handled in code,
 //! instructions, a skill, documentation or a test.
 //!

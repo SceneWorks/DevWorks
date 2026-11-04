@@ -16,10 +16,10 @@ use crate::operations::knowledge as ops;
 use crate::ports::IdKind;
 use crate::ports::storage::{
     ArtifactRead, AuthorityRead, ClaimBody, ClaimQuery, DeletedClaims, KnowledgeRead,
-    KnowledgeScope, NewEvent, NewQueueEntry, StorageError, StoredAddress, StoredChallenge,
-    StoredClaim, StoredEntity, StoredEvidence, StoredHistory, StoredLesson, StoredLessonEvent,
-    StoredRelation, StoredSourceDeletion, StoredVersion, StoredWrite, WriteChange,
-    WriteTransaction,
+    KnowledgeScope, NewEvent, NewQueueEntry, PriorRule, StorageError, StoredAddress,
+    StoredChallenge, StoredClaim, StoredEntity, StoredEvidence, StoredHistory, StoredLesson,
+    StoredLessonEvent, StoredRelation, StoredSourceDeletion, StoredVersion, StoredWrite,
+    WriteChange, WriteTransaction,
 };
 use crate::protocol::provider::{ArtifactRef, SchemaRef};
 use crate::protocol::records::{
@@ -622,6 +622,25 @@ fn basis_of(
     Ok(basis)
 }
 
+/// A claim's baselines after evidence is attached to it: a source it has no baseline for gains
+/// one, and an existing baseline stays until `knowledge.verify` moves it (KNOW-03: a claim
+/// recorded or verified against an earlier revision reads stale until verified again, and a
+/// verification keeps the revision it used).
+fn attach_basis(
+    w: &mut Writer<'_>,
+    evidence: &[Id],
+    default_revision: Option<&str>,
+    mut basis: Vec<(String, String)>,
+) -> Result<Vec<(String, String)>, Failure> {
+    for (source, revision) in basis_of(w, evidence, default_revision, Vec::new())? {
+        if !basis.iter().any(|(s, _)| *s == source) {
+            basis.push((source, revision));
+        }
+    }
+    basis.sort();
+    Ok(basis)
+}
+
 /// Who made a claim or decision (KNOW-03): the user's own ingress is always the user; an agent
 /// records a decision the user made or approved with `originRef` (the approving message or
 /// review); anything else an agent records is its own.
@@ -749,6 +768,7 @@ fn build_claim(
         lesson_quoted_words: None,
         lesson_effect: None,
         lesson_reason: None,
+        lesson_prior_rule: None,
         reason: None,
     };
     let lesson = if entry == "Lesson" {
@@ -771,6 +791,7 @@ fn build_claim(
                 body.lesson_quoted_words = p.body.lesson_quoted_words.clone();
                 body.lesson_effect = p.body.lesson_effect.clone();
                 body.lesson_reason = p.body.lesson_reason.clone();
+                body.lesson_prior_rule = p.body.lesson_prior_rule.clone();
                 Some(stored)
             }
             None => {
@@ -1029,7 +1050,7 @@ fn record(
         if !next.body.evidence_ids.contains(&evidence) {
             next.body.evidence_ids.push(evidence.clone());
         }
-        next.basis = basis_of(&mut w, &[evidence], None, next.basis)?;
+        next.basis = attach_basis(&mut w, &[evidence], None, next.basis)?;
         w.put_claim(next, Some(c.revision), "EvidenceAdded")?;
     }
     for d in &i.batch.claims.0 {
@@ -1129,7 +1150,7 @@ fn recurrence(
             next.body.evidence_ids.push(e.clone());
         }
     }
-    next.basis = basis_of(
+    next.basis = attach_basis(
         w,
         &evidence,
         d.source_revision.as_ref().map(|r| r.0.as_str()),
@@ -1137,12 +1158,20 @@ fn recurrence(
     )?;
     if model::user_source(&source)
         && let Some(lesson) = next.lesson.as_mut()
-        && matches!(lesson.rule_state.as_str(), "Candidate" | "Proposed")
+        && own_user_effect_due(
+            &lesson.rule_state,
+            next.body.lesson_effect.as_deref(),
+            next.body.lesson_prior_rule.is_some(),
+        )
     {
-        // The user's own words make the rule effective at once.
-        lesson.rule_state = "Effective".into();
-        lesson.effective_at_ms = Some(w.now);
+        // The user's own words make the rule effective at once, and its own: neither an
+        // unmerge nor a lost recurrence takes it back.
+        if lesson.rule_state != "Effective" {
+            lesson.rule_state = "Effective".into();
+            lesson.effective_at_ms = Some(w.now);
+        }
         next.body.lesson_effect = Some("UserInstruction".into());
+        next.body.lesson_prior_rule = None;
     }
     let stored = if inserted || next != t {
         w.put_claim(next, Some(t.revision), "Recurred")?
@@ -1322,6 +1351,32 @@ fn relate(
                     Some(_) => {}
                 }
             }
+            // A rule the user stated or promoted stays in effect in the lesson it merges into
+            // (KNOW-05); the target's prior rule is kept, so undoing the last merge that
+            // carries the user's effect restores it.
+            if let Some(effect) = user_effect(&from)
+                && let Some(l) = target.lesson.as_mut()
+                && takes_user_effect(&l.rule_state, target.body.lesson_effect.as_deref())
+            {
+                if target.body.lesson_prior_rule.is_none() {
+                    target.body.lesson_prior_rule = Some(PriorRule {
+                        rule_state: l.rule_state.clone(),
+                        effect: target.body.lesson_effect.clone(),
+                        effective_at_ms: l.effective_at_ms,
+                    });
+                }
+                if l.rule_state != "Effective" {
+                    l.rule_state = "Effective".into();
+                    l.effective_at_ms = Some(w.now);
+                    let message = format!(
+                        "Lesson {} took effect: the merged lesson {} carries the user's rule.",
+                        into.id.as_str(),
+                        from.id.as_str()
+                    );
+                    w.note(Severity::Info, "rule_effective", &message);
+                }
+                target.body.lesson_effect = Some(effect.to_owned());
+            }
             let stored = w.put_claim(target, Some(into.revision), "MergedInto")?;
             store_relation(
                 &mut w,
@@ -1375,6 +1430,13 @@ fn relate(
                 }
                 None => (Vec::new(), Vec::new()),
             };
+            // An event the leaving lesson took back that a remaining merge also brought (its
+            // copy stayed with that lesson, since the target held one) returns to the target.
+            let remaining = merges_into(&mut w, &into.id)?;
+            for r in &remaining {
+                w.k()
+                    .merge_knowledge_lesson_events(&r.subject_id, &into.id)?;
+            }
             // A rule that took effect only by the merged events returns to candidate evidence.
             let events = w.k().knowledge_lesson_event_count(&into.id)?;
             let threshold = w.threshold(&into.scope)?;
@@ -1390,7 +1452,27 @@ fn relate(
             target
                 .basis
                 .retain(|b| !added_basis.contains(b) || owned_basis.contains(b));
-            if into.body.lesson_effect.as_deref() == Some("Recurrence")
+            // The user's effect a merge carried in stays while a remaining merge carries it too;
+            // undoing the last one restores the rule the target had before.
+            if let Some(prior) = target.body.lesson_prior_rule.clone() {
+                let mut carried = false;
+                for r in &remaining {
+                    if let Some(c) = w.k().knowledge_claim(&r.subject_id)? {
+                        carried |= user_effect(&c).is_some();
+                    }
+                }
+                if !carried {
+                    if let Some(l) = target.lesson.as_mut()
+                        && l.rule_state == "Effective"
+                    {
+                        l.rule_state = prior.rule_state;
+                        l.effective_at_ms = prior.effective_at_ms;
+                        target.body.lesson_effect = prior.effect;
+                    }
+                    target.body.lesson_prior_rule = None;
+                }
+            }
+            if target.body.lesson_effect.as_deref() == Some("Recurrence")
                 && events < threshold
                 && let Some(l) = target.lesson.as_mut()
                 && l.rule_state == "Effective"
@@ -1400,7 +1482,9 @@ fn relate(
                 target.body.lesson_effect = None;
             }
             if target != into {
-                w.put_claim(target, Some(into.revision), "Unmerged")?;
+                let stored = w.put_claim(target, Some(into.revision), "Unmerged")?;
+                // A restored inferred rule whose events still reach the threshold is in effect.
+                take_effect_if_due(&mut w, stored)?;
             } else {
                 w.touch(&into.scope);
             }
@@ -1513,21 +1597,64 @@ fn merge_owned(w: &mut Writer<'_>, into: &Id) -> Result<Owned, StorageError> {
     Ok(owned)
 }
 
+/// The effect of a rule the user stated or promoted that a lesson carries into a merge.
+fn user_effect(c: &StoredClaim) -> Option<&str> {
+    let effect = c.body.lesson_effect.as_deref()?;
+    (c.lesson.as_ref()?.rule_state == "Effective"
+        && matches!(effect, "UserInstruction" | "Promoted"))
+    .then_some(effect)
+}
+
+/// Whether a lesson takes the user's effect a merge carries: one not yet in effect, or in
+/// effect only by recurrence (which an unmerge may take away). A rejected or retired rule
+/// stays as the user left it.
+fn takes_user_effect(rule_state: &str, effect: Option<&str>) -> bool {
+    match rule_state {
+        "Candidate" | "Proposed" => true,
+        "Effective" => !matches!(effect, Some("UserInstruction" | "Promoted")),
+        _ => false,
+    }
+}
+
+/// Whether the user's own act (their words, a promotion) changes a lesson's effect: one not
+/// in effect, or in effect only by recurrence or by a merge (which an unmerge may take away).
+fn own_user_effect_due(rule_state: &str, effect: Option<&str>, merged: bool) -> bool {
+    match rule_state {
+        "Candidate" | "Proposed" => true,
+        "Effective" => merged || takes_user_effect(rule_state, effect),
+        _ => false,
+    }
+}
+
 /// A deleted lesson's merge is never undone (its events stay with the target), so what it
 /// brought becomes the target's own, as when no other merge shared it: the other live merges
-/// into the same target stop owning it, and their unmerges keep it.
-fn settle_deleted_merges(w: &mut Writer<'_>, deleted: &Id) -> Result<(), StorageError> {
+/// into the same target stop owning it, and their unmerges keep it. That includes the events
+/// it shared with another merge (its copies, which the target holds through that merge) and
+/// the user's effect it carried.
+fn settle_deleted_merges(w: &mut Writer<'_>, deleted: &StoredClaim) -> Result<(), Failure> {
     let merged: Vec<StoredRelation> = w
         .k()
-        .knowledge_relations_touching(std::slice::from_ref(deleted))?
+        .knowledge_relations_touching(std::slice::from_ref(&deleted.id))?
         .into_iter()
-        .filter(|r| r.predicate == model::SAME_AS && r.subject_id == *deleted)
+        .filter(|r| r.predicate == model::SAME_AS && r.subject_id == deleted.id)
         .collect();
     for gone in merged {
-        for other in merges_into(w, &gone.object_id)? {
-            if other.id == gone.id {
-                continue;
-            }
+        let others: Vec<StoredRelation> = merges_into(w, &gone.object_id)?
+            .into_iter()
+            .filter(|r| r.id != gone.id)
+            .collect();
+        let live: Vec<Id> = others.iter().map(|r| r.subject_id.clone()).collect();
+        w.k()
+            .settle_knowledge_lesson_events(&deleted.id, &gone.object_id, &live)?;
+        if user_effect(deleted).is_some()
+            && let Some(target) = w.k().knowledge_claim(&gone.object_id)?
+            && target.body.lesson_prior_rule.is_some()
+        {
+            let mut next = target.clone();
+            next.body.lesson_prior_rule = None;
+            w.put_claim(next, Some(target.revision), "MergeSettled")?;
+        }
+        for other in others {
             let evidence: Vec<Id> = other
                 .added_evidence_ids
                 .iter()
@@ -1724,6 +1851,28 @@ fn relocate(
                 return Err(conflict(CLAIM, &o.id));
             }
         }
+        // A claim that names a moving claim as its object stays where it is: it must still see
+        // the moved claim (the rule a relation that stays behind follows).
+        if *dest != KnowledgeScope::Workspace
+            && let Some(referrer) =
+                w.k()
+                    .knowledge_claim_referrer_outside(&c.id, &moving_ids, dest)?
+        {
+            return Err(conflict(CLAIM, &referrer));
+        }
+        // A supersession link names both claims, each from its own scope: a partner that does
+        // not move must see the moved claim and be seen from its destination.
+        for partner in c.body.supersedes.iter().chain(c.body.superseded_by.iter()) {
+            if moving.contains(partner) {
+                continue;
+            }
+            if let Some(o) = w.k().knowledge_claim(partner)?
+                && o.lifecycle != "Deleted"
+                && !(nests(&o.scope, dest) && nests(dest, &o.scope))
+            {
+                return Err(conflict(CLAIM, &o.id));
+            }
+        }
         cited.extend(c.body.evidence_ids.iter().cloned());
         // A moving claim's challenges move with it, and so does the evidence they cite.
         for ch in w.k().knowledge_challenges(&c.id, MAX_CHALLENGES as u16)? {
@@ -1860,15 +2009,24 @@ fn promote(
         "Effective" => {
             require_user(ctx, LESSON)?;
             let mut current = c.clone();
+            // A rule in effect only by recurrence or a merge becomes the user's own as well.
             if let Some(l) = &c.lesson
-                && l.rule_state != "Effective"
+                && (l.rule_state != "Effective"
+                    || own_user_effect_due(
+                        &l.rule_state,
+                        c.body.lesson_effect.as_deref(),
+                        c.body.lesson_prior_rule.is_some(),
+                    ))
             {
                 let mut next = c.clone();
-                if let Some(nl) = next.lesson.as_mut() {
+                if let Some(nl) = next.lesson.as_mut()
+                    && nl.rule_state != "Effective"
+                {
                     nl.rule_state = "Effective".into();
                     nl.effective_at_ms = Some(w.now);
                 }
                 next.body.lesson_effect = Some("Promoted".into());
+                next.body.lesson_prior_rule = None;
                 next.body.lesson_reason = i.reason.as_ref().map(|r| r.0.clone());
                 current = w.put_claim(next, Some(c.revision), "Promoted")?;
             }
@@ -2089,6 +2247,9 @@ fn retained(snapshot: &Value) -> Value {
 }
 
 fn tombstone_claim(w: &mut Writer<'_>, c: &StoredClaim) -> Result<(), Failure> {
+    // As it is now: settling another deletion of the same write may have changed it.
+    let current = w.k().knowledge_claim(&c.id)?;
+    let c = current.as_ref().unwrap_or(c);
     let mut next = c.clone();
     next.lifecycle = "Deleted".into();
     next.deleted_at_ms = Some(w.now);
@@ -2105,10 +2266,11 @@ fn tombstone_claim(w: &mut Writer<'_>, c: &StoredClaim) -> Result<(), Failure> {
     if let Some(l) = next.lesson.as_mut() {
         l.applicability = empty_applicability();
     }
+    // A merge it made settles first (its record goes with its relations, and its events'
+    // references with the purge).
+    settle_deleted_merges(w, c)?;
     w.k().purge_knowledge_lesson_records(&c.id)?;
-    // Its relations go too: a deleted endpoint leaves no live link in another bundle (a merge
-    // it made settles first, since its record goes with them).
-    settle_deleted_merges(w, &c.id)?;
+    // Its relations go too: a deleted endpoint leaves no live link in another bundle.
     let now = w.now;
     w.k().remove_knowledge_relations_of(&c.id, now)?;
     w.k().purge_knowledge_history(&c.id, &retained)?;

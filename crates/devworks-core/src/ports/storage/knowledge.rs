@@ -128,9 +128,25 @@ pub struct ClaimBody {
     pub lesson_effect: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lesson_reason: Option<String>,
+    /// The rule a lesson had before a `same_as` merge carried the user's effect into it: what
+    /// undoing the last merge that carries one restores. `None` once the effect is the lesson's
+    /// own (the user acted on it, or a carrying merge became permanent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lesson_prior_rule: Option<PriorRule>,
     /// The last lifecycle reason (retraction, deletion).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// A lesson's rule fields as they were before a merge carried the user's effect into it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PriorRule {
+    pub rule_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_at_ms: Option<i64>,
 }
 
 /// A claim at its current revision.
@@ -531,6 +547,14 @@ pub trait KnowledgeRead {
         entity: &Id,
         deleted: &DeletedClaims<'_>,
     ) -> Result<bool, StorageError>;
+    /// A live claim other than `except`, outside `scope`, whose object is `claim`: decided over
+    /// every claim, never a bounded listing.
+    fn knowledge_claim_referrer_outside(
+        &self,
+        claim: &Id,
+        except: &[Id],
+        scope: &KnowledgeScope,
+    ) -> Result<Option<Id>, StorageError>;
     /// Whether a live claim outside `deleted` cites `evidence`: decided over every claim.
     fn knowledge_evidence_cited_beyond(
         &self,
@@ -638,6 +662,16 @@ pub trait KnowledgeRepository: KnowledgeRead {
     /// Moves the events whose latest merge left `from` back onto it, popping it from their
     /// merge path (unmerge; nested merges unwind one level at a time). Returns how many moved.
     fn unmerge_knowledge_lesson_events(&mut self, from: &Id) -> Result<i64, StorageError>;
+    /// Settles the events `deleted` (merged into `into`, its merge now permanent) still holds
+    /// because `into` held them through another live merge (one of `live`): each such event of
+    /// `into` returns to the merge that brought it, and the deleted lesson's copy takes its
+    /// place, so undoing that merge later leaves the event with `into`. Returns how many.
+    fn settle_knowledge_lesson_events(
+        &mut self,
+        deleted: &Id,
+        into: &Id,
+        live: &[Id],
+    ) -> Result<i64, StorageError>;
     /// Inserts a challenge, or replaces one that is `Open` (a resolution); a resolved one is
     /// [`StorageError::InvalidRecord`].
     fn put_knowledge_challenge(&mut self, challenge: &StoredChallenge) -> Result<(), StorageError>;
