@@ -882,7 +882,15 @@ impl JobService {
                     return Ok(None);
                 }
                 let scope = run.project_id.clone().or(project_id);
-                let agent = self.bind_agent(tx, &run.job_id, scope.as_ref())?;
+                let Some(agent) = self.bind_agent(tx, &run.job_id, scope.as_ref())? else {
+                    fail_before(
+                        tx,
+                        &started,
+                        "this job's scheduled agent is revoked; a person must rebind it before it \
+                         runs again; nothing ran",
+                    )?;
+                    return Ok(None);
+                };
                 let info = tx.store().clone();
                 let ctx = InvocationContext::new(
                     agent.clone(),
@@ -937,29 +945,34 @@ impl JobService {
         }))
     }
 
-    /// Binds (or re-binds) a job's scheduled agent principal: `Scheduled` role, confined to the
-    /// job's project (an app-level job's agent covers the workspace), every configured tool
-    /// family. Host-bound, so it is attributable and revocable like any agent.
+    /// Binds a job's scheduled agent principal on its first run: `Scheduled` role, confined to the
+    /// job's target project (an app-level job's agent covers the workspace), every configured
+    /// tool family. Host-bound, so it is attributable and revocable like any agent.
+    ///
+    /// An existing binding is reused as it stands: a person's revocation, role or narrowed tool
+    /// families are never undone here (scheduling grants no bypass, JOB-07). The only field a
+    /// re-bind sets is the project, when the job's target moved; a revoked binding is never
+    /// re-bound. `Ok(None)`: the agent is revoked and the run must not start.
     fn bind_agent(
         &self,
         tx: &mut dyn WriteTransaction,
         job: &Id,
         project: Option<&ProjectId>,
-    ) -> Result<ActorId, StorageError> {
+    ) -> Result<Option<ActorId>, StorageError> {
         let actor = agent_actor(job);
         tx.actors()
             .register(&actor, PrincipalKind::Agent, "Scheduled agent")?;
         let current = tx.authority().principal(&actor)?;
-        let wanted = |b: &crate::ports::storage::PrincipalBinding| {
-            b.active
-                && b.kind == PrincipalKind::Agent
-                && b.role == Some(AgentRole::Scheduled)
-                && b.project_id.as_ref() == project
-                && b.tool_families.is_none()
+        let (role, tool_families, expected) = match &current {
+            None => (AgentRole::Scheduled, None, None),
+            Some(b) if !b.active => return Ok(None),
+            Some(b) if b.project_id.as_ref() == project => return Ok(Some(actor)),
+            Some(b) => (
+                b.role.unwrap_or(AgentRole::Scheduled),
+                b.tool_families.clone(),
+                Some(b.revision),
+            ),
         };
-        if current.as_ref().is_some_and(wanted) {
-            return Ok(actor);
-        }
         let invocation = tx.new_id(IdKind::Correlation);
         let ctx = host_ctx(tx, native_namespace(job), invocation, None);
         crate::authority::service::bind_principal(
@@ -968,12 +981,12 @@ impl JobService {
             NewPrincipalBinding {
                 actor: actor.clone(),
                 kind: PrincipalKind::Agent,
-                role: Some(AgentRole::Scheduled),
+                role: Some(role),
                 project_id: project.cloned(),
-                tool_families: None,
+                tool_families,
                 bound_by: ctx.principal().clone(),
             },
-            current.map(|b| b.revision),
+            expected,
         )
         .map_err(|e| match e {
             crate::authority::service::AdminError::Storage(e) => e,
@@ -981,7 +994,7 @@ impl JobService {
                 StorageError::InvalidRecord(format!("scheduled agent binding refused: {other:?}"))
             }
         })?;
-        Ok(actor)
+        Ok(Some(actor))
     }
 
     /// Marks a started run's attempt `Dispatching`, immediately before its effect. `Ok(false)`

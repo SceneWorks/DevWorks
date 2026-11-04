@@ -32,6 +32,7 @@ use devworks_core::services::jobs::{JobConfig, JobService, NativeCatalog, argume
 use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::runs::recovery::LifecycleHooks;
+use devworks_core::settings::catalog::AgentRole;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1166,6 +1167,134 @@ fn scheduled_inference_fails_truthfully_without_a_pipeline_and_acts_as_a_bound_a
             .status,
         "Succeeded"
     );
+}
+
+/// Runs one inference run of `job` to `Succeeded` through `pipeline`; returns its agent.
+fn run_inference_to_success(fx: &Fx, job: &str, pipeline: &Arc<dyn InferenceJobs>) -> ActorId {
+    let rid = s(&value_of(&applied(run_now(fx, &fx.user(), job))), "id");
+    let running = fx.execute(&rid, pipeline).expect("started");
+    assert_eq!(running.status, "Running", "{:?}", running.reason);
+    let svc = fx.jobs.clone();
+    let (r, rev) = (running.id.clone(), running.revision);
+    let done = fx.write(move |tx| svc.finish_inference(tx, &r, rev, &InferenceOutcome::Succeeded));
+    assert_eq!(done.status, "Succeeded");
+    running.agent_actor.expect("agent")
+}
+fn principal_of(fx: &Fx, agent: &ActorId) -> PrincipalBinding {
+    let a = agent.clone();
+    fx.read(move |s| s.authority().principal(&a))
+        .expect("bound")
+}
+
+/// A person's revocation of a job's scheduled agent stands (JOB-07): the next run fails before
+/// dispatch with a visible reason, and the binding stays revoked at its revision.
+#[test]
+fn a_revoked_scheduled_agent_is_never_rebound_and_its_run_fails_visibly() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let p = fx.project("P");
+    let def = seed_prompt(&fx, Some(&p.id));
+    let job = fx.job(
+        &user,
+        json!({"scope": {"kind": "Project", "projectId": p.id.0.as_str()},
+        "title": "Issue scan", "schedule": every(900), "definition": def, "enabled": true}),
+    );
+    let jid = s(&job, "id");
+    let pipeline = Arc::new(Pipeline {
+        available: true,
+        ..Pipeline::default()
+    });
+    let dynp: Arc<dyn InferenceJobs> = pipeline.clone();
+    let agent = run_inference_to_success(&fx, &jid, &dynp);
+    let bound = principal_of(&fx, &agent);
+    let (by, a, rev) = (user.clone(), agent.clone(), bound.revision);
+    let revoked = fx.write(move |tx| {
+        auth::revoke_principal(tx, &by, &a, rev)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert!(!revoked.active);
+    let rid = s(&value_of(&applied(run_now(&fx, &user, &jid))), "id");
+    assert!(fx.execute(&rid, &dynp).is_none(), "nothing starts");
+    let failed = fx.run(&rid);
+    assert_eq!(failed.status, "Failed");
+    assert!(
+        failed.reason.as_deref().unwrap().contains("revoked"),
+        "{:?}",
+        failed.reason
+    );
+    let op = failed.operation_id.clone().unwrap();
+    let rec = fx.read(move |s| s.operations().operation(&op)).unwrap();
+    assert_eq!(rec.state, OperationState::Failed);
+    assert_eq!(
+        rec.attempts.last().unwrap().observations.last().unwrap()["dispatched"],
+        json!(false)
+    );
+    assert_eq!(
+        pipeline.started.lock().unwrap().len(),
+        1,
+        "no second dispatch"
+    );
+    let after = principal_of(&fx, &agent);
+    assert!(!after.active);
+    assert_eq!(after.revision, revoked.revision, "not re-bound");
+}
+
+/// A person's narrowing of a job's scheduled agent (role and tool families) stands across later
+/// runs; retargeting the job moves only the binding's project.
+#[test]
+fn a_narrowed_scheduled_agent_keeps_its_restrictions_across_runs_and_retargeting() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let p = fx.project("P");
+    let q = fx.project("Q");
+    let jid = targeting(&fx, &p.id, "Scan P", every(3600));
+    let dynp: Arc<dyn InferenceJobs> = Arc::new(Pipeline {
+        available: true,
+        ..Pipeline::default()
+    });
+    let agent = run_inference_to_success(&fx, &jid, &dynp);
+    let first = principal_of(&fx, &agent);
+    assert_eq!(first.role, Some(AgentRole::Scheduled));
+    assert!(first.tool_families.is_none());
+    let narrowed = vec!["issues".to_owned()];
+    let (by, binding) = (
+        user.clone(),
+        NewPrincipalBinding {
+            actor: agent.clone(),
+            kind: PrincipalKind::Agent,
+            role: Some(AgentRole::Worker),
+            project_id: Some(p.id.clone()),
+            tool_families: Some(narrowed.clone()),
+            bound_by: actor("user-a"),
+        },
+    );
+    let rev = first.revision;
+    let narrowed_binding = fx.write(move |tx| {
+        auth::bind_principal(tx, &by, binding, Some(rev))
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    // The next run reuses the binding as the person left it.
+    assert_eq!(run_inference_to_success(&fx, &jid, &dynp), agent);
+    let kept = principal_of(&fx, &agent);
+    assert_eq!(kept.revision, narrowed_binding.revision, "not re-bound");
+    assert_eq!(kept.tool_families.as_ref(), Some(&narrowed));
+    assert_eq!(kept.role, Some(AgentRole::Worker));
+    // Retargeted to Q: the binding moves to Q and keeps the person's restrictions.
+    let mut def = seed_prompt_once(&fx);
+    def["projectId"] = json!(q.id.0.as_str());
+    let rev = fx.stored(&jid).revision.to_string();
+    applied(fx.command(
+        &user,
+        "jobs.edit",
+        json!({"jobId": jid, "expectedRevision": rev, "title": "Scan Q",
+            "schedule": every(3600), "definition": def}),
+    ));
+    assert_eq!(run_inference_to_success(&fx, &jid, &dynp), agent);
+    let moved = principal_of(&fx, &agent);
+    assert_eq!(moved.project_id.as_ref(), Some(&q.id));
+    assert!(moved.active);
+    assert_eq!(moved.tool_families.as_ref(), Some(&narrowed));
+    assert_eq!(moved.role, Some(AgentRole::Worker));
 }
 
 #[test]

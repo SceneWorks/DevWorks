@@ -27,7 +27,8 @@
 //! as the host (ordinary host authority: a person-only operation stays refused), so they can do
 //! nothing a person did not authorize; scheduled inference runs act as a scheduled agent bound
 //! by the host with the full configured tools of a coordinator in the job's scope, under every
-//! ordinary policy, pause, plan-readiness and budget rule (see [`runner`]).
+//! ordinary policy, pause, plan-readiness and budget rule (see [`runner`]). A person's later
+//! revocation or narrowing of that agent stands: a revoked agent's runs fail before dispatch.
 //!
 //! # Runs
 //!
