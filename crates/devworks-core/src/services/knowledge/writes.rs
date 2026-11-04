@@ -2013,14 +2013,41 @@ fn owned_claim(
     Ok(c)
 }
 
-/// Moves `claims` to `dest` with the entities and evidence only they use. A record another
-/// claim still needs where it is cannot follow (`Conflict`, naming it), so nothing becomes
-/// visible beyond its scope and no former project keeps access through a moved record.
+/// A move blocked by `id` of `scope`: named when the invocation can read that scope, otherwise
+/// refused without naming it (a record of a scope it cannot read is never disclosed).
+fn blocked(
+    visible: &[KnowledgeScope],
+    kind: &'static str,
+    scope: &KnowledgeScope,
+    id: &Id,
+) -> Failure {
+    if visible.contains(scope) {
+        conflict(kind, id)
+    } else {
+        refuse(DomainErrorCode::Conflict, kind, None)
+    }
+}
+
+/// Moves `claims` to `dest` (the destination as the invocation resolved it) with the entities
+/// and evidence only they use. A record another claim still needs where it is cannot follow
+/// (`Conflict`, naming it), so nothing becomes visible beyond its scope and no former project
+/// keeps access through a moved record. Nor does a record of a scope the invocation cannot
+/// read (another project's relation between moving claims, or evidence it cites) move or stay
+/// behind stranded: the move is refused without naming it.
 fn relocate(
     w: &mut Writer<'_>,
     claims: Vec<StoredClaim>,
-    dest: &KnowledgeScope,
+    dest_scoped: &Scoped,
 ) -> Result<Vec<StoredClaim>, Failure> {
+    let dest = &dest_scoped.exact;
+    // What the invocation can read: the destination's readable scopes and the scopes of the
+    // claims it moves (each one it owns).
+    let mut visible: Vec<KnowledgeScope> = dest_scoped.readable.clone();
+    for c in &claims {
+        if !visible.contains(&c.scope) {
+            visible.push(c.scope.clone());
+        }
+    }
     let moving_ids: Vec<Id> = claims
         .iter()
         .filter(|c| c.scope != *dest)
@@ -2038,6 +2065,9 @@ fn relocate(
                 if nests(&e.scope, dest) || entities.contains_key(e.id.as_str()) {
                     continue;
                 }
+                if !visible.contains(&e.scope) {
+                    return Err(blocked(&visible, ENTITY, &e.scope, &e.id));
+                }
                 if w.k().knowledge_entity_used_beyond(&e.id, &beyond)? {
                     return Err(conflict(ENTITY, &e.id));
                 }
@@ -2049,7 +2079,7 @@ fn relocate(
                 && !nests(&o.scope, dest)
                 && !moving.contains(&o.id)
             {
-                return Err(conflict(CLAIM, &o.id));
+                return Err(blocked(&visible, CLAIM, &o.scope, &o.id));
             }
         }
         // A claim that names a moving claim as its object stays where it is: it must still see
@@ -2059,7 +2089,11 @@ fn relocate(
                 w.k()
                     .knowledge_claim_referrer_outside(&c.id, &moving_ids, dest)?
         {
-            return Err(conflict(CLAIM, &referrer));
+            let scope = w
+                .k()
+                .knowledge_claim(&referrer)?
+                .map_or(KnowledgeScope::Workspace, |r| r.scope);
+            return Err(blocked(&visible, CLAIM, &scope, &referrer));
         }
         // A supersession link names both claims, each from its own scope: a partner that does
         // not move must see the moved claim and be seen from its destination.
@@ -2071,7 +2105,7 @@ fn relocate(
                 && o.lifecycle != "Deleted"
                 && !(nests(&o.scope, dest) && nests(dest, &o.scope))
             {
-                return Err(conflict(CLAIM, &o.id));
+                return Err(blocked(&visible, CLAIM, &o.scope, &o.id));
             }
         }
         cited.extend(c.body.evidence_ids.iter().cloned());
@@ -2081,7 +2115,10 @@ fn relocate(
         }
     }
     // Relations among moving records move with them (a merge's bookkeeping among them); one
-    // whose scope would no longer see a moved endpoint cannot stay behind (`Conflict`).
+    // whose scope would no longer see a moved endpoint cannot stay behind (`Conflict`). Every
+    // scope's relations are read: one of a scope the invocation cannot read is neither moved
+    // into the destination nor left behind (it belongs to its own scope), so it refuses the
+    // move.
     let mut endpoints: Vec<Id> = moving_ids.clone();
     endpoints.extend(entities.values().map(|e| e.id.clone()));
     let mut relations = Vec::new();
@@ -2090,6 +2127,9 @@ fn relocate(
             endpoints.contains(&r.subject_id),
             endpoints.contains(&r.object_id),
         );
+        if !visible.contains(&r.scope) {
+            return Err(blocked(&visible, "knowledge_relation", &r.scope, &r.id));
+        }
         if s && o {
             if r.scope != *dest {
                 cited.extend(r.evidence_ids.iter().cloned());
@@ -2107,6 +2147,9 @@ fn relocate(
         };
         if nests(&e.scope, dest) || evidence.contains_key(e.id.as_str()) {
             continue;
+        }
+        if !visible.contains(&e.scope) {
+            return Err(blocked(&visible, EVIDENCE, &e.scope, &e.id));
         }
         if w.k().knowledge_evidence_cited_beyond(&e.id, &beyond)? {
             return Err(conflict(EVIDENCE, &e.id));
@@ -2170,7 +2213,7 @@ fn move_scope(
         }
         claims.push(owned_claim(&mut w, &reach, &r.id, &r.revision)?);
     }
-    relocate(&mut w, claims, &dest.exact)?;
+    relocate(&mut w, claims, &dest)?;
     let primary = dest.exact.clone();
     outcome(w, &primary, |value| OperationResult::KnowledgeScope {
         value,
@@ -2232,7 +2275,7 @@ fn promote(
                 current = w.put_claim(next, Some(c.revision), "Promoted")?;
             }
             if dest.exact != current.scope {
-                relocate(&mut w, vec![current], &dest.exact)?;
+                relocate(&mut w, vec![current], &dest)?;
             }
             let primary = dest.exact.clone();
             return outcome(w, &primary, |value| OperationResult::KnowledgePromote {

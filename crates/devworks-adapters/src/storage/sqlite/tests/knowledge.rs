@@ -3922,3 +3922,105 @@ fn deleting_a_merge_chain_together_restores_the_lesson_merged_into_it() {
         ("Deleted".into(), "Deleted".into())
     );
 }
+
+// Codex round 6
+
+/// Two general claims X and Y, and evidence project B recorded. Returns (X, Y, B's evidence).
+fn general_pair_and_b_evidence(
+    fx: &Fx,
+    user: &InvocationContext,
+    b: &InvocationContext,
+) -> (Id, Id, Id) {
+    let x = fx.claim_id(user, ws(), "X", draft("Fact", "x"));
+    let y = fx.claim_id(user, ws(), "Y", draft("Fact", "y"));
+    let r = receipt(fx.record(
+        b,
+        proj("project-b"),
+        json!({
+        "entities": [{"clientId": "s", "label": "B notes", "entityType": "t", "aliases": []}],
+        "evidence": [{"id": "e", "source": {"kind": "Observation", "sourceRef": "log:b"},
+            "snippet": "project B private evidence"}],
+        "claims": [with(draft("Fact", "b holder"), json!({"evidenceIds": ["e"]}))]}),
+    ));
+    let e = fx
+        .read_claim(b, proj("project-b"), &r.claim_ids.0[0])
+        .evidence
+        .0[0]
+        .id
+        .clone();
+    (x, y, e)
+}
+
+fn relations_of(fx: &Fx, claim: &Id) -> Vec<StoredRelation> {
+    let c = claim.clone();
+    fx.read(move |s| {
+        s.knowledge()
+            .knowledge_relations_touching(std::slice::from_ref(&c))
+    })
+}
+
+fn move_general(fx: &Fx, ctx: &InvocationContext, claims: &[&Id]) -> DomainFault {
+    let refs: Vec<Value> = claims
+        .iter()
+        .map(|c| json!({"id": c, "revision": fx.revision(c).to_string()}))
+        .collect();
+    refused(fx.cmd(
+        ctx,
+        "knowledge.scope",
+        json!({"claimIds": refs, "destination": proj("project-a")}),
+    ))
+}
+
+#[test]
+fn a_move_never_takes_or_strands_another_projects_private_relation() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let b = fx.agent("agent-b", Some("project-b"));
+    let (x, y, e) = general_pair_and_b_evidence(&fx, &user, &b);
+    // Project B relates the two general claims privately, citing its own evidence.
+    receipt(fx.cmd(
+        &b,
+        "knowledge.relate",
+        json!({"scope": proj("project-b"), "subjectId": x,
+        "predicate": "depends_on", "objectId": y, "evidenceIds": [e]}),
+    ));
+    // Moving both into project A would take B's relation (and its evidence) into A; moving one
+    // would strand it where B no longer sees the moved claim. Both are refused, without
+    // naming B's record.
+    for claims in [vec![&x, &y], vec![&x]] {
+        let f = move_general(&fx, &user, &claims);
+        assert_eq!(f.code, DomainErrorCode::Conflict);
+        assert_eq!(f.target_kind.unwrap().0, "knowledge_relation");
+        assert_eq!(f.target_id, None);
+    }
+    // B keeps its relation in its own scope, and X and Y stay general.
+    let kept = relations_of(&fx, &x);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].scope, KnowledgeScope::Project(project("project-b")));
+    for c in [&x, &y] {
+        let c = c.clone();
+        let stored = fx.read(move |s| s.knowledge().knowledge_claim(&c)).unwrap();
+        assert_eq!(stored.scope, KnowledgeScope::Workspace);
+    }
+    assert_eq!(stored_snippet(&fx, &e), "project B private evidence");
+}
+
+#[test]
+fn a_move_refused_by_another_projects_claim_never_names_it() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let b = fx.agent("agent-b", Some("project-b"));
+    let (x, _, _) = general_pair_and_b_evidence(&fx, &user, &b);
+    fx.claim_id(
+        &b,
+        proj("project-b"),
+        "B",
+        with(draft("Fact", "b depends on x"), json!({"objectId": x})),
+    );
+    // B's claim names X: X cannot move where B no longer sees it, and A learns nothing of B's
+    // claim but that something blocks the move.
+    let f = move_general(&fx, &user, &[&x]);
+    assert_eq!(f.code, DomainErrorCode::Conflict);
+    assert_eq!(f.target_kind.unwrap().0, "knowledge_claim");
+    assert_eq!(f.target_id, None);
+}
