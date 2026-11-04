@@ -4,14 +4,16 @@
 //! Terraform/HCL, Ansible/YAML, ColdFusion). Each extractor reports what it supports in its
 //! [`LanguageInfo::capabilities`]; nothing here claims compiler semantics.
 //!
-//! Output per file: a `File` node (index 0), definitions with 1-based spans and qualified names
-//! (`Outer.Inner.member`, nested by syntax), `DEFINES`/`DEFINES_METHOD` containment, `IMPORTS`
-//! to the imported module name, `CALLS` from the enclosing callable, and inheritance
-//! (`INHERITS`/`IMPLEMENTS`). A relationship whose target is a unique definition of the same
-//! file is `Inferred` locally; any other is a symbol for the indexer to link or leave
-//! `Unresolved`. Call confidences are the retained values: 0.7 for a bare call, 0.65 for a call
-//! on `self`/`this`, 0.45 for a call on another receiver. Inheritance chosen by a naming
-//! heuristic (a Swift class's first entry) is marked `inheritance_inferred`.
+//! The `LanguageSpecs` languages run the retained generic walk ([`spec`], with the Swift call-site
+//! reader in [`swift`]): retained labels, qualified names (without the `{repository}:{path}`
+//! prefix), properties, call receivers and confidences, argument labels, ABI, Swift inheritance
+//! and the Swift tree-sitter fallback marking. C#, JavaScript and TypeScript (retained by other
+//! CodeGraph extractors, not by `LanguageSpecs`) keep the structural walk below: a `File` node
+//! (index 0), definitions with 1-based spans and qualified names (`Outer.Inner.member`),
+//! `DEFINES`/`DEFINES_METHOD` containment, `IMPORTS` to the imported module name, `CALLS` from the
+//! enclosing callable, and inheritance (`INHERITS`/`IMPLEMENTS`). A relationship whose target is
+//! a unique definition of the same file is `Inferred` locally; any other is a symbol for the
+//! indexer to link or leave `Unresolved`.
 //!
 //! Parsing polls the run's stop signal and a per-file budget through Tree-sitter's progress
 //! callback, so a cancelled run stops within one callback interval. Walks are iterative
@@ -26,14 +28,16 @@ use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 use tree_sitter::{Language, Node, Parser};
 
+mod spec;
+mod swift;
+
 /// Most nodes and edges kept per file (beyond them the file is recorded partial).
 const MAX_NODES: usize = 10_000;
 const MAX_EDGES: usize = 40_000;
 /// Deepest syntax nesting walked.
 const MAX_DEPTH: usize = 2_000;
 
-const DEFS_IMPORTS: &[&str] = &["definitions", "spans", "containment", "imports"];
-const FULL: &[&str] = &["definitions", "spans", "containment", "imports", "calls"];
+/// The structural walk of C#, JavaScript and TypeScript.
 const FULL_INHERIT: &[&str] = &[
     "definitions",
     "spans",
@@ -41,6 +45,48 @@ const FULL_INHERIT: &[&str] = &[
     "imports",
     "calls",
     "inheritance",
+];
+// The retained `LanguageSpecs` surface per language ([`spec`]): Go and PHP specs
+// name import nodes the retained import reader reads nothing from, Ruby and Bash have none;
+// inheritance edges are Swift's only (the others record a `superclass` property).
+const C_CAPS: &[&str] = &["definitions", "spans", "containment", "imports", "calls"];
+const CPP_CAPS: &[&str] = &[
+    "definitions",
+    "spans",
+    "containment",
+    "imports",
+    "calls",
+    "abi",
+];
+const PY_JAVA_CAPS: &[&str] = &[
+    "definitions",
+    "spans",
+    "containment",
+    "imports",
+    "calls",
+    "superclass",
+];
+const GO_PHP_CAPS: &[&str] = &["definitions", "spans", "containment", "calls"];
+const RUBY_CAPS: &[&str] = &["definitions", "spans", "containment", "calls", "superclass"];
+const RUST_CAPS: &[&str] = &[
+    "definitions",
+    "spans",
+    "containment",
+    "imports",
+    "calls",
+    "abi",
+];
+const BASH_CAPS: &[&str] = &["definitions", "spans", "containment", "calls"];
+const SWIFT_CAPS: &[&str] = &[
+    "definitions",
+    "spans",
+    "containment",
+    "imports",
+    "calls",
+    "argument-labels",
+    "properties",
+    "inheritance",
+    "tree-sitter-fallback-tier",
 ];
 
 macro_rules! lang {
@@ -70,16 +116,23 @@ macro_rules! text_only {
     };
 }
 
-/// Every language this build knows.
+/// Every language this build knows: the grammar languages, the text-only ones and the
+/// manifests (see [`super::manifests`]).
 pub fn languages() -> Vec<LanguageInfo> {
+    let mut all = grammar_languages();
+    all.extend(super::manifests::languages());
+    all
+}
+
+fn grammar_languages() -> Vec<LanguageInfo> {
     vec![
-        lang!("c", "C", &[".c", ".h"], "tree-sitter-c 0.24.2", FULL),
+        lang!("c", "C", &[".c", ".h"], "tree-sitter-c 0.24.2", C_CAPS),
         lang!(
             "cpp",
             "C++",
             &[".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh"],
             "tree-sitter-cpp 0.23.4",
-            FULL_INHERIT
+            CPP_CAPS
         ),
         lang!(
             "csharp",
@@ -93,50 +146,50 @@ pub fn languages() -> Vec<LanguageInfo> {
             "Python",
             &[".py", ".pyw"],
             "tree-sitter-python 0.25.0",
-            FULL_INHERIT
+            PY_JAVA_CAPS
         ),
-        lang!("go", "Go", &[".go"], "tree-sitter-go 0.25.0", FULL),
+        lang!("go", "Go", &[".go"], "tree-sitter-go 0.25.0", GO_PHP_CAPS),
         lang!(
             "java",
             "Java",
             &[".java"],
             "tree-sitter-java 0.23.5",
-            FULL_INHERIT
+            PY_JAVA_CAPS
         ),
         lang!(
             "ruby",
             "Ruby",
             &[".rb"],
             "tree-sitter-ruby 0.23.1",
-            FULL_INHERIT
+            RUBY_CAPS
         ),
         lang!(
             "rust",
             "Rust",
             &[".rs"],
             "tree-sitter-rust 0.24.2",
-            FULL_INHERIT
+            RUST_CAPS
         ),
         lang!(
             "php",
             "PHP",
             &[".php"],
             "tree-sitter-php 0.25.1",
-            FULL_INHERIT
+            GO_PHP_CAPS
         ),
         lang!(
             "bash",
             "Bash",
             &[".sh", ".bash", ".zsh"],
             "tree-sitter-bash 0.25.1",
-            FULL
+            BASH_CAPS
         ),
         lang!(
             "swift",
             "Swift",
             &[".swift"],
             "tree-sitter-swift 0.7.4",
-            FULL_INHERIT
+            SWIFT_CAPS
         ),
         lang!(
             "javascript",
@@ -164,13 +217,19 @@ pub fn languages() -> Vec<LanguageInfo> {
             "SQL",
             &[".sql"],
             "tree-sitter-sequel 0.3.11",
+            // The retained SqlExtractor/SqlGraphVisitor (super::domain::sql).
             &[
                 "definitions",
                 "spans",
-                "containment",
                 "columns",
+                "primary-keys",
                 "foreign-keys",
-                "view-queries"
+                "indexes",
+                "parameters",
+                "view-queries",
+                "procedure-queries",
+                "procedure-calls",
+                "mysql-normalization"
             ]
         ),
         lang!(
@@ -178,21 +237,54 @@ pub fn languages() -> Vec<LanguageInfo> {
             "Terraform/HCL",
             &[".tf", ".tfvars", ".hcl"],
             "tree-sitter-hcl 1.1.0",
-            &["definitions", "spans", "modules", "references"]
+            // The retained HclParser (super::domain::hcl).
+            &[
+                "definitions",
+                "spans",
+                "modules",
+                "depends-on",
+                "output-references",
+                "locals",
+                "tfvars",
+                "deployment-targets",
+                "service-references"
+            ]
         ),
         lang!(
             "yaml",
             "YAML/Ansible",
             &[".yml", ".yaml"],
             "tree-sitter-yaml 0.7.2",
-            &["syntax", "ansible-plays", "ansible-tasks", "ansible-roles"]
+            // The retained AnsibleParser (super::domain::ansible); other YAML yields its file node.
+            &[
+                "ansible-playbooks",
+                "ansible-tasks",
+                "ansible-handlers",
+                "ansible-roles",
+                "ansible-role-dependencies",
+                "ansible-requirements",
+                "ansible-variables",
+                "deployment-targets",
+                "service-references"
+            ]
         ),
         lang!(
             "coldfusion",
             "ColdFusion",
             &[".cfm", ".cfc", ".cfml"],
             "tree-sitter-cfml 0.26.44",
-            DEFS_IMPORTS
+            // The retained ColdFusionParser (super::domain::cfml).
+            &[
+                "definitions",
+                "spans",
+                "containment",
+                "inheritance",
+                "calls",
+                "object-creation",
+                "http-calls",
+                "queries",
+                "imports"
+            ]
         ),
         // Code languages outside the retained LanguageSpecs with no grammar in this build: their
         // files are indexed as text only, never claimed as structurally parsed.
@@ -306,6 +398,8 @@ fn grammar(id: &str) -> Option<Language> {
 pub struct TreeSitterParser {
     languages: Vec<LanguageInfo>,
     by_extension: HashMap<&'static str, usize>,
+    /// Exact file names (`Cargo.toml`, `go.mod`), matched before extensions.
+    by_name: HashMap<&'static str, usize>,
 }
 impl Default for TreeSitterParser {
     fn default() -> Self {
@@ -316,14 +410,20 @@ impl TreeSitterParser {
     pub fn new() -> Self {
         let languages = languages();
         let mut by_extension = HashMap::new();
+        let mut by_name = HashMap::new();
         for (i, l) in languages.iter().enumerate() {
             for e in l.extensions {
-                by_extension.insert(*e, i);
+                if e.starts_with('.') {
+                    by_extension.insert(*e, i);
+                } else {
+                    by_name.insert(*e, i);
+                }
             }
         }
         Self {
             languages,
             by_extension,
+            by_name,
         }
     }
 }
@@ -334,6 +434,9 @@ impl StructuralParser for TreeSitterParser {
     }
     fn language_of(&self, path: &str) -> Option<&LanguageInfo> {
         let name = path.rsplit('/').next().unwrap_or(path);
+        if let Some(i) = self.by_name.get(name) {
+            return Some(&self.languages[*i]);
+        }
         let dot = name.rfind('.')?;
         if dot == 0 {
             return None;
@@ -347,12 +450,16 @@ impl StructuralParser for TreeSitterParser {
         &self,
         language: &str,
         path: &str,
+        repository: &str,
         source: &[u8],
         stop: &(dyn Fn() -> bool + Sync),
         budget_ms: u64,
     ) -> Result<FileExtract, ExtractFault> {
         if source.iter().take(8192).any(|b| *b == 0) {
             return Err(ExtractFault::Failed("binary content".into()));
+        }
+        if let Some(x) = super::manifests::extract_file(language, path, source) {
+            return Ok(x);
         }
         // A tag-free ColdFusion component is CFScript.
         let grammar_id = if language == "coldfusion"
@@ -408,16 +515,50 @@ impl StructuralParser for TreeSitterParser {
         let root = tree.root_node();
         let mut w = Walk::new(path, source, root, language);
         match grammar_id {
-            "sql" => sql(&mut w, root),
-            "terraform" => hcl(&mut w, root),
-            "yaml" => yaml(&mut w, root),
-            "coldfusion" | "cfscript" => cfml(&mut w, root),
-            _ => w.walk(root, grammar_id, stop, deadline)?,
+            "sql" => {
+                super::domain::run(&mut w.out, stop, |o| super::domain::sql::extract(source, o))?
+            }
+            "terraform" => super::domain::run(&mut w.out, stop, |o| {
+                super::domain::hcl::extract(path, source, o)
+            })?,
+            "yaml" => super::domain::run(&mut w.out, stop, |o| {
+                super::domain::ansible::extract(path, source, root, repository, o)
+            })?,
+            "coldfusion" | "cfscript" => super::domain::run(&mut w.out, stop, |o| {
+                super::domain::cfml::extract(path, source, o)
+            })?,
+            _ => match spec::spec(grammar_id) {
+                Some(s) => spec::extract(s, source, path, root, &mut w.out, stop, deadline)?,
+                None => w.walk(root, grammar_id, stop, deadline)?,
+            },
         }
         if stop() {
             return Err(ExtractFault::Cancelled);
         }
-        Ok(w.finish())
+        let mut x = w.finish();
+        if matches!(grammar_id, "rust" | "go") {
+            let e = super::endpoints::extract(root, source, path, grammar_id == "rust");
+            let base = x.nodes.len();
+            x.nodes.extend(e.nodes);
+            x.edges.extend(e.edges.into_iter().map(|mut edge| {
+                edge.source += base;
+                edge
+            }));
+            x.incomplete.extend(e.incomplete);
+        }
+        Ok(x)
+    }
+    fn group_of(&self, path: &str) -> Option<&'static str> {
+        super::manifests::group_of(path)
+    }
+    fn extract_group(
+        &self,
+        group: &str,
+        repository: &str,
+        files: &[(String, Vec<u8>)],
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<std::collections::BTreeMap<String, FileExtract>, ExtractFault> {
+        super::manifests::extract_group(group, repository, files, stop)
     }
 }
 
@@ -449,7 +590,6 @@ struct Call {
     class: Option<usize>,
     name: String,
     receiver: Receiver,
-    qualified: Option<String>,
 }
 
 #[derive(Clone)]
@@ -645,7 +785,7 @@ impl<'s> Walk<'s> {
                     props(&[("receiver", json!(receiver))]),
                 );
             } else {
-                let target = c.qualified.unwrap_or(c.name);
+                let target = c.name;
                 let mut p = props(&[("receiver", json!(receiver))]);
                 if local.len() > 1 {
                     p.insert("candidates".into(), json!(local.len()));
@@ -716,18 +856,12 @@ impl<'s> Walk<'s> {
         let kind = n.kind();
         if let Some((label, name)) = self.class_like(n, lang) {
             let qualified = format!("{}{name}", ctx.prefix);
-            let mut properties = Map::new();
-            if lang == "swift"
-                && let Some(k) = field_text(self, n, "declaration_kind")
-            {
-                properties.insert("declaration_kind".into(), json!(k));
-            }
-            let idx = self.node(label, &name, &qualified, n, ctx.container, properties)?;
+            let idx = self.node(label, &name, &qualified, n, ctx.container, Map::new())?;
             self.contain(ctx.container, idx, false);
             self.bases(n, lang, idx, label);
             return Some(Ctx {
                 container: idx,
-                class: if matches!(label, "Namespace" | "Module") {
+                class: if label == "Namespace" {
                     ctx.class
                 } else {
                     Some(idx)
@@ -737,43 +871,21 @@ impl<'s> Walk<'s> {
                 depth: ctx.depth,
             });
         }
-        if let Some(owner) = self.container_only(n, lang) {
-            // `impl Type`, `extension Type`: members qualify with the type; the type node is
-            // the local definition of that name, when the file has one.
-            let local =
-                self.local_named(&owner, &["Class", "Struct", "Enum", "Interface", "Record"]);
-            let class = (local.len() == 1).then(|| local[0]);
-            if let (Some(c), Some(t)) = (class, self.implemented_trait(n, lang)) {
-                self.symbol("IMPLEMENTS", c, &t, 0.9, Map::new());
-            }
-            return Some(Ctx {
-                container: class.unwrap_or(ctx.container),
-                class: class.or(ctx.class),
-                function: None,
-                prefix: format!("{}{owner}.", ctx.prefix),
-                depth: ctx.depth,
-            });
-        }
-        if let Some((name, receiver)) = self.function_like(n, lang) {
-            let in_class = ctx.class.is_some() || receiver.is_some();
-            let label = if is_constructor(kind) {
+        if let Some(name) = self.function_like(n, lang) {
+            let in_class = ctx.class.is_some();
+            let label = if kind == "constructor_declaration" {
                 "Constructor"
-            } else if kind == "property_declaration" || kind == "protocol_property_declaration" {
+            } else if kind == "property_declaration" {
                 "Property"
-            } else if in_class || matches!(lang, "java" | "ruby") {
+            } else if in_class {
                 "Method"
             } else {
                 "Function"
             };
-            let prefix = match &receiver {
-                Some(r) => format!("{}{r}.", ctx.prefix),
-                None => ctx.prefix.clone(),
-            };
-            let qualified = format!("{prefix}{name}");
+            let qualified = format!("{}{name}", ctx.prefix);
             let mut properties = Map::new();
             for (field, key) in [
                 ("return_type", "return_type"),
-                ("result", "return_type"),
                 ("type", "return_type"),
                 ("returns", "return_type"),
                 ("parameters", "parameters"),
@@ -784,24 +896,11 @@ impl<'s> Walk<'s> {
                     properties.insert(key.into(), json!(self.short(c)));
                 }
             }
-            if let Some(abi) = self.abi(n, lang) {
-                properties.insert("abi".into(), json!(abi));
-            }
-            let class = match &receiver {
-                Some(r) => {
-                    let local = self.local_named(r, &["Class", "Struct", "Interface"]);
-                    (local.len() == 1).then(|| local[0]).or(ctx.class)
-                }
-                None => ctx.class,
-            };
-            let parent = class
-                .filter(|_| receiver.is_some())
-                .unwrap_or(ctx.container);
-            let idx = self.node(label, &name, &qualified, n, parent, properties)?;
-            self.contain(parent, idx, in_class);
+            let idx = self.node(label, &name, &qualified, n, ctx.container, properties)?;
+            self.contain(ctx.container, idx, in_class);
             return Some(Ctx {
                 container: idx,
-                class,
+                class: ctx.class,
                 function: Some(idx),
                 prefix: format!("{qualified}."),
                 depth: ctx.depth,
@@ -810,17 +909,8 @@ impl<'s> Walk<'s> {
         for module in self.imports(n, lang) {
             self.symbol("IMPORTS", 0, &module, 1.0, Map::new());
         }
-        if let Some((name, receiver, qualified)) = self.call(n, lang) {
-            if lang == "ruby" && matches!(name.as_str(), "require" | "require_relative" | "load") {
-                if let Some(arg) = first_string(self, n) {
-                    self.symbol("IMPORTS", 0, &arg, 1.0, Map::new());
-                }
-                return None;
-            }
-            if matches!(lang, "javascript" | "typescript" | "tsx")
-                && name == "require"
-                && receiver == Receiver::None
-            {
+        if let Some((name, receiver)) = self.call(n, lang) {
+            if lang != "csharp" && name == "require" && receiver == Receiver::None {
                 if let Some(arg) = first_string(self, n) {
                     self.symbol("IMPORTS", 0, &arg, 1.0, Map::new());
                 }
@@ -831,32 +921,13 @@ impl<'s> Walk<'s> {
                 class: ctx.class,
                 name,
                 receiver,
-                qualified,
             });
         }
         None
     }
 
     fn class_like(&self, n: Node<'_>, lang: &str) -> Option<(&'static str, String)> {
-        let kind = n.kind();
-        let label = match (lang, kind) {
-            ("c" | "cpp", "struct_specifier") | ("c" | "cpp", "union_specifier") => {
-                n.child_by_field_name("body")?;
-                "Struct"
-            }
-            ("c" | "cpp", "enum_specifier") => {
-                n.child_by_field_name("body")?;
-                "Enum"
-            }
-            ("c" | "cpp", "type_definition") => {
-                let d = n.child_by_field_name("declarator")?;
-                return Some(("Struct", self.text(d)));
-            }
-            ("cpp", "class_specifier") => {
-                n.child_by_field_name("body")?;
-                "Class"
-            }
-            ("cpp", "namespace_definition") => "Namespace",
+        let label = match (lang, n.kind()) {
             ("csharp", "class_declaration") => "Class",
             ("csharp", "interface_declaration") => "Interface",
             ("csharp", "struct_declaration") => "Struct",
@@ -865,37 +936,6 @@ impl<'s> Walk<'s> {
             ("csharp", "namespace_declaration" | "file_scoped_namespace_declaration") => {
                 "Namespace"
             }
-            ("python", "class_definition") => "Class",
-            ("go", "type_spec") => match n.child_by_field_name("type").map(|t| t.kind()) {
-                Some("struct_type") => "Struct",
-                Some("interface_type") => "Interface",
-                _ => "Class",
-            },
-            ("java", "class_declaration") => "Class",
-            ("java", "interface_declaration") => "Interface",
-            ("java", "enum_declaration") => "Enum",
-            ("java", "record_declaration") => "Record",
-            ("ruby", "class") => "Class",
-            ("ruby", "module") => "Module",
-            ("rust", "struct_item") => "Struct",
-            ("rust", "enum_item") => "Enum",
-            ("rust", "trait_item") => "Interface",
-            ("rust", "mod_item") => {
-                n.child_by_field_name("body")?;
-                "Module"
-            }
-            ("php", "class_declaration") => "Class",
-            ("php", "interface_declaration") => "Interface",
-            ("php", "trait_declaration") => "Interface",
-            ("swift", "class_declaration") => {
-                match field_text(self, n, "declaration_kind").as_deref() {
-                    Some("extension") => return None,
-                    Some("struct") => "Struct",
-                    Some("enum") => "Enum",
-                    _ => "Class",
-                }
-            }
-            ("swift", "protocol_declaration") => "Interface",
             (
                 "javascript" | "typescript" | "tsx",
                 "class_declaration" | "class" | "abstract_class_declaration",
@@ -906,76 +946,19 @@ impl<'s> Walk<'s> {
             _ => return None,
         };
         let name = n.child_by_field_name("name")?;
-        let text = if lang == "swift" && name.kind() != "type_identifier" {
-            last_descendant(self, name, "type_identifier").unwrap_or_else(|| self.text(name))
-        } else {
-            self.text(name)
-        };
-        Some((label, text))
+        Some((label, self.text(name)))
     }
 
-    fn container_only(&self, n: Node<'_>, lang: &str) -> Option<String> {
+    fn function_like(&self, n: Node<'_>, lang: &str) -> Option<String> {
         match (lang, n.kind()) {
-            ("rust", "impl_item") => nominal(self, n.child_by_field_name("type")?),
-            ("swift", "class_declaration")
-                if field_text(self, n, "declaration_kind").as_deref() == Some("extension") =>
-            {
-                let name = n.child_by_field_name("name")?;
-                last_descendant(self, name, "type_identifier").or_else(|| Some(self.text(name)))
-            }
-            _ => None,
-        }
-    }
-    fn implemented_trait(&self, n: Node<'_>, lang: &str) -> Option<String> {
-        match lang {
-            "rust" => n
-                .child_by_field_name("trait")
-                .and_then(|t| nominal(self, t)),
-            _ => None,
-        }
-    }
-
-    fn function_like(&self, n: Node<'_>, lang: &str) -> Option<(String, Option<String>)> {
-        let kind = n.kind();
-        let name = match (lang, kind) {
-            ("c" | "cpp", "function_definition") => {
-                let d = n.child_by_field_name("declarator")?;
-                return c_function_name(self, d);
-            }
             (
                 "csharp",
                 "method_declaration"
                 | "constructor_declaration"
                 | "local_function_statement"
                 | "property_declaration",
-            ) => self.text(n.child_by_field_name("name")?),
-            ("python", "function_definition") => self.text(n.child_by_field_name("name")?),
-            ("go", "function_declaration") => self.text(n.child_by_field_name("name")?),
-            ("go", "method_declaration") => {
-                let name = self.text(n.child_by_field_name("name")?);
-                let receiver = n
-                    .child_by_field_name("receiver")
-                    .and_then(|r| last_descendant(self, r, "type_identifier"));
-                return Some((name, receiver));
-            }
-            ("java", "method_declaration" | "constructor_declaration") => {
-                self.text(n.child_by_field_name("name")?)
-            }
-            ("ruby", "method" | "singleton_method") => self.text(n.child_by_field_name("name")?),
-            ("rust", "function_item" | "function_signature_item") => {
-                self.text(n.child_by_field_name("name")?)
-            }
-            ("php", "function_definition" | "method_declaration") => {
-                self.text(n.child_by_field_name("name")?)
-            }
-            ("bash", "function_definition") => self.text(n.child_by_field_name("name")?),
-            ("swift", "function_declaration" | "protocol_function_declaration") => {
-                self.text(n.child_by_field_name("name")?)
-            }
-            ("swift", "init_declaration") => "init".into(),
-            ("swift", "deinit_declaration") => "deinit".into(),
-            ("swift", "subscript_declaration") => "subscript".into(),
-            (
+            )
+            | (
                 "javascript" | "typescript" | "tsx",
                 "function_declaration"
                 | "generator_function_declaration"
@@ -983,7 +966,7 @@ impl<'s> Walk<'s> {
                 | "method_signature"
                 | "abstract_method_signature"
                 | "function_signature",
-            ) => self.text(n.child_by_field_name("name")?),
+            ) => Some(self.text(n.child_by_field_name("name")?)),
             ("javascript" | "typescript" | "tsx", "variable_declarator") => {
                 let v = n.child_by_field_name("value")?;
                 if !matches!(
@@ -996,64 +979,15 @@ impl<'s> Walk<'s> {
                 if name.kind() != "identifier" {
                     return None;
                 }
-                self.text(name)
+                Some(self.text(name))
             }
-            _ => return None,
-        };
-        Some((name, None))
+            _ => None,
+        }
     }
 
     fn bases(&mut self, n: Node<'_>, lang: &str, idx: usize, label: &str) {
         let mut out: Vec<(String, &'static str, bool)> = Vec::new();
         match lang {
-            "python" => {
-                if let Some(s) = n.child_by_field_name("superclasses") {
-                    let mut c = s.walk();
-                    for b in s.named_children(&mut c) {
-                        if matches!(b.kind(), "identifier" | "attribute") {
-                            out.push((self.text(b), "INHERITS", false));
-                        }
-                    }
-                }
-            }
-            "java" => {
-                if let Some(s) = n.child_by_field_name("superclass") {
-                    for t in descendants_of(s, &["type_identifier", "scoped_type_identifier"]) {
-                        out.push((self.text(t), "INHERITS", false));
-                    }
-                }
-                for field in ["interfaces", "extends"] {
-                    if let Some(s) = n
-                        .child_by_field_name(field)
-                        .or_else(|| child_of_kind(n, "extends_interfaces"))
-                    {
-                        let edge = if label == "Interface" {
-                            "INHERITS"
-                        } else {
-                            "IMPLEMENTS"
-                        };
-                        for t in descendants_of(s, &["type_identifier"]) {
-                            out.push((self.text(t), edge, false));
-                        }
-                    }
-                }
-            }
-            "ruby" => {
-                if let Some(s) = n.child_by_field_name("superclass") {
-                    out.push((
-                        self.text(s).trim_start_matches('<').trim().to_owned(),
-                        "INHERITS",
-                        false,
-                    ));
-                }
-            }
-            "cpp" => {
-                if let Some(b) = child_of_kind(n, "base_class_clause") {
-                    for t in descendants_of(b, &["type_identifier", "qualified_identifier"]) {
-                        out.push((self.text(t), "INHERITS", false));
-                    }
-                }
-            }
             "csharp" => {
                 // C# syntax does not say which base is the class: the first is INHERITS when the
                 // name does not follow the interface convention, others IMPLEMENTS (inferred).
@@ -1070,18 +1004,6 @@ impl<'s> Walk<'s> {
                             "INHERITS"
                         };
                         out.push((name, edge, true));
-                    }
-                }
-            }
-            "php" => {
-                if let Some(b) = child_of_kind(n, "base_clause") {
-                    for t in descendants_of(b, &["name", "qualified_name"]) {
-                        out.push((self.text(t), "INHERITS", false));
-                    }
-                }
-                if let Some(b) = child_of_kind(n, "class_interface_clause") {
-                    for t in descendants_of(b, &["name", "qualified_name"]) {
-                        out.push((self.text(t), "IMPLEMENTS", false));
                     }
                 }
             }
@@ -1116,38 +1038,6 @@ impl<'s> Walk<'s> {
                     }
                 }
             }
-            "swift" => {
-                // The retained Swift rules: protocols inherit; struct/enum/actor entries are
-                // conformances; a class's first entry is a superclass unless it looks like a
-                // protocol (inferred either way), later entries conform.
-                let mut c = n.walk();
-                let entries: Vec<String> = n
-                    .named_children(&mut c)
-                    .filter(|x| x.kind() == "inheritance_specifier")
-                    .filter_map(|x| x.child_by_field_name("inherits_from").map(|t| self.text(t)))
-                    .collect();
-                let decl = field_text(self, n, "declaration_kind").unwrap_or_default();
-                for (i, e) in entries.into_iter().enumerate() {
-                    if label == "Interface" {
-                        if e != "AnyObject" {
-                            out.push((e, "INHERITS", false));
-                        }
-                    } else if decl == "class" && i == 0 {
-                        // A type of this file decides; otherwise the naming heuristic (inferred).
-                        let simple = e.rsplit('.').next().unwrap_or(&e).to_owned();
-                        if !self.local_named(&simple, &["Interface"]).is_empty() {
-                            out.push((e, "IMPLEMENTS", false));
-                        } else if !self.local_named(&simple, &["Class"]).is_empty() {
-                            out.push((e, "INHERITS", false));
-                        } else {
-                            let protocol = swift_protocol_like(&e);
-                            out.push((e, if protocol { "IMPLEMENTS" } else { "INHERITS" }, true));
-                        }
-                    } else {
-                        out.push((e, "IMPLEMENTS", false));
-                    }
-                }
-            }
             _ => {}
         }
         for (name, edge, inferred) in out {
@@ -1162,71 +1052,11 @@ impl<'s> Walk<'s> {
     fn imports(&self, n: Node<'_>, lang: &str) -> Vec<String> {
         let strip = |s: String| s.trim_matches(['"', '\'', '`', '<', '>']).to_owned();
         match (lang, n.kind()) {
-            ("c" | "cpp", "preproc_include") => n
-                .child_by_field_name("path")
-                .map(|p| vec![strip(self.text(p))])
-                .unwrap_or_default(),
             ("csharp", "using_directive") => {
                 let mut c = n.walk();
                 n.named_children(&mut c)
                     .filter(|x| matches!(x.kind(), "qualified_name" | "identifier"))
                     .last()
-                    .map(|x| vec![self.text(x)])
-                    .unwrap_or_default()
-            }
-            ("python", "import_statement") => {
-                let mut out = Vec::new();
-                let mut c = n.walk();
-                for x in n.named_children(&mut c) {
-                    match x.kind() {
-                        "dotted_name" => out.push(self.text(x)),
-                        "aliased_import" => {
-                            if let Some(nm) = x.child_by_field_name("name") {
-                                out.push(self.text(nm));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                out
-            }
-            ("python", "import_from_statement") => n
-                .child_by_field_name("module_name")
-                .map(|m| vec![self.text(m)])
-                .unwrap_or_default(),
-            ("go", "import_spec") => n
-                .child_by_field_name("path")
-                .map(|p| vec![strip(self.text(p))])
-                .unwrap_or_default(),
-            ("java", "import_declaration") => {
-                let mut c = n.walk();
-                n.named_children(&mut c)
-                    .find(|x| matches!(x.kind(), "scoped_identifier" | "identifier"))
-                    .map(|x| vec![self.text(x)])
-                    .unwrap_or_default()
-            }
-            ("rust", "use_declaration") => n
-                .child_by_field_name("argument")
-                .map(|a| vec![self.short(a)])
-                .unwrap_or_default(),
-            ("php", "namespace_use_clause") => vec![self.short(n)],
-            ("bash", "command") => {
-                let name = n
-                    .child_by_field_name("name")
-                    .map(|x| self.text(x))
-                    .unwrap_or_default();
-                if name == "source" || name == "." {
-                    n.child_by_field_name("argument")
-                        .map(|a| vec![strip(self.text(a))])
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                }
-            }
-            ("swift", "import_declaration") => {
-                let mut c = n.walk();
-                n.named_children(&mut c)
-                    .find(|x| x.kind() == "identifier")
                     .map(|x| vec![self.text(x)])
                     .unwrap_or_default()
             }
@@ -1238,13 +1068,12 @@ impl<'s> Walk<'s> {
         }
     }
 
-    fn call(&self, n: Node<'_>, lang: &str) -> Option<(String, Receiver, Option<String>)> {
+    fn call(&self, n: Node<'_>, lang: &str) -> Option<(String, Receiver)> {
         let receiver_of = |obj: Option<Node<'_>>| match obj.map(|o| o.kind()) {
             None => Receiver::None,
-            Some("self" | "this" | "self_expression" | "this_expression") => Receiver::SelfRef,
+            Some("this" | "this_expression") => Receiver::SelfRef,
             Some(_) => {
-                let t = obj.map(|o| self.text(o)).unwrap_or_default();
-                if t == "self" || t == "this" || t == "$this" {
+                if obj.map(|o| self.text(o)).as_deref() == Some("this") {
                     Receiver::SelfRef
                 } else {
                     Receiver::Other
@@ -1252,56 +1081,13 @@ impl<'s> Walk<'s> {
             }
         };
         match (lang, n.kind()) {
-            (
-                "c" | "cpp" | "rust" | "go" | "javascript" | "typescript" | "tsx" | "swift",
-                "call_expression",
-            ) => {
-                let f = n
-                    .child_by_field_name("function")
-                    .or_else(|| n.named_child(0))?;
+            ("javascript" | "typescript" | "tsx", "call_expression") => {
+                let f = n.child_by_field_name("function")?;
                 match f.kind() {
-                    "identifier" | "simple_identifier" => {
-                        Some((self.text(f), Receiver::None, None))
-                    }
-                    "field_expression" => {
-                        let field = f.child_by_field_name("field")?;
-                        let obj = f
-                            .child_by_field_name("argument")
-                            .or_else(|| f.child_by_field_name("value"));
-                        Some((self.text(field), receiver_of(obj), None))
-                    }
-                    "selector_expression" => {
-                        let field = f.child_by_field_name("field")?;
-                        Some((
-                            self.text(field),
-                            receiver_of(f.child_by_field_name("operand")),
-                            None,
-                        ))
-                    }
+                    "identifier" => Some((self.text(f), Receiver::None)),
                     "member_expression" => {
                         let p = f.child_by_field_name("property")?;
-                        Some((
-                            self.text(p),
-                            receiver_of(f.child_by_field_name("object")),
-                            None,
-                        ))
-                    }
-                    "scoped_identifier" | "qualified_identifier" => {
-                        let name = f.child_by_field_name("name")?;
-                        Some((
-                            last_identifier(self, name),
-                            Receiver::None,
-                            Some(self.text(f).replace("::", ".")),
-                        ))
-                    }
-                    "navigation_expression" => {
-                        let s = f.child_by_field_name("suffix")?;
-                        let name = s.child_by_field_name("suffix").unwrap_or(s);
-                        Some((
-                            self.text(name).trim_start_matches('.').to_owned(),
-                            receiver_of(f.child_by_field_name("target")),
-                            None,
-                        ))
+                        Some((self.text(p), receiver_of(f.child_by_field_name("object"))))
                     }
                     _ => None,
                 }
@@ -1309,147 +1095,23 @@ impl<'s> Walk<'s> {
             ("csharp", "invocation_expression") => {
                 let f = n.child_by_field_name("function")?;
                 match f.kind() {
-                    "identifier" => Some((self.text(f), Receiver::None, None)),
+                    "identifier" => Some((self.text(f), Receiver::None)),
                     "member_access_expression" => {
                         let name = f.child_by_field_name("name")?;
                         Some((
                             self.text(name),
                             receiver_of(f.child_by_field_name("expression")),
-                            None,
                         ))
                     }
-                    "generic_name" => Some((self.text(f.named_child(0)?), Receiver::None, None)),
+                    "generic_name" => Some((self.text(f.named_child(0)?), Receiver::None)),
                     _ => None,
                 }
-            }
-            ("python", "call") => {
-                let f = n.child_by_field_name("function")?;
-                match f.kind() {
-                    "identifier" => Some((self.text(f), Receiver::None, None)),
-                    "attribute" => {
-                        let a = f.child_by_field_name("attribute")?;
-                        Some((
-                            self.text(a),
-                            receiver_of(f.child_by_field_name("object")),
-                            None,
-                        ))
-                    }
-                    _ => None,
-                }
-            }
-            ("java", "method_invocation") => {
-                let name = n.child_by_field_name("name")?;
-                Some((
-                    self.text(name),
-                    receiver_of(n.child_by_field_name("object")),
-                    None,
-                ))
-            }
-            ("ruby", "call") => {
-                let m = n.child_by_field_name("method")?;
-                Some((
-                    self.text(m),
-                    receiver_of(n.child_by_field_name("receiver")),
-                    None,
-                ))
-            }
-            ("php", "function_call_expression") => Some((
-                self.text(n.child_by_field_name("function")?),
-                Receiver::None,
-                None,
-            )),
-            ("php", "member_call_expression") => {
-                let name = n.child_by_field_name("name")?;
-                Some((
-                    self.text(name),
-                    receiver_of(n.child_by_field_name("object")),
-                    None,
-                ))
-            }
-            ("php", "scoped_call_expression") => {
-                let name = n.child_by_field_name("name")?;
-                let scope = n.child_by_field_name("scope").map(|s| self.text(s));
-                let receiver = if matches!(scope.as_deref(), Some("self" | "static" | "parent")) {
-                    Receiver::SelfRef
-                } else {
-                    Receiver::Other
-                };
-                Some((
-                    self.text(name),
-                    receiver,
-                    scope.map(|s| format!("{s}.{}", self.text(name))),
-                ))
-            }
-            ("bash", "command") => {
-                // Only calls of functions this file defines (every other command is a program).
-                let name = self.text(n.child_by_field_name("name")?);
-                (!self.local_named(&name, &["Function"]).is_empty()).then_some((
-                    name,
-                    Receiver::None,
-                    None,
-                ))
-            }
-            _ => None,
-        }
-    }
-
-    fn abi(&self, n: Node<'_>, lang: &str) -> Option<String> {
-        match lang {
-            "rust" => {
-                let mut c = n.walk();
-                let modifiers = n
-                    .named_children(&mut c)
-                    .find(|x| x.kind() == "function_modifiers")?;
-                let mut c2 = modifiers.walk();
-                let ext = modifiers
-                    .named_children(&mut c2)
-                    .find(|x| x.kind() == "extern_modifier")?;
-                // Exported by symbol name only (`#[no_mangle]`/`#[export_name]` above it).
-                let mut prev = n.prev_named_sibling();
-                let mut exported = false;
-                while let Some(p) = prev {
-                    if p.kind() == "line_comment" || p.kind() == "block_comment" {
-                        prev = p.prev_named_sibling();
-                        continue;
-                    }
-                    if p.kind() != "attribute_item" {
-                        break;
-                    }
-                    let t = self.text(p);
-                    if t.contains("no_mangle") || t.contains("export_name") {
-                        exported = true;
-                    }
-                    prev = p.prev_named_sibling();
-                }
-                if !exported {
-                    return None;
-                }
-                let abi = self
-                    .text(ext)
-                    .trim_start_matches("extern")
-                    .trim()
-                    .trim_matches('"')
-                    .to_owned();
-                Some(if abi.is_empty() { "C".into() } else { abi }).filter(|a| a != "Rust")
-            }
-            "cpp" => {
-                let mut p = n.parent()?;
-                if p.kind() == "declaration_list" {
-                    p = p.parent()?;
-                }
-                (p.kind() == "linkage_specification"
-                    && p.child_by_field_name("value")
-                        .is_some_and(|v| self.text(v).trim_matches('"') == "C"))
-                .then(|| "C".to_owned())
             }
             _ => None,
         }
     }
 }
 
-fn is_constructor(kind: &str) -> bool {
-    matches!(kind, "constructor_declaration" | "init_declaration")
-}
 fn count_errors(root: Node<'_>) -> u32 {
     if !root.has_error() {
         return 0;
@@ -1470,9 +1132,6 @@ fn count_errors(root: Node<'_>) -> u32 {
         }
     }
     n.max(1)
-}
-fn field_text(w: &Walk<'_>, n: Node<'_>, field: &str) -> Option<String> {
-    n.child_by_field_name(field).map(|f| w.text(f))
 }
 fn child_of_kind<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
     let mut c = n.walk();
@@ -1495,465 +1154,13 @@ fn descendants_of<'t>(n: Node<'t>, kinds: &[&str]) -> Vec<Node<'t>> {
     }
     out
 }
-fn last_descendant(w: &Walk<'_>, n: Node<'_>, kind: &str) -> Option<String> {
-    descendants_of(n, &[kind]).last().map(|x| w.text(*x))
-}
-fn last_identifier(w: &Walk<'_>, n: Node<'_>) -> String {
-    let t = w.text(n);
-    t.rsplit("::").next().unwrap_or(&t).to_owned()
-}
-/// The nominal type of a Rust `impl` target (`Vec<T>` → `Vec`, `a::B` → `B`).
-fn nominal(w: &Walk<'_>, n: Node<'_>) -> Option<String> {
-    match n.kind() {
-        "type_identifier" | "identifier" => Some(w.text(n)),
-        "generic_type" => nominal(w, n.child_by_field_name("type")?),
-        "scoped_type_identifier" => n.child_by_field_name("name").and_then(|x| nominal(w, x)),
-        "reference_type" => nominal(w, n.child_by_field_name("type")?),
-        _ => descendants_of(n, &["type_identifier"])
-            .first()
-            .map(|x| w.text(*x)),
-    }
-}
-/// The name of a C/C++ function declarator, with its qualifying owner (`A::m` → (`m`, `A`)).
-fn c_function_name(w: &Walk<'_>, mut d: Node<'_>) -> Option<(String, Option<String>)> {
-    for _ in 0..16 {
-        match d.kind() {
-            "function_declarator"
-            | "pointer_declarator"
-            | "reference_declarator"
-            | "parenthesized_declarator" => {
-                d = d
-                    .child_by_field_name("declarator")
-                    .or_else(|| d.named_child(0))?;
-            }
-            "identifier" | "field_identifier" | "operator_name" | "destructor_name" => {
-                return Some((w.text(d), None));
-            }
-            "qualified_identifier" => {
-                let text = w.text(d);
-                let mut parts: Vec<&str> = text.split("::").collect();
-                let name = parts.pop()?.to_owned();
-                let owner = parts.last().map(|s| (*s).to_owned());
-                return Some((name, owner));
-            }
-            _ => return None,
-        }
-    }
-    None
-}
 fn first_string(w: &Walk<'_>, n: Node<'_>) -> Option<String> {
     let args = n.child_by_field_name("arguments")?;
     descendants_of(args, &["string_fragment", "string_content"])
         .first()
         .map(|s| w.text(*s))
 }
-const SWIFT_PROTOCOLS: &[&str] = &[
-    "Actor",
-    "AnyActor",
-    "App",
-    "AsyncIteratorProtocol",
-    "AsyncSequence",
-    "BidirectionalCollection",
-    "CaseIterable",
-    "Codable",
-    "Collection",
-    "Comparable",
-    "CustomDebugStringConvertible",
-    "CustomStringConvertible",
-    "Decodable",
-    "Encodable",
-    "Equatable",
-    "Error",
-    "ExpressibleByArrayLiteral",
-    "ExpressibleByDictionaryLiteral",
-    "ExpressibleByIntegerLiteral",
-    "ExpressibleByStringLiteral",
-    "Hashable",
-    "Identifiable",
-    "IteratorProtocol",
-    "LocalizedError",
-    "MutableCollection",
-    "NSCoding",
-    "NSCopying",
-    "NSSecureCoding",
-    "ObservableObject",
-    "OptionSet",
-    "PreviewProvider",
-    "RandomAccessCollection",
-    "RawRepresentable",
-    "RangeReplaceableCollection",
-    "Scene",
-    "Sendable",
-    "Sequence",
-    "SetAlgebra",
-    "Strideable",
-    "View",
-    "ViewModifier",
-];
-/// The retained protocol heuristic for a Swift class's first inheritance entry.
-fn swift_protocol_like(path: &str) -> bool {
-    let simple = path.rsplit('.').next().unwrap_or(path);
-    if simple.ends_with("DiffableDataSource") || simple.ends_with("DiffableDataSourceReference") {
-        return false;
-    }
-    SWIFT_PROTOCOLS.contains(&simple)
-        || ["Protocol", "Delegate", "DataSource"]
-            .iter()
-            .any(|s| simple.len() > s.len() && simple.ends_with(s))
-}
 
 // ---------------------------------------------------------------------------------------------
-// Domain extractors
-
-/// SQL: tables (with columns and foreign keys), views (with the relations they query),
-/// functions and procedures.
-fn sql(w: &mut Walk<'_>, root: Node<'_>) {
-    for st in descendants_of(
-        root,
-        &[
-            "create_table",
-            "create_view",
-            "create_function",
-            "create_procedure",
-            "create_materialized_view",
-        ],
-    ) {
-        let Some(name_node) = child_of_kind(st, "object_reference") else {
-            continue;
-        };
-        let name = w.text(name_node);
-        let simple = name
-            .rsplit('.')
-            .next()
-            .unwrap_or(&name)
-            .trim_matches(['"', '`', '[', ']'])
-            .to_owned();
-        let label = match st.kind() {
-            "create_table" => "Table",
-            "create_view" | "create_materialized_view" => "View",
-            "create_procedure" => "StoredProcedure",
-            _ => "Function",
-        };
-        let Some(idx) = w.node(label, &simple, &name, st, 0, Map::new()) else {
-            return;
-        };
-        w.contain(0, idx, false);
-        if label == "Table" {
-            for col in descendants_of(st, &["column_definition"]) {
-                let Some(cn) = col.child_by_field_name("name") else {
-                    continue;
-                };
-                let cname = w.text(cn);
-                let mut p = Map::new();
-                if let Some(t) = col.child_by_field_name("type") {
-                    p.insert("type".into(), json!(w.short(t)));
-                }
-                if let Some(c) = w.node("Column", &cname, &format!("{name}.{cname}"), col, idx, p) {
-                    w.edge(
-                        "HAS_COLUMN",
-                        idx,
-                        EdgeTarget::Local(c),
-                        Resolution::Resolved,
-                        1.0,
-                        Map::new(),
-                    );
-                }
-                for r in descendants_of(col, &["object_reference"]) {
-                    let target = w.text(r);
-                    w.symbol(
-                        "FOREIGN_KEY",
-                        idx,
-                        &target,
-                        0.9,
-                        props(&[("column", json!(cname))]),
-                    );
-                }
-            }
-        } else if label == "View" {
-            for rel in descendants_of(st, &["relation"]) {
-                if let Some(r) = child_of_kind(rel, "object_reference") {
-                    let target = w.text(r);
-                    w.symbol("QUERIES", idx, &target, 0.9, Map::new());
-                }
-            }
-        }
-    }
-}
-
-/// Terraform/HCL: resources, data sources, modules (with their source), variables and outputs,
-/// and references between them.
-fn hcl(w: &mut Walk<'_>, root: Node<'_>) {
-    let Some(body) = child_of_kind(root, "body") else {
-        return;
-    };
-    let mut c = body.walk();
-    let blocks: Vec<Node<'_>> = body
-        .named_children(&mut c)
-        .filter(|b| b.kind() == "block")
-        .collect();
-    for b in blocks {
-        let mut c2 = b.walk();
-        let parts: Vec<Node<'_>> = b.named_children(&mut c2).collect();
-        let Some(kind) = parts.first().map(|p| w.text(*p)) else {
-            continue;
-        };
-        let labels: Vec<String> = parts
-            .iter()
-            .filter(|p| p.kind() == "string_lit" || p.kind() == "identifier")
-            .skip(1)
-            .map(|p| w.text(*p).trim_matches('"').to_owned())
-            .collect();
-        let (label, name, qualified) = match (kind.as_str(), labels.as_slice()) {
-            ("resource", [t, n, ..]) => ("TerraformResource", n.clone(), format!("{t}.{n}")),
-            ("data", [t, n, ..]) => ("TerraformDataSource", n.clone(), format!("data.{t}.{n}")),
-            ("module", [n, ..]) => ("TerraformModule", n.clone(), format!("module.{n}")),
-            ("variable", [n, ..]) => ("TerraformVariable", n.clone(), format!("var.{n}")),
-            ("output", [n, ..]) => ("TerraformOutput", n.clone(), format!("output.{n}")),
-            _ => continue,
-        };
-        let mut p = Map::new();
-        if let Some(t) = labels
-            .first()
-            .filter(|_| matches!(kind.as_str(), "resource" | "data"))
-        {
-            p.insert("type".into(), json!(t));
-        }
-        let Some(idx) = w.node(label, &name, &qualified, b, 0, p) else {
-            return;
-        };
-        w.contain(0, idx, false);
-        for attr in descendants_of(b, &["attribute"]) {
-            let mut c3 = attr.walk();
-            let kids: Vec<Node<'_>> = attr.named_children(&mut c3).collect();
-            if kind == "module"
-                && kids.first().is_some_and(|k| w.text(*k) == "source")
-                && let Some(v) = kids.get(1)
-            {
-                let src = w.text(*v).trim_matches('"').to_owned();
-                w.symbol("INCLUDES_MODULE", idx, &src, 1.0, Map::new());
-            }
-        }
-        for e in descendants_of(b, &["expression"]) {
-            let mut c4 = e.walk();
-            let kids: Vec<Node<'_>> = e.named_children(&mut c4).collect();
-            if kids.first().is_some_and(|k| k.kind() == "variable_expr") {
-                let root_name = w.text(kids[0]);
-                let attrs: Vec<String> = kids[1..]
-                    .iter()
-                    .filter(|k| k.kind() == "get_attr")
-                    .map(|k| w.text(*k).trim_start_matches('.').to_owned())
-                    .collect();
-                let target = match (root_name.as_str(), attrs.as_slice()) {
-                    ("var" | "local" | "module", [n, ..]) => format!("{root_name}.{n}"),
-                    ("data", [t, n, ..]) => format!("data.{t}.{n}"),
-                    (t, [n, ..])
-                        if !matches!(t, "count" | "each" | "self" | "path" | "terraform") =>
-                    {
-                        format!("{t}.{n}")
-                    }
-                    _ => continue,
-                };
-                w.symbol("DEPENDS_ON", idx, &target, 0.9, Map::new());
-            }
-        }
-    }
-}
-
-/// YAML: Ansible plays (a sequence of mappings with `hosts`), their tasks and handlers, roles
-/// they include, and task lists (role task files). Other YAML is recorded syntax-only.
-fn yaml(w: &mut Walk<'_>, root: Node<'_>) {
-    let Some(seq) = descendants_of(root, &["block_sequence"]).into_iter().next() else {
-        return;
-    };
-    if seq
-        .parent()
-        .and_then(|p| p.parent())
-        .is_none_or(|d| d.kind() != "document")
-    {
-        return;
-    }
-    let mut c = seq.walk();
-    let items: Vec<Node<'_>> = seq.named_children(&mut c).collect();
-    for (i, item) in items.into_iter().enumerate() {
-        let Some(map) = descendants_of(item, &["block_mapping"]).into_iter().next() else {
-            continue;
-        };
-        let pairs = mapping(w, map);
-        let name = pairs
-            .iter()
-            .find(|(k, _)| k == "name")
-            .map(|(_, v)| scalar(w, *v));
-        if pairs.iter().any(|(k, _)| k == "hosts") {
-            let play = name.unwrap_or_else(|| format!("play {}", i + 1));
-            let Some(idx) = w.node("Playbook", &play, &play, map, 0, Map::new()) else {
-                return;
-            };
-            w.contain(0, idx, false);
-            for (k, v) in &pairs {
-                match k.as_str() {
-                    "tasks" | "pre_tasks" | "post_tasks" | "handlers" => {
-                        let label = if k == "handlers" {
-                            "AnsibleHandler"
-                        } else {
-                            "AnsibleTask"
-                        };
-                        tasks(w, *v, idx, &play, label);
-                    }
-                    "roles" => {
-                        for r in descendants_of(*v, &["block_sequence_item", "flow_node"]) {
-                            if r.kind() != "block_sequence_item" {
-                                continue;
-                            }
-                            let role =
-                                match descendants_of(r, &["block_mapping"]).into_iter().next() {
-                                    Some(m) => mapping(w, m)
-                                        .into_iter()
-                                        .find(|(k, _)| k == "role" || k == "name")
-                                        .map(|(_, v)| scalar(w, v)),
-                                    None => Some(scalar(w, r)),
-                                };
-                            if let Some(role) = role {
-                                w.symbol("INCLUDES_ROLE", idx, &role, 1.0, Map::new());
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        } else if let Some(task) = name
-            && pairs.len() > 1
-        {
-            // A task list (a role's tasks/main.yml): each named step is a task.
-            if let Some(t) = w.node("AnsibleTask", &task, &task, map, 0, Map::new()) {
-                w.contain(0, t, false);
-            }
-        }
-    }
-}
-fn mapping<'t>(w: &Walk<'_>, map: Node<'t>) -> Vec<(String, Node<'t>)> {
-    let mut c = map.walk();
-    map.named_children(&mut c)
-        .filter(|p| p.kind() == "block_mapping_pair")
-        .filter_map(|p| {
-            Some((
-                scalar(w, p.child_by_field_name("key")?),
-                p.child_by_field_name("value")?,
-            ))
-        })
-        .collect()
-}
-fn scalar(w: &Walk<'_>, n: Node<'_>) -> String {
-    w.short(n)
-        .trim_start_matches("- ")
-        .trim_matches(['"', '\''])
-        .to_owned()
-}
-fn tasks(w: &mut Walk<'_>, list: Node<'_>, parent: usize, prefix: &str, label: &str) {
-    let Some(seq) = descendants_of(list, &["block_sequence"]).into_iter().next() else {
-        return;
-    };
-    let mut c = seq.walk();
-    let items: Vec<Node<'_>> = seq.named_children(&mut c).collect();
-    for (i, item) in items.into_iter().enumerate() {
-        let Some(map) = descendants_of(item, &["block_mapping"]).into_iter().next() else {
-            continue;
-        };
-        let pairs = mapping(w, map);
-        let name = pairs
-            .iter()
-            .find(|(k, _)| k == "name")
-            .map(|(_, v)| scalar(w, *v))
-            .unwrap_or_else(|| format!("task {}", i + 1));
-        let mut p = Map::new();
-        if let Some((module, _)) = pairs.iter().find(|(k, _)| {
-            !matches!(
-                k.as_str(),
-                "name" | "when" | "tags" | "notify" | "register" | "become" | "vars"
-            )
-        }) {
-            p.insert("module".into(), json!(module));
-        }
-        if let Some(t) = w.node(label, &name, &format!("{prefix}.{name}"), map, parent, p) {
-            w.contain(parent, t, false);
-            if let Some((_, v)) = pairs.iter().find(|(k, _)| k == "notify") {
-                let target = scalar(w, *v);
-                w.symbol("NOTIFIES_HANDLER", t, &target, 0.9, Map::new());
-            }
-        }
-    }
-}
-
-/// ColdFusion: components and functions (tag syntax and CFScript), includes and calls.
-fn cfml(w: &mut Walk<'_>, root: Node<'_>) {
-    let file = w.out.nodes[0].name.clone();
-    let stem = file
-        .rsplit_once('.')
-        .map_or(file.clone(), |(s, _)| s.to_owned());
-    let component = descendants_of(root, &["cf_component_open_tag", "component"])
-        .first()
-        .copied()
-        .and_then(|c| w.node("Class", &stem, &stem, c, 0, Map::new()));
-    if let Some(c) = component {
-        w.contain(0, c, false);
-    }
-    let parent = component.unwrap_or(0);
-    for f in descendants_of(root, &["cf_function_tag", "function_declaration"]) {
-        let name = if f.kind() == "function_declaration" {
-            f.child_by_field_name("name").map(|n| w.text(n))
-        } else {
-            cf_attribute(w, f, "name")
-        };
-        let Some(name) = name else { continue };
-        let label = if component.is_some() {
-            "Method"
-        } else {
-            "Function"
-        };
-        let qualified = format!("{stem}.{name}");
-        let mut p = Map::new();
-        if let Some(a) = cf_attribute(w, f, "access") {
-            p.insert("access".into(), json!(a));
-        }
-        if let Some(idx) = w.node(label, &name, &qualified, f, parent, p) {
-            w.contain(parent, idx, component.is_some());
-            for call in descendants_of(f, &["call_expression"]) {
-                if let Some(func) = call
-                    .child_by_field_name("function")
-                    .filter(|x| x.kind() == "identifier")
-                {
-                    w.calls.push(Call {
-                        caller: idx,
-                        class: component,
-                        name: w.text(func),
-                        receiver: Receiver::None,
-                        qualified: None,
-                    });
-                }
-            }
-        }
-    }
-    for inc in descendants_of(root, &["cf_include_tag"]) {
-        if let Some(t) = cf_attribute(w, inc, "template") {
-            w.symbol("IMPORTS", 0, &t, 1.0, Map::new());
-        }
-    }
-}
-fn cf_attribute(w: &Walk<'_>, tag: Node<'_>, name: &str) -> Option<String> {
-    let mut c = tag.walk();
-    for a in tag
-        .named_children(&mut c)
-        .filter(|x| x.kind() == "cf_attribute")
-    {
-        let mut c2 = a.walk();
-        let kids: Vec<Node<'_>> = a.named_children(&mut c2).collect();
-        if kids
-            .first()
-            .is_some_and(|k| w.text(*k).eq_ignore_ascii_case(name))
-        {
-            return kids
-                .get(1)
-                .map(|v| w.text(*v).trim_matches(['"', '\'']).to_owned());
-        }
-    }
-    None
-}
+// Domain extractors: SQL, Terraform, Ansible and ColdFusion are ports of the retained CodeGraph
+// extractors in `super::domain` (dispatched from `extract`).

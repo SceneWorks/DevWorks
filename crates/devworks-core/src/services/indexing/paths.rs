@@ -64,6 +64,46 @@ pub fn parent(p: &str) -> &str {
     p.rfind('/').map_or("", |i| &p[..i])
 }
 
+/// Paths at least this long keep the Windows verbatim prefix (the file APIs need it beyond the
+/// classic 260-character limit).
+pub const VERBATIM_MIN: usize = 248;
+
+/// The identity form of a native absolute path (a registration location or a worktree path),
+/// so a path reaching the indexer from the file system (`canonicalize`: `\\?\C:\x`) and one from
+/// Git's output (`C:/x`, `//?/C:/x`) compare equal. On Windows: `/` becomes `\`, a verbatim
+/// prefix is dropped while the path is shorter than [`VERBATIM_MIN`] (`\\?\UNC\server\share`
+/// becomes `\\server\share`), the drive letter is upper case and a trailing separator is
+/// removed (except at a drive root). Elsewhere the path is unchanged. `windows` is the target
+/// platform (`cfg!(windows)`), a parameter so every platform tests the Windows rules.
+pub fn native_location(raw: &str, windows: bool) -> String {
+    if !windows {
+        return raw.to_owned();
+    }
+    let mut s = raw.replace('/', "\\");
+    if let Some(rest) = s.strip_prefix("\\\\?\\UNC\\") {
+        if rest.len() + 2 < VERBATIM_MIN {
+            s = format!("\\\\{rest}");
+        }
+    } else if let Some(rest) = s.strip_prefix("\\\\?\\")
+        && rest.as_bytes().get(1) == Some(&b':')
+        && rest.len() < VERBATIM_MIN
+    {
+        s = rest.to_owned();
+    }
+    // The drive letter: `c:\x` and `C:\x` name one directory.
+    let drive_at = if s.starts_with("\\\\?\\") { 4 } else { 0 };
+    if s.as_bytes().get(drive_at + 1) == Some(&b':')
+        && let Some(c) = s.get(drive_at..drive_at + 1)
+    {
+        let upper = c.to_ascii_uppercase();
+        s.replace_range(drive_at..drive_at + 1, &upper);
+    }
+    while s.len() > 3 && s.ends_with('\\') && !s.ends_with(":\\") {
+        s.pop();
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +141,36 @@ mod tests {
         assert!(a.len() <= 128 && symbol_id("r", "x").starts_with("sym-"));
         assert_eq!(parent("a/b/c.rs"), "a/b");
         assert_eq!(parent("c.rs"), "");
+    }
+
+    #[test]
+    fn native_locations_compare_equal_across_their_windows_spellings() {
+        let want = r"C:\Users\runneradmin\AppData\Local\Temp\src\app";
+        for spelling in [
+            r"\\?\C:\Users\runneradmin\AppData\Local\Temp\src\app",
+            "C:/Users/runneradmin/AppData/Local/Temp/src/app",
+            "//?/C:/Users/runneradmin/AppData/Local/Temp/src/app",
+            r"c:\Users\runneradmin\AppData\Local\Temp\src\app\",
+            want,
+        ] {
+            assert_eq!(native_location(spelling, true), want, "{spelling}");
+        }
+        assert_eq!(
+            native_location(r"\\?\UNC\srv\share\r", true),
+            r"\\srv\share\r"
+        );
+        assert_eq!(native_location("C:/", true), r"C:\");
+        // Beyond the classic limit the verbatim form stays (the file APIs need it).
+        let long = format!(r"\\?\C:\{}", "a".repeat(VERBATIM_MIN));
+        assert_eq!(native_location(&long, true), long);
+        assert_eq!(
+            native_location(&long.replace('\\', "/"), true),
+            long,
+            "Git's spelling of a long path"
+        );
+        // Elsewhere a path is its own identity.
+        for p in ["/private/var/x", "/a/b/", r"C:\x"] {
+            assert_eq!(native_location(p, false), p);
+        }
     }
 }

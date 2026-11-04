@@ -198,18 +198,39 @@ pub fn manifest_coverage(manifest: &Value) -> (CoverageState, Vec<String>) {
     (state, gaps)
 }
 
+/// Whether a ready overlay was built under a source configuration other than `current` (the
+/// repository's effective configuration digest now): its build run recorded the one it used.
+pub fn overlay_config_moved(
+    idx: &dyn IndexRead,
+    o: &StoredOverlay,
+    current: &str,
+) -> Result<bool, StorageError> {
+    if o.state != OVERLAY_READY {
+        return Ok(false);
+    }
+    let built = match &o.run_id {
+        Some(r) => idx.run(r)?.map(|r| r.config_digest),
+        None => None,
+    };
+    Ok(built.is_some_and(|b| b != current))
+}
+
 /// The overlay state an observer must see now: a ready overlay past its retention reads
-/// `Expired`, one over a baseline that is no longer published reads `Stale`.
+/// `Expired`, one over a baseline that is no longer published, or built under a configuration
+/// that is no longer the effective one (`config_moved`), reads `Stale`.
 pub fn effective_overlay_state(
     o: &StoredOverlay,
     published_generation: Option<&Id>,
     now: i64,
+    config_moved: bool,
 ) -> &'static str {
     let live = !matches!(o.state.as_str(), OVERLAY_EXPIRED | OVERLAY_UNAVAILABLE);
     if live && now >= o.expires_at_ms {
         return OVERLAY_EXPIRED;
     }
-    if o.state == OVERLAY_READY && o.base_generation_id.as_ref() != published_generation {
+    if o.state == OVERLAY_READY
+        && (o.base_generation_id.as_ref() != published_generation || config_moved)
+    {
         return OVERLAY_STALE;
     }
     OVERLAY_STATES
@@ -334,8 +355,13 @@ pub fn status(
     let overlays = idx.overlays(&r.id)?;
     let mut current_view_ids: Vec<Id> = published.iter().map(|p| p.view_id.clone()).collect();
     let published_gen = view.as_ref().map(|v| v.baseline_id.clone());
+    let current_config = super::effective_config(idx, read.projects(), &r.id)?.digest;
+    let mut moved: Vec<bool> = Vec::with_capacity(overlays.len());
     for o in &overlays {
-        if effective_overlay_state(o, published_gen.as_ref(), now) == OVERLAY_READY
+        moved.push(overlay_config_moved(idx, o, &current_config)?);
+    }
+    for (o, m) in overlays.iter().zip(&moved) {
+        if effective_overlay_state(o, published_gen.as_ref(), now, *m) == OVERLAY_READY
             && let Some(v) = &o.view_id
         {
             current_view_ids.push(v.clone());
@@ -477,12 +503,13 @@ pub fn status(
     status.overlays = Some(BoundedList(
         overlays
             .iter()
+            .zip(&moved)
             .take(128)
-            .map(|o| OverlayStatus {
+            .map(|(o, m)| OverlayStatus {
                 overlay_id: o.id.clone(),
                 revision: rev(o.revision),
                 worktree_id: o.worktree_id.clone(),
-                state: overlay_state(effective_overlay_state(o, published_gen.as_ref(), now)),
+                state: overlay_state(effective_overlay_state(o, published_gen.as_ref(), now, *m)),
                 view_id: o.view_id.clone(),
                 base_commit: o.base_oid.as_ref().map(|c| label(c, "commit")),
                 head_commit: o.head_oid.as_ref().map(|c| label(c, "commit")),

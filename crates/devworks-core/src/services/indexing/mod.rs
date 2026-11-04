@@ -773,6 +773,29 @@ impl IndexCoordinator {
             ..wanted
         };
         tx.indexing().put_source_config(&next, current.revision)?;
+        // Ready overlays built under the previous configuration are stale from this write on
+        // (a project section covers its members; the workspace section every repository).
+        let affected: Vec<Id> = match &project {
+            Some(p) => tx.projects().members(&p.id)?,
+            None => {
+                let mut all = Vec::new();
+                let mut after = None;
+                loop {
+                    let page = tx.projects().repositories(
+                        &RepositoryFilter::default(),
+                        after.as_ref(),
+                        MAX_PAGE,
+                    )?;
+                    all.extend(page.iter().map(|r| r.id.clone()));
+                    if page.len() < MAX_PAGE as usize {
+                        break;
+                    }
+                    after = page.last().map(|r| r.id.clone());
+                }
+                all
+            }
+        };
+        overlay::invalidate_for_configuration(tx, ctx, &affected)?;
         history(
             tx,
             ctx.principal(),
@@ -883,20 +906,24 @@ impl IndexCoordinator {
                 }
             }
         }
-        let mut changed = Vec::new();
-        for run in &targets {
-            // Visibility follows each run's repository (and project, for a project invocation).
+        // Visibility follows each run's repository (and project, for a project invocation): an
+        // invisible run is neither changed nor reported.
+        let mut visible_targets = Vec::with_capacity(targets.len());
+        for run in targets {
             let visible = visible_repository(tx.projects(), ctx, &run.repository_id).is_ok()
                 && match ctx.project_id() {
                     None => true,
                     Some(own) => tx.projects().members(own)?.contains(&run.repository_id),
                 };
-            if !visible {
-                if run.id == named.id {
-                    return Err(not_found("index_run", operation).into());
-                }
-                continue;
+            if visible {
+                visible_targets.push(run);
+            } else if run.id == named.id {
+                return Err(not_found("index_run", operation).into());
             }
+        }
+        let targets = visible_targets;
+        let mut changed = Vec::new();
+        for run in &targets {
             if run_terminal(&run.state) || run.cancel_requested_at_ms.is_some() {
                 continue;
             }

@@ -33,7 +33,9 @@ use super::{IndexEnv, RUN_AGGREGATE, digest, effective_config, history};
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
 use crate::ports::IdKind;
-use crate::ports::indexing::{EdgeTarget, ExtractFault, FileExtract, LanguageMode};
+use crate::ports::indexing::{
+    EdgeTarget, ExtractFault, ExtractedNode, FileExtract, LanguageMode, Span,
+};
 use crate::ports::storage::*;
 use crate::protocol::Id;
 use crate::protocol::records::{DiagnosticErrorClass, DiagnosticOutcome, Severity};
@@ -166,7 +168,13 @@ pub(crate) fn plan(
             (MODE_LINK, None)
         } else {
             match language {
-                Some(l) if !cfg.language_selected(l.id) => (MODE_NOT_SELECTED, Some(l.id)),
+                // Manifests (Cargo.toml, .csproj, go.mod, ...) are read whatever the language
+                // selection: package identities are not a language choice.
+                Some(l)
+                    if !l.capabilities.contains(&"manifest") && !cfg.language_selected(l.id) =>
+                {
+                    (MODE_NOT_SELECTED, Some(l.id))
+                }
                 Some(l) if l.mode == LanguageMode::TextFallback => (MODE_TEXT_FALLBACK, Some(l.id)),
                 Some(l) if e.size as i64 > cfg.max_bytes_for(&e.path) => {
                     (MODE_OVERSIZE, Some(l.id))
@@ -226,7 +234,12 @@ pub(crate) fn push_warning(w: &mut Vec<RunWarning>, code: &str, message: String)
 }
 
 /// The unit payload of a planned unit.
-pub(crate) fn unit_payload(u: &PlanUnit, parse_errors: u32, extra: Option<&str>) -> Value {
+pub(crate) fn unit_payload(
+    u: &PlanUnit,
+    parse_errors: u32,
+    extra: Option<&str>,
+    incomplete: &[String],
+) -> Value {
     let mut p = json!({
         "mode": u.mode,
         "size": u.size,
@@ -243,6 +256,9 @@ pub(crate) fn unit_payload(u: &PlanUnit, parse_errors: u32, extra: Option<&str>)
     }
     if let Some(x) = extra {
         p["note"] = json!(x);
+    }
+    if !incomplete.is_empty() {
+        p["incomplete"] = json!(incomplete);
     }
     p
 }
@@ -339,10 +355,36 @@ pub(crate) fn rows_of(
             },
             EdgeTarget::Symbol(name) => {
                 let name: String = name.chars().take(1024).collect();
+                let mut payload = json!({"resolution": e.resolution.as_str(), "targetName": name});
+                // Candidate scopes an extractor already narrowed the name to (a route
+                // handler's files, lines or package directory): the linker honours them.
+                for k in [
+                    "candidateUnits",
+                    "candidateLines",
+                    "candidateDirs",
+                    "goImport",
+                    "targetMatch",
+                ] {
+                    if let Some(v) = e.properties.get(k) {
+                        payload[k] = v.clone();
+                    }
+                }
+                (symbol_id(repository, &name), name.clone(), payload)
+            }
+            EdgeTarget::Node {
+                unit,
+                kind,
+                qualified_name,
+            } => {
+                let id = if kind == "File" {
+                    file_node_id(repository, unit)
+                } else {
+                    node_id(repository, unit, kind, qualified_name, 0)
+                };
                 (
-                    symbol_id(repository, &name),
-                    name.clone(),
-                    json!({"resolution": e.resolution.as_str(), "targetName": name}),
+                    id.clone(),
+                    id,
+                    json!({"resolution": e.resolution.as_str(), "targetUnit": unit}),
                 )
             }
         };
@@ -443,7 +485,99 @@ pub(crate) fn dir_rows(
     (vec![node], edges)
 }
 
-/// Builds the stored rows of one planned unit (`content`: the blob of a structural unit).
+/// Most bytes one extraction group reads (every member together).
+pub const MAX_GROUP_BYTES: usize = 64 * 1024 * 1024;
+
+/// The members of each repository-level extraction group among planned units: readable file
+/// units the parser assigns to a group, within the size limit, in path order.
+pub(crate) fn group_members<'a>(
+    env: &IndexEnv,
+    cfg: &EffectiveConfig,
+    units: impl IntoIterator<Item = &'a PlanUnit>,
+) -> BTreeMap<&'static str, Vec<&'a PlanUnit>> {
+    let mut out: BTreeMap<&'static str, Vec<&'a PlanUnit>> = BTreeMap::new();
+    for u in units {
+        let readable = matches!(
+            u.mode,
+            MODE_STRUCTURAL | MODE_NOT_SELECTED | MODE_TEXT_FALLBACK | MODE_TEXT
+        ) && u.size as i64 <= cfg.max_bytes_for(&u.key);
+        if let (true, Some(g)) = (readable, env.parser.group_of(&u.key)) {
+            out.entry(g).or_default().push(u);
+        }
+    }
+    for members in out.values_mut() {
+        members.sort_by(|a, b| a.key.cmp(&b.key));
+    }
+    out
+}
+
+/// Whether a group's members differ from the parent generation's (a member added, removed or
+/// changed): the whole group is then extracted again, since each member's output depends on
+/// the others.
+pub(crate) fn group_changed(
+    env: &IndexEnv,
+    group: &str,
+    members: &[&PlanUnit],
+    parent: &BTreeMap<String, UnitFacts>,
+) -> bool {
+    let now: BTreeSet<(&str, &str)> = members
+        .iter()
+        .map(|u| (u.key.as_str(), u.digest.as_str()))
+        .collect();
+    let before: BTreeSet<(&str, &str)> = parent
+        .iter()
+        .filter(|(k, _)| env.parser.group_of(k) == Some(group))
+        .map(|(k, (d, _, _))| (k.as_str(), d.as_str()))
+        .collect();
+    now != before
+}
+
+/// Appends a group share (its node 0 stands for the unit's file node) to an extraction.
+pub(crate) fn merge_share(x: &mut FileExtract, share: &FileExtract) {
+    let base = x.nodes.len();
+    let map = |i: usize| if i == 0 { 0 } else { base + i - 1 };
+    for n in share.nodes.iter().skip(1) {
+        let mut n = n.clone();
+        n.parent = Some(n.parent.map_or(0, map));
+        x.nodes.push(n);
+    }
+    for e in &share.edges {
+        let mut e = e.clone();
+        e.source = map(e.source);
+        if let EdgeTarget::Local(t) = &mut e.target {
+            *t = map(*t);
+        }
+        x.edges.push(e);
+    }
+    x.incomplete.extend(share.incomplete.iter().cloned());
+}
+
+/// The stored rows of a unit whose extraction is `x` with `share` merged in: rows from the
+/// share carry the group extractor's provenance.
+fn rows_with_share(
+    repo: &str,
+    key: &str,
+    mut x: FileExtract,
+    share: Option<&FileExtract>,
+    language: Option<&str>,
+    grammar: Option<&str>,
+) -> (Vec<StoredNode>, Vec<StoredEdge>, Vec<String>) {
+    let (node_split, edge_split) = (x.nodes.len(), x.edges.len());
+    if let Some(s) = share {
+        merge_share(&mut x, s);
+    }
+    let (mut n, mut e) = rows_of(repo, key, &x, language, grammar, "tree-sitter");
+    for row in n.iter_mut().skip(node_split) {
+        row.payload["provenance"]["extractor"] = json!("manifest-group");
+    }
+    for row in e.iter_mut().skip(edge_split) {
+        row.payload["provenance"]["extractor"] = json!("manifest-group");
+    }
+    (n, e, x.incomplete)
+}
+
+/// Builds the stored rows of one planned unit (`content`: the blob of a structural unit;
+/// `share`: its part of a repository-level group extraction).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_unit(
     env: &IndexEnv,
@@ -452,10 +586,12 @@ pub(crate) fn build_unit(
     generation: &Id,
     u: &PlanUnit,
     content: Option<&[u8]>,
+    share: Option<&FileExtract>,
     stop: &(dyn Fn() -> bool + Sync),
     warnings: &mut Vec<RunWarning>,
 ) -> Result<(StoredUnit, Vec<StoredNode>, Vec<StoredEdge>), Stop> {
     let repo = repository.as_str();
+    let mut incomplete: Vec<String> = Vec::new();
     let (nodes, edges, parse_errors, note) = match u.mode {
         MODE_DIRECTORY => {
             let (n, e) = dir_rows(repo, name, u);
@@ -465,10 +601,14 @@ pub(crate) fn build_unit(
             let language = u.language.unwrap_or("text");
             let info = env.parser.languages().iter().find(|l| l.id == language);
             let bytes = content.unwrap_or_default();
-            match env
-                .parser
-                .extract(language, &u.key, bytes, stop, env.settings.file_budget_ms)
-            {
+            match env.parser.extract(
+                language,
+                &u.key,
+                name,
+                bytes,
+                stop,
+                env.settings.file_budget_ms,
+            ) {
                 Ok(x) => {
                     let errors = x.parse_errors;
                     if errors > 0 {
@@ -478,14 +618,18 @@ pub(crate) fn build_unit(
                             format!("{}: {errors} syntax errors recovered", u.key),
                         );
                     }
-                    let (n, e) = rows_of(
+                    let (n, e, inc) = rows_with_share(
                         repo,
                         &u.key,
-                        &x,
+                        x,
+                        share,
                         Some(language),
                         info.and_then(|i| i.grammar),
-                        "tree-sitter",
                     );
+                    for why in &inc {
+                        push_warning(warnings, "pass_incomplete", format!("{}: {why}", u.key));
+                    }
+                    incomplete = inc;
                     (n, e, errors, None)
                 }
                 Err(ExtractFault::Cancelled) => return Err(Stop::Cancelled),
@@ -513,14 +657,43 @@ pub(crate) fn build_unit(
                 }
             }
         }
-        _ => (file_only(repo, u), Vec::new(), 0, None),
+        // A group member that is not parsed itself (its language not selected) still carries
+        // its group share.
+        _ => match share {
+            Some(s) => {
+                let file = file_only(repo, u);
+                let x = FileExtract {
+                    nodes: vec![ExtractedNode {
+                        kind: "File".into(),
+                        name: file[0].name.clone(),
+                        qualified_name: u.key.clone(),
+                        span: Span {
+                            start_line: 1,
+                            start_column: 1,
+                            end_line: 1,
+                            end_column: 1,
+                            start_byte: 0,
+                            end_byte: 0,
+                        },
+                        parent: None,
+                        properties: Map::new(),
+                    }],
+                    ..FileExtract::default()
+                };
+                let (mut n, e, inc) = rows_with_share(repo, &u.key, x, Some(s), u.language, None);
+                n[0] = file.into_iter().next().expect("a file node");
+                incomplete = inc;
+                (n, e, 0, None)
+            }
+            None => (file_only(repo, u), Vec::new(), 0, None),
+        },
     };
     let unit = StoredUnit {
         generation_id: generation.clone(),
         unit_key: u.key.clone(),
         content_digest: u.digest.clone(),
         action: UNIT_REPLACE.into(),
-        payload: unit_payload(u, parse_errors, note),
+        payload: unit_payload(u, parse_errors, note, &incomplete),
     };
     Ok((unit, nodes, edges))
 }
@@ -831,6 +1004,7 @@ impl IndexWorker {
             stop,
             ctx: self.env.host_context(run.project_id.as_ref()),
             warnings: run.warnings.clone(),
+            shares: BTreeMap::new(),
         };
         exec.log(
             "claimed",
@@ -924,6 +1098,9 @@ pub(crate) struct Exec<'a> {
     pub stop: Arc<AtomicBool>,
     pub ctx: InvocationContext,
     pub warnings: Vec<RunWarning>,
+    /// Each group member's share of the repository-level group extraction of the layer being
+    /// staged (see [`group_members`]).
+    pub shares: BTreeMap<String, FileExtract>,
 }
 
 impl Exec<'_> {
@@ -932,6 +1109,98 @@ impl Exec<'_> {
     }
     pub fn git<'g>(&'g self, stop: &'g (dyn Fn() -> bool + Sync)) -> Git<'g> {
         git_for(&self.w.env, &self.ctx, stop)
+    }
+
+    /// Extracts each group of `groups` from its members' bytes and records every member's share
+    /// in `self.shares`. A member is read from the worktree when `local` names it (and checked
+    /// against its captured digest), else as the committed blob its digest names.
+    pub(crate) fn group_shares(
+        &mut self,
+        dir: &Path,
+        repository: &str,
+        groups: &BTreeMap<&'static str, Vec<&PlanUnit>>,
+        local: Option<&BTreeMap<String, String>>,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<(), Stop> {
+        let env = self.w.env.clone();
+        for (group, members) in groups {
+            if self.stopped() {
+                return Err(Stop::Cancelled);
+            }
+            let total: usize = members.iter().map(|u| u.size as usize).sum();
+            let failed = |why: String| -> BTreeMap<String, FileExtract> {
+                members
+                    .iter()
+                    .map(|u| {
+                        (
+                            u.key.clone(),
+                            FileExtract {
+                                incomplete: vec![format!("{group}: {why}")],
+                                ..FileExtract::default()
+                            },
+                        )
+                    })
+                    .collect()
+            };
+            let shares = if total > MAX_GROUP_BYTES {
+                failed(format!(
+                    "the group's {} files exceed {MAX_GROUP_BYTES} bytes",
+                    members.len()
+                ))
+            } else {
+                let mut files: Vec<(String, Vec<u8>)> = Vec::with_capacity(members.len());
+                let committed: Vec<&&PlanUnit> = members
+                    .iter()
+                    .filter(|u| !local.is_some_and(|l| l.contains_key(&u.key)))
+                    .collect();
+                let oids: Vec<String> = committed.iter().map(|u| u.digest.clone()).collect();
+                let blobs = if oids.is_empty() {
+                    Vec::new()
+                } else {
+                    self.git(stop).blobs(dir, &oids, total).map_err(Stop::git)?
+                };
+                let mut by_key: BTreeMap<&str, Vec<u8>> = committed
+                    .iter()
+                    .map(|u| u.key.as_str())
+                    .zip(blobs)
+                    .collect();
+                for u in members {
+                    let bytes = match local.and_then(|l| l.get(&u.key)) {
+                        Some(captured) => {
+                            let b =
+                                env.source
+                                    .read_file(dir, &u.key, u.size.max(1))
+                                    .map_err(|_| {
+                                        Stop::transient(
+                                            "worktree_changed",
+                                            format!("{} changed during capture", u.key),
+                                        )
+                                    })?;
+                            if &format!("sha256:{}", sha256_hex(&b)) != captured {
+                                return Err(Stop::transient(
+                                    "worktree_changed",
+                                    format!("{} changed during capture", u.key),
+                                ));
+                            }
+                            b
+                        }
+                        None => by_key.remove(u.key.as_str()).unwrap_or_default(),
+                    };
+                    files.push((u.key.clone(), bytes));
+                }
+                match env.parser.extract_group(group, repository, &files, stop) {
+                    Ok(mut map) => members
+                        .iter()
+                        .map(|u| (u.key.clone(), map.remove(&u.key).unwrap_or_default()))
+                        .collect(),
+                    Err(ExtractFault::Cancelled) => return Err(Stop::Cancelled),
+                    Err(ExtractFault::TimedOut) => failed("the extraction budget passed".into()),
+                    Err(ExtractFault::Failed(why)) => failed(why),
+                }
+            };
+            self.shares.extend(shares);
+        }
+        Ok(())
     }
 
     pub fn log(
@@ -1438,6 +1707,14 @@ impl Exec<'_> {
             Some(p) => unit_index(&env, &p.id).map_err(Stop::storage)?,
             None => BTreeMap::new(),
         };
+        // Repository-level groups (Cargo, SwiftPM): a group with any changed member is extracted
+        // again as a whole.
+        let groups = group_members(&env, &cfg, &units);
+        let regroup: BTreeSet<&str> = groups
+            .iter()
+            .filter(|(g, m)| parent_units.is_empty() || group_changed(&env, g, m, &parent_units))
+            .flat_map(|(_, m)| m.iter().map(|u| u.key.as_str()))
+            .collect();
         let mut inherit: Vec<String> = Vec::new();
         let mut extract: Vec<&PlanUnit> = Vec::new();
         for u in &units {
@@ -1447,12 +1724,18 @@ impl Exec<'_> {
             let same = parent_units.get(&u.key).is_some_and(|(d, mode, lang)| {
                 d == &u.digest && mode == u.mode && lang.as_deref() == u.language
             });
-            if same && u.previous.is_none() {
+            if same && u.previous.is_none() && !regroup.contains(u.key.as_str()) {
                 inherit.push(u.key.clone());
             } else {
                 extract.push(u);
             }
         }
+        let pending: BTreeSet<&str> = extract.iter().map(|u| u.key.as_str()).collect();
+        let needed: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
+            .into_iter()
+            .filter(|(_, m)| m.iter().any(|u| pending.contains(u.key.as_str())))
+            .collect();
+        self.group_shares(&dir, &repo.name, &needed, None, &stop)?;
         let mut done = staged.len() as i64;
         if let Some(p) = reusable {
             for chunk in inherit.chunks(500) {
@@ -1579,6 +1862,7 @@ impl Exec<'_> {
             let mut rows = Vec::with_capacity(batch.len());
             for u in &batch {
                 let c = u.oid.as_deref().and_then(|o| content.get(o).copied());
+                let share = self.shares.get(&u.key).cloned();
                 rows.push(build_unit(
                     &env,
                     &self.run.repository_id,
@@ -1586,6 +1870,7 @@ impl Exec<'_> {
                     generation,
                     u,
                     c,
+                    share.as_ref(),
                     stop,
                     &mut self.warnings,
                 )?);
@@ -1810,7 +2095,16 @@ pub(crate) fn unit_index(
 /// The edge kinds linked by name, with the node kinds that may be their target.
 fn target_kinds(edge: &str) -> Option<&'static [&'static str]> {
     Some(match edge {
-        "CALLS" => &["Function", "Method", "Constructor"],
+        // A callable, or a type the call constructs (the retained `CallLanguages.IsCallTarget`).
+        "CALLS" => &[
+            "Function",
+            "Method",
+            "Constructor",
+            "Class",
+            "Struct",
+            "Record",
+            "Enum",
+        ],
         "INHERITS" | "IMPLEMENTS" | "USES_TYPE" => &[
             "Class",
             "Interface",
@@ -1821,9 +2115,132 @@ fn target_kinds(edge: &str) -> Option<&'static [&'static str]> {
             "Module",
         ],
         "IMPORTS" => &["File", "Module", "Namespace"],
+        "HANDLES" => &["Function", "Method"],
         _ => return None,
     })
 }
+
+/// The nodes of unit `key` as the layers compose it (`None`: absent or deleted).
+fn layered_unit_nodes(
+    s: &dyn ReadSnapshot,
+    layers: &[Id],
+    key: &str,
+) -> Result<Option<Vec<StoredNode>>, StorageError> {
+    for g in layers {
+        if let Some(u) = s.indexing().unit(g, key)? {
+            if u.action != UNIT_REPLACE {
+                return Ok(None);
+            }
+            return Ok(Some(s.indexing().nodes(g, key)?));
+        }
+    }
+    Ok(None)
+}
+
+/// The package directory a Go import names, from the nearest `go.mod` above `from` (its module
+/// path must be the import's prefix): `Err` when that manifest has no unique module identity.
+fn go_import_dir(
+    s: &dyn ReadSnapshot,
+    layers: &[Id],
+    from: &str,
+    import: &str,
+) -> Result<Result<Option<String>, String>, StorageError> {
+    let mut dir = parent(from).to_owned();
+    loop {
+        let manifest = if dir.is_empty() {
+            "go.mod".to_owned()
+        } else {
+            format!("{dir}/go.mod")
+        };
+        if let Some(nodes) = layered_unit_nodes(s, layers, &manifest)? {
+            let module = nodes.iter().find(|n| n.kind == "GoModule");
+            let Some(module) = module.and_then(|m| {
+                m.payload["properties"]["module"]
+                    .as_str()
+                    .map(str::to_owned)
+            }) else {
+                return Ok(Err(format!("{manifest} has no unique module identity")));
+            };
+            if import == module || import.starts_with(&format!("{module}/")) {
+                let rest = import[module.len()..].trim_matches('/');
+                let joined = [dir.as_str(), rest]
+                    .iter()
+                    .filter(|p| !p.is_empty())
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("/");
+                return Ok(Ok(Some(joined)));
+            }
+            return Ok(Ok(None));
+        }
+        if dir.is_empty() {
+            return Ok(Ok(None));
+        }
+        dir = parent(&dir).to_owned();
+    }
+}
+
+/// Link candidates: (unit key, node kind, node ID).
+type Candidates = Vec<(String, String, String)>;
+
+/// Narrows a HANDLES edge's name candidates to the scopes its extractor recorded: exact units
+/// (each optionally limited to definition lines) and package directories (Go files directly in
+/// them, including the one a module-relative import names).
+fn handler_scope(
+    s: &dyn ReadSnapshot,
+    layers: &[Id],
+    unit: &str,
+    payload: &Value,
+    all: Candidates,
+) -> Result<(Candidates, Option<String>), StorageError> {
+    let units: Vec<&str> = payload["candidateUnits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let mut dirs: Vec<String> = payload["candidateDirs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    let mut problem = None;
+    if let Some(import) = payload["goImport"].as_str() {
+        match go_import_dir(s, layers, unit, import)? {
+            Ok(Some(d)) => dirs.push(d),
+            Ok(None) => {}
+            Err(why) => problem = Some(why),
+        }
+    }
+    let lines = payload["candidateLines"].as_object();
+    let mut out = Vec::new();
+    for c in all {
+        let in_unit = units.contains(&c.0.as_str());
+        let in_dir = c.0.ends_with(".go") && dirs.iter().any(|d| parent(&c.0) == d);
+        if !in_unit && !in_dir {
+            continue;
+        }
+        if let Some(allowed) = lines.and_then(|l| l.get(&c.0)).and_then(Value::as_array) {
+            let nodes = layered_unit_nodes(s, layers, &c.0)?.unwrap_or_default();
+            let start = nodes
+                .iter()
+                .find(|n| n.node_id == c.2)
+                .and_then(|n| n.payload["span"]["startLine"].as_i64());
+            if !start.is_some_and(|l| allowed.iter().any(|a| a.as_i64() == Some(l))) {
+                continue;
+            }
+        }
+        if !out.iter().any(|o: &(String, String, String)| o.2 == c.2) {
+            out.push(c);
+        }
+    }
+    Ok((out, problem))
+}
+
+/// C and C++ header suffixes an include names.
+const HEADER_SUFFIXES: [&str; 6] = [".h", ".hh", ".hpp", ".hxx", ".h++", ".inl"];
 
 /// Candidate file paths an import string names, relative to the importing file.
 fn import_candidates(from: &str, module: &str) -> Vec<String> {
@@ -1863,6 +2280,12 @@ fn import_candidates(from: &str, module: &str) -> Vec<String> {
                 out.push(format!("{p}{ext}"));
             }
         }
+    } else if HEADER_SUFFIXES.iter().any(|s| module.ends_with(s)) {
+        // A C/C++ include (checked before dotted modules: `foo.h` is not a module path).
+        if let Some(p) = join(dir, module) {
+            out.push(p);
+        }
+        out.push(module.to_owned());
     } else if module.contains('.') && !module.contains('/') && !module.contains(' ') {
         // Python and Java style dotted modules.
         let p = module.replace('.', "/");
@@ -1872,11 +2295,6 @@ fn import_candidates(from: &str, module: &str) -> Vec<String> {
         if let Some(p) = join(dir, &p) {
             out.push(format!("{p}.py"));
         }
-    } else if module.ends_with(".h") || module.ends_with(".hpp") || module.ends_with(".hh") {
-        if let Some(p) = join(dir, module) {
-            out.push(p);
-        }
-        out.push(module.to_owned());
     } else {
         if let Some(p) = join(dir, module) {
             out.push(format!("{p}.py"));
@@ -1924,10 +2342,16 @@ pub(crate) fn link_generation(
                     let Some(name) = e.payload.get("targetName").and_then(Value::as_str) else {
                         continue;
                     };
-                    let Some(kinds) = target_kinds(&e.kind) else {
+                    // A target named by its exact qualified name (any edge kind, any node kind).
+                    let by_qualified_name = e.payload.get("targetMatch").and_then(Value::as_str)
+                        == Some("qualifiedName");
+                    let kinds = target_kinds(&e.kind).unwrap_or(&[]);
+                    if kinds.is_empty() && !by_qualified_name {
                         continue;
-                    };
-                    let candidates: Vec<(String, String, String)> = if e.kind == "IMPORTS" {
+                    }
+                    let candidates: Vec<(String, String, String)> = if by_qualified_name {
+                        visible_qualified(s, &g, &low, name)?
+                    } else if e.kind == "IMPORTS" {
                         let mut found = Vec::new();
                         for path in import_candidates(&u.unit_key, name) {
                             let basename = path.rsplit('/').next().unwrap_or(&path).to_owned();
@@ -1941,6 +2365,32 @@ pub(crate) fn link_generation(
                             }
                         }
                         found
+                    } else if let Some(path) =
+                        name.strip_prefix(SWIFT_TYPE_REF).filter(|p| !p.is_empty())
+                    {
+                        // A Swift type reference names the type at that path, never a name.
+                        let protocol =
+                            e.payload["properties"]["swift_protocol_target"] == json!(true);
+                        swift_type_nodes(s, &g, &low, path)?
+                            .into_iter()
+                            .filter(|c| {
+                                kinds.contains(&c.kind.as_str())
+                                    && (!protocol || c.kind == "Interface")
+                            })
+                            .map(CallNode::key)
+                            .collect()
+                    } else if e.kind == "CALLS"
+                        && e.payload["properties"].get("receiver_kind").is_some()
+                    {
+                        call_candidates(
+                            s,
+                            &g,
+                            &low,
+                            &u.unit_key,
+                            name,
+                            &e.payload["properties"],
+                            kinds,
+                        )?
                     } else {
                         let simple = name
                             .rsplit(['.', ':'])
@@ -1960,6 +2410,34 @@ pub(crate) fn link_generation(
                             .collect()
                     };
                     let mut payload = e.payload.clone();
+                    let mut candidates = candidates;
+                    if e.kind == "HANDLES" {
+                        let mut layers = vec![g.clone()];
+                        layers.extend(low.iter().cloned());
+                        let (scoped, problem) =
+                            handler_scope(s, &layers, &u.unit_key, &e.payload, candidates)?;
+                        candidates = scoped;
+                        if let Some(p) = problem {
+                            payload["resolutionProblem"] = json!(p);
+                            candidates.clear();
+                        }
+                        // One route identity (method and path) registered by several files is
+                        // ambiguous: none of its registrations proves the handler.
+                        if let Some(route) = e.payload["properties"]["routeName"].as_str() {
+                            let mut sources: Vec<String> = visible_named(s, &g, &low, route)?
+                                .into_iter()
+                                .filter(|n| n.1 == "Route")
+                                .map(|n| n.0)
+                                .collect();
+                            sources.sort();
+                            sources.dedup();
+                            if sources.len() > 1 {
+                                payload["registrationAmbiguous"] = json!(true);
+                                payload["registrationSources"] = json!(sources);
+                                candidates.clear();
+                            }
+                        }
+                    }
                     let (target, unit) = if candidates.len() == 1 {
                         payload["resolution"] = json!("Inferred");
                         payload["candidates"] = json!(1);
@@ -2006,6 +2484,34 @@ pub(crate) fn link_generation(
     }
 }
 
+/// Nodes whose qualified name is exactly `qualified_name`, visible from `generation` (then
+/// `lower` layers, skipping units a higher layer mentions): (unit key, kind, node ID).
+fn visible_qualified(
+    s: &dyn ReadSnapshot,
+    generation: &Id,
+    lower: &[Id],
+    qualified_name: &str,
+) -> Result<Vec<(String, String, String)>, StorageError> {
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    let mut layers = vec![generation.clone()];
+    layers.extend(lower.iter().cloned());
+    for (i, g) in layers.iter().enumerate() {
+        for n in s.indexing().nodes_qualified(g, qualified_name, 64)? {
+            let mut masked = false;
+            for higher in &layers[..i] {
+                if s.indexing().unit(higher, &n.unit_key)?.is_some() {
+                    masked = true;
+                    break;
+                }
+            }
+            if !masked && !out.iter().any(|o| o.2 == n.node_id) {
+                out.push((n.unit_key.clone(), n.kind.clone(), n.node_id.clone()));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Nodes named `name` visible from `generation` (then `lower` layers, skipping units a higher
 /// layer mentions): (unit key, kind, node ID).
 fn visible_named(
@@ -2033,6 +2539,319 @@ fn visible_named(
         }
     }
     Ok(out)
+}
+
+/// The retained `SwiftTypeReference` prefix of a symbolic Swift type endpoint.
+const SWIFT_TYPE_REF: &str = "swift-type:";
+/// Node kinds that own members a call's receiver names (the retained `IsReceiverOwnerLabel`).
+const RECEIVER_OWNER_KINDS: [&str; 7] = [
+    "Namespace",
+    "Class",
+    "Interface",
+    "Enum",
+    "Struct",
+    "Record",
+    "Module",
+];
+
+/// A node a call or type reference may bind to, with what the binding rules read.
+#[derive(Clone, Debug, PartialEq)]
+struct CallNode {
+    unit: String,
+    kind: String,
+    id: String,
+    name: String,
+    qualified_name: String,
+    receiver_owner: Option<String>,
+    argument_labels: Option<String>,
+}
+impl CallNode {
+    fn of(n: &StoredNode) -> Self {
+        let p = &n.payload["properties"];
+        Self {
+            unit: n.unit_key.clone(),
+            kind: n.kind.clone(),
+            id: n.node_id.clone(),
+            name: n.name.clone(),
+            qualified_name: n.payload["qualifiedName"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            receiver_owner: p["receiver_owner"].as_str().map(str::to_owned),
+            argument_labels: p["argument_labels"].as_str().map(str::to_owned),
+        }
+    }
+    fn key(self) -> (String, String, String) {
+        (self.unit, self.kind, self.id)
+    }
+}
+
+/// Nodes named `name` (or, with `qualified`, whose qualified name is `name`) visible from
+/// `generation` and then `lower` layers, skipping units a higher layer mentions.
+fn visible_nodes(
+    s: &dyn ReadSnapshot,
+    generation: &Id,
+    lower: &[Id],
+    name: &str,
+    qualified: bool,
+) -> Result<Vec<StoredNode>, StorageError> {
+    let mut out: Vec<StoredNode> = Vec::new();
+    let mut layers = vec![generation.clone()];
+    layers.extend(lower.iter().cloned());
+    for (i, g) in layers.iter().enumerate() {
+        let found = if qualified {
+            s.indexing().nodes_qualified(g, name, 64)?
+        } else {
+            s.indexing().nodes_named(g, name, 64)?
+        };
+        for n in found {
+            let mut masked = false;
+            for higher in &layers[..i] {
+                if s.indexing().unit(higher, &n.unit_key)?.is_some() {
+                    masked = true;
+                    break;
+                }
+            }
+            if !masked && !out.iter().any(|o| o.node_id == n.node_id) {
+                out.push(n);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a call's receiver is present but unproven (the retained `CallReceiverKind`
+/// `Unresolved`/`Unknown`): such a call never binds by name.
+fn call_binding_refused(properties: &Value) -> bool {
+    matches!(
+        properties.get("receiver_kind").and_then(Value::as_str),
+        Some("Unresolved" | "Unknown")
+    )
+}
+
+/// The qualified names a Swift type at dotted `path` has in its file, as the structural
+/// extractor names them: `Outer.Inner` is `#type:Outer#type:Inner`, or a type nested in an
+/// extension of a type declared elsewhere (`#extension:Outer#type:Inner`).
+fn swift_type_qualified_names(path: &str) -> Vec<String> {
+    let parts: Vec<&str> = path.split('.').filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!("#type:{}", parts.join("#type:"))];
+    for split in 1..parts.len() {
+        out.push(format!(
+            "#extension:{}#type:{}",
+            parts[..split].join("."),
+            parts[split..].join("#type:")
+        ));
+    }
+    out
+}
+
+fn is_swift_unit(unit: &str) -> bool {
+    unit.to_ascii_lowercase().ends_with(".swift")
+}
+
+/// The Swift types at dotted `path` (exact qualified names in Swift units, never by simple name).
+fn swift_type_nodes(
+    s: &dyn ReadSnapshot,
+    generation: &Id,
+    lower: &[Id],
+    path: &str,
+) -> Result<Vec<CallNode>, StorageError> {
+    let mut out: Vec<CallNode> = Vec::new();
+    for qn in swift_type_qualified_names(path) {
+        for n in visible_nodes(s, generation, lower, &qn, true)? {
+            if is_swift_unit(&n.unit_key) && !out.iter().any(|o| o.id == n.node_id) {
+                out.push(CallNode::of(&n));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The retained `IsOwnedBy`: a member of `owner` (same unit, its qualified name continues the
+/// owner's with `.` or `#method:`), or, when the owner's name is unique, a member declaring it as
+/// its `receiver_owner` (a Rust `impl` in another file).
+fn owned_by(candidate: &CallNode, owner: &CallNode, symbolic: bool) -> bool {
+    let prefixed = candidate.unit == owner.unit
+        && candidate
+            .qualified_name
+            .strip_prefix(owner.qualified_name.as_str())
+            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with("#method:"));
+    prefixed || (symbolic && candidate.receiver_owner.as_deref() == Some(owner.name.as_str()))
+}
+
+/// A method of a Swift extension of the type at `path` declared in another file.
+fn owned_by_swift_extension(candidate: &CallNode, path: &str) -> bool {
+    is_swift_unit(&candidate.unit)
+        && candidate
+            .qualified_name
+            .starts_with(&format!("#extension:{path}#method:"))
+}
+
+/// The retained `ArgumentLabels.Accepts`: whether a declaration's argument-label signature
+/// (`x=:_...:to:`) accepts a call's (`x:*:`).
+fn labels_accept(declared: &str, call: &str) -> bool {
+    struct Param<'a> {
+        label: &'a str,
+        default: bool,
+        variadic: bool,
+    }
+    fn split(s: &str) -> Vec<&str> {
+        s.split(':')
+            .map(str::trim)
+            .filter(|x| !x.is_empty())
+            .collect()
+    }
+    let params: Vec<Param<'_>> = split(declared)
+        .into_iter()
+        .map(|seg| {
+            let (seg, variadic) = match seg.strip_suffix("...") {
+                Some(r) => (r, true),
+                None => (seg, false),
+            };
+            let (label, default) = match seg.strip_suffix('=') {
+                Some(r) => (r, true),
+                None => (seg, false),
+            };
+            Param {
+                label,
+                default,
+                variadic,
+            }
+        })
+        .collect();
+    let args = split(call);
+    fn matches(ps: &[Param<'_>], p: usize, args: &[&str], a: usize, budget: &mut u32) -> bool {
+        if *budget == 0 {
+            return false;
+        }
+        *budget -= 1;
+        if p == ps.len() {
+            return a == args.len();
+        }
+        let cur = &ps[p];
+        if (cur.default || cur.variadic) && matches(ps, p + 1, args, a, budget) {
+            return true;
+        }
+        if a >= args.len() || !(args[a] == "*" || args[a] == cur.label) {
+            return false;
+        }
+        if matches(ps, p + 1, args, a + 1, budget) {
+            return true;
+        }
+        if !cur.variadic {
+            return false;
+        }
+        let mut next = a + 1;
+        while next < args.len() && args[next] == "_" {
+            if matches(ps, p + 1, args, next + 1, budget) {
+                return true;
+            }
+            next += 1;
+        }
+        false
+    }
+    let mut budget = 100_000;
+    matches(&params, 0, &args, 0, &mut budget)
+}
+
+/// The owner a resolved call's `receiver_type` names (the retained `ResolveReceiverOwner`): a
+/// type of the caller's unit by its exact qualified name, else the single owner-kind node of
+/// that simple name; with whether its name is unique (symbolic ownership allowed).
+fn receiver_owner(
+    s: &dyn ReadSnapshot,
+    generation: &Id,
+    lower: &[Id],
+    unit: &str,
+    receiver: &str,
+) -> Result<Option<(CallNode, bool)>, StorageError> {
+    let owner_kind = |n: &StoredNode| RECEIVER_OWNER_KINDS.contains(&n.kind.as_str());
+    let exact = visible_nodes(s, generation, lower, receiver, true)?
+        .into_iter()
+        .find(|n| n.unit_key == unit && owner_kind(n));
+    let owner = match exact {
+        Some(o) => CallNode::of(&o),
+        None => {
+            let normalized = receiver.replace("::", ".");
+            let normalized = normalized.trim_matches('.');
+            if normalized.is_empty() || normalized.contains('.') {
+                return Ok(None);
+            }
+            let matches: Vec<StoredNode> = visible_nodes(s, generation, lower, normalized, false)?
+                .into_iter()
+                .filter(owner_kind)
+                .collect();
+            if matches.len() != 1 {
+                return Ok(None);
+            }
+            CallNode::of(&matches[0])
+        }
+    };
+    let named: Vec<StoredNode> = visible_nodes(s, generation, lower, &owner.name, false)?
+        .into_iter()
+        .filter(owner_kind)
+        .collect();
+    let symbolic = named.len() == 1 && named[0].node_id == owner.id;
+    Ok(Some((owner, symbolic)))
+}
+
+/// Link candidates of a call the structural extractor classified (`receiver_kind`): none for an
+/// unproven receiver; for a resolved receiver whose type is found, only the members of that type
+/// (a Swift type reference: the type at that path and extensions of that path); then the
+/// declarations whose argument labels accept the call's. A resolved receiver naming no type of
+/// the index (a Rust module path, an external type) keeps the name's candidates; the retained
+/// pipeline left such a call unbound.
+fn call_candidates(
+    s: &dyn ReadSnapshot,
+    generation: &Id,
+    lower: &[Id],
+    unit: &str,
+    callee: &str,
+    properties: &Value,
+    kinds: &[&str],
+) -> Result<Candidates, StorageError> {
+    if call_binding_refused(properties) {
+        return Ok(Vec::new());
+    }
+    let mut all: Vec<CallNode> = visible_nodes(s, generation, lower, callee, false)?
+        .iter()
+        .filter(|n| kinds.contains(&n.kind.as_str()))
+        .map(CallNode::of)
+        .collect();
+    if properties.get("receiver_kind").and_then(Value::as_str) == Some("Resolved") {
+        let receiver = properties
+            .get("receiver_type")
+            .and_then(Value::as_str)
+            .filter(|r| !r.is_empty());
+        if let Some(path) = receiver.and_then(|r| r.strip_prefix(SWIFT_TYPE_REF)) {
+            let types: Vec<CallNode> = swift_type_nodes(s, generation, lower, path)?
+                .into_iter()
+                .filter(|t| RECEIVER_OWNER_KINDS.contains(&t.kind.as_str()))
+                .collect();
+            let owner = (types.len() == 1).then(|| types[0].clone());
+            let extended = all.iter().any(|c| owned_by_swift_extension(c, path));
+            if owner.is_some() || extended {
+                all.retain(|c| {
+                    owner.as_ref().is_some_and(|o| owned_by(c, o, false))
+                        || owned_by_swift_extension(c, path)
+                });
+            }
+        } else if let Some(receiver) = receiver
+            && let Some((owner, symbolic)) = receiver_owner(s, generation, lower, unit, receiver)?
+        {
+            all.retain(|c| owned_by(c, &owner, symbolic));
+        }
+    }
+    if let Some(labels) = properties.get("argument_labels").and_then(Value::as_str) {
+        all.retain(|c| {
+            c.argument_labels
+                .as_deref()
+                .is_none_or(|declared| labels_accept(declared, labels))
+        });
+    }
+    Ok(all.into_iter().map(CallNode::key).collect())
 }
 
 /// Coverage of a staged generation (languages, modes, gaps) and its unit count.
@@ -2088,6 +2907,18 @@ pub(crate) fn coverage_of(
             }
             if errors > 0 {
                 gaps.insert("parse-errors".into());
+            }
+            // A pass that could not complete (`backend-endpoints: ...`) names its own gap.
+            for reason in u
+                .payload
+                .get("incomplete")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                let pass = reason.split(':').next().unwrap_or(reason).trim();
+                gaps.insert(format!("incomplete-{pass}"));
             }
         }
         if page.len() < MAX_PAGE as usize {
@@ -2192,8 +3023,125 @@ mod tests {
         );
         let py = import_candidates("pkg/mod.py", "pkg.helpers");
         assert!(py.contains(&"pkg/helpers.py".to_owned()));
+        // A dotted include is a header, never a module path.
+        for (from, include, want) in [
+            ("src/main.c", "foo.h", "src/foo.h"),
+            ("src/a.cpp", "widget.hpp", "src/widget.hpp"),
+            ("lib/x.cc", "util.hh", "lib/util.hh"),
+        ] {
+            let c = import_candidates(from, include);
+            assert_eq!(
+                c.first().map(String::as_str),
+                Some(want),
+                "{include}: {c:?}"
+            );
+            assert!(!c.iter().any(|p| p.ends_with(".py")), "{include}: {c:?}");
+        }
         assert_eq!(dir_key(""), "/");
         assert_eq!(dir_key("src"), "/src");
+    }
+
+    fn call_node(unit: &str, kind: &str, name: &str, qn: &str, owner: Option<&str>) -> CallNode {
+        CallNode {
+            unit: unit.into(),
+            kind: kind.into(),
+            id: format!("{unit}:{qn}"),
+            name: name.into(),
+            qualified_name: qn.into(),
+            receiver_owner: owner.map(str::to_owned),
+            argument_labels: None,
+        }
+    }
+
+    #[test]
+    fn calls_bind_only_as_the_retained_rules_allow() {
+        // An unproven receiver never binds by name; a bare or resolved one may.
+        assert!(call_binding_refused(
+            &json!({"receiver_kind": "Unresolved"})
+        ));
+        assert!(call_binding_refused(&json!({"receiver_kind": "Unknown"})));
+        assert!(!call_binding_refused(&json!({"receiver_kind": "Bare"})));
+        assert!(!call_binding_refused(&json!({"receiver_kind": "Resolved"})));
+        assert!(!call_binding_refused(&json!({})));
+        // A call may construct a type.
+        let kinds = target_kinds("CALLS").unwrap();
+        for k in [
+            "Function",
+            "Method",
+            "Constructor",
+            "Class",
+            "Struct",
+            "Record",
+            "Enum",
+        ] {
+            assert!(kinds.contains(&k), "{k}");
+        }
+        assert!(!kinds.contains(&"Interface") && !kinds.contains(&"Property"));
+
+        // Members of the receiver type: same unit and qualified-name prefix, or (a unique owner
+        // name) the member's receiver_owner.
+        let owner = call_node("src/s.rs", "Class", "S", "#type:S", None);
+        let member = call_node(
+            "src/s.rs",
+            "Method",
+            "f",
+            "#type:S#method:f(&self)",
+            Some("S"),
+        );
+        let nested = call_node("src/s.rs", "Method", "f", "#type:S#type:T#method:f()", None);
+        let other_unit = call_node("src/x.rs", "Method", "f", "#type:S#method:f(&self)", None);
+        let impl_elsewhere = call_node("src/i.rs", "Method", "f", "#method:f(&self)", Some("S"));
+        let prefix_only = call_node("src/s.rs", "Method", "f", "#type:Sx#method:f()", None);
+        assert!(owned_by(&member, &owner, false));
+        assert!(!owned_by(&nested, &owner, false), "a nested type's member");
+        assert!(!owned_by(&other_unit, &owner, true));
+        assert!(!owned_by(&prefix_only, &owner, false));
+        assert!(!owned_by(&impl_elsewhere, &owner, false));
+        assert!(owned_by(&impl_elsewhere, &owner, true));
+
+        // Swift: the type at a dotted path by exact qualified names, and extension members.
+        assert_eq!(
+            swift_type_qualified_names("Outer.Inner"),
+            vec![
+                "#type:Outer#type:Inner".to_owned(),
+                "#extension:Outer#type:Inner".into()
+            ]
+        );
+        assert_eq!(
+            swift_type_qualified_names("Box"),
+            vec!["#type:Box".to_owned()]
+        );
+        assert!(swift_type_qualified_names("").is_empty());
+        let ext = call_node(
+            "Sources/E.swift",
+            "Method",
+            "y",
+            "#extension:Remote.Thing#method:y()",
+            Some("Thing"),
+        );
+        assert!(owned_by_swift_extension(&ext, "Remote.Thing"));
+        assert!(
+            !owned_by_swift_extension(&ext, "Thing"),
+            "never by last segment"
+        );
+        let not_swift = CallNode {
+            unit: "src/e.rs".into(),
+            ..ext.clone()
+        };
+        assert!(!owned_by_swift_extension(&not_swift, "Remote.Thing"));
+
+        // Argument labels select overloads: defaults may be omitted, variadics take any number of
+        // unlabeled arguments, a trailing closure binds any label.
+        assert!(labels_accept("by:_=:", "by:"));
+        assert!(labels_accept("by:_=:", "by:_:"));
+        assert!(!labels_accept("by:_=:", "_:"));
+        assert!(labels_accept("radius:", "radius:"));
+        assert!(!labels_accept("", "radius:"));
+        assert!(labels_accept("", ""));
+        assert!(labels_accept("_...:to:", "_:_:_:to:"));
+        assert!(labels_accept("_...:to:", "to:"));
+        assert!(labels_accept("x:completion:", "x:*:"));
+        assert!(!labels_accept("x:", "x:*:"));
     }
 
     #[test]

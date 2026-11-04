@@ -179,7 +179,7 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 13] = [
+pub const COMMANDS: [&str; 19] = [
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
@@ -193,6 +193,12 @@ pub const COMMANDS: [&str; 13] = [
     "projects.restore",
     "projects.delete",
     "repositories.remove_index",
+    "indexing.index",
+    "indexing.reindex",
+    "indexing.cancel",
+    "indexing.refresh_overlay",
+    "indexing.retire_view",
+    "indexing.configure_sources",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.
@@ -604,6 +610,70 @@ impl Drop for Client {
         } else {
             // A stuck worker is detached; it holds its backend until the process exits.
             self.workers.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every command operation the shell builds a frame for survives a relaunch: an operation
+    /// left out of [`COMMANDS`] would be dropped from the unresolved list it was kept in.
+    #[test]
+    fn every_command_the_shell_sends_is_restorable() {
+        let sources = [
+            include_str!("shell.rs"),
+            include_str!("shell/projects.rs"),
+            include_str!("shell/indexing.rs"),
+            include_str!("ops.rs"),
+        ];
+        let mut found = std::collections::BTreeSet::new();
+        for text in sources {
+            for (i, _) in text.match_indices('"') {
+                let rest = &text[i + 1..];
+                let Some(end) = rest.find('"') else { continue };
+                let name = &rest[..end];
+                let shaped = name.split_once('.').is_some_and(|(f, o)| {
+                    !f.is_empty()
+                        && !o.is_empty()
+                        && name
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b == b'.' || b == b'_')
+                });
+                if !shaped {
+                    continue;
+                }
+                if let Some(d) = devworks_core::registry::find(name)
+                    && d.modes
+                        .iter()
+                        .all(|m| m.mode == devworks_core::registry::Mode::Command)
+                {
+                    found.insert(name.to_owned());
+                }
+            }
+        }
+        for indexing in [
+            "indexing.index",
+            "indexing.reindex",
+            "indexing.cancel",
+            "indexing.refresh_overlay",
+            "indexing.retire_view",
+            "indexing.configure_sources",
+        ] {
+            assert!(found.contains(indexing), "{indexing} is sent by the shell");
+        }
+        // Kept across a relaunch by its own record (an attachment's exact frame in the pending
+        // memory, see `memory.rs`), not by the unresolved-command list.
+        let own_restore = ["artifacts.save"];
+        for op in found
+            .iter()
+            .filter(|op| !own_restore.contains(&op.as_str()))
+        {
+            assert!(
+                Unresolved::restored(Slot::SettingsSave, "l".into(), op, Vec::new()).is_some(),
+                "{op} is sent by the shell but would be dropped at relaunch"
+            );
         }
     }
 }

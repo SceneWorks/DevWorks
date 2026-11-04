@@ -162,6 +162,13 @@ pub enum EdgeTarget {
     Local(usize),
     /// A name for the indexer to resolve across the repository (or leave unresolved).
     Symbol(String),
+    /// A node another unit of the same extraction group defines (a repository-level pass: a
+    /// path dependency naming another manifest's package). Its ID is derived exactly.
+    Node {
+        unit: String,
+        kind: String,
+        qualified_name: String,
+    },
 }
 
 /// A relationship found in one file.
@@ -186,6 +193,9 @@ pub struct FileExtract {
     pub edges: Vec<ExtractedEdge>,
     /// Syntax errors the grammar recovered from (the extraction is then partial).
     pub parse_errors: u32,
+    /// Passes over this file that could not complete (`backend-endpoints: ...`): the unit is
+    /// recorded, but its coverage is partial.
+    pub incomplete: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,16 +214,41 @@ pub trait StructuralParser: Send + Sync {
     fn languages(&self) -> &[LanguageInfo];
     /// The language of a repository-relative path, by exact file name then extension.
     fn language_of(&self, path: &str) -> Option<&LanguageInfo>;
-    /// Extracts one file. `stop` is polled during the parse (cooperative cancellation within a
-    /// bounded interval) and `budget_ms` bounds the parse time.
+    /// Extracts one file of `repository` (its registration name, which a few retained
+    /// identities carry: a standalone Ansible role is named after its repository). `stop` is
+    /// polled during the parse (cooperative cancellation within a bounded interval) and
+    /// `budget_ms` bounds the parse time.
     fn extract(
         &self,
         language: &str,
         path: &str,
+        repository: &str,
         source: &[u8],
         stop: &(dyn Fn() -> bool + Sync),
         budget_ms: u64,
     ) -> Result<FileExtract, ExtractFault>;
+
+    /// The repository-level extraction group a path belongs to (`cargo`, `swiftpm`), whatever
+    /// its language selection: a group's members are extracted together because their output
+    /// depends on one another (workspace inheritance, path dependencies, resolved pins).
+    fn group_of(&self, _path: &str) -> Option<&'static str> {
+        None
+    }
+
+    /// Extracts one group from every member's bytes (`files`: repository-relative path and
+    /// content). Returns each member's share: a [`FileExtract`] whose node 0 stands for the
+    /// member's file node (it is not stored again) and whose other nodes and edges are added to
+    /// the member's unit. A member the group cannot read is reported in its share's
+    /// `incomplete`.
+    fn extract_group(
+        &self,
+        _group: &str,
+        _repository: &str,
+        _files: &[(String, Vec<u8>)],
+        _stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<std::collections::BTreeMap<String, FileExtract>, ExtractFault> {
+        Ok(std::collections::BTreeMap::new())
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

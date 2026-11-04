@@ -1,10 +1,14 @@
 //! Indexing adapters (DW-023): the native [`NativeSourceTree`] (read-only, no-follow, bounded
 //! access to repository checkouts) and the Tree-sitter [`treesitter::TreeSitterParser`].
+pub mod domain;
+pub mod endpoints;
+pub mod manifests;
 pub mod treesitter;
 
 use crate::fs::NativeFilesystem;
 use devworks_core::authority::reads::{ReadRefusal, ReadRequest, ReadRoot, VerifiedReader};
 use devworks_core::ports::indexing::{DirEntry, EntryKind, GitMarker, SourceFault, SourceTree};
+use devworks_core::services::indexing::paths::native_location;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -21,24 +25,14 @@ impl NativeSourceTree {
     }
 }
 
-/// The plain form of a canonical path: Windows verbatim prefixes are dropped while the path
-/// stays within the classic length limit (longer paths keep the `\\?\` form, which the file
-/// APIs need beyond 260 characters).
+/// The identity form of a canonical path (see [`native_location`]): on Windows the verbatim
+/// prefix `canonicalize` adds is dropped while the path stays within the classic length limit,
+/// so registrations compare equal with the paths Git reports.
 fn plain(p: PathBuf) -> PathBuf {
-    #[cfg(windows)]
-    {
-        let s = p.as_os_str().to_string_lossy().into_owned();
-        if let Some(rest) = s.strip_prefix(r"\\?\")
-            && !rest.starts_with("UNC\\")
-            && rest.len() < 248
-            && rest.as_bytes().get(1) == Some(&b':')
-        {
-            return PathBuf::from(rest);
-        }
-        p
+    match p.to_str() {
+        Some(s) if cfg!(windows) => PathBuf::from(native_location(s, true)),
+        _ => p,
     }
-    #[cfg(not(windows))]
-    p
 }
 
 impl SourceTree for NativeSourceTree {

@@ -756,6 +756,20 @@ macro_rules! index_reads {
                     .collect::<rusqlite::Result<Vec<_>>>())?;
                 rows.into_iter().map(node_from).collect()
             }
+            fn nodes_qualified(
+                &self,
+                generation: &Id,
+                qualified_name: &str,
+                n: u16,
+            ) -> Result<Vec<StoredNode>, StorageError> {
+                let n = limit(n)?;
+                let mut s = db(self.conn.prepare_cached(
+                    "SELECT unit_key,node_id,kind,name,payload_json FROM graph_nodes WHERE generation_id=?1 AND json_extract(payload_json, '$.qualifiedName')=?2 ORDER BY unit_key,node_id LIMIT ?3",
+                ))?;
+                let rows = db(db(s.query_map(params![generation.as_str(), qualified_name, n], node_of))?
+                    .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter().map(node_from).collect()
+            }
             fn published(&self, repository: &Id) -> Result<Option<StoredPublished>, StorageError> {
                 let raw: Option<(String, i64)> = db(db(self.conn.prepare_cached(
                     "SELECT view_id,revision FROM published_views WHERE source_key=?1",

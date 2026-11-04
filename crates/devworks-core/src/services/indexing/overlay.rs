@@ -262,6 +262,54 @@ fn observe_inner(
     })
 }
 
+/// The overlay layers (branch, worktree) a view composes over its baseline.
+fn view_layers(v: &StoredView) -> Vec<Id> {
+    v.branch_id
+        .iter()
+        .chain(v.worktree_id.iter())
+        .cloned()
+        .collect()
+}
+
+/// Marks every ready overlay of `repositories` that was built under a configuration other than
+/// its repository's effective one (after a `configure_sources` write) stale. Returns how many.
+pub(crate) fn invalidate_for_configuration(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    repositories: &[Id],
+) -> Result<usize, StorageError> {
+    let mut n = 0;
+    for repo in repositories {
+        let overlays = tx.indexing().overlays(repo)?;
+        if !overlays.iter().any(|o| o.state == OVERLAY_READY) {
+            continue;
+        }
+        let effective = effective_config_tx(tx, repo)?;
+        for o in overlays {
+            if !super::status::overlay_config_moved(tx.indexing(), &o, &effective.digest)? {
+                continue;
+            }
+            let now = tx.now_ms();
+            let mut next = o.clone();
+            next.revision += 1;
+            next.state = OVERLAY_STALE.into();
+            next.reason = Some("the source configuration changed".into());
+            next.updated_at_ms = now;
+            tx.indexing().put_overlay(&next, Some(o.revision))?;
+            history(
+                tx,
+                ctx.principal(),
+                ctx.project_id(),
+                (OVERLAY_AGGREGATE, &o.id, next.revision),
+                "IndexOverlayStale",
+                json!({"reason": next.reason, "principalKind": format!("{:?}", ctx.principal_kind())}),
+            )?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// Whether a stored overlay holds exactly this snapshot.
 fn same_snapshot(o: &StoredOverlay, s: &Snapshot) -> bool {
     o.base_generation_id.as_ref() == Some(&s.base_generation)
@@ -344,6 +392,7 @@ pub(crate) fn refresh(
     let snapshot = observed.and_then(|o| o.0.as_ref().ok());
     let now = tx.now_ms();
     let existing = tx.indexing().overlay_for(&r.id, worktree)?;
+    let effective = effective_config_tx(tx, &r.id)?;
     if let Some(o) = &existing {
         if let Some(active) = tx.indexing().active_run(&r.id, Some(&o.id))? {
             // A build is queued or running: it captures the worktree when it runs.
@@ -353,7 +402,9 @@ pub(crate) fn refresh(
                 },
             });
         }
-        let state = super::status::effective_overlay_state(o, base.as_ref(), now);
+        // The reuse identity is the snapshot and the configuration it was built under.
+        let moved = super::status::overlay_config_moved(tx.indexing(), o, &effective.digest)?;
+        let state = super::status::effective_overlay_state(o, base.as_ref(), now, moved);
         if state == OVERLAY_READY
             && snapshot.is_some_and(|s| same_snapshot(o, s))
             && let Some(run) = o
@@ -371,7 +422,6 @@ pub(crate) fn refresh(
             });
         }
     }
-    let effective = effective_config_tx(tx, &r.id)?;
     let overlay_id = existing
         .as_ref()
         .map_or_else(|| tx.new_id(IdKind::Overlay), |o| o.id.clone());
@@ -507,22 +557,21 @@ fn end_overlay(
         }
         tx.indexing().update_run(&run, expected)?;
     }
+    // The view's own layers, which a build in flight may no longer name on the record.
+    let mut layers: Vec<Id> = Vec::new();
     if let Some(v) = &o.view_id {
         let named = tx
             .indexing()
             .published(&o.repository_id)?
             .is_some_and(|p| &p.view_id == v);
-        if !named && tx.indexing().view(v)?.is_some() {
+        if !named && let Some(view) = tx.indexing().view(v)? {
+            layers.extend(view_layers(&view));
             tx.indexing().remove_view(v)?;
         }
     }
-    for g in [
-        o.branch_generation_id.as_ref(),
-        o.worktree_generation_id.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
+    layers.extend(o.branch_generation_id.iter().cloned());
+    layers.extend(o.worktree_generation_id.iter().cloned());
+    for g in &layers {
         retire_unused(tx, g)?;
     }
     let mut next = o.clone();
@@ -614,7 +663,11 @@ pub(crate) fn observe_all(
             // Unobservable (the worktree went away): leave it for retirement or expiry.
             Err(_) => false,
         };
-        if o.state == OVERLAY_READY && !moved {
+        let config_moved = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+            let c = super::effective_config(s.indexing(), s.projects(), &o.repository_id)?;
+            super::status::overlay_config_moved(s.indexing(), &o, &c.digest)
+        })?;
+        if o.state == OVERLAY_READY && !moved && !config_moved {
             continue;
         }
         let ttl = env.settings.overlay_ttl_ms;
@@ -653,6 +706,8 @@ pub(crate) fn observe_all(
             next.reason = Some(
                 if moved {
                     "the worktree changed"
+                } else if config_moved {
+                    "the source configuration changed"
                 } else {
                     "the repository baseline moved"
                 }
@@ -769,7 +824,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
                 ));
             }
         };
-        let units = layer_units(
+        let (units, groups) = layer_units(
             &env,
             &cfg,
             &head_entries,
@@ -778,6 +833,12 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             env.source.case_insensitive(&root),
         );
         let stored = new_layer(exec, &repo_id, LAYER_BRANCH, h, &snap, &layers)?;
+        exec.shares.clear();
+        let groups: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
+            .iter()
+            .map(|(g, m)| (*g, m.iter().collect()))
+            .collect();
+        exec.group_shares(&root, &repo.name, &groups, None, &stop)?;
         stage_layer(exec, &root, &repo.name, &stored, &units, None, &stop)?;
         link_generation(exec, &stored, &layers, &stop)?;
         seal_layer(exec, &stored)?;
@@ -827,7 +888,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         }
     }
     let composed: Vec<TreeEntry> = composed.into_values().collect();
-    let units = layer_units(
+    let (units, groups) = layer_units(
         &env,
         &cfg,
         &composed,
@@ -846,6 +907,12 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
                 .map(|c| (l.path.clone(), c.digest.clone()))
         })
         .collect();
+    exec.shares.clear();
+    let groups: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
+        .iter()
+        .map(|(g, m)| (*g, m.iter().collect()))
+        .collect();
+    exec.group_shares(&root, &repo.name, &groups, Some(&expected), &stop)?;
     stage_layer(
         exec,
         &root,
@@ -904,11 +971,14 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             }),
         };
         tx.indexing().insert_view(&view)?;
-        // The previous view of this overlay and its layers go.
+        // The previous view of this overlay and its layers go. Its layers are read from the
+        // view itself: this build's `new_layer` already replaced the IDs on the record.
         let previous = o.clone();
+        let mut old_layers: Vec<Id> = Vec::new();
         if let Some(v) = &previous.view_id
-            && tx.indexing().view(v)?.is_some()
+            && let Some(old) = tx.indexing().view(v)?
         {
+            old_layers.extend(view_layers(&old));
             tx.indexing().remove_view(v)?;
         }
         let now = tx.now_ms();
@@ -927,13 +997,14 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         o.updated_at_ms = now;
         o.expires_at_ms = now + ttl;
         tx.indexing().put_overlay(&o, Some(expected))?;
-        for g in [
-            previous.branch_generation_id.as_ref(),
-            previous.worktree_generation_id.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
+        for g in old_layers.iter().chain(
+            [
+                previous.branch_generation_id.as_ref(),
+                previous.worktree_generation_id.as_ref(),
+            ]
+            .into_iter()
+            .flatten(),
+        ) {
             if Some(g) != o.branch_generation_id.as_ref()
                 && Some(g) != o.worktree_generation_id.as_ref()
             {
@@ -980,7 +1051,7 @@ fn layer_units(
     changes: &[Change],
     warnings: &mut Vec<RunWarning>,
     case_insensitive: bool,
-) -> Vec<LayerUnit> {
+) -> (Vec<LayerUnit>, BTreeMap<&'static str, Vec<PlanUnit>>) {
     let mut renamed: BTreeMap<String, String> = BTreeMap::new();
     let mut changed: BTreeSet<String> = BTreeSet::new();
     for c in changes {
@@ -1010,15 +1081,29 @@ fn layer_units(
             d = super::paths::parent(&d).to_owned();
         }
     }
+    // A repository-level group with a changed member (added, changed or deleted) is staged
+    // again as a whole in this layer: each member's output depends on the others.
+    let mut groups: BTreeMap<&'static str, Vec<PlanUnit>> = BTreeMap::new();
+    for (g, members) in super::worker::group_members(env, cfg, by_key.values()) {
+        if changed.iter().any(|k| env.parser.group_of(k) == Some(g)) {
+            groups.insert(g, members.into_iter().cloned().collect());
+        }
+    }
+    let regrouped: BTreeSet<String> = groups
+        .values()
+        .flatten()
+        .map(|u| u.key.clone())
+        .filter(|k| !changed.contains(k))
+        .collect();
     let mut out = Vec::new();
-    for key in changed.iter().chain(dirs.iter()) {
+    for key in changed.iter().chain(dirs.iter()).chain(regrouped.iter()) {
         match by_key.get(key) {
             Some(u) => out.push(LayerUnit::Replace(u.clone())),
             // Deleted, renamed away or now excluded: masks the lower layers.
             None => out.push(LayerUnit::Delete(key.clone())),
         }
     }
-    out
+    (out, groups)
 }
 
 #[derive(Clone, Debug)]
@@ -1100,7 +1185,11 @@ fn stage_layer(
                 payload: json!({"mode": "Deleted"}),
             }),
             LayerUnit::Replace(p) if !staged.contains(&p.key) => {
-                if expected.is_some() && p.mode != super::worker::MODE_DIRECTORY {
+                // Captured local changes come from the worktree; everything else in the layer
+                // (directories, unchanged members of a changed group) from the commit.
+                if expected.is_some_and(|e| e.contains_key(&p.key))
+                    && p.mode != super::worker::MODE_DIRECTORY
+                {
                     from_worktree.push(p);
                 } else {
                     from_commit.push(p);
@@ -1160,6 +1249,7 @@ fn stage_layer(
             } else {
                 None
             };
+            let share = exec.shares.get(&u.key).cloned();
             rows.push(build_unit(
                 &env,
                 &exec.run.repository_id,
@@ -1167,6 +1257,7 @@ fn stage_layer(
                 generation,
                 u,
                 content.as_deref(),
+                share.as_ref(),
                 stop,
                 &mut exec.warnings,
             )?);

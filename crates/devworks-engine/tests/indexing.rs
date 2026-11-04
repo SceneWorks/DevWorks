@@ -29,7 +29,9 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 struct NoPower;
 struct NoHold;
@@ -76,7 +78,9 @@ fn sources() -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    std::fs::canonicalize(&base).unwrap()
+    // The identity form discovery records (no Windows verbatim prefix).
+    devworks_core::ports::indexing::SourceTree::canonical_dir(&NativeSourceTree::new(), &base)
+        .unwrap()
 }
 fn id_counter() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -218,6 +222,52 @@ fn run_state(store: &Arc<dyn ApplicationStore>, run: &str) -> StoredIndexRun {
 }
 
 #[test]
+fn discovery_scans_only_after_admission_and_only_for_people() {
+    let h = Harness::new();
+    let rt = runtime();
+    let src = sources();
+    let repo = src.join("svc");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("a.rs"), "fn a() {}\n").unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "one"]);
+    let store = h.open();
+    let runtime_ = rt
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let user = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &user, &src);
+    let location = repo.display().to_string();
+    let registered = |store: &Arc<dyn ApplicationStore>| {
+        let l = location.clone();
+        read(&**store, move |s| s.indexing().repository_at(&l))
+    };
+    // A query the gateway refuses (an unknown member) has no effect, even for a person.
+    let refused = json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-x", "body": {
+        "kind": "indexing.discover", "scope": {"kind": "Workspace"}, "roots": [],
+        "page": {"limit": 50}, "unexpected": true}});
+    let reply = runtime_.query(&user, "indexing.discover", refused.to_string().as_bytes());
+    assert!(
+        !matches!(reply, Ok(DomainQueryReply::Result { .. })),
+        "{reply:?}"
+    );
+    assert_eq!(registered(&store), None, "a refused query scanned");
+    // An agent's admitted read answers from the recorded registrations without a host scan.
+    let agent = principal(&*store, "agent", PrincipalKind::Agent);
+    let frame = json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-a", "body": {
+        "kind": "indexing.discover", "scope": {"kind": "Workspace"}, "roots": [],
+        "page": {"limit": 50}}});
+    let _ = runtime_.query(&agent, "indexing.discover", frame.to_string().as_bytes());
+    assert_eq!(registered(&store), None, "an agent's read scanned");
+    // A person's admitted query scans first.
+    assert_eq!(discovered(&runtime_, &user).len(), 1);
+    assert!(registered(&store).is_some());
+    rt.block_on(runtime_.shutdown());
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
 fn the_runtime_discovers_indexes_and_publishes_through_its_supervisor() {
     let h = Harness::new();
     let rt = runtime();
@@ -271,6 +321,9 @@ fn the_runtime_discovers_indexes_and_publishes_through_its_supervisor() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Uses a POSIX shell fake Git; Windows process-tree supervision is covered by the process
+/// tests.
+#[cfg(unix)]
 #[test]
 fn shutdown_stops_a_run_within_its_deadline_and_the_next_boot_resumes_it() {
     let h = Harness::new();
@@ -289,7 +342,6 @@ fn shutdown_stops_a_run_within_its_deadline_and_the_next_boot_resumes_it() {
         "#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = ls-tree ]; then sleep 30 & wait; fi; done\nexec git \"$@\"\n",
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();

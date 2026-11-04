@@ -101,4 +101,7 @@ CREATE INDEX index_overlays_due ON index_overlays(expires_at)
 ALTER TABLE source_units ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(payload_json));
 ALTER TABLE graph_edges ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(payload_json));
 CREATE INDEX graph_nodes_by_name ON graph_nodes(generation_id, name, unit_key, node_id);
+-- Linking by exact qualified name (domain extractors name their targets that way).
+CREATE INDEX graph_nodes_by_qualified_name
+ ON graph_nodes(generation_id, json_extract(payload_json, '$.qualifiedName'), unit_key, node_id);
 CREATE INDEX index_generations_by_source ON index_generations(source_key, id);

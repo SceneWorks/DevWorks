@@ -409,7 +409,16 @@ fn reconcile(
     dir: &Path,
     name: &str,
 ) -> Result<(Id, bool, bool), String> {
-    let observed = observe_checkout(git, dir)?;
+    let mut observed = observe_checkout(git, dir)?;
+    // Git reports worktree paths in its own spelling (`C:/x`, the path given at `worktree add`,
+    // possibly an 8.3 short name): each is recorded in the same identity form as registrations,
+    // canonical when it exists.
+    for w in &mut observed.worktrees {
+        w.0 = match env.source.canonical_dir(Path::new(&w.0)) {
+            Ok(c) => c.display().to_string(),
+            Err(_) => super::paths::native_location(&w.0, cfg!(windows)),
+        };
+    }
     let location = dir.display().to_string();
     let root = root.display().to_string();
     let section = section.to_owned();

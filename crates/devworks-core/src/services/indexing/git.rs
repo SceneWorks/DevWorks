@@ -22,8 +22,22 @@ pub const EMPTY_TREE_SHA256: &str =
 /// Most bytes a listing (`ls-tree`, `diff`, `ls-files`) may produce: a larger repository is
 /// refused honestly rather than read unbounded.
 pub const MAX_LISTING_BYTES: usize = 128 * 1024 * 1024;
-/// Most bytes one blob batch may produce.
-pub const MAX_BATCH_BYTES: usize = 48 * 1024 * 1024;
+/// Most content bytes one blob batch may produce: never below the largest file (or extraction
+/// group) the configuration accepts, since a batch always admits its first blob whole.
+pub const MAX_BATCH_BYTES: usize = {
+    let file = super::config::MAX_FILE_BYTES_LIMIT as usize;
+    let group = super::worker::MAX_GROUP_BYTES;
+    if file > group { file } else { group }
+};
+
+/// The stdout bound of a `cat-file --batch` read of `count` blobs totalling `expected` bytes:
+/// headers are at most ~100 bytes per object.
+pub fn blob_output_limit(expected: usize, count: usize) -> usize {
+    let headers = count.saturating_mul(128);
+    expected
+        .saturating_add(headers)
+        .min(MAX_BATCH_BYTES.saturating_add(headers))
+}
 
 /// One Git invocation context: who runs it, how long it may take and when to stop.
 pub struct Git<'a> {
@@ -223,10 +237,7 @@ impl Git<'_> {
             request.push_str(o);
             request.push('\n');
         }
-        // Headers are at most ~100 bytes per object.
-        let max = expected_bytes
-            .saturating_add(oids.len() * 128)
-            .min(MAX_BATCH_BYTES + oids.len() * 128);
+        let max = blob_output_limit(expected_bytes, oids.len());
         let out = self.runner.run(
             self.ctx,
             self.spec(dir, &["cat-file", "--batch"], Some(request.into_bytes())),
@@ -472,6 +483,18 @@ pub fn parse_batch(out: &[u8], oids: &[String]) -> Result<Vec<Vec<u8>>, GitFault
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blob_read_admits_the_largest_accepted_file() {
+        let largest = super::super::config::MAX_FILE_BYTES_LIMIT as usize;
+        // One file at the accepted maximum, with its header, fits the read bound.
+        assert!(blob_output_limit(largest, 1) >= largest + 100);
+        // So does a whole extraction group at its maximum.
+        let group = super::super::worker::MAX_GROUP_BYTES;
+        assert!(blob_output_limit(group, 200) >= group + 200 * 100);
+        // A small read is bounded by what it expects.
+        assert_eq!(blob_output_limit(10, 1), 10 + 128);
+    }
 
     #[test]
     fn name_status_parses_renames_copies_and_refuses_escapes() {

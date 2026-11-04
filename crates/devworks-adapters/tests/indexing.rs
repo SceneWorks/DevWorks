@@ -14,7 +14,9 @@ use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::indexing::{ExtractFault, FileExtract, LanguageInfo, StructuralParser};
+use devworks_core::ports::indexing::{
+    ExtractFault, FileExtract, LanguageInfo, SourceTree, StructuralParser,
+};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::records::{
@@ -44,6 +46,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 const T0: i64 = 1_800_000_000_000;
@@ -81,8 +84,9 @@ impl Temp {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // Canonical, so locations compare with what discovery records (macOS /private/var).
-        Self(std::fs::canonicalize(&dir).unwrap())
+        // In the identity form discovery records (macOS /private/var; on Windows without the
+        // verbatim prefix `canonicalize` adds, which Git also refuses in `worktree add`).
+        Self(NativeSourceTree::new().canonical_dir(&dir).unwrap())
     }
     fn join(&self, p: &str) -> PathBuf {
         self.0.join(p)
@@ -169,6 +173,7 @@ impl StructuralParser for Counting {
         &self,
         language: &str,
         path: &str,
+        repository: &str,
         source: &[u8],
         stop: &(dyn Fn() -> bool + Sync),
         budget_ms: u64,
@@ -179,7 +184,20 @@ impl StructuralParser for Counting {
         {
             f();
         }
-        self.inner.extract(language, path, source, stop, budget_ms)
+        self.inner
+            .extract(language, path, repository, source, stop, budget_ms)
+    }
+    fn group_of(&self, path: &str) -> Option<&'static str> {
+        self.inner.group_of(path)
+    }
+    fn extract_group(
+        &self,
+        group: &str,
+        repository: &str,
+        files: &[(String, Vec<u8>)],
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<std::collections::BTreeMap<String, FileExtract>, ExtractFault> {
+        self.inner.extract_group(group, repository, files, stop)
     }
 }
 
@@ -950,14 +968,6 @@ fn incremental_runs_reconcile_edits_deletions_and_renames_and_stale_never_reads_
 #[test]
 fn cancellation_is_bound_to_the_run_and_kills_its_helper_tree() {
     let _s = serial();
-    let bin = Temp::new("bin");
-    let fake = bin.join("slow-git");
-    std::fs::write(&fake, "#!/bin/sh\nsleep 30 &\nwait\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
     let fx = Fx::new(|_| {});
     let src = Temp::new("src");
     let dir = src.join("c");
@@ -981,7 +991,23 @@ fn cancellation_is_bound_to_the_run_and_kills_its_helper_tree() {
         )),
         DomainDecision::NoChange { .. }
     ));
-    // A running run whose Git hangs: the cancellation kills the tree within the bound.
+    // A running run whose Git hangs (a POSIX shell fake; Windows process-tree supervision is
+    // covered by the process tests).
+    #[cfg(unix)]
+    hanging_git_is_killed_on_cancel(fx, &repo_id);
+}
+
+#[cfg(unix)]
+fn hanging_git_is_killed_on_cancel(fx: Fx, repo_id: &Id) {
+    let bin = Temp::new("bin");
+    let fake = bin.join("slow-git");
+    std::fs::write(&fake, "#!/bin/sh\nsleep 30 &\nwait\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let repo_id = repo_id.clone();
+    // The cancellation kills the tree within the bound.
     let fx = {
         let mut s = fx.env.settings.clone();
         s.git_program = fake.display().to_string();
@@ -1071,14 +1097,6 @@ fn a_cancel_recorded_without_a_local_signal_stops_the_run_at_its_next_checkpoint
 #[test]
 fn deterministic_failures_fail_once_and_transient_ones_back_off_then_stop() {
     let _s = serial();
-    let bin = Temp::new("bin");
-    let fake = bin.join("slow-git");
-    std::fs::write(&fake, "#!/bin/sh\nsleep 5\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
     let fx = Fx::new(|_| {});
     let src = Temp::new("src");
     let empty = src.join("empty");
@@ -1104,14 +1122,29 @@ fn deterministic_failures_fail_once_and_transient_ones_back_off_then_stop() {
         status.last_run.unwrap().state,
         OperationState::Failed
     ));
+    // Git that never answers in time (a POSIX shell fake; Windows process-tree supervision is
+    // covered by the process tests).
+    #[cfg(unix)]
+    transient_git_backs_off_then_stops(fx, &repo_id, &empty);
+}
 
-    // Git that never answers in time: transient, retried with backoff, then failed.
+#[cfg(unix)]
+fn transient_git_backs_off_then_stops(fx: Fx, repo_id: &Id, empty: &Path) {
+    let bin = Temp::new("bin");
+    let fake = bin.join("slow-git");
+    std::fs::write(&fake, "#!/bin/sh\nsleep 5\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let repo_id = repo_id.clone();
+    // Transient, retried with backoff, then failed.
     let mut s = fx.env.settings.clone();
     s.git_program = fake.display().to_string();
     s.git_deadline = Duration::from_millis(200);
     let fx = fx.reopen(s, "owner-b");
-    write(&empty, "a.rs", "fn a() {}\n");
-    commit(&empty, "now with a commit");
+    write(empty, "a.rs", "fn a() {}\n");
+    commit(empty, "now with a commit");
     let r = run_of(decision(fx.index(&repo_id, false, "1")));
     assert_eq!(fx.drain(), 1);
     let first = fx.run(&r.id);
@@ -1323,6 +1356,215 @@ fn sections_validate_fence_by_revision_and_apply_exclusions_and_languages() {
 }
 
 #[test]
+fn registrations_and_package_identities_link_across_files_and_follow_group_changes() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("svc");
+    repo(
+        &dir,
+        &[
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"core\", \"app\"]\n[workspace.package]\nversion = \"0.4.0\"\n",
+            ),
+            (
+                "core/Cargo.toml",
+                "[package]\nname = \"core\"\nversion.workspace = true\n",
+            ),
+            // A function sharing the last segment of a Terraform address.
+            ("core/src/lib.rs", "pub fn util() {}\npub fn logs() {}\n"),
+            (
+                "infra/main.tf",
+                "resource \"aws_s3_bucket\" \"logs\" {\n  bucket = \"acme-logs\"\n}\n",
+            ),
+            (
+                "infra/app.tf",
+                "resource \"aws_instance\" \"web\" {\n  ami = \"ami-1\"\n  depends_on = [aws_s3_bucket.logs]\n}\n",
+            ),
+            (
+                "app/Cargo.toml",
+                "[package]\nname = \"app\"\nversion = \"1.0.0\"\n[dependencies]\ncore = { path = \"../core\" }\n",
+            ),
+            (
+                "app/src/main.rs",
+                "use axum::{routing::get, Router};\nmod handlers;\nfn app() -> Router { Router::new().route(\"/users\", get(handlers::list)).route(\"/dup\", get(dup)) }\nfn dup() {}\n",
+            ),
+            ("app/src/handlers.rs", "pub fn list() {}\n"),
+            (
+                "app/src/other.rs",
+                "use axum::{routing::get, Router};\nfn more() -> Router { Router::new().route(\"/dup\", get(dup2)) }\nfn dup2() {}\n",
+            ),
+            ("go/go.mod", "module example.com/gosvc\n"),
+            (
+                "go/api/routes.go",
+                "package api\n\nimport (\n\t\"github.com/gin-gonic/gin\"\n\th \"example.com/gosvc/internal/handlers\"\n)\n\nfunc Register(r *gin.Engine) {\n\tr.GET(\"/items\", h.ListItems)\n}\n",
+            ),
+            (
+                "go/internal/handlers/items.go",
+                "package handlers\n\nfunc ListItems() {}\n",
+            ),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let view = fx.published(&repo_id);
+    let edges = |key: &str| {
+        let (v, k) = (view.clone(), key.to_owned());
+        fx.read(move |s| views::unit_edges(s.indexing(), &v, &k))
+    };
+    let handler = |key: &str, route: &str| {
+        let nodes = fx.nodes(&view, key);
+        let r = nodes
+            .iter()
+            .find(|n| n.kind == "Route" && n.name == route)
+            .unwrap_or_else(|| panic!("no route {route} in {key}"))
+            .node_id
+            .clone();
+        edges(key)
+            .into_iter()
+            .find(|(e, _)| e.kind == "HANDLES" && e.source_node_id == r)
+            .unwrap_or_else(|| panic!("no HANDLES of {route}"))
+    };
+    // A module-path handler resolves to that module's function.
+    let (e, resolves) = handler("app/src/main.rs", "GET /users");
+    assert_eq!(e.payload["resolution"], json!("Inferred"), "{e:?}");
+    assert_eq!(e.payload["targetUnit"], json!("app/src/handlers.rs"));
+    assert!(resolves);
+    let list = fx
+        .nodes(&view, "app/src/handlers.rs")
+        .into_iter()
+        .find(|n| n.name == "list")
+        .unwrap();
+    assert_eq!(e.target_node_id, list.node_id);
+    // A route identity registered by two files proves no handler.
+    let (dup, _) = handler("app/src/main.rs", "GET /dup");
+    assert_eq!(dup.payload["resolution"], json!("Unresolved"));
+    assert_eq!(dup.payload["registrationAmbiguous"], json!(true));
+    // A Go handler in a module-relative package resolves through the nearest go.mod.
+    let (g, _) = handler("go/api/routes.go", "GET /items");
+    assert_eq!(g.payload["resolution"], json!("Inferred"), "{g:?}");
+    assert_eq!(
+        g.payload["targetUnit"],
+        json!("go/internal/handlers/items.go")
+    );
+    // The app's path dependency points at core's definition node exactly.
+    let core_def = |view: &views::ViewLayers| {
+        fx.nodes(view, "core/Cargo.toml")
+            .into_iter()
+            .find(|n| n.kind == "Package")
+            .unwrap()
+    };
+    let def = core_def(&view);
+    assert_eq!(
+        def.payload["qualifiedName"],
+        json!("package:cargo:registry:crates.io:core@0.4.0")
+    );
+    let dep = edges("app/Cargo.toml")
+        .into_iter()
+        .find(|(e, _)| e.kind == "REFERENCES_PACKAGE")
+        .unwrap();
+    assert_eq!(dep.0.target_node_id, def.node_id);
+    assert!(dep.1, "the target is visible in the view");
+    // A domain reference names its target by qualified name, across files, never by the last
+    // segment (`logs` is also a Rust function).
+    let bucket = fx
+        .nodes(&view, "infra/main.tf")
+        .into_iter()
+        .find(|n| n.payload["qualifiedName"] == json!("resource.aws_s3_bucket.logs"))
+        .expect("the bucket resource");
+    let depends = edges("infra/app.tf")
+        .into_iter()
+        .find(|(e, _)| e.kind == "DEPENDS_ON")
+        .expect("a dependency");
+    assert_eq!(
+        depends.0.payload["resolution"],
+        json!("Inferred"),
+        "{depends:?}"
+    );
+    assert_eq!(depends.0.target_node_id, bucket.node_id);
+    // A change to one member (the workspace version) re-extracts the group: core's definition
+    // and the app's reference follow, though core/Cargo.toml itself did not change.
+    write(
+        &dir,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"core\", \"app\"]\n[workspace.package]\nversion = \"0.5.0\"\n",
+    );
+    commit(&dir, "bump the workspace version");
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let view2 = fx.published(&repo_id);
+    let def2 = core_def(&view2);
+    assert_eq!(
+        def2.payload["qualifiedName"],
+        json!("package:cargo:registry:crates.io:core@0.5.0")
+    );
+    let (v2, k2) = (view2.clone(), "app/Cargo.toml".to_owned());
+    let dep2 = fx
+        .read(move |s| views::unit_edges(s.indexing(), &v2, &k2))
+        .into_iter()
+        .find(|(e, _)| e.kind == "REFERENCES_PACKAGE")
+        .unwrap();
+    assert_eq!(dep2.0.target_node_id, def2.node_id);
+    assert!(dep2.1);
+}
+
+#[test]
+fn cancelling_a_batch_reports_and_changes_only_visible_runs() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let (a, b) = (src.join("a"), src.join("b"));
+    repo(&a, &[("a.rs", "fn a() {}\n")]);
+    repo(&b, &[("b.rs", "fn b() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let (ra, rb) = (fx.repository_at(&a), fx.repository_at(&b));
+    // One workspace request indexes both: one batch.
+    let batch = run_of(decision(fx.command(
+        "indexing.index",
+        json!({"scope": {"kind": "Workspace"}, "repositoryIds": [ra, rb], "expectedSourceRevision": "1",
+            "views": {"kind": "Published", "repositoryIds": [ra, rb]}}),
+    )));
+    let bid = batch.id.clone();
+    let runs = fx.read(move |s| s.indexing().batch_runs(&bid));
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    let opener = runs.iter().find(|r| r.id == r.batch_id).unwrap().clone();
+    let other = runs.iter().find(|r| r.id != opener.id).unwrap().clone();
+    // A project that holds only the opener's repository.
+    let project = match decision(fx.command(
+        "projects.create",
+        json!({"name": "P", "description": "", "repositoryIds": [opener.repository_id]}),
+    )) {
+        DomainDecision::Applied {
+            result: OperationResult::ProjectsCreate { value },
+        } => value,
+        other => panic!("{other:?}"),
+    };
+    let in_project = fx.user().with_lineage(Some(project.id.clone()), None, None);
+    let reply = fx.command_frame(
+        &in_project,
+        "indexing.cancel",
+        json!({"protocol": "1.0-draft.1", "requestKey": "key-cancel-visible",
+            "command": {"kind": "Cancel", "operationId": opener.id}}),
+    );
+    let d = decision(reply);
+    let text = serde_json::to_string(&d).unwrap();
+    assert!(
+        !text.contains(other.id.as_str()),
+        "the response names a run the caller cannot see: {text}"
+    );
+    assert_eq!(run_of(d).id, opener.id);
+    assert_eq!(fx.run(&opener.id).state, RUN_CANCELLED);
+    let untouched = fx.run(&other.id);
+    assert_eq!(untouched.state, RUN_QUEUED);
+    assert_eq!(untouched.cancel_requested_at_ms, None);
+}
+
+#[test]
 fn archived_projects_accept_no_runs_and_their_queued_runs_cancel() {
     let _s = serial();
     let fx = Fx::new(|_| {});
@@ -1480,10 +1722,12 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
     fx.scan();
     let w1 = worktree_id(&repo_id, &wt1.display().to_string());
     let w2 = worktree_id(&repo_id, &wt2.display().to_string());
+    let section_revision = std::cell::Cell::new("1");
     let refresh = |w: &Id| {
         decision(fx.index_command(
             "indexing.refresh_overlay",
-            json!({"kind": "RefreshOverlay", "repositoryId": repo_id, "worktreeId": w, "expectedSourceRevision": "1"}),
+            json!({"kind": "RefreshOverlay", "repositoryId": repo_id, "worktreeId": w,
+                "expectedSourceRevision": section_revision.get()}),
         ))
     };
     let r1 = run_of(refresh(&w1));
@@ -1555,6 +1799,14 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
         OverlayState::Ready
     ));
     let _ = r2;
+    let first_layers = {
+        let oid = o1.overlay_id.clone();
+        let o = fx.read(move |s| s.indexing().overlay(&oid)).unwrap();
+        (
+            o.branch_generation_id.clone().unwrap(),
+            o.worktree_generation_id.clone().unwrap(),
+        )
+    };
 
     // The same snapshot is reused; a change is observed stale and rebuilt.
     assert!(matches!(refresh(&w1), DomainDecision::NoChange { .. }));
@@ -1585,10 +1837,69 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
     let again = refresh(&w1);
     assert!(matches!(again, DomainDecision::Applied { .. }), "{again:?}");
     fx.drain();
+    // The layers the rebuilds replaced are retired, not left behind.
+    let (b, w) = first_layers;
+    let states = fx.read(move |s| {
+        Ok((
+            s.indexing().generation(&b)?.unwrap().state,
+            s.indexing().generation(&w)?.unwrap().state,
+        ))
+    });
+    assert_eq!(
+        states,
+        (GEN_RETIRED.to_owned(), GEN_RETIRED.to_owned()),
+        "replaced overlay layers"
+    );
+    // A source configuration change makes a ready overlay stale at once, and a refresh never
+    // reuses a build made under the earlier configuration.
+    let o1_id = o1.overlay_id.clone();
+    let record = |fx: &Fx| {
+        let oid = o1_id.clone();
+        fx.read(move |s| s.indexing().overlay(&oid)).unwrap()
+    };
+    assert_eq!(record(&fx).state, OVERLAY_READY);
+    let configured = decision(fx.command(
+        "indexing.configure_sources",
+        json!({"scope": {"kind": "Workspace"}, "expectedRevision": "1", "config": {
+            "structuralLanguages": ["rust"], "semanticPackageIds": [], "excludePatterns": [],
+            "maxFileBytes": "524288"}}),
+    ));
+    assert!(
+        matches!(configured, DomainDecision::Applied { .. }),
+        "{configured:?}"
+    );
+    section_revision.set("2");
+    assert_eq!(
+        record(&fx).state,
+        OVERLAY_STALE,
+        "invalidated by the configuration write"
+    );
+    // Even a record still reading Ready is not reused under another configuration.
+    let mut ready = record(&fx);
+    let expected = ready.revision;
+    ready.revision += 1;
+    ready.state = OVERLAY_READY.into();
+    fx.write(move |tx| tx.indexing().put_overlay(&ready, Some(expected)));
+    let status_now = fx.status(&repo_id).overlays.unwrap().0;
+    assert!(matches!(
+        status_now
+            .iter()
+            .find(|o| o.worktree_id == w1)
+            .unwrap()
+            .state,
+        OverlayState::Stale
+    ));
+    let rebuilt_again = refresh(&w1);
+    assert!(
+        matches!(rebuilt_again, DomainDecision::Applied { .. }),
+        "{rebuilt_again:?}"
+    );
+    fx.drain();
+    assert_eq!(record(&fx).state, OVERLAY_READY);
     // A new baseline makes every overlay over the old one stale.
     write(&dir, "h.rs", "fn h() {}\n");
     commit(&dir, "baseline moves");
-    run_of(decision(fx.index(&repo_id, false, "1")));
+    run_of(decision(fx.index(&repo_id, false, section_revision.get())));
     fx.drain();
     let after = fx.status(&repo_id).overlays.unwrap().0;
     assert!(
@@ -1676,6 +1987,18 @@ fn links_in_a_repository_or_worktree_are_recorded_never_followed() {
                 .any(|n| n.name == "secret_outside")
         );
     }
+    // Without a link (no symlink privilege is assumed off Unix) the checkout still indexes and
+    // nothing outside it appears.
+    #[cfg(not(unix))]
+    {
+        assert!(fx.unit(&view, "a.rs").is_some());
+        assert!(fx.unit(&view, "escape.rs").is_none());
+        assert!(
+            !fx.nodes(&view, "a.rs")
+                .iter()
+                .any(|n| n.name == "secret_outside")
+        );
+    }
     // An untracked link in the worktree is captured as a link, not read.
     #[cfg(unix)]
     std::os::unix::fs::symlink(outside.join("secret.rs"), dir.join("escape2.rs")).unwrap();
@@ -1699,5 +2022,6 @@ fn links_in_a_repository_or_worktree_are_recorded_never_followed() {
             .iter()
             .any(|n| n.name == "secret_outside")
     );
-    let _ = v;
+    // The worktree view composes over the baseline either way.
+    assert!(fx.unit(&v, "a.rs").is_some());
 }

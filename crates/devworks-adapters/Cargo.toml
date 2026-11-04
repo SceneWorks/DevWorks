@@ -38,6 +38,15 @@ tree-sitter-sequel = "=0.3.11"
 tree-sitter-swift = "=0.7.4"
 tree-sitter-typescript = "=0.23.2"
 tree-sitter-yaml = "=0.7.2"
+# Package identities from manifests (Cargo.toml, .csproj). Both are already in the lockfile
+# (through the desktop's dependency tree), so they add no package. Pinned exactly. TOML is read
+# only (no writer) and keeps table order, as the retained Tomlyn reader does.
+quick-xml = "=0.41.0"
+toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "preserve_order"] }
+# The retained Terraform, ColdFusion and SQL-normalization extractors are regular-expression
+# scanners; their expressions are ported as written (leftmost-first semantics, as .NET's). Already
+# in the lockfile (with all its dependencies), so it adds no package. Pinned exactly.
+regex = "=1.13.1"
 
 [dev-dependencies]
 devworks-core = { path = "../devworks-core", features = ["contract-suite"] }

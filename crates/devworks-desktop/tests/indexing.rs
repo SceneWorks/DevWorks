@@ -45,7 +45,12 @@ fn git(dir: &Path, args: &[&str]) {
 #[test]
 fn sources_discovery_indexing_and_status_through_the_shared_commands() {
     let root = Root::new("indexing-ui");
-    let base = std::fs::canonicalize(root.dir("sources")).unwrap();
+    // The identity form discovery records (no Windows verbatim prefix).
+    let base = devworks_core::ports::indexing::SourceTree::canonical_dir(
+        &devworks_adapters::index::NativeSourceTree::new(),
+        &root.dir("sources"),
+    )
+    .unwrap();
     let repo = base.join("svc");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(

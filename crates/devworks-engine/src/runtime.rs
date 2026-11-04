@@ -660,18 +660,27 @@ impl Runtime {
     }
 
     pub fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome {
+        let outcome = self.use_cases.query(&self.gateway(), ctx, operation, raw);
         if operation == DISCOVERS_REPOSITORIES
             && let Some(ix) = &self.indexing
-            && self.use_cases.has_query(operation)
+            && discovery_scans_inline(ctx, &outcome)
         {
-            // Discovery answers from a fresh scan of the invocation's sections (registrations
-            // and source identity are host-derived from the configured base directories); a
-            // scan that fails leaves the recorded registrations to answer.
+            // Only after the gateway admitted the query (authority, store and epoch checks) and
+            // for a person or the host: discovery then answers from a fresh scan of the
+            // invocation's sections. Other readers answer from the recorded registrations, which
+            // the supervisor's background discovery keeps current. Shutdown refuses the scan.
+            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+            if *open {
+                return outcome;
+            }
             let env = ix.env().clone();
             let never = || false;
+            // A scan that fails leaves the recorded registrations to answer.
             let _ = devworks_core::services::indexing::discover::scan(&env, ctx, None, &never);
+            drop(open);
+            return self.use_cases.query(&self.gateway(), ctx, operation, raw);
         }
-        self.use_cases.query(&self.gateway(), ctx, operation, raw)
+        outcome
     }
 
     pub fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
@@ -890,6 +899,19 @@ impl ShutdownStage {
             _ => Self::Done,
         }
     }
+}
+
+/// Whether an `indexing.discover` query scans before it answers: only once the gateway admitted
+/// it (a result, not a refusal or failure), and only for a person or the host. Agents, packages,
+/// MCP clients and schedules read the recorded registrations.
+pub(crate) fn discovery_scans_inline(ctx: &InvocationContext, outcome: &QueryOutcome) -> bool {
+    matches!(
+        outcome,
+        Ok(devworks_core::protocol::results::DomainQueryReply::Result { .. })
+    ) && matches!(
+        ctx.principal_kind(),
+        devworks_core::context::PrincipalKind::Human | devworks_core::context::PrincipalKind::Host
+    )
 }
 
 /// The run an `indexing.cancel` frame names.

@@ -135,7 +135,9 @@ pub fn worktree_view(
         .transpose()?
         .flatten()
         .map(|v| v.baseline_id);
-    let state = super::status::effective_overlay_state(&o, published.as_ref(), now_ms);
+    let current = super::effective_config(read.indexing(), read.projects(), repository)?.digest;
+    let moved = super::status::overlay_config_moved(read.indexing(), &o, &current)?;
+    let state = super::status::effective_overlay_state(&o, published.as_ref(), now_ms, moved);
     match (state, &o.view_id) {
         (OVERLAY_READY, Some(v)) => layers(read.indexing(), v),
         _ => Err(Refusal::new(
