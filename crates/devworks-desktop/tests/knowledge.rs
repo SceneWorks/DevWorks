@@ -767,6 +767,7 @@ fn the_lessons_filter_keeps_the_search_text_and_lifecycles() {
                 "label": "Habits", "entityType": "topic", "aliases": []}], "evidence": [],
                 "claims": [lesson("Run cargo fmt before committing"),
                     lesson("Read the diff before pushing"),
+                    lesson("Check the test output before merging"),
                     {"kind": "Fact", "subjectId": "s", "predicate": "states",
                         "value": "cargo fmt is installed", "confidence": 0.8,
                         "evidenceIds": [], "tags": []}]}}),
