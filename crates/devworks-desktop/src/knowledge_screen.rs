@@ -467,8 +467,8 @@ impl KnowledgeScreen {
     // -----------------------------------------------------------------------------------------
     // Frames
 
-    /// Starts a new listing generation and returns its frame body (`knowledge.search`, or
-    /// `knowledge.tagged_lessons` for lessons only).
+    /// Starts a new listing generation and returns its frame body (`knowledge.search`, narrowed
+    /// to lessons when only lessons are listed).
     pub fn begin_listing(&mut self, append: bool) -> (&'static str, Value) {
         if !append {
             let scope = self.typed_scope();
@@ -496,16 +496,6 @@ impl KnowledgeScreen {
             page["cursor"] = json!(c);
         }
         let tags = split(&self.tags);
-        if self.lessons_only {
-            let mut tags = tags;
-            if tags.is_empty() {
-                tags.push("lesson".into());
-            }
-            return (
-                "knowledge.tagged_lessons",
-                json!({"scope": self.scope(), "tags": tags, "page": page}),
-            );
-        }
         let states: Vec<&str> = LIFECYCLES
             .iter()
             .zip(self.lifecycles)
@@ -518,6 +508,11 @@ impl KnowledgeScreen {
             "states": if states.is_empty() { vec!["Active"] } else { states }});
         if let Some(k) = self.entry_kind {
             body["entryKinds"] = json!([k]);
+        }
+        // Lessons only narrows the same search (its text, tags, entry kind and lifecycles
+        // all still apply).
+        if self.lessons_only {
+            body["kinds"] = json!(["Lesson"]);
         }
         ("knowledge.search", body)
     }

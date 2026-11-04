@@ -745,3 +745,76 @@ fn an_unconfirmed_import_upload_is_confirmed_by_confirm_outcomes() {
     assert_eq!(import_artifacts(&*real), 1, "never stored twice");
     h.state_mut().on_exit();
 }
+
+#[test]
+fn the_lessons_filter_keeps_the_search_text_and_lifecycles() {
+    use devworks_core::protocol::results::OperationResult;
+    let root = Root::new("knowledge-lessons-filter");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let lesson = |value: &str| {
+        json!({"kind": "Lesson", "subjectId": "s", "predicate": "lesson", "value": value,
+            "confidence": 0.8, "evidenceIds": [], "tags": [],
+            "lesson": {"source": "Prompt", "applicability": {"activities": [], "paths": [],
+                "tools": [], "repositoryIds": []}}})
+    };
+    let recorded = ops::command_result(backend.command(
+        "knowledge.record",
+        &knowledge_screen::command(
+            &*backend,
+            "knowledge.record",
+            json!({"scope": {"kind": "Workspace"}, "batch": {"entities": [{"clientId": "s",
+                "label": "Habits", "entityType": "topic", "aliases": []}], "evidence": [],
+                "claims": [lesson("Run cargo fmt before committing"),
+                    lesson("Read the diff before pushing"),
+                    {"kind": "Fact", "subjectId": "s", "predicate": "states",
+                        "value": "cargo fmt is installed", "confidence": 0.8,
+                        "evidenceIds": [], "tags": []}]}}),
+        ),
+    ));
+    let ids = match recorded {
+        Ok(OperationResult::KnowledgeRecord { value }) => value.claim_ids.0,
+        other => panic!("{other:?}"),
+    };
+    // The second lesson is deleted.
+    assert!(
+        ops::command_result(backend.command(
+            "knowledge.delete_selected",
+            &knowledge_screen::command(
+                &*backend,
+                "knowledge.delete_selected",
+                json!({"scope": {"kind": "Workspace"},
+                    "claims": [{"id": ids[1], "revision": "1"}]}),
+            ),
+        ))
+        .is_ok()
+    );
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    h.state_mut().knowledge.lessons_only = true;
+    // A word search among lessons: the fact with the same words is not a lesson.
+    type_into(&mut h, "Search Knowledge", "fmt");
+    click(&mut h, Role::Button, "Search");
+    let listed: Vec<_> = h
+        .state()
+        .knowledge
+        .items
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    assert_eq!(listed, vec![ids[0].clone()]);
+    // Deleted lessons, when that lifecycle is chosen.
+    h.state_mut().knowledge.text.clear();
+    h.state_mut().knowledge.lifecycles = [false, false, false, true];
+    click(&mut h, Role::Button, "Search");
+    let listed: Vec<_> = h
+        .state()
+        .knowledge
+        .items
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    assert_eq!(listed, vec![ids[1].clone()]);
+}
