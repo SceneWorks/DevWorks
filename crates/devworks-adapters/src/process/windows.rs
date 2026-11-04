@@ -307,6 +307,11 @@ impl ProcessTree for JobTree {
     fn take_control(&mut self) -> Option<ControlChannel> {
         self.control.take()
     }
+    fn root_exited(&mut self) -> Result<bool, ProcessError> {
+        // The job keeps descendants alive after the root's exit; the root's own handle (held
+        // by `child`, so its pid cannot be reused) tells whether it ended.
+        Ok(self.empty || matches!(self.child.try_wait(), Ok(Some(_))))
+    }
 }
 
 impl Drop for JobTree {

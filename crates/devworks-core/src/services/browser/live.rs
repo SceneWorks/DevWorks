@@ -196,29 +196,57 @@ impl Notices {
     pub fn is_empty(&self) -> bool {
         self.pending.is_empty() && self.dropped == 0
     }
-    /// The pending entries as one bounded evidence document; `truncated` when entries were
-    /// dropped or cut.
-    pub fn drain(&mut self, session: &Id, channel: &str) -> (Vec<u8>, bool) {
+    /// Takes the oldest pending entries that fit one bounded evidence document (the rest stay
+    /// pending for the next one) with the drop count. Until the batch is durably published
+    /// it must be given back with [`Self::restore`] if publication fails.
+    pub fn take(&mut self) -> NoticeBatch {
         let mut entries = Vec::new();
         let mut size = 0;
-        let mut cut = 0u64;
-        for e in self.pending.drain(..) {
+        while let Some(e) = self.pending.front() {
             let n = e.to_string().len() + 1;
-            if size + n > EVIDENCE_LIMIT - 1024 {
-                cut += 1;
-                continue;
+            if !entries.is_empty() && size + n > EVIDENCE_LIMIT - 1024 {
+                break;
             }
             size += n;
-            entries.push(e);
+            entries.push(self.pending.pop_front().expect("front"));
         }
-        let dropped = std::mem::take(&mut self.dropped) + cut;
+        NoticeBatch {
+            entries,
+            dropped: std::mem::take(&mut self.dropped),
+        }
+    }
+    /// Puts back a batch whose publication failed, ahead of what arrived meanwhile (still
+    /// bounded: the oldest are dropped, and counted, beyond the limit).
+    pub fn restore(&mut self, batch: NoticeBatch) {
+        self.dropped += batch.dropped;
+        for e in batch.entries.into_iter().rev() {
+            self.pending.push_front(e);
+        }
+        while self.pending.len() > NOTICE_LIMIT {
+            self.pending.pop_front();
+            self.dropped += 1;
+        }
+    }
+}
+
+/// Notifications taken for one observation.
+#[derive(Debug)]
+pub struct NoticeBatch {
+    pub entries: Vec<Value>,
+    pub dropped: u64,
+}
+impl NoticeBatch {
+    /// The batch as one evidence document; `truncated` when notifications were dropped.
+    pub fn document(&self, session: &Id, channel: &str, cdp_dropped: bool) -> (Vec<u8>, bool) {
         let doc = json!({
             "sessionId": session.as_str(),
             "channel": channel,
-            "entries": entries,
-            "dropped": dropped,
+            "entries": self.entries,
+            "dropped": self.dropped,
+            "protocolEventsDropped": cdp_dropped,
         });
-        (doc.to_string().into_bytes(), dropped > 0)
+        let truncated = self.dropped > 0 || cdp_dropped;
+        (doc.to_string().into_bytes(), truncated)
     }
 }
 
@@ -945,6 +973,13 @@ impl Live {
     /// The target, CDP frame and hosting CDP session a wire target names, when its document
     /// revision is current.
     pub fn resolve(&self, target: &BrowserTarget) -> Result<(usize, Frame), ActionError> {
+        // Host target IDs repeat across sessions (`t1`, ...): a reference names its session.
+        if target.session_id != self.session {
+            return Err(ActionError::Refused {
+                kind: "browser_target_session",
+                detail: "the reference belongs to another browser session".into(),
+            });
+        }
         let Some(i) = self.target_index(target.target_id.as_str()) else {
             return Err(ActionError::Stale {
                 kind: "browser_target",
@@ -1346,31 +1381,25 @@ impl Live {
                 let (i, n) = self.resolve_node(node)?;
                 // Pointer input goes to the top-level page; DOM reads go to the node's session.
                 let s = self.targets[i].cdp_session.clone();
-                let b = n.backend;
-                self.call(
-                    Some(&n.session),
-                    "DOM.scrollIntoViewIfNeeded",
-                    json!({"backendNodeId": b}),
-                    bounds.call,
-                )
-                .map_err(before_or_after)?;
+                // A node without a box is refused before anything changes the page.
                 let quads = self
                     .call(
                         Some(&n.session),
                         "DOM.getContentQuads",
-                        json!({"backendNodeId": b}),
+                        json!({"backendNodeId": n.backend}),
                         bounds.call,
                     )
-                    .map_err(before_or_after)?;
-                let Some((x, y)) = centre(&quads) else {
+                    .map_err(ActionError::Before)?;
+                if centre(&quads).is_none() {
                     return Err(ActionError::Refused {
                         kind: "browser_node",
                         detail: "the node has no visible box to click".into(),
                     });
-                };
-                let (dx, dy) = self.frame_offset(i, &n.session, bounds)?;
-                let (x, y) = (x + dx, y + dy);
-                self.resolve_node(node)?;
+                }
+                // From the scroll on, the page may have changed: every failure is post-dispatch.
+                let (x, y) = self
+                    .place_click(i, &n, node, bounds)
+                    .map_err(post_dispatch)?;
                 let button = match button {
                     MouseButton::Primary => "left",
                     MouseButton::Secondary => "right",
@@ -1399,7 +1428,8 @@ impl Live {
                     bounds.call,
                 )
                 .map_err(before_or_after)?;
-                self.resolve_node(node)?;
+                // Focus ran page handlers: from here on every failure is post-dispatch.
+                self.resolve_node(node).map_err(post_dispatch)?;
                 self.call(
                     Some(&s),
                     "Input.insertText",
@@ -1553,6 +1583,39 @@ impl Live {
         })
     }
 
+    /// Scrolls a node into view and computes its click point in the top-level viewport.
+    fn place_click(
+        &mut self,
+        i: usize,
+        n: &NodeRef,
+        node: &BrowserNode,
+        bounds: &Bounds,
+    ) -> Result<(f64, f64), ActionError> {
+        self.call(
+            Some(&n.session),
+            "DOM.scrollIntoViewIfNeeded",
+            json!({"backendNodeId": n.backend}),
+            bounds.call,
+        )
+        .map_err(ActionError::After)?;
+        let quads = self
+            .call(
+                Some(&n.session),
+                "DOM.getContentQuads",
+                json!({"backendNodeId": n.backend}),
+                bounds.call,
+            )
+            .map_err(ActionError::After)?;
+        let (x, y) = centre(&quads).ok_or_else(|| {
+            ActionError::After(CdpError::Protocol(
+                "the node lost its box after scrolling".into(),
+            ))
+        })?;
+        let (dx, dy) = self.frame_offset(i, &n.session, bounds)?;
+        self.resolve_node(node)?;
+        Ok((x + dx, y + dy))
+    }
+
     /// Sets the files of a file input after re-checking that the node is still exactly that
     /// file input (and that it accepts several files when several are given).
     pub fn set_files(
@@ -1660,6 +1723,21 @@ impl Live {
             self.targets.len(),
             self.console.total,
         )
+    }
+}
+
+/// An error observed after the navigation or input was sent: whatever it is, the effect may
+/// have happened, so it is never reported as "nothing was sent".
+pub fn post_dispatch(e: ActionError) -> ActionError {
+    match e {
+        ActionError::After(e) => ActionError::After(e),
+        ActionError::Closing => ActionError::Closing,
+        ActionError::Before(e) => ActionError::After(e),
+        ActionError::Stale { detail, .. }
+        | ActionError::Refused { detail, .. }
+        | ActionError::Navigation(detail) => {
+            ActionError::After(CdpError::Protocol(format!("after the action: {detail}")))
+        }
     }
 }
 
@@ -1802,11 +1880,41 @@ mod tests {
             n.push(json!({"i": i}));
         }
         assert_eq!(n.dropped, 3);
-        let (doc, truncated) = n.drain(&Id::new("s").unwrap(), "Console");
+        let batch = n.take();
+        let (doc, truncated) = batch.document(&Id::new("s").unwrap(), "Console", false);
         assert!(truncated);
         let v: Value = serde_json::from_slice(&doc).unwrap();
         assert_eq!(v["dropped"], 3);
         assert_eq!(v["entries"].as_array().unwrap().len(), NOTICE_LIMIT);
         assert!(n.is_empty());
+        // A failed publication gives the batch back ahead of newer entries.
+        n.push(json!({"i": "newer"}));
+        n.restore(batch);
+        assert_eq!(
+            n.dropped,
+            3 + 1,
+            "still bounded: the oldest one is dropped and counted"
+        );
+        let again = n.take();
+        assert_eq!(again.entries.last().unwrap()["i"], "newer");
+        assert_eq!(again.dropped, 4);
+    }
+
+    #[test]
+    fn an_oversize_backlog_is_published_over_several_observations_never_cut() {
+        let mut n = Notices::default();
+        let big = "x".repeat(1000);
+        for i in 0..1000 {
+            n.push(json!({"i": i, "text": big}));
+        }
+        let mut seen = 0;
+        while !n.is_empty() {
+            let b = n.take();
+            assert!(!b.entries.is_empty());
+            let (doc, _) = b.document(&Id::new("s").unwrap(), "Console", false);
+            assert!(doc.len() <= EVIDENCE_LIMIT);
+            seen += b.entries.len();
+        }
+        assert_eq!(seen, 1000);
     }
 }

@@ -133,6 +133,12 @@ pub trait ProcessTree: Send {
     fn take_control(&mut self) -> Option<ControlChannel> {
         None
     }
+    /// Whether the tree's root has exited, whatever its descendants do (a program whose main
+    /// process died while helpers linger has ended). Never collects anything. The default is
+    /// the tree's emptiness.
+    fn root_exited(&mut self) -> Result<bool, ProcessError> {
+        self.poll().map(|s| s.empty)
+    }
 }
 
 /// The native launcher.

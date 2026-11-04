@@ -66,10 +66,10 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, browser as ops};
 use crate::ports::browser::{BrowserAsset, BrowserPlatform, Profile, Qualification};
 use crate::ports::storage::{
-    ApplicationStore, ArtifactScope, BrowserChannel, BrowserFilter, BrowserPhase, NewEvent,
-    NewOperation, NewQueueEntry, OperationRecord, ReadOptions, ReadSnapshot, StorageError,
-    StoredBrowserObservation, StoredBrowserSession, WriteOptions, WriteTransaction, read_snapshot,
-    run_write,
+    ApplicationStore, ArtifactScope, BrowserChannel, BrowserFilter, BrowserPhase, MAX_PAGE,
+    NewEvent, NewOperation, NewQueueEntry, OperationRecord, ReadOptions, ReadSnapshot,
+    StorageError, StoredBrowserObservation, StoredBrowserSession, WriteOptions, WriteTransaction,
+    read_snapshot, run_write,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -99,7 +99,7 @@ use crate::services::process::{
 use crate::services::sessions::{
     Failure, Refusal, counter, decided, project_visible, query_fault, require_project, rev,
 };
-use live::{ActionError, Bounds, Live};
+use live::{ActionError, Bounds, Live, post_dispatch};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -274,6 +274,18 @@ fn view_of(live: &Live) -> View {
 fn stale(kind: &'static str) -> Refusal {
     Refusal::new(DomainErrorCode::SourceChanged, kind, None)
         .retry(RetryAdvice::RefreshAndNewRequest)
+}
+
+/// A reference that names another session than the one the request selected.
+fn other_session(t: &BrowserTarget, session: &Id) -> Result<(), Refusal> {
+    if &t.session_id != session {
+        return Err(Refusal::new(
+            DomainErrorCode::InvalidArgument,
+            "browser_target_session",
+            Some(t.session_id.clone()),
+        ));
+    }
+    Ok(())
 }
 
 impl View {
@@ -969,8 +981,17 @@ impl BrowserService {
             if buffer.is_empty() {
                 continue;
             }
-            let (doc, truncated) = buffer.drain(id, channel.as_str());
-            let _ = self.publish_observation(&s, channel, &doc, truncated || dropped, None);
+            // The browser is going away: one bounded observation per batch, best effort.
+            while !buffer.is_empty() {
+                let batch = buffer.take();
+                let (doc, truncated) = batch.document(id, channel.as_str(), dropped);
+                if self
+                    .publish_observation(&s, channel, &doc, truncated, None)
+                    .is_err()
+                {
+                    break;
+                }
+            }
         }
     }
 
@@ -1121,7 +1142,23 @@ impl BrowserService {
                     "the session's owner no longer has authority",
                 );
             }
-            Ok(_) => {}
+            // Not just the predecessor: any unreconciled uncertain action of the session holds
+            // every later one (a failed predecessor in between does not release it).
+            Ok(Some(s)) => match self.unresolved_uncertain(&s, &op.id) {
+                Ok(Some(u)) => {
+                    return failed(
+                        DomainErrorCode::Conflict,
+                        "browser_action_order",
+                        &format!(
+                            "action {} of this session has an unknown outcome",
+                            u.0.as_str()
+                        ),
+                    );
+                }
+                Ok(None) => {}
+                Err(e) => return EffectOutcome::NotApplied(e.to_string()),
+            },
+            Ok(None) => {}
             Err(e) => return EffectOutcome::NotApplied(e.to_string()),
         }
         let Some(slot) = self.existing_slot(id) else {
@@ -1207,6 +1244,23 @@ impl BrowserService {
         }
     }
 
+    /// The session's recorded uncertain action other than `own`, while its outcome is still
+    /// not established (unknown, awaiting input, or being recorded).
+    fn unresolved_uncertain(
+        &self,
+        s: &StoredBrowserSession,
+        own: &OperationId,
+    ) -> Result<Option<OperationId>, StorageError> {
+        let Some(u) = s.uncertain_operation_id.clone().filter(|u| u != own) else {
+            return Ok(None);
+        };
+        let q = u.clone();
+        let state = read_snapshot(&*self.store, &ReadOptions::default(), move |r| {
+            Ok(r.operations().operation(&q)?.map(|o| o.state))
+        })?;
+        Ok(unresolved(state).then_some(u))
+    }
+
     fn mark_uncertain(&self, id: &Id, op: &OperationId) {
         let op = op.clone();
         let _ = self.update(id, move |s| {
@@ -1218,14 +1272,22 @@ impl BrowserService {
         });
     }
 
+    /// Records the session's registered targets; if the write fails, the live session keeps
+    /// its change flag so the next pass records them again.
     fn record_targets(&self, id: &Id, targets: Vec<String>) {
-        let _ = self.update(id, move |s| {
+        let written = self.update(id, move |s| {
             if s.targets == targets {
                 return None;
             }
             s.targets = targets.clone();
             Some(("BrowserTargetsChanged", json!({"targets": targets})))
         });
+        if written.is_err()
+            && let Some(slot) = self.existing_slot(id)
+            && let Some(live) = slot.live.lock().unwrap_or_else(|p| p.into_inner()).as_mut()
+        {
+            live.targets_changed = true;
+        }
     }
 
     fn session_evidence(
@@ -1348,12 +1410,22 @@ impl BrowserService {
             // Without a target, navigation opens and registers a new one.
             None => live.open_target(bounds)?,
         };
-        live.navigate(i, &url, bounds, closing)?;
+        let opened = input.target_id.is_none();
+        live.navigate(i, &url, bounds, closing).map_err(|e| {
+            // A target the action opened exists whatever the navigation then did.
+            if opened && !matches!(e, ActionError::Navigation(_)) {
+                post_dispatch(e)
+            } else {
+                e
+            }
+        })?;
         // Frames the new document attached are configured before its snapshot is named.
         live.settle_pending(bounds).map_err(ActionError::After)?;
         let main = live.targets[i].main_frame().to_owned();
         let target = live.targets[i].wire(&live.session, &main);
-        let snapshot = self.snapshot_of(live, &target, bounds, Some(&op.id))?;
+        let snapshot = self
+            .snapshot_of(live, &target, bounds, Some(&op.id))
+            .map_err(post_dispatch)?;
         Ok(json!({"result": OperationResult::BrowserNavigate { value: snapshot }}))
     }
 
@@ -1547,7 +1619,10 @@ impl BrowserService {
                 continue;
             };
             let Some(live) = guard.as_mut() else { continue };
-            let exited = matches!(self.processes.poll(&live.process), Ok(Some(_)));
+            // The browser's main process exiting ends the session even while helper processes
+            // of its tree linger (the teardown stops them).
+            let exited = matches!(self.processes.poll(&live.process), Ok(Some(_)))
+                || self.processes.root_exited(&live.process);
             let pumped = live.pump(Duration::from_millis(20), &bounds);
             if exited || pumped.is_err() || live.cdp.closed() {
                 let l = guard.take().expect("live");
@@ -2210,10 +2285,7 @@ impl BrowserService {
             );
         }
         if let Some(op) = &s.uncertain_operation_id
-            && tx
-                .operations()
-                .operation(op)?
-                .is_some_and(|o| o.state == OperationState::OutcomeUnknown)
+            && unresolved(tx.operations().operation(op)?.map(|o| o.state))
         {
             // Observe the uncertain navigation/submission before anything else is sent.
             let mut fault = Refusal::new(
@@ -2282,9 +2354,11 @@ impl BrowserService {
             }
             OperationInput::Browser(ops::Input::Input(i)) => match &i.action {
                 BrowserInput::Click { node, .. } | BrowserInput::Text { node, .. } => {
+                    other_session(&node.target, &s.id)?;
                     view.node(node)?
                 }
                 BrowserInput::Key { target, .. } | BrowserInput::Scroll { target, .. } => {
+                    other_session(target, &s.id)?;
                     view.target(target)?
                 }
             },
@@ -2569,19 +2643,33 @@ impl BrowserService {
                             BrowserChannel::Network => &mut live.network,
                             _ => &mut live.console,
                         };
-                        let dropped = std::mem::take(&mut live.cdp.dropped) > 0;
                         (!buffer.is_empty()).then(|| {
-                            let (doc, truncated) = buffer.drain(id, channel.as_str());
-                            (doc, truncated || dropped)
+                            let batch = buffer.take();
+                            let cdp = std::mem::take(&mut live.cdp.dropped);
+                            (batch, cdp)
                         })
                     }
                     None => None,
                 }
             };
-            if let Some((doc, truncated)) = pending {
-                let (evidence, sequence) = self
-                    .publish_observation(&s, channel, &doc, truncated, None)
-                    .map_err(evidence_failure)?;
+            if let Some((batch, cdp)) = pending {
+                let (doc, truncated) = batch.document(id, channel.as_str(), cdp > 0);
+                let published = self.publish_observation(&s, channel, &doc, truncated, None);
+                let (evidence, sequence) = match published {
+                    Ok(p) => p,
+                    Err(e) => {
+                        // Nothing was recorded: the notifications stay pending for a retry.
+                        let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
+                        if let Some(live) = guard.as_mut() {
+                            live.cdp.dropped += cdp;
+                            match channel {
+                                BrowserChannel::Network => live.network.restore(batch),
+                                _ => live.console.restore(batch),
+                            }
+                        }
+                        return Err(evidence_failure(e));
+                    }
+                };
                 fresh.push(BrowserObservation {
                     session_id: id.clone(),
                     sequence: counter(sequence),
@@ -2590,11 +2678,22 @@ impl BrowserService {
                 });
             }
         }
-        let limit = (page.limit.get() as usize).clamp(1, 500);
-        let rows =
-            snapshot
-                .browser()
-                .browser_observations(id, channel, position, (limit + 1) as u16)?;
+        let limit = (page.limit.get() as usize).clamp(1, MAX_PAGE as usize);
+        // One row of lookahead, within the repository's page bound.
+        let ask = (limit + 1).min(MAX_PAGE as usize) as u16;
+        let mut rows = snapshot
+            .browser()
+            .browser_observations(id, channel, position, ask)?;
+        if rows.len() == limit
+            && usize::from(ask) == limit
+            && let Some(last) = rows.last().map(|o| o.sequence)
+        {
+            rows.extend(
+                snapshot
+                    .browser()
+                    .browser_observations(id, channel, last, 1)?,
+            );
+        }
         let mut items = Vec::new();
         for o in rows {
             let Some(v) = snapshot.artifacts().version(&o.version_id)? else {
@@ -2629,6 +2728,18 @@ impl BrowserService {
             has_more: more,
         })
     }
+}
+
+/// Whether an uncertain action's outcome is still not established.
+fn unresolved(state: Option<OperationState>) -> bool {
+    matches!(
+        state,
+        Some(
+            OperationState::OutcomeUnknown
+                | OperationState::NeedsInput
+                | OperationState::Dispatching
+        )
+    )
 }
 
 fn completed(result: OperationResult) -> EffectOutcome {

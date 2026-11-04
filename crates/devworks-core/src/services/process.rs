@@ -402,6 +402,16 @@ impl ProcessSupervisor {
         live.tree.take_control()
     }
 
+    /// Whether the root of an owned tree has exited (its descendants may still run; stop the
+    /// tree with [`Self::cancel`]). A tree this supervisor no longer owns has ended.
+    pub fn root_exited(&self, p: &OwnedProcess) -> bool {
+        let Some(entry) = self.entry(&p.id) else {
+            return true;
+        };
+        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        live.tree.root_exited().unwrap_or(false)
+    }
+
     /// Observes a tree without blocking; a tree found empty is settled `Reaped`.
     pub fn poll(&self, p: &OwnedProcess) -> Result<Option<StopOutcome>, StorageError> {
         let Some(entry) = self.entry(&p.id) else {

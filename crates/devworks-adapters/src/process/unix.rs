@@ -210,6 +210,21 @@ impl ProcessTree for UnixTree {
     fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)> {
         self.output.take()
     }
+    fn root_exited(&mut self) -> Result<bool, ProcessError> {
+        if self.empty {
+            return Ok(true);
+        }
+        // The root is not collected while the tree lives, so its pid is still ours: it has
+        // exited once it is a zombie (or gone).
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            Ok(start_time(self.identity.pid as libc::pid_t, false).is_none())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            self.poll().map(|s| s.empty)
+        }
+    }
     fn take_control(&mut self) -> Option<ControlChannel> {
         self.control.take()
     }

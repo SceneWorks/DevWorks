@@ -157,12 +157,33 @@ impl ArtifactService {
         let files = self.files.clone();
         let s = staged.clone();
         let committed = run_write(store, WriteOptions::default(), move |tx| {
+            // The storage limit is checked again with the new version in place, inside the
+            // publishing transaction (as a save does): concurrent publications that each passed
+            // the check above cannot together exceed it. Over the limit, nothing is kept.
+            let savepoint = tx.savepoint()?;
             let r = commit(tx, &*files, &evidence, &s)?;
+            match super::check_quota(tx, &evidence.scope) {
+                Ok(()) => {}
+                Err(Failure::Refused(refusal)) => {
+                    tx.rollback_to(savepoint)?;
+                    return Ok(Err(refusal));
+                }
+                Err(Failure::Storage(e)) => return Err(e),
+            }
+            tx.release(savepoint)?;
             let t = then(tx, &r)?;
-            Ok((r, t))
+            Ok(Ok((r, t)))
         });
         let committed = match committed {
-            Ok(r) => r,
+            Ok(Ok(r)) => r,
+            Ok(Err(refusal)) => {
+                self.abandon_or_defer(
+                    &env,
+                    &staging,
+                    json!({"abandoned": "the storage limit was reached"}),
+                );
+                return Err(EvidenceFailure::Refused(refusal));
+            }
             Err(e) => {
                 // Re-read under the staging fence: completed if the version did commit.
                 self.abandon_or_defer(

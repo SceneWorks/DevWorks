@@ -2320,6 +2320,313 @@ fn out_of_process_frames_are_inspected_driven_and_revisioned_on_their_own_sessio
 }
 
 #[test]
+fn a_browser_whose_main_process_exits_is_settled_while_its_helpers_linger() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let identity = fx.identity(&session);
+    let root = fx.profile_root(&session);
+    // Only the main process dies; its descendant (a helper) keeps the tree non-empty.
+    let pid = identity.pid.to_string();
+    let killed = if cfg!(windows) {
+        std::process::Command::new("taskkill")
+            .args(["/PID", &pid, "/F"])
+            .output()
+    } else {
+        std::process::Command::new("kill")
+            .args(["-9", &pid])
+            .output()
+    };
+    assert!(killed.unwrap().status.success());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while fx.session(&session).phase == BrowserPhase::Ready {
+        assert!(
+            Instant::now() < deadline,
+            "the main process's exit was not detected"
+        );
+        fx.svc().tick();
+        fx.drive(20);
+    }
+    let s = fx.session(&session);
+    assert_eq!(s.phase, BrowserPhase::Failed, "{s:?}");
+    assert!(s.detail.unwrap().contains("exited"));
+    // The teardown stopped the lingering helpers too: the whole tree is gone.
+    assert_eq!(NativeProcessHost.probe(&identity), Probe::Gone);
+    let pid = fx.session(&session).process_id.unwrap();
+    let rec = read(&**fx.app().store(), move |s| s.resources().process(&pid)).unwrap();
+    assert_eq!(rec.phase, ProcessPhase::Reaped, "{rec:?}");
+    assert!(!root.exists());
+}
+
+/// Writes the workspace artifact storage limit directly (as a settings save would).
+fn set_quota(store: &dyn ApplicationStore, bytes: i64) {
+    use devworks_core::settings::catalog::{ARTIFACT_QUOTA_KEY, descriptor};
+    use devworks_core::settings::model;
+    write(store, move |tx| {
+        let current = model::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
+        let schema =
+            serde_json::to_value(descriptor(ARTIFACT_QUOTA_KEY).unwrap().schema_ref()).unwrap();
+        let a = serde_json::from_value(
+            json!({"key": ARTIFACT_QUOTA_KEY, "value": {"schema": schema, "value": bytes}}),
+        )
+        .unwrap();
+        let plan = model::plan(&current, &[a]);
+        let body = model::body(
+            &plan,
+            &ActorId(id("host")),
+            tx.now_ms(),
+            json!({"kind": "test"}),
+        );
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            model::NAMESPACE,
+            current.revision,
+            model::BODY_SCHEMA_VERSION,
+            body,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_failed_predecessor_never_releases_actions_queued_behind_an_unknown_one() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    fx.platform
+        .browser(&session)
+        .lock()
+        .unwrap()
+        .hang
+        .insert("Input.insertText".into());
+    let rev = fx.session(&session).revision.to_string();
+    let key = json!({"kind": "Key", "target": target_json(&snap), "key": "Tab", "modifiers": []});
+    // A (its outcome will be unknown), then B and C queued behind it.
+    let ops: Vec<OperationId> = [
+        json!({"kind": "Text", "node": node(&snap, &ax, "Name"), "text": "a"}),
+        key.clone(),
+        key,
+    ]
+    .into_iter()
+    .map(|action| {
+        fx.accepted(
+            &user,
+            "browser.input",
+            json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": action}),
+        )
+    })
+    .collect();
+    assert!(matches!(
+        fx.completion(&user, &ops[0]),
+        OperationCompletion::OutcomeUnknown { .. }
+    ));
+    assert!(matches!(
+        fx.completion(&user, &ops[1]),
+        OperationCompletion::Failed { .. }
+    ));
+    match fx.completion(&user, &ops[2]) {
+        OperationCompletion::Failed { fault, .. } => {
+            assert_eq!(fault.target_kind.unwrap().0, "browser_action_order");
+        }
+        other => panic!("C ran behind an unreconciled action: {other:?}"),
+    }
+    let b = fx.platform.browser(&session);
+    assert_eq!(
+        requests(&b, "Input.dispatchKeyEvent"),
+        0,
+        "nothing after the unknown action"
+    );
+}
+
+#[test]
+fn a_reference_into_another_session_is_refused_even_when_its_ids_collide() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let a = fx.create(&user, workspace());
+    let b = fx.create(&user, workspace());
+    // Both sessions start at t1 with the same frame, document and snapshot revisions.
+    let snap_a = fx.snapshot(fx.navigate(&user, &a, Some("t1"), "https://app.test/form"));
+    let ax_a = fx.json(&snap_a.accessibility);
+    let snap_b = fx.snapshot(fx.navigate(&user, &b, Some("t1"), "https://app.test/form"));
+    fx.json(&snap_b.accessibility);
+    assert_eq!(
+        snap_a.target.document_revision,
+        snap_b.target.document_revision
+    );
+    let rev = fx.session(&b).revision.to_string();
+    for action in [
+        json!({"kind": "Click", "node": node(&snap_a, &ax_a, "Submit"), "button": "Primary"}),
+        json!({"kind": "Key", "target": target_json(&snap_a), "key": "Tab", "modifiers": []}),
+    ] {
+        let fault = fx.refused(
+            &user,
+            "browser.input",
+            json!({"sessionId": b.as_str(), "expectedRevision": rev, "action": action}),
+        );
+        assert_eq!(
+            (fault.code, fault.target_kind.unwrap().0),
+            (
+                DomainErrorCode::InvalidArgument,
+                "browser_target_session".to_owned()
+            )
+        );
+    }
+    let fb = fx.platform.browser(&b);
+    assert_eq!(
+        requests(&fb, "Input.dispatchMouseEvent") + requests(&fb, "Input.dispatchKeyEvent"),
+        0
+    );
+}
+
+#[test]
+fn concurrent_evidence_publications_cannot_exceed_the_storage_limit() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let store = fx.app().store().clone();
+    set_quota(&*store, 100);
+    // Hold the write owner so both publications pass their read-only check first.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let (started, blocking) = std::sync::mpsc::channel::<()>();
+    let st = store.clone();
+    let blocker = std::thread::spawn(move || {
+        run_write(&*st, WriteOptions::default(), move |_| {
+            started.send(()).unwrap();
+            held.recv().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    });
+    blocking.recv().unwrap();
+    let publish = |byte: u8| {
+        let (artifacts, store, owner) = (
+            fx.app().artifacts().clone(),
+            store.clone(),
+            user.principal().clone(),
+        );
+        std::thread::spawn(move || {
+            let e = Evidence {
+                scope: ArtifactScope::Workspace,
+                producer: owner,
+                principal_kind: "Human".into(),
+                agent_session: None,
+                root: None,
+                assignment: None,
+                title: "evidence".into(),
+                media_type: "application/octet-stream".into(),
+                tags: vec![],
+                source: json!({"kind": "Fixture"}),
+            };
+            artifacts
+                .publish_evidence(&*store, e, &[byte; 60], |_, _| Ok(()))
+                .map(|_| ())
+        })
+    };
+    let (one, two) = (publish(1), publish(2));
+    std::thread::sleep(Duration::from_millis(400));
+    release.send(()).unwrap();
+    blocker.join().unwrap();
+    let results = [one.join().unwrap(), two.join().unwrap()];
+    let refused = results
+        .iter()
+        .filter(|r| {
+            matches!(
+                r,
+                Err(devworks_core::services::artifacts::evidence::EvidenceFailure::Refused(_))
+            )
+        })
+        .count();
+    assert_eq!(
+        (results.iter().filter(|r| r.is_ok()).count(), refused),
+        (1, 1),
+        "{results:?}"
+    );
+    let used = read(&*store, |s| s.artifacts().workspace_usage());
+    assert!(used <= 100, "workspace usage {used} exceeds the limit");
+}
+
+#[test]
+fn a_failure_after_the_navigation_was_sent_is_an_unknown_outcome() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let b = fx.platform.browser(&session);
+    b.lock()
+        .unwrap()
+        .hang
+        .insert("Accessibility.getFullAXTree".into());
+    let c = fx.navigate(&user, &session, Some("t1"), "https://app.test/form");
+    assert!(
+        matches!(c, OperationCompletion::OutcomeUnknown { .. }),
+        "{c:?}"
+    );
+    assert_eq!(requests(&b, "Page.navigate"), 1, "the navigation was sent");
+    assert!(
+        fx.session(&session).uncertain_operation_id.is_some(),
+        "the session holds further actions"
+    );
+}
+
+#[test]
+fn notifications_stay_pending_when_their_publication_fails() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let b = fx.platform.browser(&session);
+    b.lock().unwrap().emit(
+        Some("S1"),
+        "Runtime.consoleAPICalled",
+        json!({"type": "log", "args": [{"type": "string", "value": "kept notice"}]}),
+    );
+    set_quota(&**fx.app().store(), 1);
+    let query = json!({"sessionId": session.as_str(), "afterSequence": "0", "page": {"limit": 50}});
+    assert_eq!(
+        fx.fault(&user, "browser.console", query.clone()).code,
+        DomainErrorCode::CapacityWait
+    );
+    set_quota(&**fx.app().store(), 0);
+    match fx.result(&user, "browser.console", query) {
+        OperationResult::BrowserConsole { value } => {
+            let text = value
+                .items
+                .0
+                .iter()
+                .map(|o| fx.json(&o.evidence).to_string())
+                .collect::<String>();
+            assert!(text.contains("kept notice"), "{text}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_largest_notification_page_stays_within_the_repository_bound() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    for op in ["browser.console", "browser.network"] {
+        match fx.query(
+            &user,
+            op,
+            json!({"sessionId": session.as_str(), "afterSequence": "0", "page": {"limit": 500}}),
+        ) {
+            DomainQueryReply::Result { .. } => {}
+            other => panic!("{op} with a page of 500: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn a_queued_action_of_a_revoked_owner_is_never_performed() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
