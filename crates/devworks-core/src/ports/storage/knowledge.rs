@@ -585,6 +585,14 @@ pub trait KnowledgeRepository: KnowledgeRead {
     ) -> Result<Option<StoredRelation>, StorageError>;
     /// Marks a live relation removed; `false` when it was not live.
     fn remove_knowledge_relation(&mut self, id: &Id, at_ms: i64) -> Result<bool, StorageError>;
+    /// Replaces a live relation's merge bookkeeping (the citations and baselines its `same_as`
+    /// merge owns on the object); `false` when it was not live.
+    fn set_knowledge_relation_ownership(
+        &mut self,
+        id: &Id,
+        added_evidence_ids: &[Id],
+        added_basis: &[(String, String)],
+    ) -> Result<bool, StorageError>;
     /// Appends a revision snapshot; an existing `(target, revision)` is
     /// [`StorageError::Duplicate`].
     fn put_knowledge_history(&mut self, history: &StoredHistory) -> Result<(), StorageError>;

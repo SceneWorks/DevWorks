@@ -1931,6 +1931,14 @@ impl KnowledgeRepository for Unsupported {
     fn remove_knowledge_relation(&mut self, _: &Id, _: i64) -> Result<bool, StorageError> {
         nope()
     }
+    fn set_knowledge_relation_ownership(
+        &mut self,
+        _: &Id,
+        _: &[Id],
+        _: &[(String, String)],
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
     fn put_knowledge_history(&mut self, _: &StoredHistory) -> Result<(), StorageError> {
         nope()
     }

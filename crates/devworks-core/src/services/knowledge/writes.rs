@@ -1290,23 +1290,36 @@ fn relate(
             merged.body.superseded_by = Some(into.id.clone());
             w.put_claim(merged, Some(from.revision), "Merged")?;
             let mut target = into.clone();
-            // Only what the target did not cite already is the merge's: an unmerge takes
-            // back exactly these.
+            // What the target did not cite already is the merge's, and so is what it holds
+            // only through another active merge (which this merge needs as well): ownership
+            // may overlap, and an unmerge takes back only what no remaining merge owns.
+            let (owned, owned_basis) = merge_owned(&mut w, &into.id)?;
             let mut added = Vec::new();
             for e in from.body.evidence_ids.iter().chain(&evidence) {
+                if added.contains(e) {
+                    continue;
+                }
                 if !target.body.evidence_ids.contains(e) {
                     target.body.evidence_ids.push(e.clone());
+                    added.push(e.clone());
+                } else if owned.contains(e) {
                     added.push(e.clone());
                 }
             }
             // The source-revision baselines come with the citations, so a later observation
-            // of a merged source marks the target stale; only those the target lacked are the
-            // merge's (an unmerge removes exactly these).
+            // of a merged source marks the target stale; those the target lacked, or holds
+            // only through another active merge, are the merge's too.
             let mut added_basis = Vec::new();
             for (source_ref, revision) in &from.basis {
-                if !target.basis.iter().any(|(r, _)| r == source_ref) {
-                    target.basis.push((source_ref.clone(), revision.clone()));
-                    added_basis.push((source_ref.clone(), revision.clone()));
+                match target.basis.iter().find(|(r, _)| r == source_ref) {
+                    None => {
+                        target.basis.push((source_ref.clone(), revision.clone()));
+                        added_basis.push((source_ref.clone(), revision.clone()));
+                    }
+                    Some(held) if owned_basis.contains(held) && !added_basis.contains(held) => {
+                        added_basis.push(held.clone());
+                    }
+                    Some(_) => {}
                 }
             }
             let stored = w.put_claim(target, Some(into.revision), "MergedInto")?;
@@ -1366,13 +1379,17 @@ fn relate(
             let events = w.k().knowledge_lesson_event_count(&into.id)?;
             let threshold = w.threshold(&into.scope)?;
             let mut target = into.clone();
+            // What a remaining active merge into the target still owns stays with it.
+            let (owned, owned_basis) = merge_owned(&mut w, &into.id)?;
             // Evidence the target cited before the merge (or that this unmerge cites) stays.
             target
                 .body
                 .evidence_ids
-                .retain(|e| !added.contains(e) || evidence.contains(e));
+                .retain(|e| !added.contains(e) || evidence.contains(e) || owned.contains(e));
             // ... and the baselines it added (one the target re-verified since is its own).
-            target.basis.retain(|b| !added_basis.contains(b));
+            target
+                .basis
+                .retain(|b| !added_basis.contains(b) || owned_basis.contains(b));
             if into.body.lesson_effect.as_deref() == Some("Recurrence")
                 && events < threshold
                 && let Some(l) = target.lesson.as_mut()
@@ -1473,6 +1490,63 @@ fn store_relation(
     });
     w.touch(&scoped.exact);
     Ok(true)
+}
+
+/// The live `same_as` merges into `into`.
+fn merges_into(w: &mut Writer<'_>, into: &Id) -> Result<Vec<StoredRelation>, StorageError> {
+    Ok(w.k()
+        .knowledge_relations_touching(std::slice::from_ref(into))?
+        .into_iter()
+        .filter(|r| r.predicate == model::SAME_AS && r.object_id == *into)
+        .collect())
+}
+
+/// Citations and the source-revision baselines `(source_ref, revision)` a merge owns.
+type Owned = (Vec<Id>, Vec<(String, String)>);
+/// The citations and baselines the live merges into `into` own (what an unmerge keeps).
+fn merge_owned(w: &mut Writer<'_>, into: &Id) -> Result<Owned, StorageError> {
+    let mut owned: Owned = (Vec::new(), Vec::new());
+    for r in merges_into(w, into)? {
+        owned.0.extend(r.added_evidence_ids);
+        owned.1.extend(r.added_basis);
+    }
+    Ok(owned)
+}
+
+/// A deleted lesson's merge is never undone (its events stay with the target), so what it
+/// brought becomes the target's own, as when no other merge shared it: the other live merges
+/// into the same target stop owning it, and their unmerges keep it.
+fn settle_deleted_merges(w: &mut Writer<'_>, deleted: &Id) -> Result<(), StorageError> {
+    let merged: Vec<StoredRelation> = w
+        .k()
+        .knowledge_relations_touching(std::slice::from_ref(deleted))?
+        .into_iter()
+        .filter(|r| r.predicate == model::SAME_AS && r.subject_id == *deleted)
+        .collect();
+    for gone in merged {
+        for other in merges_into(w, &gone.object_id)? {
+            if other.id == gone.id {
+                continue;
+            }
+            let evidence: Vec<Id> = other
+                .added_evidence_ids
+                .iter()
+                .filter(|e| !gone.added_evidence_ids.contains(e))
+                .cloned()
+                .collect();
+            let basis: Vec<(String, String)> = other
+                .added_basis
+                .iter()
+                .filter(|b| !gone.added_basis.contains(b))
+                .cloned()
+                .collect();
+            if evidence != other.added_evidence_ids || basis != other.added_basis {
+                w.k()
+                    .set_knowledge_relation_ownership(&other.id, &evidence, &basis)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2032,7 +2106,9 @@ fn tombstone_claim(w: &mut Writer<'_>, c: &StoredClaim) -> Result<(), Failure> {
         l.applicability = empty_applicability();
     }
     w.k().purge_knowledge_lesson_records(&c.id)?;
-    // Its relations go too: a deleted endpoint leaves no live link in another bundle.
+    // Its relations go too: a deleted endpoint leaves no live link in another bundle (a merge
+    // it made settles first, since its record goes with them).
+    settle_deleted_merges(w, &c.id)?;
     let now = w.now;
     w.k().remove_knowledge_relations_of(&c.id, now)?;
     w.k().purge_knowledge_history(&c.id, &retained)?;
@@ -2079,30 +2155,50 @@ pub(super) struct PreparedDeletion {
     pub plan: DeletionPlan,
 }
 
-/// Evidence cited only by claims the deletion removes (independent surviving evidence stays).
-/// The store decides "still referenced" over every claim, relation and challenge.
+/// Evidence cited only by what the deletion removes (independent surviving evidence stays):
+/// the removed claims, their challenges, and the relations that go with the removed claims and
+/// entities. The store decides "still referenced" over every claim, relation and challenge.
 fn orphaned_evidence(
     k: &dyn KnowledgeRead,
     claims: &[StoredClaim],
+    entities: &[StoredEntity],
     deleted: &DeletedClaims<'_>,
 ) -> Result<Vec<StoredEvidence>, StorageError> {
-    let mut out: BTreeMap<String, StoredEvidence> = BTreeMap::new();
-    // Every cited evidence record, from the claims' complete citation lists (never a bounded
-    // listing, which would leave content of later evidence behind).
+    // Every evidence record they cite, from complete lists (never a bounded listing, which
+    // would leave content of later evidence behind): a claim's citations, its challenges'
+    // (a claim holds at most `MAX_CHALLENGES`), and every live relation of a removed node.
+    let mut cited: Vec<Id> = Vec::new();
     for claim in claims {
-        for id in &claim.body.evidence_ids {
-            if out.contains_key(id.as_str()) {
-                continue;
-            }
-            let Some(e) = k.knowledge_evidence(id)? else {
-                continue;
-            };
-            if e.deleted_at_ms.is_some() {
-                continue;
-            }
-            if !k.knowledge_evidence_cited_beyond(&e.id, deleted)? {
-                out.insert(e.id.as_str().to_owned(), e);
-            }
+        cited.extend(claim.body.evidence_ids.iter().cloned());
+        for ch in k.knowledge_challenges(&claim.id, MAX_CHALLENGES as u16)? {
+            cited.extend(ch.evidence_ids);
+        }
+    }
+    let endpoints: Vec<Id> = claims
+        .iter()
+        .map(|c| c.id.clone())
+        .chain(entities.iter().map(|e| e.id.clone()))
+        .collect();
+    if !endpoints.is_empty() {
+        for r in k.knowledge_relations_touching(&endpoints)? {
+            cited.extend(r.evidence_ids);
+            cited.extend(r.added_evidence_ids);
+        }
+    }
+    let mut out: BTreeMap<String, StoredEvidence> = BTreeMap::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for id in cited {
+        if !seen.insert(id.as_str().to_owned()) {
+            continue;
+        }
+        let Some(e) = k.knowledge_evidence(&id)? else {
+            continue;
+        };
+        if e.deleted_at_ms.is_some() {
+            continue;
+        }
+        if !k.knowledge_evidence_cited_beyond(&e.id, deleted)? {
+            out.insert(e.id.as_str().to_owned(), e);
         }
     }
     Ok(out.into_values().collect())
@@ -2136,7 +2232,7 @@ pub(super) fn deletion_plan(
             page.iter()
                 .map(|c| format!("c:{}@{}", c.id.as_str(), c.revision)),
         );
-        for e in orphaned_evidence(k, &page, &gone)? {
+        for e in orphaned_evidence(k, &page, &[], &gone)? {
             orphans.insert(e.id.as_str().to_owned(), ());
         }
         if page.len() < page_size as usize {
@@ -2148,12 +2244,18 @@ pub(super) fn deletion_plan(
     loop {
         let page = k.knowledge_source_entities(scope, source, after.as_deref(), page_size)?;
         after = page.last().map(|e| e.id.as_str().to_owned());
+        let mut removed = Vec::new();
         for e in &page {
             // An entity something surviving still uses is kept (decided over every reference).
             if !k.knowledge_entity_used_beyond(&e.id, &gone)? {
                 entities += 1;
                 parts.push(format!("e:{}@{}", e.id.as_str(), e.revision));
+                removed.push(e.clone());
             }
+        }
+        // The relations a removed entity takes with it may leave evidence nothing cites.
+        for e in orphaned_evidence(k, &[], &removed, &gone)? {
+            orphans.insert(e.id.as_str().to_owned(), ());
         }
         if page.len() < page_size as usize {
             break;
@@ -2196,7 +2298,7 @@ fn deletion_batch(
     let claims = w
         .k()
         .knowledge_source_claims(scope, source, None, size as u16)?;
-    let evidence = orphaned_evidence(w.tx.knowledge(), &claims, &gone)?;
+    let evidence = orphaned_evidence(w.tx.knowledge(), &claims, &[], &gone)?;
     for c in &claims {
         tombstone_claim(w, c)?;
         out.claims += 1;
@@ -2215,12 +2317,22 @@ fn deletion_batch(
         out.entity_cursor.as_deref(),
         budget as u16,
     )?;
+    let mut removed = Vec::new();
     for e in &entities {
         out.entity_cursor = Some(e.id.as_str().to_owned());
         if !w.k().knowledge_entity_used_beyond(&e.id, &gone)? {
-            tombstone_entity(w, e)?;
-            out.entities += 1;
+            removed.push(e.clone());
         }
+    }
+    // Read before the tombstones remove their relations (as the plan counted them).
+    let evidence = orphaned_evidence(w.tx.knowledge(), &[], &removed, &gone)?;
+    for e in &removed {
+        tombstone_entity(w, e)?;
+        out.entities += 1;
+    }
+    for e in &evidence {
+        purge_evidence(w, e)?;
+        out.evidence += 1;
     }
     out.done = entities.len() < budget;
     Ok(out)
@@ -2489,7 +2601,7 @@ fn delete_selected(
         }
     }
     let ids: Vec<Id> = selected.iter().map(|c| c.id.clone()).collect();
-    let evidence = orphaned_evidence(w.tx.knowledge(), &selected, &DeletedClaims::Ids(&ids))?;
+    let evidence = orphaned_evidence(w.tx.knowledge(), &selected, &[], &DeletedClaims::Ids(&ids))?;
     for c in &selected {
         tombstone_claim(&mut w, c)?;
     }

@@ -3078,3 +3078,249 @@ fn an_entity_a_surviving_relation_names_outlives_a_deleted_source() {
     assert!(e.deleted_at_ms.is_none());
     assert_eq!(e.label, "Related entity");
 }
+
+// Codex round 4
+
+/// Three lessons of project A: A and C cite `repo:merged` at `c1` (their basis), B cites
+/// nothing. Returns (A, B, C).
+fn three_lessons(fx: &Fx, ctx: &InvocationContext) -> (Id, Id, Id) {
+    let r = receipt(fx.record(
+        ctx,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": "Rules", "entityType": "t", "aliases": []}],
+        "evidence": [{"id": "e", "source": {"kind": "Code", "sourceRef": "repo:merged"},
+            "snippet": "merged evidence", "sourceRevision": "c1"}],
+        "claims": [
+            with(draft("Lesson", "rule a"), json!({"evidenceIds": ["e"],
+                "lesson": lesson_draft("Agent", Some("ea"), None)})),
+            with(draft("Lesson", "rule b"),
+                json!({"lesson": lesson_draft("Agent", Some("eb"), None)})),
+            with(draft("Lesson", "rule c"), json!({"evidenceIds": ["e"],
+                "lesson": lesson_draft("Agent", Some("ec"), None)}))]}),
+    ));
+    (
+        r.claim_ids.0[0].clone(),
+        r.claim_ids.0[1].clone(),
+        r.claim_ids.0[2].clone(),
+    )
+}
+
+fn relate_in_a(fx: &Fx, ctx: &InvocationContext, subject: &Id, predicate: &str, object: &Id) {
+    relate_with(fx, ctx, subject, predicate, object, &[]);
+}
+
+fn relate_with(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    subject: &Id,
+    predicate: &str,
+    object: &Id,
+    evidence: &[&Id],
+) {
+    receipt(fx.cmd(
+        ctx,
+        "knowledge.relate",
+        json!({"scope": proj("project-a"), "subjectId": subject,
+        "predicate": predicate, "objectId": object, "evidenceIds": evidence}),
+    ));
+}
+
+fn cited_snippets(fx: &Fx, ctx: &InvocationContext, claim: &Id) -> Vec<String> {
+    fx.read_claim(ctx, proj("project-a"), claim)
+        .evidence
+        .0
+        .iter()
+        .map(|e| e.snippet.0.clone())
+        .collect()
+}
+
+fn stored_snippet(fx: &Fx, evidence: &Id) -> String {
+    let e = evidence.clone();
+    fx.read(move |s| s.knowledge().knowledge_evidence(&e))
+        .unwrap()
+        .snippet
+}
+
+fn observe_merged_source(fx: &Fx) {
+    fx.write({
+        let k = fx.knowledge.clone();
+        move |tx| k.observe_source(tx, "repo:merged", "c2")
+    });
+}
+
+fn delete_claim(fx: &Fx, ctx: &InvocationContext, claim: &Id) {
+    let rev = fx.revision(claim);
+    summary(fx.cmd(
+        ctx,
+        "knowledge.delete_selected",
+        json!({"scope": proj("project-a"),
+        "claims": [{"id": claim, "revision": rev.to_string()}]}),
+    ));
+}
+
+#[test]
+fn an_unmerge_keeps_what_another_active_merge_into_the_target_still_needs() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let (la, lb, lc) = three_lessons(&fx, &a);
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    // C cites what B holds only through A's merge: C's merge needs it as well.
+    relate_in_a(&fx, &a, &lc, "same_as", &lb);
+    relate_in_a(&fx, &a, &la, "unmerge", &lb);
+    assert_eq!(cited_snippets(&fx, &a, &lb), vec!["merged evidence"]);
+    // ... and its source baseline: a newer revision still marks B stale.
+    observe_merged_source(&fx);
+    assert_eq!(fx.claim(&a, proj("project-a"), &lb).stale, Some(true));
+    // Once no merge needs them, the last unmerge takes both back.
+    relate_in_a(&fx, &a, &lc, "unmerge", &lb);
+    assert!(cited_snippets(&fx, &a, &lb).is_empty());
+    assert_eq!(fx.claim(&a, proj("project-a"), &lb).stale, Some(false));
+}
+
+#[test]
+fn a_deleted_merges_citations_stay_with_the_target_when_another_merge_unmerges() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let user = fx.user();
+    let (la, lb, lc) = three_lessons(&fx, &a);
+    relate_in_a(&fx, &a, &la, "same_as", &lb);
+    relate_in_a(&fx, &a, &lc, "same_as", &lb);
+    // Deleting A never undoes its merge (its events stay with B): what it brought is B's own
+    // now, exactly as when no other merge shared it.
+    delete_claim(&fx, &user, &la);
+    relate_in_a(&fx, &a, &lc, "unmerge", &lb);
+    assert_eq!(cited_snippets(&fx, &a, &lb), vec!["merged evidence"]);
+    observe_merged_source(&fx);
+    assert_eq!(fx.claim(&a, proj("project-a"), &lb).stale, Some(true));
+}
+
+#[test]
+fn deleting_a_claim_purges_evidence_only_its_challenges_or_relations_cite() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let r = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": "Holder", "entityType": "t", "aliases": []}],
+        "evidence": [
+            {"id": "c", "source": {"kind": "Observation", "sourceRef": "log:c"},
+                "snippet": "challenge only evidence"},
+            {"id": "r", "source": {"kind": "Observation", "sourceRef": "log:r"},
+                "snippet": "relation only evidence"}],
+        "claims": [with(draft("Fact", "holder"), json!({"evidenceIds": ["c", "r"]}))]}),
+    ));
+    let holder = r.claim_ids.0[0].clone();
+    let evidence: HashMap<String, Id> = fx
+        .read_claim(&user, proj("project-a"), &holder)
+        .evidence
+        .0
+        .iter()
+        .map(|e| (e.snippet.0.clone(), e.id.clone()))
+        .collect();
+    let vc = evidence["challenge only evidence"].clone();
+    let vr = evidence["relation only evidence"].clone();
+    let x = fx.claim_id(&user, proj("project-a"), "X", draft("Fact", "x"));
+    let y = fx.claim_id(&user, proj("project-a"), "Y", draft("Fact", "y"));
+    let rev = fx.revision(&x);
+    receipt(fx.cmd(
+        &user,
+        "knowledge.challenge",
+        json!({"scope": proj("project-a"), "claimId": x, "expectedRevision": rev.to_string(),
+        "reason": "doubt", "evidenceIds": [vc]}),
+    ));
+    relate_with(&fx, &user, &x, "depends_on", &y, &[&vr]);
+    // X's challenge and relation still cite both: they outlive the claim that recorded them.
+    delete_claim(&fx, &user, &holder);
+    assert_eq!(stored_snippet(&fx, &vc), "challenge only evidence");
+    assert_eq!(stored_snippet(&fx, &vr), "relation only evidence");
+    // Deleting X empties its challenge's citations and removes its relation: nothing cites
+    // either any more.
+    delete_claim(&fx, &user, &x);
+    assert!(stored_snippet(&fx, &vc).is_empty());
+    assert!(stored_snippet(&fx, &vr).is_empty());
+}
+
+/// The preview message of deleting `source` from project A.
+fn preview_message(fx: &Fx, ctx: &InvocationContext, source: &str) -> String {
+    let (d, _) = fx.diagnostics(ctx, json!({"scope": proj("project-a"), "sourceId": source}));
+    d.iter()
+        .find(|x| x.component.0 == "knowledge.preview")
+        .unwrap()
+        .message
+        .0
+        .clone()
+}
+
+/// Entities `S` and `T` of source `run-9` and a sourceless claim citing one evidence record
+/// (its deletion leaves the record cited only by relations). Returns (S, T, evidence, claim).
+fn source_entities_and_evidence(fx: &Fx, ctx: &InvocationContext) -> (Id, Id, Id, Id) {
+    let r = receipt(fx.record(
+        ctx,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "s", "label": "Run nine S", "entityType": "t", "aliases": [],
+                "source": "run-9"},
+            {"clientId": "t", "label": "Run nine T", "entityType": "t", "aliases": [],
+                "source": "run-9"},
+            {"clientId": "k", "label": "Keeper", "entityType": "t", "aliases": []}],
+        "evidence": [{"id": "v", "source": {"kind": "Observation", "sourceRef": "log:v"},
+            "snippet": "entity relation evidence"}],
+        "claims": [with(draft("Fact", "keeper"),
+            json!({"subjectId": "k", "evidenceIds": ["v"]}))]}),
+    ));
+    let holder = r.claim_ids.0[0].clone();
+    let v = fx.read_claim(ctx, proj("project-a"), &holder).evidence.0[0]
+        .id
+        .clone();
+    (
+        r.entity_ids.0[0].clone(),
+        r.entity_ids.0[1].clone(),
+        v,
+        holder,
+    )
+}
+
+#[test]
+fn deleting_a_source_purges_evidence_only_its_entities_relations_cite_as_previewed() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let (s, t, v, holder) = source_entities_and_evidence(&fx, &user);
+    relate_with(&fx, &user, &s, "about", &t, &[&v]);
+    delete_claim(&fx, &user, &holder);
+    assert_eq!(stored_snippet(&fx, &v), "entity relation evidence");
+    // The preview counts the evidence only the source's removed relation cites, and the
+    // confirmed deletion purges exactly that.
+    let message = preview_message(&fx, &user, "run-9");
+    assert!(
+        message.contains("0 claims, 2 entities and 1 evidence records"),
+        "{message}"
+    );
+    delete_source(&fx, &user, "run-9");
+    assert!(stored_snippet(&fx, &v).is_empty());
+}
+
+#[test]
+fn evidence_a_kept_source_entitys_relation_cites_outlives_the_deletion() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let (s, x, v, holder) = source_entities_and_evidence(&fx, &user);
+    let y = fx.claim_id(&user, proj("project-a"), "Y", draft("Fact", "y"));
+    // S goes with its source; X stays (surviving Y relates to it), and so does X->Y.
+    relate_with(&fx, &user, &s, "about", &x, &[&v]);
+    relate_with(&fx, &user, &x, "about", &y, &[&v]);
+    delete_claim(&fx, &user, &holder);
+    let message = preview_message(&fx, &user, "run-9");
+    assert!(
+        message.contains("0 claims, 1 entities and 0 evidence records"),
+        "{message}"
+    );
+    delete_source(&fx, &user, "run-9");
+    assert_eq!(stored_snippet(&fx, &v), "entity relation evidence");
+    let kept = fx
+        .read(move |s| s.knowledge().knowledge_entity(&x))
+        .unwrap();
+    assert!(kept.deleted_at_ms.is_none());
+}

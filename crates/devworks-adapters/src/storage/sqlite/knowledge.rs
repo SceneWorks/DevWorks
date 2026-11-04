@@ -354,6 +354,28 @@ fn survives(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, id_sql: &str) -> Stri
          WHERE se.id={id_sql} AND se.deleted_at IS NULL AND NOT {entity}))"
     )
 }
+/// [`survives`] as the deletion carries it out: an entity of the deleted source that something
+/// surviving still uses stays (exactly `knowledge_entity_used_beyond`), and so do its live
+/// relations, so what they cite is still cited.
+fn kept(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, id_sql: &str) -> String {
+    let claim = outside_as(deleted, p, "kx");
+    let inside = entity_inside(deleted, p, "ke");
+    let named = outside_as(deleted, p, "ku");
+    let other = survives(
+        deleted,
+        p,
+        "CASE WHEN kr.subject_id=ke.id THEN kr.object_id ELSE kr.subject_id END",
+    );
+    format!(
+        "(EXISTS(SELECT 1 FROM knowledge_claims kx WHERE kx.id={id_sql} AND \
+         kx.lifecycle<>'Deleted' AND {claim}) OR EXISTS(SELECT 1 FROM knowledge_entities ke \
+         WHERE ke.id={id_sql} AND ke.deleted_at IS NULL AND (NOT {inside} OR \
+         EXISTS(SELECT 1 FROM knowledge_claims ku WHERE (ku.subject_id=ke.id OR \
+         ku.object_id=ke.id) AND ku.lifecycle<>'Deleted' AND {named}) OR \
+         EXISTS(SELECT 1 FROM knowledge_relations kr WHERE (kr.subject_id=ke.id OR \
+         kr.object_id=ke.id) AND kr.removed_at IS NULL AND {other}))))"
+    )
+}
 
 /// The rule state of a lesson row as read: an inferred lesson whose distinct events reach its
 /// scope's threshold is `Effective` (the same rule as the service's `effective_rule_state`).
@@ -1339,12 +1361,13 @@ macro_rules! knowledge_reads {
             ) -> Result<bool, StorageError> {
                 // Every reference to evidence: a surviving claim's citation, a challenge of a
                 // surviving claim, and a live relation's evidence or the citations its merge
-                // added, while both its endpoints survive (addresses cite no evidence).
+                // added, while both its endpoints survive (addresses cite no evidence; a kept
+                // entity of the deleted source survives with its relations).
                 let mut p = vec![Sql::Text(evidence.as_str().into())];
                 let cited = outside_of(deleted, &mut p);
                 let challenged = outside_of(deleted, &mut p);
-                let subject = survives(deleted, &mut p, "r.subject_id");
-                let object = survives(deleted, &mut p, "r.object_id");
+                let subject = kept(deleted, &mut p, "r.subject_id");
+                let object = kept(deleted, &mut p, "r.object_id");
                 db(self.conn.query_row(
                     &format!(
                         "SELECT EXISTS(SELECT 1 FROM knowledge_claim_evidence ce JOIN \
@@ -1783,6 +1806,20 @@ impl KnowledgeRepository for Unit<'_> {
         Ok(db(self.conn.execute(
             "UPDATE knowledge_relations SET removed_at=?2 WHERE id=?1 AND removed_at IS NULL",
             params![id.as_str(), at_ms],
+        ))? == 1)
+    }
+
+    fn set_knowledge_relation_ownership(
+        &mut self,
+        id: &Id,
+        added_evidence_ids: &[Id],
+        added_basis: &[(String, String)],
+    ) -> Result<bool, StorageError> {
+        let basis = serde_json::to_string(added_basis).map_err(|x| invalid(x.to_string()))?;
+        Ok(db(self.conn.execute(
+            "UPDATE knowledge_relations SET added_evidence_json=?2, added_basis_json=?3 \
+             WHERE id=?1 AND removed_at IS NULL",
+            params![id.as_str(), ids_json(added_evidence_ids), basis],
         ))? == 1)
     }
 
