@@ -168,7 +168,8 @@ pub trait ProjectRead {
         view: &Id,
         kind: TextKind,
     ) -> Result<Option<StoredRepositoryText>, StorageError>;
-    /// Work items of `project` that name `repository`.
+    /// Work items of `project` that name `repository`: in their repository context, in an
+    /// expected touch, or in their feature's pending plan draft.
     fn work_naming_repository(
         &self,
         project: &ProjectId,

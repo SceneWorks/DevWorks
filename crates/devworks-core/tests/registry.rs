@@ -274,6 +274,27 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "workspace.diagnostics",
             "workspace.logs",
             "workspace.record_diagnostic",
+            // Feature readiness (revision 2 of every operation returning a work record).
+            "features.list",
+            "features.get",
+            "features.create",
+            "features.edit_plan",
+            "features.dependencies",
+            "features.edit",
+            "issues.list",
+            "issues.get",
+            "issues.create",
+            "issues.edit",
+            "tasks.list",
+            "tasks.get",
+            "tasks.create",
+            "tasks.edit",
+            "tasks.move",
+            "tasks.assign",
+            "tasks.dependency_links",
+            "tasks.acceptance_evidence",
+            "tasks.sync_plan",
+            "tasks.set_feature",
         ])
     );
     // Revision 1 of the history pages is exactly the recorded Page; revision 2 adds the tail

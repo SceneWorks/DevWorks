@@ -27,14 +27,14 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `features.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel` | `Page<WorkRecord>` |
-| `features.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest` | `WorkRecord` |
-| `features.create` | **Command**<br>`projectId`: `ProjectId`<br>`creation`: `FeatureCreation` | `Page<WorkRecord>` |
-| `features.edit_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`plan`: `PlanDraft` | `WorkRecord` |
+| `features.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `features.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `features.create` | **Command**<br>`projectId`: `ProjectId`<br>`creation`: `FeatureCreation`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `features.edit_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`plan`: `PlanDraft`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 | `features.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `NonEmpty<Id>` | `MutationSummary` |
-| `features.dependencies` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement` | `WorkRecord` |
+| `features.dependencies` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 | `features.request_plan_approval` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`planRevision`: `Revision`<br>`planDigest`: `Digest` | `ProposalRecord` |
-| `features.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `FeaturePatch` | `WorkRecord` |
+| `features.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `FeaturePatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 
 ### Issues
 
@@ -42,10 +42,10 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `issues.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel` | `Page<WorkRecord>` |
-| `issues.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest` | `WorkRecord` |
-| `issues.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`statusId`: `Id`<br>`priority`: `i32`<br>`featureId`: `?RootId` | `WorkRecord` |
-| `issues.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `IssuePatch` | `WorkRecord` |
+| `issues.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `issues.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `issues.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`statusId`: `Id`<br>`priority`: `i32`<br>`featureId`: `?RootId`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `issues.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `IssuePatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 | `issues.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `NonEmpty<Id>` | `MutationSummary` |
 | `issues.publish` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`expectedRemoteRevision`: `?Text` | `GitLink` |
 | `issues.link` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`remoteIssueNumber`: `PositiveCounter` | `GitLink` |
@@ -56,17 +56,17 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `tasks.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel` | `Page<WorkRecord>` |
-| `tasks.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest` | `WorkRecord` |
-| `tasks.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`parentId`: `?RootId`<br>`statusId`: `Id`<br>`priority`: `i32` | `WorkRecord` |
-| `tasks.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `TaskPatch` | `WorkRecord` |
+| `tasks.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `tasks.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`parentId`: `?RootId`<br>`statusId`: `Id`<br>`priority`: `i32`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `TaskPatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 | `tasks.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`featureId`: `?RootId`<br>`expectedQueueRevision`: `Revision`<br>`priority`: `i32`<br>`orderedTaskIds`: `NonEmpty<Id>` | `MutationSummary` |
-| `tasks.move` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`statusId`: `Id`<br>`expectedWorkflowRevision`: `Revision` | `WorkRecord` |
-| `tasks.assign` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`assignmentId`: `?AssignmentId`<br>`clearAssignment`: `bool` | `WorkRecord` |
-| `tasks.dependency_links` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement` | `WorkRecord` |
-| `tasks.acceptance_evidence` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`criteria`: `NonEmpty<AcceptanceCriterion>` | `WorkRecord` |
-| `tasks.sync_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedPlanRevision`: `Revision`<br>`expectedTaskSetRevision`: `Revision`<br>`tasks`: `PlanItems<TaskPlanEntry>`<br>`projectPlan`: `?AtomicWorkPlan`<br>`stagedProjectPlan`: `?ArtifactRef` | `Page<WorkRecord>` |
-| `tasks.set_feature` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`featureId`: `?RootId`<br>`clearFeature`: `bool` | `WorkRecord` |
+| `tasks.move` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`statusId`: `Id`<br>`expectedWorkflowRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.assign` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`assignmentId`: `?AssignmentId`<br>`clearAssignment`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.dependency_links` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.acceptance_evidence` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`criteria`: `NonEmpty<AcceptanceCriterion>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.sync_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedPlanRevision`: `Revision`<br>`expectedTaskSetRevision`: `Revision`<br>`tasks`: `PlanItems<TaskPlanEntry>`<br>`projectPlan`: `?AtomicWorkPlan`<br>`stagedProjectPlan`: `?ArtifactRef`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `tasks.set_feature` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`featureId`: `?RootId`<br>`clearFeature`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 
 ### Workflows
 
@@ -959,6 +959,77 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `dependentIds` | `Items<Id>` |
 | `manualOrder` | `?Counter` |
 | `githubIssue` | `?GithubIssueTracking` |
+| `readiness` | `?ReadinessAssessment` · *revision 2+* |
+| `queueRevision` | `?Revision` · *revision 2+* |
+| `workflowRevision` | `?Revision` · *revision 2+* |
+
+### ReadinessDisposition
+
+`ResolvedDecision`, `BoundedInvestigation`, `NeedsUserDecision`.
+
+### FindingState
+
+`Open`, `Resolved`, `RiskAccepted`.
+
+### ConfidenceLevel
+
+`High`, `Medium`, `Low`.
+
+### ReadinessFreshness
+
+`Current`, `Stale`.
+
+### ReadinessFinding
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `disposition` | `ReadinessDisposition` |
+| `blocking` | `bool` |
+| `prerequisite` | `bool` |
+| `state` | `FindingState` |
+| `requirementIds` | `Items<Id>` |
+| `scopeKey` | `?Id` |
+| `affectedWorkIds` | `Items<Id>` |
+| `summary` | `Content` |
+| `missing` | `Content` |
+| `consequence` | `Content` |
+| `attempts` | `Items<Content>` |
+| `insufficiency` | `Content` |
+| `closureCondition` | `Content` |
+| `decision` | `?Content` |
+| `confidence` | `?ConfidenceLevel` |
+| `evidence` | `Items<ArtifactRef>` |
+| `objective` | `?Content` |
+| `limits` | `?Content` |
+| `question` | `?Content` |
+| `recommendation` | `?Content` |
+| `closureNote` | `?Content` |
+| `closureEvidence` | `Items<ArtifactRef>` |
+
+### ReadinessAssessment
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `planRevision` | `Revision` |
+| `planDigest` | `Digest` |
+| `reviewedPending` | `bool` |
+| `freshness` | `ReadinessFreshness` |
+| `staleScopeKeys` | `Items<Id>` |
+| `ready` | `bool` |
+| `summary` | `Content` |
+| `findings` | `Items<ReadinessFinding>` |
+| `assessedBy` | `ActorId` |
+| `assessedAtMs` | `Counter` |
+
+### ReadinessChange
+
+| Kind | Fields |
+| --- | --- |
+| `Assess` | `expectedAssessmentRevision`: `?Revision`<br>`planRevision`: `Revision`<br>`planDigest`: `Digest`<br>`summary`: `Content`<br>`findings`: `Items<ReadinessFinding>` |
+| `CloseFinding` | `expectedAssessmentRevision`: `Revision`<br>`findingId`: `Id`<br>`note`: `Content`<br>`evidence`: `Items<ArtifactRef>` |
 
 ### PlanDraft
 
@@ -2685,6 +2756,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `addLinks` | `?Items<WorkLink>` |
 | `removeLinkIds` | `?Items<Id>` |
 | `addComment` | `?WorkComment` |
+| `readiness` | `?ReadinessChange` · *revision 2+* |
 
 ### IssuePatch
 

@@ -468,5 +468,40 @@ case('r2-result-router.availability','operation-result.r2',{'kind':'router.avail
 case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
 case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
 case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
+# Schema revision 2 (feature readiness, AGENT-12/18-20): every operation returning a work record
+# negotiates revision 2, whose WorkRecord carries the feature's readiness assessment; features.edit
+# records an assessment of the active or pending plan, or closes one finding.
+WORK_R2=['features.list','features.get','features.create','features.edit_plan','features.dependencies','features.edit','issues.list','issues.get','issues.create','issues.edit','tasks.list','tasks.get','tasks.create','tasks.edit','tasks.move','tasks.assign','tasks.dependency_links','tasks.acceptance_evidence','tasks.sync_plan','tasks.set_feature']
+for name in WORK_R2:
+ case('r2-input-'+name,'domain-request.r2',domain(name) if OPS[name]['mode']=='Query' else command_at(name))
+finding={'id':'F1','disposition':'NeedsUserDecision','blocking':True,'prerequisite':False,'state':'Open','requirementIds':['E1'],'scopeKey':'E1','affectedWorkIds':['task-a'],'summary':'processor unknown','missing':'which payment processor','consequence':'refunds cannot be verified','attempts':['read the repository conventions'],'insufficiency':'a product choice','closureCondition':'the processor is named','evidence':[],'question':'Stripe or Adyen?','recommendation':'Stripe','closureEvidence':[]}
+assess={'kind':'Assess','planRevision':'2','planDigest':'b'*64,'summary':'assessed','findings':[finding]}
+edit=command_at('features.edit')
+edit['body']['changes']={'readiness':assess}
+case('r2-input-features.edit-assess','domain-request.r2',edit)
+close=command_at('features.edit')
+close['body']['changes']={'readiness':{'kind':'CloseFinding','expectedAssessmentRevision':'1','findingId':'F1','note':'the user chose Stripe','evidence':[ART]}}
+case('r2-input-features.edit-close-finding','domain-request.r2',close)
+r1edit=command_at('features.edit',None)
+r1edit['body']['changes']={'readiness':assess}
+case('reject-r1-features.edit-readiness','domain-request',r1edit,False,False)
+bad=copy.deepcopy(edit);bad['body']['changes']['readiness']['findings'][0]['disposition']='Maybe'
+case('reject-r2-readiness-unknown-disposition','domain-request.r2',bad,False,False)
+readiness={'id':'assessment-a','revision':'1','planRevision':'2','planDigest':'b'*64,'reviewedPending':False,'freshness':'Stale','staleScopeKeys':['E1'],'ready':False,'summary':'assessed','findings':[finding],'assessedBy':'actor-a','assessedAtMs':'1793570000000'}
+feature_r2={**copy.deepcopy(POS['result-features.get']['value']),'readiness':readiness,'queueRevision':'3','workflowRevision':'1'}
+case('r2-result-features.get','operation-result.r2',{'kind':'features.get','value':feature_r2})
+case('r2-result-features.get-unassessed','operation-result.r2',{'kind':'features.get','value':copy.deepcopy(POS['result-features.get']['value'])})
+case('r2-result-features.list','operation-result.r2',{'kind':'features.list','value':{'items':[feature_r2],'hasMore':False}})
+def work_r2(v):
+ v=copy.deepcopy(v)
+ if 'items' in v:
+  v['items']=[{**x,'queueRevision':'3','workflowRevision':'1'} for x in v['items']]
+  return v
+ return {**v,'queueRevision':'3','workflowRevision':'1'}
+for name in WORK_R2:
+ if name in ('features.get','features.list'):continue
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':work_r2(POS['result-'+name]['value'])})
+case('reject-r1-result-readiness','operation-result',{'kind':'features.get','value':feature_r2},False,False)
+case('reject-r2-result-readiness-freshness','operation-result.r2',{'kind':'features.get','value':{**feature_r2,'readiness':{**readiness,'freshness':'Fresh'}}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

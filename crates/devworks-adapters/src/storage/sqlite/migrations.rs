@@ -202,7 +202,25 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0014_projects.sql"),
         rebuilds_tables: false,
     },
+    // Additive: the work detail, queue revision, plan-approval request and readiness side
+    // tables and five indexes; the migration 1 work tables keep their shape. The writer floor
+    // rises to 15: a build without this migration evaluates dispatch eligibility without the
+    // work fences written here (unverified or open prerequisites, a card's own unlink pause
+    // under its new feature, a card moved to another feature, the parent feature's controls
+    // over a linked card), so as a writer it would dispatch work those records hold. The reader
+    // floor stays at 8: no earlier build reads the new tables, and the indexes leave every query
+    // an earlier reader makes unchanged. Both are at least every earlier floor.
+    Migration {
+        version: 15,
+        minimum_reader: 8,
+        minimum_writer: 15,
+        sql: include_str!("migrations/0015_work.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 15; a test fails if the shipped text changes.
+pub const MIGRATION_0015_SHA256: &str =
+    "734258932025560e659daca87252e9c4b2188c610b9ff8922cc345ff5fa11f75";
 /// Recorded checksum of migration 14; a test fails if the shipped text changes.
 pub const MIGRATION_0014_SHA256: &str =
     "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";

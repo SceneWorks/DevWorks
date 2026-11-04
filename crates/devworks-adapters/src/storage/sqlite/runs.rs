@@ -767,20 +767,61 @@ macro_rules! run_reads {
                 &self,
                 feature: &RootId,
             ) -> Result<Option<StoredPlanState>, StorageError> {
-                db(self
+                let raw: Option<(i64, Option<String>, Option<i64>)> = db(self
                     .conn
                     .query_row(
-                        "SELECT revision,approved_plan_json IS NOT NULL,pending_revision FROM feature_plans WHERE feature_id=?1",
+                        "SELECT revision,approved_plan_json,pending_revision FROM feature_plans WHERE feature_id=?1",
                         [feature.0.as_str()],
-                        |r| {
-                            Ok(StoredPlanState {
-                                revision: r.get(0)?,
-                                approved: r.get(1)?,
-                                pending_revision: r.get(2)?,
-                            })
-                        },
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                     )
-                    .optional())
+                    .optional())?;
+                let Some((revision, approved, pending_revision)) = raw else {
+                    return Ok(None);
+                };
+                let approved_plan = approved
+                    .as_deref()
+                    .map(serde_json::from_str::<serde_json::Value>)
+                    .transpose()
+                    .map_err(|e| {
+                        StorageError::unavailable(Unavailable::Corrupt, format!("stored plan: {e}"))
+                    })?;
+                let readiness = super::work::readiness_of(self.conn, &feature.0)?
+                    .map(|r| (r.revision, r.body));
+                Ok(Some(StoredPlanState {
+                    revision,
+                    approved: approved_plan.is_some(),
+                    pending_revision,
+                    approved_plan,
+                    readiness,
+                }))
+            }
+            fn work_parent(
+                &self,
+                work: &RootId,
+            ) -> Result<Option<Option<RootId>>, StorageError> {
+                let raw: Option<Option<String>> = db(self
+                    .conn
+                    .query_row(
+                        "SELECT parent_feature_id FROM work_items WHERE id=?1",
+                        [work.0.as_str()],
+                        |r| r.get(0),
+                    )
+                    .optional())?;
+                raw.map(|p| {
+                    p.map(|p| {
+                        Id::new(p).map(RootId).map_err(|_| {
+                            StorageError::unavailable(Unavailable::Corrupt, "stored identifier")
+                        })
+                    })
+                    .transpose()
+                })
+                .transpose()
+            }
+            fn open_prerequisites(&self, work: &RootId) -> Result<Vec<RootId>, StorageError> {
+                Ok(super::work::open_prerequisites(self.conn, &work.0)?
+                    .into_iter()
+                    .map(RootId)
+                    .collect())
             }
             fn project_lifecycle(
                 &self,
@@ -804,7 +845,7 @@ macro_rules! run_reads {
                 let n = limit(n)?;
                 Ok(ids(
                     self.conn,
-                    "SELECT id FROM work_items WHERE project_id=?1 AND (kind='feature' OR parent_feature_id IS NULL) AND id>?2 ORDER BY id LIMIT ?3",
+                    "SELECT id FROM work_items WHERE project_id=?1 AND (kind='feature' OR parent_feature_id IS NULL OR EXISTS(SELECT 1 FROM root_controls rc WHERE rc.root_id=work_items.id)) AND id>?2 ORDER BY id LIMIT ?3",
                     params![project.0.as_str(), after.map_or("", |r| r.0.as_str()), n],
                 )?
                 .into_iter()

@@ -17,6 +17,7 @@ pub mod resources;
 pub mod router;
 pub mod runs;
 pub mod sessions;
+pub mod work;
 
 use crate::context::InvocationContext;
 use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, QueryOutcome};
@@ -170,6 +171,13 @@ impl UseCases {
     /// Registers the repository registration operations (`RepositoryService`).
     pub fn with_repositories(mut self, service: Arc<projects::RepositoryService>) -> Self {
         for op in projects::REPOSITORY_OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    pub fn with_work(mut self, service: Arc<work::WorkService>) -> Self {
+        for op in work::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

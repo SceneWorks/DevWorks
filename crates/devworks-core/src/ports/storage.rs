@@ -78,6 +78,7 @@ mod resources;
 mod router;
 mod runs;
 mod sessions;
+mod work;
 pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
@@ -87,6 +88,7 @@ pub use resources::*;
 pub use router::*;
 pub use runs::*;
 pub use sessions::*;
+pub use work::*;
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -479,6 +481,7 @@ pub trait WriteTransaction {
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
     fn projects(&mut self) -> &mut dyn ProjectRepository;
+    fn work(&mut self) -> &mut dyn WorkRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -521,6 +524,7 @@ pub trait ReadSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead;
     fn router(&self) -> &dyn RouterRead;
     fn projects(&self) -> &dyn ProjectRead;
+    fn work(&self) -> &dyn WorkRead;
 }
 
 // ---------------------------------------------------------------------------------------------

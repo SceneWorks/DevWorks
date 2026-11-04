@@ -480,11 +480,15 @@ pub struct StoredTurn {
 
 /// A feature's plan slot as stored by the planning service (`feature_plans`): only the active
 /// approved plan authorizes implementation; a pending revision never does.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StoredPlanState {
     pub revision: i64,
     pub approved: bool,
     pub pending_revision: Option<i64>,
+    /// The active approved plan as the planning service stored it.
+    pub approved_plan: Option<Value>,
+    /// The feature's readiness assessment (its revision and body), if one was recorded.
+    pub readiness: Option<(i64, Value)>,
 }
 
 pub trait RunRead {
@@ -535,9 +539,15 @@ pub trait RunRead {
     /// Turns recorded by any boot but `boot`.
     fn turns_prior_boots(&self, boot: &Id, limit: u16) -> Result<Vec<StoredTurn>, StorageError>;
     fn feature_plan(&self, feature: &RootId) -> Result<Option<StoredPlanState>, StorageError>;
+    /// The work item's current feature membership (`None`: no such item; `Some(None)`: it has
+    /// no feature).
+    fn work_parent(&self, work: &RootId) -> Result<Option<Option<RootId>>, StorageError>;
+    /// The work item's prerequisites that are not completed with verified acceptance.
+    fn open_prerequisites(&self, work: &RootId) -> Result<Vec<RootId>, StorageError>;
     /// The project's lifecycle label (`None` for an unknown project).
     fn project_lifecycle(&self, project: &ProjectId) -> Result<Option<String>, StorageError>;
-    /// Root work items (features and standalone issues/tasks) of a project in ID order.
+    /// Root work items of a project in ID order: features, standalone issues/tasks, and cards
+    /// linked to a feature that keep run controls of their own (an archival stops them too).
     fn project_roots(
         &self,
         project: &ProjectId,

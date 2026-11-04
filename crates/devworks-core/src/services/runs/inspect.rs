@@ -3,7 +3,7 @@
 //! wire `runs.inspect` result ([`super::root_snapshot`]) is its contract projection; transcripts
 //! and tool calls are read with `sessions.transcript` and the history operations for the listed
 //! sessions, and owned process output through the process owner for the listed trees.
-use super::{ControlService, active_blockers, control_of, root_assignments, run_root};
+use super::{ControlService, active_blockers, control_of, root_assignments};
 use crate::context::InvocationContext;
 use crate::ports::storage::{
     ActivationFilter, ActivationOutcome, ActivationPhase, BlockerFilter, DesiredExecution,
@@ -159,7 +159,7 @@ impl ControlService {
         root_id: &RootId,
         now_ms: i64,
     ) -> Result<RunInspection, Failure> {
-        let root = run_root(snapshot.sessions(), ctx, root_id)?;
+        let root = super::controlled_root(snapshot.sessions(), snapshot.runs(), ctx, root_id)?;
         let runs = snapshot.runs();
         let control = control_of(runs, &root.id)?;
         let activations = runs.activations(

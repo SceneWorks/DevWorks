@@ -1,0 +1,660 @@
+//! Feature execution-readiness assessments (AGENT-12, AGENT-18..20; AD79).
+//!
+//! An assessment is a feature-owned record bound to the plan it reviewed (the active approved
+//! plan, or the pending draft before adoption: its slot revision and digest) and to the digest
+//! of each scope unit of that plan ([`super::model::plan_units`]: the feature-wide unit and one
+//! per live requirement). It holds every finding with its disposition:
+//!
+//! * a **resolved decision** (never blocking) records the decision, its confidence and evidence;
+//! * a **bounded investigation** records its objective, authority/resource limits, closure
+//!   condition and the dependent work it gates (only that work, and only implementation);
+//! * a **needs-user decision** records the specific question and the recommended answer.
+//!
+//! A blocking finding names the requirement it threatens (none: the feature-wide outcome), what
+//! is missing or contradictory, the concrete consequence, what was checked or attempted, why
+//! autonomous resolution is insufficient and the exact answer or evidence that closes it.
+//!
+//! Freshness is computed, unit by unit, against the active plan: a unit whose digest changed (or
+//! a new requirement) is stale; every unchanged unit keeps its evidence, so a material change
+//! invalidates only the affected scope. Readiness is derived — a current assessment of the
+//! active plan with no open blocking finding — and is reported apart from plan approval; no
+//! caller asserts it, and approving a plan never closes a finding. Re-assessing an unchanged plan
+//! cannot add a blocker or reopen a settled finding without new evidence; settled findings an
+//! assessment leaves out are kept. A blocking finding closes with a closure note and, for anyone
+//! but the user, evidence; a human may accept a finding's identified risk through the approvals
+//! item's decision seam ([`accept_finding_risk`]), which never waives a missing prerequisite.
+use super::model::{
+    FEATURE_UNIT, active_of, pending_of, plan_digest as digest_of_draft, plan_units,
+};
+use super::{R, check_artifact, conflict, invalid, not_found, refuse, stale, visible_feature};
+use crate::context::{InvocationContext, PrincipalKind};
+use crate::ports::IdKind;
+use crate::ports::storage::{
+    FEATURE, NewEvent, StorageError, StoredReadiness, StoredWork, WorkRead, WriteTransaction,
+};
+use crate::protocol::provider::Digest;
+use crate::protocol::records::{
+    FindingState, ReadinessAssessment, ReadinessChange, ReadinessDisposition, ReadinessFinding,
+    ReadinessFreshness,
+};
+use crate::protocol::support::BoundedList;
+use crate::protocol::{ActorId, DomainErrorCode, EventId, Id, RevisionDimension, RootId};
+use crate::services::runs::scope::{PlanState, Readiness, ScopeUnit};
+use crate::services::sessions::{content, counter, rev};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+
+/// History aggregate of a feature's readiness (`aggregate_id` = feature ID).
+pub const READINESS_AGGREGATE: &str = "feature_readiness";
+
+/// The stored body of an assessment.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Assessment {
+    pub id: Id,
+    pub plan_revision: i64,
+    pub plan_digest: String,
+    pub reviewed_pending: bool,
+    /// Digest of each reviewed scope unit (`""`: the feature-wide unit).
+    pub units: BTreeMap<String, String>,
+    pub summary: String,
+    pub findings: Vec<ReadinessFinding>,
+    pub assessed_by: ActorId,
+    pub assessed_at_ms: i64,
+}
+impl Assessment {
+    pub fn of(v: &Value) -> Option<Self> {
+        serde_json::from_value(v.clone()).ok()
+    }
+}
+
+fn open_blocking(f: &ReadinessFinding) -> bool {
+    f.blocking && matches!(f.state, FindingState::Open)
+}
+
+/// The scope units of the active plan of `feature`, or of its pending draft before approval.
+fn reference_units(
+    read: &dyn WorkRead,
+    feature: &Id,
+) -> Result<Option<BTreeMap<String, String>>, StorageError> {
+    let Some(slot) = read.feature_plan(feature)? else {
+        return Ok(None);
+    };
+    if let Some(a) = active_of(slot.approved.as_ref()) {
+        return Ok(Some(plan_units(&a.draft)));
+    }
+    Ok(pending_of(slot.pending.as_ref()).map(|p| plan_units(&p.draft)))
+}
+/// The units whose evidence is stale: changed digests and units the assessment never reviewed.
+fn stale_units(
+    reviewed: &BTreeMap<String, String>,
+    current: &BTreeMap<String, String>,
+) -> Vec<String> {
+    current
+        .iter()
+        .filter(|(k, d)| reviewed.get(*k) != Some(*d))
+        .map(|(k, _)| k.clone())
+        .collect()
+}
+
+/// The wire assessment of `feature` (with freshness against its active plan), if one exists.
+pub fn assessment(
+    read: &dyn WorkRead,
+    feature: &StoredWork,
+) -> Result<Option<ReadinessAssessment>, StorageError> {
+    if feature.kind != FEATURE {
+        return Ok(None);
+    }
+    let Some(stored) = read.readiness(&feature.id)? else {
+        return Ok(None);
+    };
+    let Some(a) = Assessment::of(&stored.body) else {
+        return Ok(None);
+    };
+    let active = read
+        .feature_plan(&feature.id)?
+        .and_then(|s| active_of(s.approved.as_ref()));
+    let current = reference_units(read, &feature.id)?.unwrap_or_default();
+    let stale: Vec<Id> = if current.is_empty() {
+        vec![feature.id.clone()]
+    } else {
+        stale_units(&a.units, &current)
+            .into_iter()
+            .map(|k| {
+                if k == FEATURE_UNIT {
+                    feature.id.clone()
+                } else {
+                    Id::new(k).unwrap_or_else(|_| feature.id.clone())
+                }
+            })
+            .collect()
+    };
+    let fresh = stale.is_empty();
+    let ready = active.is_some() && fresh && !a.findings.iter().any(open_blocking);
+    Ok(Some(ReadinessAssessment {
+        id: a.id.clone(),
+        revision: rev(stored.revision),
+        plan_revision: rev(a.plan_revision),
+        plan_digest: Digest::try_from(a.plan_digest.clone())
+            .map_err(|_| StorageError::InvalidRecord("stored plan digest".into()))?,
+        reviewed_pending: a.reviewed_pending,
+        freshness: if fresh {
+            ReadinessFreshness::Current
+        } else {
+            ReadinessFreshness::Stale
+        },
+        stale_scope_keys: BoundedList(stale.into_iter().take(128).collect()),
+        ready,
+        summary: content(&a.summary),
+        findings: BoundedList(a.findings.iter().take(128).cloned().collect()),
+        assessed_by: a.assessed_by.clone(),
+        assessed_at_ms: counter(a.assessed_at_ms),
+    }))
+}
+
+/// The execution authority run control evaluates for a feature (its scope port): the active
+/// approved plan's units and, for each, readiness from the stored assessment. `None` when the
+/// stored plan is not one this service wrote (fixtures): the caller keeps its plain reading.
+pub fn scope_plan(
+    approved: &Value,
+    pending_revision: Option<i64>,
+    readiness: Option<&(i64, Value)>,
+) -> Option<PlanState> {
+    let active = active_of(Some(approved))?;
+    let units = plan_units(&active.draft);
+    let assessment = readiness.and_then(|(r, v)| Assessment::of(v).map(|a| (*r, a)));
+    let unit = |key: &str, digest: &String| -> ScopeUnit {
+        let readiness = match &assessment {
+            None => Readiness::Missing,
+            Some((r, a)) => {
+                let blocking = a.findings.iter().find(|f| {
+                    open_blocking(f)
+                        && (f.scope_key.is_none()
+                            || f.scope_key.as_ref().is_some_and(|k| k.as_str() == key))
+                });
+                if a.units.get(key) != Some(digest) {
+                    Readiness::Stale {
+                        assessment_revision: *r,
+                    }
+                } else if let Some(f) = blocking {
+                    Readiness::Blocked {
+                        finding: f.id.as_str().to_owned(),
+                    }
+                } else {
+                    Readiness::Current {
+                        assessment_revision: *r,
+                    }
+                }
+            }
+        };
+        ScopeUnit {
+            digest: digest.clone(),
+            readiness,
+        }
+    };
+    let feature = unit(FEATURE_UNIT, units.get(FEATURE_UNIT)?);
+    let named = units
+        .iter()
+        .filter(|(k, _)| k.as_str() != FEATURE_UNIT)
+        .map(|(k, d)| (k.clone(), unit(k, d)))
+        .collect();
+    Some(PlanState::Approved {
+        revision: active.plan_revision,
+        pending_revision,
+        feature,
+        units: named,
+    })
+}
+
+/// The open blocking finding that gates `work` (a bounded investigation or a decision whose
+/// affected work names it): that work's implementation waits for its closure; unrelated work of
+/// the feature keeps moving.
+pub fn gating_finding(readiness: &Value, work: &Id) -> Option<String> {
+    let a = Assessment::of(readiness)?;
+    a.findings
+        .iter()
+        .find(|f| open_blocking(f) && f.affected_work_ids.0.contains(work))
+        .map(|f| f.id.as_str().to_owned())
+}
+
+fn nonblank(c: &Option<crate::protocol::support::BoundedText<0, 65536>>) -> bool {
+    c.as_ref().is_some_and(|t| !t.0.trim().is_empty())
+}
+fn blank(t: &str) -> bool {
+    t.trim().is_empty()
+}
+
+/// Checks one finding of an assessment against the reviewed plan and the feature's work.
+fn check_finding(
+    f: &ReadinessFinding,
+    requirements: &BTreeSet<String>,
+    work: &BTreeSet<String>,
+) -> R<()> {
+    let bad = |kind: &'static str| Err(invalid(kind, Some(&f.id)));
+    for r in &f.requirement_ids.0 {
+        if !requirements.contains(r.as_str()) {
+            return Err(not_found("requirement", r).into());
+        }
+    }
+    if let Some(k) = &f.scope_key
+        && !requirements.contains(k.as_str())
+    {
+        return Err(not_found("requirement", k).into());
+    }
+    for w in &f.affected_work_ids.0 {
+        if !work.contains(w.as_str()) {
+            return Err(not_found("work", w).into());
+        }
+    }
+    if matches!(f.state, FindingState::RiskAccepted) {
+        // Only a human decision accepts a finding's risk.
+        return bad("finding_state");
+    }
+    match f.disposition {
+        ReadinessDisposition::ResolvedDecision => {
+            if f.blocking
+                || !matches!(f.state, FindingState::Resolved)
+                || !nonblank(&f.decision)
+                || f.confidence.is_none()
+            {
+                return bad("resolved_decision");
+            }
+        }
+        ReadinessDisposition::BoundedInvestigation => {
+            if !nonblank(&f.objective)
+                || !nonblank(&f.limits)
+                || blank(&f.closure_condition.0)
+                || f.affected_work_ids.0.is_empty()
+            {
+                return bad("investigation");
+            }
+        }
+        ReadinessDisposition::NeedsUserDecision => {
+            if !nonblank(&f.question) || !nonblank(&f.recommendation) {
+                return bad("user_decision");
+            }
+        }
+    }
+    if f.blocking {
+        // A blocker must justify itself: its requirement (unless the whole outcome is
+        // undefined), what is missing, the consequence, the attempts made, why autonomous
+        // resolution is insufficient and what closes it.
+        let feature_wide = f.scope_key.is_none() && f.requirement_ids.0.is_empty();
+        if (!feature_wide && f.requirement_ids.0.is_empty())
+            || blank(&f.missing.0)
+            || blank(&f.consequence.0)
+            || f.attempts.0.is_empty()
+            || blank(&f.insufficiency.0)
+            || blank(&f.closure_condition.0)
+        {
+            return bad("blocking_finding");
+        }
+    }
+    if f.blocking
+        && matches!(f.state, FindingState::Resolved)
+        && !nonblank(&f.closure_note)
+        && f.closure_evidence.0.is_empty()
+    {
+        return bad("closure");
+    }
+    Ok(())
+}
+
+fn evidence_keys(f: &ReadinessFinding) -> BTreeSet<String> {
+    f.evidence
+        .0
+        .iter()
+        .chain(&f.closure_evidence.0)
+        .map(|a| format!("{}:{}", a.artifact_id.as_str(), a.version_id.as_str()))
+        .collect()
+}
+
+fn record(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    feature: &StoredWork,
+    revision: i64,
+    kind: &str,
+    payload: Value,
+) -> Result<(), StorageError> {
+    let mut payload = payload;
+    if let Some(m) = payload.as_object_mut() {
+        m.insert(
+            "principalKind".into(),
+            json!(format!("{:?}", ctx.principal_kind())),
+        );
+    }
+    let id = EventId(tx.new_id(IdKind::Event));
+    tx.history().append(NewEvent {
+        id,
+        actor: ctx.principal().clone(),
+        project_id: Some(feature.project_id.clone()),
+        root_id: Some(RootId(feature.id.clone())),
+        operation_id: None,
+        aggregate_kind: READINESS_AGGREGATE.into(),
+        aggregate_id: feature.id.as_str().to_owned(),
+        aggregate_revision: revision,
+        kind: kind.into(),
+        payload,
+    })?;
+    Ok(())
+}
+
+/// Applies a `features.edit` readiness change to `feature` (inside the edit's unit of work).
+pub(crate) fn apply_change(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    feature: &StoredWork,
+    change: &ReadinessChange,
+) -> R<()> {
+    let stored = tx.work().readiness(&feature.id)?;
+    let previous = stored.as_ref().and_then(|s| Assessment::of(&s.body));
+    let current_rev = stored.as_ref().map(|s| s.revision);
+    match change {
+        ReadinessChange::Assess {
+            expected_assessment_revision,
+            plan_revision,
+            plan_digest,
+            summary,
+            findings,
+        } => {
+            let expected = expected_assessment_revision.as_ref().map(|r| r.get());
+            if expected != current_rev {
+                return Err(stale(
+                    RevisionDimension::Plan,
+                    "readiness",
+                    &feature.id,
+                    expected.unwrap_or(1),
+                    current_rev.unwrap_or(1),
+                ));
+            }
+            // The assessment binds the plan it reviewed: the active plan or the pending draft,
+            // at exactly this revision and digest.
+            let slot = tx.work().feature_plan(&feature.id)?;
+            let active = slot.as_ref().and_then(|s| active_of(s.approved.as_ref()));
+            let pending = slot
+                .as_ref()
+                .and_then(|s| pending_of(s.pending.as_ref()).zip(s.pending_revision));
+            let digest = String::from(plan_digest.clone());
+            let (draft, reviewed_pending) = match (&active, &pending) {
+                (Some(a), _) if a.plan_revision == plan_revision.get() && a.digest == digest => {
+                    (a.draft.clone(), false)
+                }
+                (_, Some((p, r))) if *r == plan_revision.get() && p.digest == digest => {
+                    (p.draft.clone(), true)
+                }
+                _ => return Err(conflict("plan_changed", &feature.id)),
+            };
+            debug_assert_eq!(digest_of_draft(&draft), digest);
+            let requirements: BTreeSet<String> = draft
+                .requirements
+                .0
+                .iter()
+                .filter(|r| !super::model::dropped(r))
+                .map(|r| r.id.as_str().to_owned())
+                .collect();
+            let work = feature_work(tx.work(), feature)?;
+            let ids: Vec<Id> = findings.0.iter().map(|f| f.id.clone()).collect();
+            super::id_set(&ids, "finding_ids")?;
+            for f in &findings.0 {
+                check_finding(f, &requirements, &work)?;
+                for a in f.evidence.0.iter().chain(&f.closure_evidence.0) {
+                    check_artifact(tx, ctx, &feature.project_id, a)?;
+                }
+            }
+            let units = plan_units(&draft);
+            let mut out: Vec<ReadinessFinding> = findings.0.clone();
+            if let Some(prev) = &previous {
+                // Closure is checked without reopening settled choices: at an unchanged plan, a
+                // new blocker or a reopened finding needs newly discovered evidence.
+                let same_plan = prev.plan_digest == digest;
+                for f in &findings.0 {
+                    let old = prev.findings.iter().find(|o| o.id == f.id);
+                    let new_evidence = match old {
+                        Some(o) => !evidence_keys(f).is_subset(&evidence_keys(o)),
+                        None => !f.evidence.0.is_empty(),
+                    };
+                    let reopened = old.is_some_and(|o| {
+                        !matches!(o.state, FindingState::Open)
+                            && matches!(f.state, FindingState::Open)
+                    });
+                    let added_blocker = old.is_none() && open_blocking(f);
+                    if same_plan && (reopened || added_blocker) && !new_evidence {
+                        return Err(conflict("settled_without_new_evidence", &f.id));
+                    }
+                    if old.is_some_and(|o| matches!(o.state, FindingState::RiskAccepted))
+                        && !matches!(f.state, FindingState::RiskAccepted)
+                        && !new_evidence
+                    {
+                        return Err(conflict("settled_without_new_evidence", &f.id));
+                    }
+                }
+                // Settled findings the new assessment leaves out are kept with their closure.
+                for o in &prev.findings {
+                    if !matches!(o.state, FindingState::Open)
+                        && !out.iter().any(|f| f.id == o.id)
+                        && out.len() < 128
+                    {
+                        out.push(o.clone());
+                    }
+                }
+            }
+            let body = Assessment {
+                id: previous
+                    .as_ref()
+                    .map(|p| p.id.clone())
+                    .unwrap_or_else(|| tx.new_id(IdKind::Link)),
+                plan_revision: plan_revision.get(),
+                plan_digest: digest.clone(),
+                reviewed_pending,
+                units,
+                summary: summary.0.clone(),
+                findings: out,
+                assessed_by: ctx.principal().clone(),
+                assessed_at_ms: tx.now_ms(),
+            };
+            let revision = current_rev.map_or(1, |r| r + 1);
+            tx.work().put_readiness(
+                &StoredReadiness {
+                    feature_id: feature.id.clone(),
+                    revision,
+                    body: serde_json::to_value(&body).unwrap_or_else(|_| json!({})),
+                },
+                current_rev,
+            )?;
+            let open: Vec<&str> = body
+                .findings
+                .iter()
+                .filter(|f| open_blocking(f))
+                .map(|f| f.id.as_str())
+                .collect();
+            record(
+                tx,
+                ctx,
+                feature,
+                revision,
+                "ReadinessAssessed",
+                json!({
+                    "planRevision": plan_revision.get(),
+                    "reviewedPending": reviewed_pending,
+                    "findings": body.findings.len(),
+                    "openBlocking": open,
+                }),
+            )?;
+        }
+        ReadinessChange::CloseFinding {
+            expected_assessment_revision,
+            finding_id,
+            note,
+            evidence,
+        } => {
+            let (Some(stored), Some(mut body)) = (stored, previous) else {
+                return Err(not_found("readiness", &feature.id).into());
+            };
+            if stored.revision != expected_assessment_revision.get() {
+                return Err(stale(
+                    RevisionDimension::Plan,
+                    "readiness",
+                    &feature.id,
+                    expected_assessment_revision.get(),
+                    stored.revision,
+                ));
+            }
+            let Some(f) = body.findings.iter_mut().find(|f| &f.id == finding_id) else {
+                return Err(not_found("finding", finding_id).into());
+            };
+            if !matches!(f.state, FindingState::Open) {
+                return Err(conflict("finding_settled", finding_id));
+            }
+            if blank(&note.0) {
+                return Err(invalid("closure_note", Some(finding_id)));
+            }
+            if f.blocking && evidence.0.is_empty() && ctx.principal_kind() != PrincipalKind::Human {
+                return Err(invalid("closure_evidence", Some(finding_id)));
+            }
+            for a in &evidence.0 {
+                check_artifact(tx, ctx, &feature.project_id, a)?;
+            }
+            f.state = FindingState::Resolved;
+            f.closure_note = Some(note.clone());
+            f.closure_evidence = evidence.clone();
+            let revision = stored.revision + 1;
+            tx.work().put_readiness(
+                &StoredReadiness {
+                    feature_id: feature.id.clone(),
+                    revision,
+                    body: serde_json::to_value(&body).unwrap_or_else(|_| json!({})),
+                },
+                Some(stored.revision),
+            )?;
+            record(
+                tx,
+                ctx,
+                feature,
+                revision,
+                "ReadinessFindingClosed",
+                json!({"findingId": finding_id.as_str(), "evidence": evidence.0.len()}),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// The cards of `feature` (IDs), for affected-work validation.
+fn feature_work(read: &dyn WorkRead, feature: &StoredWork) -> R<BTreeSet<String>> {
+    use crate::ports::storage::{WorkFilter, WorkPosition, WorkSelection};
+    let filter = WorkFilter {
+        project: feature.project_id.clone(),
+        selection: WorkSelection::FeatureTasks(feature.id.clone()),
+        status_ids: Vec::new(),
+        repository_ids: Vec::new(),
+        text: None,
+    };
+    let mut out = BTreeSet::new();
+    let mut after: Option<WorkPosition> = None;
+    loop {
+        let page = read.works(&filter, after.as_ref(), 500)?;
+        let more = page.len() == 500;
+        after = page.last().map(WorkPosition::of);
+        out.extend(page.iter().map(|w| w.id.as_str().to_owned()));
+        if !more {
+            return Ok(out);
+        }
+    }
+}
+
+/// The approvals item's seam for an explicit, finding-specific human acceptance of an
+/// identified risk. Only a human decides; a finding recording a missing prerequisite (a
+/// credential, dependency, contradictory acceptance or required verification) cannot be waived.
+/// Plan approval never reaches this.
+pub fn accept_finding_risk(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    feature_id: &Id,
+    finding_id: &Id,
+    expected_revision: i64,
+    rationale: &str,
+) -> R<ReadinessAssessment> {
+    if ctx.principal_kind() != PrincipalKind::Human {
+        return Err(refuse(
+            DomainErrorCode::PermissionDenied,
+            "risk_acceptance",
+            Some(finding_id),
+        ));
+    }
+    let feature = visible_feature(tx.work(), ctx, feature_id)?;
+    super::open_project(tx, ctx, &feature.project_id)?;
+    let Some(stored) = tx.work().readiness(&feature.id)? else {
+        return Err(not_found("readiness", feature_id).into());
+    };
+    if stored.revision != expected_revision {
+        return Err(stale(
+            RevisionDimension::Plan,
+            "readiness",
+            feature_id,
+            expected_revision,
+            stored.revision,
+        ));
+    }
+    let Some(mut body) = Assessment::of(&stored.body) else {
+        return Err(not_found("readiness", feature_id).into());
+    };
+    let Some(f) = body.findings.iter_mut().find(|f| &f.id == finding_id) else {
+        return Err(not_found("finding", finding_id).into());
+    };
+    if f.prerequisite {
+        return Err(conflict("prerequisite_not_waivable", finding_id));
+    }
+    if !matches!(f.state, FindingState::Open) || blank(rationale) {
+        return Err(conflict("finding_settled", finding_id));
+    }
+    f.state = FindingState::RiskAccepted;
+    f.closure_note = Some(content(rationale));
+    let revision = stored.revision + 1;
+    tx.work().put_readiness(
+        &StoredReadiness {
+            feature_id: feature.id.clone(),
+            revision,
+            body: serde_json::to_value(&body).unwrap_or_else(|_| json!({})),
+        },
+        Some(stored.revision),
+    )?;
+    record(
+        tx,
+        ctx,
+        &feature,
+        revision,
+        "ReadinessRiskAccepted",
+        json!({"findingId": finding_id.as_str(), "rationale": rationale}),
+    )?;
+    Ok(assessment(tx.work(), &feature)?.expect("just recorded"))
+}
+
+/// Records which scope units a plan adoption made stale (their evidence is no longer current;
+/// every other unit keeps it).
+pub(crate) fn record_adoption(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    feature: &StoredWork,
+) -> Result<(), StorageError> {
+    let Some(stored) = tx.work().readiness(&feature.id)? else {
+        return Ok(());
+    };
+    let Some(a) = Assessment::of(&stored.body) else {
+        return Ok(());
+    };
+    let Some(current) = reference_units(tx.work(), &feature.id)? else {
+        return Ok(());
+    };
+    let stale = stale_units(&a.units, &current);
+    let kept: Vec<&String> = current.keys().filter(|k| !stale.contains(k)).collect();
+    record(
+        tx,
+        ctx,
+        feature,
+        stored.revision,
+        "ReadinessInvalidated",
+        json!({"staleUnits": stale, "currentUnits": kept}),
+    )
+}

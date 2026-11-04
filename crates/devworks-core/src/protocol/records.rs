@@ -748,6 +748,27 @@ pub struct WorkRecord {
     pub manual_order: Option<Counter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github_issue: Option<GithubIssueTracking>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReadinessAssessment", extend("x-since" = 2))]
+    pub readiness: Option<ReadinessAssessment>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub queue_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub workflow_revision: Option<Revision>,
 }
 impl Check for WorkRecord {
     fn check(&self) -> Result<(), String> {
@@ -787,10 +808,230 @@ impl Check for WorkRecord {
         self.dependent_ids.check()?;
         self.manual_order.check()?;
         self.github_issue.check()?;
+        self.readiness.check()?;
+        self.queue_revision.check()?;
+        self.workflow_revision.check()?;
         crate::protocol::rules::record(
             "WorkRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for WorkRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.readiness = None;
+        }
+        if revision < 2 {
+            self.queue_revision = None;
+        }
+        if revision < 2 {
+            self.workflow_revision = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ReadinessDisposition {
+    ResolvedDecision,
+    BoundedInvestigation,
+    NeedsUserDecision,
+}
+impl Check for ReadinessDisposition {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum FindingState {
+    Open,
+    Resolved,
+    RiskAccepted,
+}
+impl Check for FindingState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConfidenceLevel {
+    High,
+    Medium,
+    Low,
+}
+impl Check for ConfidenceLevel {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ReadinessFreshness {
+    Current,
+    Stale,
+}
+impl Check for ReadinessFreshness {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadinessFinding {
+    pub id: Id,
+    pub disposition: ReadinessDisposition,
+    pub blocking: bool,
+    pub prerequisite: bool,
+    pub state: FindingState,
+    pub requirement_ids: Items<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_key: Option<Id>,
+    pub affected_work_ids: Items<Id>,
+    pub summary: Content,
+    pub missing: Content,
+    pub consequence: Content,
+    pub attempts: Items<Content>,
+    pub insufficiency: Content,
+    pub closure_condition: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<ConfidenceLevel>,
+    pub evidence: Items<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommendation: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure_note: Option<Content>,
+    pub closure_evidence: Items<ArtifactRef>,
+}
+impl Check for ReadinessFinding {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.disposition.check()?;
+        self.blocking.check()?;
+        self.prerequisite.check()?;
+        self.state.check()?;
+        self.requirement_ids.check()?;
+        self.scope_key.check()?;
+        self.affected_work_ids.check()?;
+        self.summary.check()?;
+        self.missing.check()?;
+        self.consequence.check()?;
+        self.attempts.check()?;
+        self.insufficiency.check()?;
+        self.closure_condition.check()?;
+        self.decision.check()?;
+        self.confidence.check()?;
+        self.evidence.check()?;
+        self.objective.check()?;
+        self.limits.check()?;
+        self.question.check()?;
+        self.recommendation.check()?;
+        self.closure_note.check()?;
+        self.closure_evidence.check()?;
+        crate::protocol::rules::record(
+            "ReadinessFinding",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadinessAssessment {
+    pub id: Id,
+    pub revision: Revision,
+    pub plan_revision: Revision,
+    pub plan_digest: Digest,
+    pub reviewed_pending: bool,
+    pub freshness: ReadinessFreshness,
+    pub stale_scope_keys: Items<Id>,
+    pub ready: bool,
+    pub summary: Content,
+    pub findings: Items<ReadinessFinding>,
+    pub assessed_by: ActorId,
+    pub assessed_at_ms: Counter,
+}
+impl Check for ReadinessAssessment {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.plan_revision.check()?;
+        self.plan_digest.check()?;
+        self.reviewed_pending.check()?;
+        self.freshness.check()?;
+        self.stale_scope_keys.check()?;
+        self.ready.check()?;
+        self.summary.check()?;
+        self.findings.check()?;
+        self.assessed_by.check()?;
+        self.assessed_at_ms.check()?;
+        crate::protocol::rules::record(
+            "ReadinessAssessment",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ReadinessChange {
+    Assess {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_assessment_revision: Option<Revision>,
+        plan_revision: Revision,
+        plan_digest: Digest,
+        summary: Content,
+        findings: Items<ReadinessFinding>,
+    },
+    CloseFinding {
+        expected_assessment_revision: Revision,
+        finding_id: Id,
+        note: Content,
+        evidence: Items<ArtifactRef>,
+    },
+}
+impl Check for ReadinessChange {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Assess {
+                expected_assessment_revision,
+                plan_revision,
+                plan_digest,
+                summary,
+                findings,
+            } => {
+                expected_assessment_revision.check()?;
+                plan_revision.check()?;
+                plan_digest.check()?;
+                summary.check()?;
+                findings.check()?;
+            }
+            Self::CloseFinding {
+                expected_assessment_revision,
+                finding_id,
+                note,
+                evidence,
+            } => {
+                expected_assessment_revision.check()?;
+                finding_id.check()?;
+                note.check()?;
+                evidence.check()?;
+            }
+        }
         Ok(())
     }
 }
@@ -5985,6 +6226,13 @@ pub struct FeaturePatch {
     pub remove_link_ids: Option<Items<Id>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub add_comment: Option<WorkComment>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReadinessChange", extend("x-since" = 2))]
+    pub readiness: Option<ReadinessChange>,
 }
 impl Check for FeaturePatch {
     fn check(&self) -> Result<(), String> {
@@ -5996,11 +6244,20 @@ impl Check for FeaturePatch {
         self.add_links.check()?;
         self.remove_link_ids.check()?;
         self.add_comment.check()?;
+        self.readiness.check()?;
         crate::protocol::rules::record(
             "FeaturePatch",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for FeaturePatch {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.readiness = None;
+        }
     }
 }
 

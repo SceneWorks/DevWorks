@@ -183,7 +183,9 @@ impl Check for EditInput {
     }
 }
 impl Revisioned for EditInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.changes.retain_revision(revision);
+    }
 }
 
 /// An admitted input of the `features` family, built only for the selected operation and mode.

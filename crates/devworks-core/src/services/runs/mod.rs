@@ -197,6 +197,43 @@ pub(crate) fn run_root(
     }
     Ok(root)
 }
+/// The root `id` for a control of its own holds and activation: a run root, or a card linked
+/// to a feature that has controls of its own (it ran as a root, or carries its unlink pause).
+/// Such a card keeps its holds through relinking, and only its own Continue clears them; its
+/// feature's coordinator runs its work, so Start stays root-only.
+pub(crate) fn controlled_root(
+    sessions: &dyn SessionRead,
+    runs: &dyn RunRead,
+    ctx: &InvocationContext,
+    id: &RootId,
+) -> Result<WorkRoot, Failure> {
+    let root = crate::services::sessions::visible_root(sessions, ctx, id)?;
+    if is_run_root(&root) || runs.root_control(&root.id)?.is_some() {
+        return Ok(root);
+    }
+    Err(Refusal::new(
+        DomainErrorCode::UnsupportedTarget,
+        "root",
+        Some(root.id.0.clone()),
+    )
+    .into())
+}
+pub(crate) fn controlled_root_tx(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    id: &RootId,
+) -> Result<WorkRoot, Failure> {
+    let root = crate::services::sessions::visible_root(tx.sessions(), ctx, id)?;
+    if is_run_root(&root) || tx.runs().root_control(&root.id)?.is_some() {
+        return Ok(root);
+    }
+    Err(Refusal::new(
+        DomainErrorCode::UnsupportedTarget,
+        "root",
+        Some(root.id.0.clone()),
+    )
+    .into())
+}
 /// Whether a work item is a run root (a feature, or a task/issue without a feature).
 pub fn is_run_root(w: &WorkRoot) -> bool {
     w.kind == "feature" || w.parent_feature_id.is_none()
@@ -528,6 +565,43 @@ impl ControlService {
             ));
         }
         c.extend(root_level.iter().map(stored));
+        // A card that keeps an activation of its own after it was linked to a feature (an
+        // existing agent continues) is governed by its feature's controls as well.
+        if !is_run_root(root)
+            && let Some(f) = &root.parent_feature_id
+        {
+            let feature_control = control_of(runs, f)?;
+            let feature_level = active_blockers(runs, &BlockerFilter::RootLevel(f.clone()))?;
+            if feature_control.desired == DesiredExecution::Paused
+                && !feature_level.iter().any(|b| b.cause.manual_resume())
+            {
+                c.push(derived(
+                    "feature-paused",
+                    Subject::Root(f.clone()),
+                    feature_control.revision,
+                    HoldCause::HumanPause,
+                    "its feature is paused",
+                ));
+            }
+            c.extend(feature_level.iter().map(stored));
+        }
+        // A standalone card's unsatisfied prerequisites hold its implementation (a manual Done
+        // label is not verified completion).
+        if purpose == ActivationPurpose::Implementation && !is_feature(root) {
+            let open = runs.open_prerequisites(&root.id)?;
+            if let Some(p) = open.first() {
+                c.push(derived(
+                    "prerequisites",
+                    root_subject.clone(),
+                    open.len() as i64,
+                    HoldCause::Dependency,
+                    &format!(
+                        "prerequisite {} is not complete with verified acceptance",
+                        p.0.as_str()
+                    ),
+                ));
+            }
+        }
         let mut readiness_revision = None;
         let assignment = match target {
             Target::Root => None,
@@ -572,6 +646,57 @@ impl ControlService {
                     .iter()
                     .map(stored),
             );
+            if a.work_id != root.id {
+                // The card's own holds travel with it (an unlink pause survives relinking), a
+                // card that left this root is fenced, and its unsatisfied prerequisites hold
+                // its implementation.
+                c.extend(
+                    active_blockers(runs, &BlockerFilter::RootLevel(a.work_id.clone()))?
+                        .iter()
+                        .map(stored),
+                );
+                if let Some(parent) = runs.work_parent(&a.work_id)?
+                    && parent.as_ref() != Some(&root.id)
+                {
+                    c.push(derived(
+                        "membership",
+                        subject.clone(),
+                        a.revision,
+                        HoldCause::Policy,
+                        "the work is no longer part of this root",
+                    ));
+                }
+                if purpose == ActivationPurpose::Implementation
+                    && is_feature(root)
+                    && let Some((_, readiness)) =
+                        runs.feature_plan(&root.id)?.and_then(|p| p.readiness)
+                    && let Some(f) =
+                        crate::services::work::readiness::gating_finding(&readiness, &a.work_id.0)
+                {
+                    c.push(derived(
+                        "finding-gate",
+                        subject.clone(),
+                        a.revision,
+                        HoldCause::Policy,
+                        &format!("readiness finding {f} gates this work"),
+                    ));
+                }
+                if purpose == ActivationPurpose::Implementation {
+                    let open = runs.open_prerequisites(&a.work_id)?;
+                    if let Some(p) = open.first() {
+                        c.push(derived(
+                            "prerequisites",
+                            subject.clone(),
+                            open.len() as i64,
+                            HoldCause::Dependency,
+                            &format!(
+                                "prerequisite {} is not complete with verified acceptance",
+                                p.0.as_str()
+                            ),
+                        ));
+                    }
+                }
+            }
             if a.parent_id.is_none() && a.instruction_revision < control.instruction_revision {
                 c.push(derived(
                     "redirect",
@@ -1108,7 +1233,7 @@ impl ControlService {
         root_id: &RootId,
         expected: i64,
     ) -> Result<DomainDecision, Fail> {
-        let root = run_root(tx.sessions(), ctx, root_id)?;
+        let root = controlled_root_tx(tx, ctx, root_id)?;
         let control = ensure_control(tx, &root.id)?;
         control_conflict(&control, expected)?;
         let paused = active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?
@@ -1199,7 +1324,7 @@ impl ControlService {
         expected: i64,
         covered: &[HoldRef],
     ) -> Result<DomainDecision, Fail> {
-        let root = run_root(tx.sessions(), ctx, root_id)?;
+        let root = controlled_root_tx(tx, ctx, root_id)?;
         // An archived project allocates no work: Continue, like Start, is refused (its holds
         // and the archival stop stay in place).
         if tx
@@ -1351,7 +1476,9 @@ impl ControlService {
                 "reactivateAfterStop": reactivate,
             }),
         )?;
-        if live.is_none() {
+        // A linked card's work is run by its feature's coordinator: Continue clears its own
+        // holds but records no activation of its own.
+        if live.is_none() && is_run_root(&root) {
             let plan = self.scope.plan(tx.runs(), &root)?;
             self.new_activation(
                 tx,
@@ -1513,7 +1640,7 @@ impl ControlService {
         ctx: &InvocationContext,
         input: &ops::StopInput,
     ) -> Result<Decided, Fail> {
-        let root = run_root(tx.sessions(), ctx, &input.root_id)?;
+        let root = controlled_root_tx(tx, ctx, &input.root_id)?;
         let control = ensure_control(tx, &root.id)?;
         control_conflict(&control, input.expected_control_revision.get())?;
         // A stop still in progress answers itself, but only while the root still carries its
@@ -1745,7 +1872,7 @@ impl ControlService {
         ctx: &InvocationContext,
         root_id: &RootId,
     ) -> Result<OperationResult, Fail> {
-        let root = run_root(snapshot.sessions(), ctx, root_id)?;
+        let root = controlled_root(snapshot.sessions(), snapshot.runs(), ctx, root_id)?;
         Ok(OperationResult::RunsInspect {
             value: root_snapshot(snapshot.runs(), &root.id)?,
         })
@@ -1766,7 +1893,7 @@ impl ControlService {
                 None => return Err(not_found("assignment", &a.0).into()),
             },
         };
-        let root = match run_root(snapshot.sessions(), ctx, &root_id) {
+        let root = match controlled_root(snapshot.sessions(), snapshot.runs(), ctx, &root_id) {
             Ok(r) => r,
             // An assignment of an invisible root does not disclose the root.
             Err(_) if matches!(target, EligibilityTarget::Assignment(_)) => {

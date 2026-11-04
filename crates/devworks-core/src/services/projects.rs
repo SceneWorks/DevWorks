@@ -75,8 +75,11 @@
 //! `WorkController.Create`/`Find`/`Get`/`Update` and `create_work`/`find_work`/`get_work`/
 //! `update_work` for the `project` kind map to `projects.create`, `.list`, `.get` and `.edit`
 //! (`.membership`, `.archive`, `.restore`, `.delete` for the boundary and lifecycle changes).
-//! An initial work plan is created by the work-planning item; until then `initialPlan` is
-//! `UnsupportedCapability` rather than silently ignored.
+//! `initialPlan` creates the plan's features (each with its pending plan), cards and links
+//! through the work service in the project's own unit of work (all or nothing); a composition
+//! without the work service answers `UnsupportedCapability` rather than ignoring it. A project's
+//! work items name its repositories (context, expected touches, pending plan drafts), and such a
+//! repository cannot leave the membership (`repository_in_use`).
 use crate::authority::AccessProfile;
 use crate::authority::policy::{ACCESS_PROFILE_KEY, resolve_policy};
 use crate::context::InvocationContext;
@@ -497,12 +500,22 @@ fn require_name(name: &str) -> Result<(), Failure> {
 pub struct ProjectService {
     ids: Arc<dyn IdSource>,
     runs: Arc<ControlService>,
+    work: Option<Arc<crate::services::work::WorkService>>,
 }
 
 impl ProjectService {
     /// A service whose archival stops roots through `runs` (the runtime's one control service).
     pub fn new(ids: Arc<dyn IdSource>, runs: Arc<ControlService>) -> Self {
-        Self { ids, runs }
+        Self {
+            ids,
+            runs,
+            work: None,
+        }
+    }
+    /// Creates a new project's initial plan (`initialPlan`) through the work service.
+    pub fn with_work(mut self, work: Arc<crate::services::work::WorkService>) -> Self {
+        self.work = Some(work);
+        self
     }
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
@@ -601,7 +614,7 @@ impl ProjectService {
                 None,
             ));
         }
-        if i.initial_plan.is_some() {
+        if i.initial_plan.is_some() && self.work.is_none() {
             return Err(refuse(
                 DomainErrorCode::UnsupportedCapability,
                 "initial_plan",
@@ -638,6 +651,11 @@ impl ProjectService {
             "ProjectCreated",
             json!({"name": p.name, "repositoryIds": ids(&members)}),
         )?;
+        // The initial plan's features, cards and links are created in this same unit of work:
+        // a refused plan creates no project either.
+        if let (Some(plan), Some(work)) = (&i.initial_plan, &self.work) {
+            work.apply_atomic(tx, ctx, &p.id, plan, false)?;
+        }
         Ok(DomainDecision::Applied {
             result: OperationResult::ProjectsCreate {
                 value: tx_record(tx, &p)?,

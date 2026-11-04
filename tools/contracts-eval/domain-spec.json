@@ -466,7 +466,109 @@
         "pending_plan": "?PendingFeaturePlan",
         "dependent_ids": "Items<Id>",
         "manual_order": "?Counter",
-        "github_issue": "?GithubIssueTracking"
+        "github_issue": "?GithubIssueTracking",
+        "readiness": "?ReadinessAssessment",
+        "queue_revision": "?Revision",
+        "workflow_revision": "?Revision"
+      },
+      "since": {
+        "readiness": 2,
+        "queue_revision": 2,
+        "workflow_revision": 2
+      }
+    },
+    "ReadinessDisposition": {
+      "kind": "enum",
+      "values": [
+        "ResolvedDecision",
+        "BoundedInvestigation",
+        "NeedsUserDecision"
+      ]
+    },
+    "FindingState": {
+      "kind": "enum",
+      "values": [
+        "Open",
+        "Resolved",
+        "RiskAccepted"
+      ]
+    },
+    "ConfidenceLevel": {
+      "kind": "enum",
+      "values": [
+        "High",
+        "Medium",
+        "Low"
+      ]
+    },
+    "ReadinessFreshness": {
+      "kind": "enum",
+      "values": [
+        "Current",
+        "Stale"
+      ]
+    },
+    "ReadinessFinding": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "disposition": "ReadinessDisposition",
+        "blocking": "bool",
+        "prerequisite": "bool",
+        "state": "FindingState",
+        "requirement_ids": "Items<Id>",
+        "scope_key": "?Id",
+        "affected_work_ids": "Items<Id>",
+        "summary": "Content",
+        "missing": "Content",
+        "consequence": "Content",
+        "attempts": "Items<Content>",
+        "insufficiency": "Content",
+        "closure_condition": "Content",
+        "decision": "?Content",
+        "confidence": "?ConfidenceLevel",
+        "evidence": "Items<ArtifactRef>",
+        "objective": "?Content",
+        "limits": "?Content",
+        "question": "?Content",
+        "recommendation": "?Content",
+        "closure_note": "?Content",
+        "closure_evidence": "Items<ArtifactRef>"
+      }
+    },
+    "ReadinessAssessment": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "plan_revision": "Revision",
+        "plan_digest": "Digest",
+        "reviewed_pending": "bool",
+        "freshness": "ReadinessFreshness",
+        "stale_scope_keys": "Items<Id>",
+        "ready": "bool",
+        "summary": "Content",
+        "findings": "Items<ReadinessFinding>",
+        "assessed_by": "ActorId",
+        "assessed_at_ms": "Counter"
+      }
+    },
+    "ReadinessChange": {
+      "kind": "union",
+      "variants": {
+        "Assess": {
+          "expected_assessment_revision": "?Revision",
+          "plan_revision": "Revision",
+          "plan_digest": "Digest",
+          "summary": "Content",
+          "findings": "Items<ReadinessFinding>"
+        },
+        "CloseFinding": {
+          "expected_assessment_revision": "Revision",
+          "finding_id": "Id",
+          "note": "Content",
+          "evidence": "Items<ArtifactRef>"
+        }
       }
     },
     "PlanDraft": {
@@ -2467,7 +2569,11 @@
         "goals": "?Items<Content>",
         "add_links": "?Items<WorkLink>",
         "remove_link_ids": "?Items<Id>",
-        "add_comment": "?WorkComment"
+        "add_comment": "?WorkComment",
+        "readiness": "?ReadinessChange"
+      },
+      "since": {
+        "readiness": 2
       }
     },
     "IssuePatch": {
@@ -2780,7 +2886,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read one feature at its work revision. Schema revision 2: the record carries the feature's current execution-readiness assessment (AGENT-12, AGENT-18-20): the reviewed plan revision and digest, freshness against the active approved plan (stale scope units by requirement ID; the absent key is feature-wide), whether it is ready (current with no open blocking finding) and every finding with its requirement links, disposition, affected work, attempts, closure condition, decision with confidence and evidence, investigation objective/limits, question/recommendation and closure evidence. Readiness is reported separately from plan approval. Every work record at revision 2 also carries the revision of the queue it is ranked in (queueRevision: the project queue for features and standalone issues, its feature queue for a card) and of its project workflow (workflowRevision), the expected revisions of prioritization and workflow moves."
     },
     "features.create": {
       "operation": "features.create",
@@ -2805,7 +2911,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority."
+      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings."
     },
     "issues.list": {
       "operation": "issues.list",
@@ -6806,6 +6912,86 @@
       2
     ],
     "router.availability": [
+      1,
+      2
+    ],
+    "features.get": [
+      1,
+      2
+    ],
+    "features.edit": [
+      1,
+      2
+    ],
+    "features.list": [
+      1,
+      2
+    ],
+    "features.create": [
+      1,
+      2
+    ],
+    "issues.list": [
+      1,
+      2
+    ],
+    "issues.get": [
+      1,
+      2
+    ],
+    "issues.create": [
+      1,
+      2
+    ],
+    "issues.edit": [
+      1,
+      2
+    ],
+    "tasks.list": [
+      1,
+      2
+    ],
+    "tasks.get": [
+      1,
+      2
+    ],
+    "tasks.create": [
+      1,
+      2
+    ],
+    "tasks.edit": [
+      1,
+      2
+    ],
+    "features.edit_plan": [
+      1,
+      2
+    ],
+    "features.dependencies": [
+      1,
+      2
+    ],
+    "tasks.move": [
+      1,
+      2
+    ],
+    "tasks.assign": [
+      1,
+      2
+    ],
+    "tasks.dependency_links": [
+      1,
+      2
+    ],
+    "tasks.acceptance_evidence": [
+      1,
+      2
+    ],
+    "tasks.sync_plan": [
+      1,
+      2
+    ],
+    "tasks.set_feature": [
       1,
       2
     ]
