@@ -92,6 +92,11 @@ pub struct StoredBrowserSession {
     /// The latest admitted navigation, input or upload; the next one runs only after it
     /// settled. Maintained by [`BrowserRepository::set_last_action`] only.
     pub last_action_operation_id: Option<OperationId>,
+    /// The latest accepted Close. Never cleared, and never on a `Ready` session: a session
+    /// that is still starting when its Close is accepted keeps `Starting` with this request
+    /// (it never settles while its launch may still produce a tree), never becomes `Ready`,
+    /// and settles `Closed` once its tree is verified gone (or `Uncertain`, profile kept).
+    pub close_operation_id: Option<OperationId>,
     /// Host target IDs registered under the session, in registration order.
     pub targets: Vec<String>,
     /// Last observation sequence allocated (0: none).
@@ -178,7 +183,8 @@ pub trait BrowserRepository: BrowserRead {
     ) -> Result<(), StorageError>;
     /// Compare-and-set on `expected` (the stored revision); `session.revision` must be
     /// `expected + 1`. Identity, owner, boot, scope, lineage, asset and create operation never
-    /// change; a settled session is final; the observation sequence never decreases.
+    /// change; a settled session is final; the observation sequence never decreases; a close
+    /// request is never withdrawn, and a `Ready` session has none.
     fn update_browser_session(
         &mut self,
         session: &StoredBrowserSession,

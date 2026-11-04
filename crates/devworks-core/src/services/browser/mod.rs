@@ -13,9 +13,12 @@
 //! applies the session policy (downloads denied, permissions denied, dialogs answered, popups
 //! registered). Close stops the tree through the process owner and removes the profile only once
 //! the tree is verified gone; an unverifiable stop leaves the session `Uncertain` with its
-//! profile kept. Every session runs in its own profile, so concurrent sessions share no cookies,
-//! storage or cache (UIQA-04). Boot recovery settles sessions of earlier boots from what process
-//! recovery verified, and removes profile roots no live session owns.
+//! profile kept. A Close accepted while the session is still starting never settles it: the
+//! session keeps `Starting` with the close request, and its Create (or the Close, once no
+//! launch holds the session, or boot recovery) stops whatever was launched first. Every session
+//! runs in its own profile, so concurrent sessions share no cookies, storage or cache (UIQA-04).
+//! Boot recovery settles sessions of earlier boots from what process recovery verified (a
+//! pending close request settles `Closed`), and removes profile roots no live session owns.
 //!
 //! # Authority
 //!
@@ -451,6 +454,19 @@ fn session_page(s: &StoredBrowserSession) -> Page<BrowserSession> {
     }
 }
 
+/// A recorded tree by its process ID (the process owner resolves its identity).
+fn by_id(id: Id) -> OwnedProcess {
+    OwnedProcess {
+        id,
+        identity: crate::ports::process::NativeIdentity {
+            pid: 0,
+            birth: String::new(),
+            group: None,
+        },
+        lease: None,
+    }
+}
+
 fn detail(s: &str) -> String {
     Redactor::new().redact_text(s).chars().take(1000).collect()
 }
@@ -715,13 +731,33 @@ impl BrowserService {
     }
 
     fn fail_session(&self, id: &Id, why: &str, phase: BrowserPhase) {
-        let why = detail(why);
+        self.settle(id, why, phase, None);
+    }
+
+    /// Records `phase` (`Closed`, `Failed` or `Uncertain`) on a session that may still own a
+    /// browser, naming `process` as its tree when the session names none yet (an unverified
+    /// stop stays associated with the tree a later Close or recovery must stop). A session
+    /// whose Close was accepted settles `Closed` rather than `Failed`: its browser is gone
+    /// either way, and the Close is what was asked for.
+    fn settle(&self, id: &Id, why: &str, phase: BrowserPhase, process: Option<&Id>) {
+        let why = why.to_owned();
+        let process = process.cloned();
         let _ = self.update(id, move |s| {
             if !s.phase.live() && s.phase != BrowserPhase::Uncertain {
                 return None;
             }
+            let (phase, why) = match phase {
+                BrowserPhase::Failed if s.close_operation_id.is_some() => (
+                    BrowserPhase::Closed,
+                    detail(&format!("closed as requested; {why}")),
+                ),
+                _ => (phase, detail(&why)),
+            };
             s.phase = phase;
             s.detail = Some(why.clone());
+            if s.process_id.is_none() {
+                s.process_id = process.clone();
+            }
             Some((
                 match phase {
                     BrowserPhase::Uncertain => "BrowserSessionUncertain",
@@ -793,6 +829,20 @@ impl BrowserService {
                 SESSION_STATE,
                 "the session was closed before its browser was launched",
             );
+        }
+        // Its Close was accepted before anything was launched: nothing starts, and the close
+        // settles here, under the slot, so no launch can begin meanwhile.
+        if s.close_operation_id.is_some() {
+            let closed = self.finish_close(id, &s, "closed before its browser was launched");
+            drop(guard);
+            return match closed {
+                Ok(()) => failed(
+                    DomainErrorCode::Conflict,
+                    SESSION_STATE,
+                    "the session was closed before its browser was launched",
+                ),
+                Err(e) => EffectOutcome::NotApplied(e.to_string()),
+            };
         }
         if !self.owner_active(&s) {
             let why = "the session's owner no longer has authority";
@@ -884,10 +934,20 @@ impl BrowserService {
             }
         };
         let pid = process.id.clone();
-        let _ = self.update(id, move |s| {
+        let recorded = self.update(id, move |s| {
             s.process_id = Some(pid.clone());
             Some(("BrowserProcessLaunched", json!({"processId": pid.as_str()})))
         });
+        // A Close accepted while the browser was launching (the session kept `Starting` with
+        // the request): the tree is stopped now, and only a verified stop settles `Closed`.
+        if let Ok(Some(r)) = &recorded
+            && r.close_operation_id.is_some()
+        {
+            let why = "closed while the browser was starting";
+            self.teardown(id, &process, None, why, BrowserPhase::Closed);
+            drop(guard);
+            return failed(DomainErrorCode::Conflict, SESSION_STATE, why);
+        }
         let control = self.processes.take_control(&process);
         let transport = match self.platform.connect(&profile, control) {
             Ok(t) => t,
@@ -925,7 +985,7 @@ impl BrowserService {
         );
         live.targets_changed = false;
         let ready = self.update(id, move |s| {
-            if s.phase != BrowserPhase::Starting {
+            if s.phase != BrowserPhase::Starting || s.close_operation_id.is_some() {
                 return None;
             }
             s.phase = BrowserPhase::Ready;
@@ -943,18 +1003,18 @@ impl BrowserService {
                     value: session_page(&r),
                 })
             }
-            // Close was accepted while the browser started: stop it now.
-            Ok(Some(r)) => {
-                drop(guard);
+            // Close was accepted while the browser started: stop it now. The slot stays held
+            // until the session settled, so the Close sees the outcome, never a half-stop.
+            Ok(Some(_)) => {
                 let why = "closed while the browser was starting";
                 self.teardown(id, &process, Some(live), why, BrowserPhase::Closed);
-                let _ = r;
+                drop(guard);
                 failed(DomainErrorCode::Conflict, SESSION_STATE, why)
             }
             Ok(None) | Err(_) => {
-                drop(guard);
                 let why = "the ready session could not be recorded";
                 self.teardown(id, &process, Some(live), why, BrowserPhase::Failed);
+                drop(guard);
                 EffectOutcome::Unknown(why.into())
             }
         }
@@ -1004,9 +1064,33 @@ impl BrowserService {
                 format!("{why}; the browser could not be verified stopped: {u}"),
             ),
         };
-        self.fail_session(id, &why, phase);
+        self.settle(id, &why, phase, Some(&process.id));
         self.forget(id);
         phase
+    }
+
+    /// Finishes the Close of a session no live connection holds (called with its slot held,
+    /// so no launch starts meanwhile). The tree it launched, if any (the one it names, or the
+    /// one its create operation's launch record names), is stopped through the process owner
+    /// first: only a verified stop settles `Closed` and removes the profile, an unverified one
+    /// leaves it `Uncertain`. With no tree, it closes and its profile is removed.
+    fn finish_close(
+        &self,
+        id: &Id,
+        s: &StoredBrowserSession,
+        why: &str,
+    ) -> Result<(), StorageError> {
+        match self.launched_process(s)? {
+            Some(p) => {
+                self.teardown(id, &by_id(p.id), None, why, BrowserPhase::Closed);
+            }
+            None => {
+                let _ = self.platform.remove_profile(id);
+                self.fail_session(id, why, BrowserPhase::Closed);
+                self.forget(id);
+            }
+        }
+        Ok(())
     }
 
     /// Publishes the buffered console and network notifications of `live` as observations.
@@ -1069,19 +1153,9 @@ impl BrowserService {
                 if let Ok(Some(s)) = self.read_session(id)
                     && let Some(pid) = s.process_id.clone()
                 {
-                    let _ = self.processes.cancel(
-                        &OwnedProcess {
-                            id: pid,
-                            identity: crate::ports::process::NativeIdentity {
-                                pid: 0,
-                                birth: String::new(),
-                                group: None,
-                            },
-                            lease: None,
-                        },
-                        Duration::ZERO,
-                        self.config.close_bound,
-                    );
+                    let _ =
+                        self.processes
+                            .cancel(&by_id(pid), Duration::ZERO, self.config.close_bound);
                 }
                 slot.live.lock().unwrap_or_else(|p| p.into_inner())
             }
@@ -1100,38 +1174,34 @@ impl BrowserService {
                 return EffectOutcome::NotApplied(e.to_string());
             }
         };
-        let live = guard.take();
-        drop(guard);
-        let why = "closed";
-        match (live, s.process_id.clone()) {
-            (Some(l), _) => {
+        // The slot stays held until the session settled: a Create that has not run yet then
+        // finds it closed and launches nothing.
+        match guard.take() {
+            Some(l) => {
                 let process = l.process.clone();
-                self.teardown(id, &process, Some(l), why, BrowserPhase::Closed);
+                self.teardown(id, &process, Some(l), "closed", BrowserPhase::Closed);
             }
-            (None, Some(pid)) if s.phase.live() || s.phase == BrowserPhase::Uncertain => {
-                // No live connection (an earlier stop was uncertain): stop the owned tree again.
-                let process = OwnedProcess {
-                    id: pid,
-                    identity: crate::ports::process::NativeIdentity {
-                        pid: 0,
-                        birth: String::new(),
-                        group: None,
-                    },
-                    lease: None,
-                };
-                self.teardown(id, &process, None, why, BrowserPhase::Closed);
-            }
-            (None, _) => {
-                // Nothing was launched: closing only settles the record.
+            // Settled meanwhile (its stop was verified): nothing of it remains to stop.
+            None if s.phase.settled() => {
                 let _ = self.platform.remove_profile(id);
-                self.fail_session(
-                    id,
-                    "closed before its browser was launched",
-                    BrowserPhase::Closed,
-                );
                 self.forget(id);
             }
+            // No live connection: a session still starting (its Create has not run, or ended
+            // without settling) or one whose earlier stop was uncertain. Its tree, if any, is
+            // stopped first.
+            None => {
+                let why = if s.process_id.is_some() {
+                    "closed"
+                } else {
+                    "closed before its browser was launched"
+                };
+                if let Err(e) = self.finish_close(id, &s, why) {
+                    slot.closing.store(false, Ordering::SeqCst);
+                    return EffectOutcome::NotApplied(e.to_string());
+                }
+            }
         }
+        drop(guard);
         match self.read_session(id) {
             Ok(Some(s)) => completed(OperationResult::BrowserSessions {
                 value: session_page(&s),
@@ -1804,9 +1874,9 @@ impl BrowserService {
     }
 
     /// Settles the sessions of earlier boots from what process recovery verified (run after
-    /// it): a session whose tree is gone is `Closed` (it was stopping) or `Failed` (interrupted),
-    /// with its profile removed; one whose tree could not be verified stays `Uncertain` with its
-    /// profile kept. Then removes every profile root no unsettled session owns.
+    /// it): a session whose tree is gone is `Closed` (it was stopping, or its Close was requested
+    /// while it started) or `Failed` (interrupted), with its profile removed; one whose tree
+    /// could not be verified stays `Uncertain` with its profile kept. Then removes every profile root no unsettled session owns.
     pub fn recover(&self) -> Result<BrowserRecovery, StorageError> {
         let boot = self.store.info().boot_id;
         let mut report = BrowserRecovery::default();
@@ -2289,6 +2359,7 @@ impl BrowserService {
             create_operation_id: op.clone(),
             uncertain_operation_id: None,
             last_action_operation_id: None,
+            close_operation_id: None,
             targets: Vec::new(),
             observation_sequence: 0,
             detail: None,
@@ -2363,10 +2434,13 @@ impl BrowserService {
         if expected.get() != s.revision {
             return Err(conflict(id, expected, s.revision));
         }
+        // A session already stopping or settled, or still starting with its Close already
+        // requested, has nothing more to accept.
         if matches!(
             s.phase,
             BrowserPhase::Stopping | BrowserPhase::Closed | BrowserPhase::Failed
-        ) {
+        ) || (s.phase == BrowserPhase::Starting && s.close_operation_id.is_some())
+        {
             return Ok(Decided {
                 decision: DomainDecision::NoChange {
                     result: OperationResult::BrowserSessions {
@@ -2376,23 +2450,29 @@ impl BrowserService {
                 operation_id: None,
             });
         }
+        let op = OperationId(tx.new_id(IdKind::Operation));
         let mut next = s.clone();
         next.revision += 1;
+        next.close_operation_id = Some(op.clone());
         // A missing process ID is not evidence that nothing was launched (a crash or a lost
         // write between the launch and recording its tree leaves none): the create operation's
         // launch record names the tree then, and it is adopted here.
         if next.process_id.is_none() {
             next.process_id = launch_record(tx.resources(), &s.create_operation_id)?.map(|p| p.id);
         }
-        // A session with no launched tree closes now; one with a tree is stopping until the
-        // process owner verified its stop.
-        if next.process_id.is_none() {
+        if s.phase == BrowserPhase::Starting {
+            // Its Create may be launching right now, and a tree it launches is recorded only
+            // after this decision: the session keeps `Starting` with the request and never
+            // settles here. The Create stops what it launched once it sees the request (or this
+            // Close settles it once no launch holds the session); only a verified stop closes.
+        } else if next.process_id.is_none() {
+            // A session with no launched tree closes now.
             next.phase = BrowserPhase::Closed;
             next.detail = Some("closed before its browser was launched".into());
         } else {
+            // One with a tree is stopping until the process owner verified its stop.
             next.phase = BrowserPhase::Stopping;
         }
-        let op = OperationId(tx.new_id(IdKind::Operation));
         tx.operations().record_intent(NewOperation {
             id: op.clone(),
             root_id: ctx.root_id().cloned(),

@@ -36,13 +36,13 @@ const OWNER_KINDS: [&str; 6] = ["Human", "Agent", "Package", "McpClient", "Sched
 /// Most registered targets one session keeps (the browser service's live bound).
 pub use devworks_core::ports::browser::MAX_TARGETS;
 
-const COLUMNS: &str = "id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,create_operation_id,uncertain_operation_id,targets,detail,last_action_operation_id,observation_seq,created_at,updated_at,revision";
+const COLUMNS: &str = "id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,create_operation_id,uncertain_operation_id,targets,detail,last_action_operation_id,close_operation_id,observation_seq,created_at,updated_at,revision";
 type Raw = (Vec<Option<String>>, [i64; 4]);
 fn row(r: &Row<'_>) -> rusqlite::Result<Raw> {
-    let text = (0..16)
+    let text = (0..17)
         .map(|i| r.get(i))
         .collect::<rusqlite::Result<Vec<Option<String>>>>()?;
-    Ok((text, [r.get(16)?, r.get(17)?, r.get(18)?, r.get(19)?]))
+    Ok((text, [r.get(17)?, r.get(18)?, r.get(19)?, r.get(20)?]))
 }
 fn session_of((text, num): Raw) -> Result<StoredBrowserSession, StorageError> {
     let mut t = text.into_iter();
@@ -67,6 +67,7 @@ fn session_of((text, num): Raw) -> Result<StoredBrowserSession, StorageError> {
         .map_err(|e| corrupt(format!("stored browser targets: {e}")))?;
     let detail = next();
     let last_action_operation_id = opt_id(next())?.map(OperationId);
+    let close_operation_id = opt_id(next())?.map(OperationId);
     Ok(StoredBrowserSession {
         id,
         revision: num[3],
@@ -83,6 +84,7 @@ fn session_of((text, num): Raw) -> Result<StoredBrowserSession, StorageError> {
         create_operation_id,
         uncertain_operation_id,
         last_action_operation_id,
+        close_operation_id,
         targets,
         observation_sequence: num[0],
         detail,
@@ -215,15 +217,20 @@ fn check(s: &StoredBrowserSession) -> Result<String, StorageError> {
     if s.observation_sequence < 0 {
         return Err(invalid("observation sequence must be non-negative"));
     }
+    if s.phase == BrowserPhase::Ready && s.close_operation_id.is_some() {
+        return Err(invalid(
+            "a session whose close was requested is never ready",
+        ));
+    }
     serde_json::to_string(&s.targets).map_err(|e| invalid(e.to_string()))
 }
 
 impl BrowserRepository for Unit<'_> {
     fn insert_browser_session(&mut self, s: &StoredBrowserSession) -> Result<(), StorageError> {
         let targets = check(s)?;
-        if s.revision != 1 || s.phase != BrowserPhase::Starting {
+        if s.revision != 1 || s.phase != BrowserPhase::Starting || s.close_operation_id.is_some() {
             return Err(invalid(
-                "a new browser session starts at revision 1, Starting",
+                "a new browser session starts at revision 1, Starting, with no close request",
             ));
         }
         if self.browser_session(&s.id)?.is_some() {
@@ -284,13 +291,14 @@ impl BrowserRepository for Unit<'_> {
             || current.phase.settled()
             || (current.process_id.is_some() && current.process_id != s.process_id)
             || s.observation_sequence < current.observation_sequence
+            || (current.close_operation_id.is_some() && s.close_operation_id.is_none())
         {
             return Err(invalid(
-                "a browser session keeps its identity, owner, scope, asset and process; a settled one is final",
+                "a browser session keeps its identity, owner, scope, asset, process and close request; a settled one is final",
             ));
         }
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE browser_sessions SET state=?2,process_id=?3,uncertain_operation_id=?4,targets=?5,detail=?6,observation_seq=?7,updated_at=?8,revision=?9 WHERE id=?1 AND revision=?10",
+            "UPDATE browser_sessions SET state=?2,process_id=?3,uncertain_operation_id=?4,targets=?5,detail=?6,observation_seq=?7,updated_at=?8,revision=?9,close_operation_id=?11 WHERE id=?1 AND revision=?10",
         ))?
         .execute(params![
             s.id.as_str(),
@@ -303,6 +311,7 @@ impl BrowserRepository for Unit<'_> {
             self.now,
             s.revision,
             expected,
+            s.close_operation_id.as_ref().map(|o| o.0.as_str()),
         ]))?;
         if n != 1 {
             return Err(lost(&s.id));

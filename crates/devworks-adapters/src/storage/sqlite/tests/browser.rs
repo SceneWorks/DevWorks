@@ -52,6 +52,7 @@ fn session(s: &SqliteStore) -> StoredBrowserSession {
         create_operation_id: OperationId(id("op-create")),
         uncertain_operation_id: None,
         last_action_operation_id: None,
+        close_operation_id: None,
         targets: vec![],
         observation_sequence: 0,
         detail: None,
@@ -178,6 +179,45 @@ fn sessions_change_by_compare_and_set_and_settle_finally() {
     .unwrap();
     assert_eq!(listed.0.len(), 1);
     assert!(listed.1.is_empty(), "a closed session is settled");
+}
+
+#[test]
+fn a_close_request_is_kept_while_starting_and_never_withdrawn() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    // A new session carries no close request.
+    let mut requested = session(&s);
+    requested.close_operation_id = Some(OperationId(id("op-action")));
+    assert!(matches!(
+        write(&s, move |tx| tx
+            .browser()
+            .insert_browser_session(&requested)),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    let new = session(&s);
+    write(&s, move |tx| tx.browser().insert_browser_session(&new)).unwrap();
+    // Recorded on a starting session, it stays `Starting` and is read back.
+    let mut next = get(&s);
+    next.close_operation_id = Some(OperationId(id("op-action")));
+    next.revision = 2;
+    write(&s, move |tx| tx.browser().update_browser_session(&next, 1)).unwrap();
+    let stored = get(&s);
+    assert_eq!(stored.phase, BrowserPhase::Starting);
+    assert_eq!(
+        stored.close_operation_id,
+        Some(OperationId(id("op-action")))
+    );
+    // It is never withdrawn.
+    let mut withdrawn = get(&s);
+    withdrawn.close_operation_id = None;
+    withdrawn.revision = 3;
+    assert!(matches!(
+        write(&s, move |tx| tx
+            .browser()
+            .update_browser_session(&withdrawn, 2)),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    assert_eq!(get(&s).revision, 2);
 }
 
 #[test]

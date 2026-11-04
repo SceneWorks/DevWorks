@@ -23,6 +23,9 @@ CREATE TABLE browser_sessions (
     uncertain_operation_id TEXT REFERENCES operations,
     -- The session's latest admitted navigation, input or upload: the next one runs after it.
     last_action_operation_id TEXT REFERENCES operations,
+    -- The latest accepted Close; never withdrawn. A session starting when its Close is
+    -- accepted keeps Starting with this request until its launch settles.
+    close_operation_id TEXT REFERENCES operations,
     targets TEXT NOT NULL CHECK (json_valid(targets) AND json_type(targets) = 'array'),
     detail TEXT CHECK (detail IS NULL OR length(detail) <= 1024),
     observation_seq INTEGER NOT NULL CHECK (observation_seq >= 0),
@@ -30,7 +33,9 @@ CREATE TABLE browser_sessions (
     updated_at INTEGER NOT NULL,
     revision INTEGER NOT NULL CHECK (revision > 0),
     -- A running or stopping browser has a launched tree.
-    CHECK (state NOT IN ('Ready', 'Stopping') OR process_id IS NOT NULL)
+    CHECK (state NOT IN ('Ready', 'Stopping') OR process_id IS NOT NULL),
+    -- A session whose close was requested never becomes ready.
+    CHECK (state <> 'Ready' OR close_operation_id IS NULL)
 ) STRICT;
 CREATE INDEX browser_session_scope ON browser_sessions(project_id, id);
 CREATE INDEX browser_session_unsettled ON browser_sessions(id)

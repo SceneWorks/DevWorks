@@ -786,6 +786,14 @@ struct FakePlatform {
     hang: Mutex<HashSet<String>>,
     /// When set, profile removal does not return until this gate opens.
     removal: Mutex<Option<Arc<Gate>>>,
+    /// When set, the next launch does not start until this gate opens (the session's Create
+    /// has passed its `Starting` check and holds the session; nothing is launched yet).
+    launch: Mutex<Option<Arc<Gate>>>,
+    /// The next launches name a program that does not exist (the launch fails, nothing runs).
+    fail_launch: std::sync::atomic::AtomicBool,
+    /// While set, no owned tree is ever observed empty: every stop is unverified (the trees
+    /// are still really killed).
+    unverified_stop: Arc<std::sync::atomic::AtomicBool>,
 }
 /// A step that does not return until released.
 #[derive(Default)]
@@ -831,6 +839,9 @@ impl FakePlatform {
             protocol: Mutex::new("1.3".into()),
             hang: Mutex::new(HashSet::new()),
             removal: Mutex::new(None),
+            launch: Mutex::new(None),
+            fail_launch: Default::default(),
+            unverified_stop: Default::default(),
         }
     }
     fn browser(&self, session: &Id) -> Arc<Mutex<FakeBrowser>> {
@@ -860,6 +871,81 @@ fn sleeping_spec() -> ProcessSpec {
     };
     ProcessSpec::new(&argv).unwrap()
 }
+/// The native process host, except that while `unverified` is set no tree is ever observed
+/// empty, so the process owner cannot verify any stop (the tree is still really killed).
+struct StopHookHost {
+    unverified: Arc<std::sync::atomic::AtomicBool>,
+}
+struct StopHookTree {
+    inner: Box<dyn devworks_core::ports::process::ProcessTree>,
+    unverified: Arc<std::sync::atomic::AtomicBool>,
+}
+impl devworks_core::ports::process::ProcessTree for StopHookTree {
+    fn identity(&self) -> &NativeIdentity {
+        self.inner.identity()
+    }
+    fn request_stop(&mut self) -> Result<bool, devworks_core::ports::process::ProcessError> {
+        self.inner.request_stop()
+    }
+    fn kill(&mut self) -> Result<(), devworks_core::ports::process::ProcessError> {
+        self.inner.kill()
+    }
+    fn poll(
+        &mut self,
+    ) -> Result<
+        devworks_core::ports::process::TreeStatus,
+        devworks_core::ports::process::ProcessError,
+    > {
+        if self.unverified.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(devworks_core::ports::process::TreeStatus {
+                empty: false,
+                exit_code: None,
+            });
+        }
+        self.inner.poll()
+    }
+    fn take_output(
+        &mut self,
+    ) -> Option<(Box<dyn std::io::Read + Send>, Box<dyn std::io::Read + Send>)> {
+        self.inner.take_output()
+    }
+    fn take_control(&mut self) -> Option<ControlChannel> {
+        self.inner.take_control()
+    }
+    fn root_exited(&mut self) -> Result<bool, devworks_core::ports::process::ProcessError> {
+        if self.unverified.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(false);
+        }
+        self.inner.root_exited()
+    }
+}
+impl ProcessHost for StopHookHost {
+    fn platform(&self) -> &'static str {
+        NativeProcessHost.platform()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        NativeProcessHost.environment()
+    }
+    fn spawn(
+        &self,
+        spec: &ProcessSpec,
+    ) -> Result<
+        Box<dyn devworks_core::ports::process::ProcessTree>,
+        devworks_core::ports::process::ProcessError,
+    > {
+        Ok(Box::new(StopHookTree {
+            inner: NativeProcessHost.spawn(spec)?,
+            unverified: self.unverified.clone(),
+        }))
+    }
+    fn probe(&self, identity: &NativeIdentity) -> Probe {
+        NativeProcessHost.probe(identity)
+    }
+    fn terminate(&self, identity: &NativeIdentity) -> Probe {
+        NativeProcessHost.terminate(identity)
+    }
+}
+
 impl BrowserPlatform for FakePlatform {
     fn target(&self) -> String {
         "test-target".into()
@@ -881,7 +967,16 @@ impl BrowserPlatform for FakePlatform {
         self.native.profiles()
     }
     fn command(&self, _: &BrowserAsset, _: &Profile, args: &[String]) -> ProcessSpec {
+        let gate = self.launch.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.pass();
+        }
         self.launched.lock().unwrap().push(args.to_vec());
+        if self.fail_launch.load(std::sync::atomic::Ordering::SeqCst) {
+            let mut spec = sleeping_tree();
+            spec.program = "/nonexistent/devworks-fake-browser".into();
+            return spec;
+        }
         sleeping_tree()
     }
     fn connect(
@@ -1013,7 +1108,13 @@ impl Fx {
         seed_project(&h);
         let user = principal(&*store, "user-a", PrincipalKind::Human);
         let app = rt
-            .block_on(boot(composition(&h, store, real, browser)))
+            .block_on(boot(composition(
+                &h,
+                store,
+                real,
+                browser,
+                platform.unverified_stop.clone(),
+            )))
             .unwrap();
         Self {
             h: Some(h),
@@ -1307,6 +1408,7 @@ fn composition(
     store: Arc<dyn ApplicationStore>,
     platform: Arc<dyn BrowserPlatform>,
     browser: BrowserConfig,
+    unverified_stop: Arc<std::sync::atomic::AtomicBool>,
 ) -> Composition {
     let artifacts = Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
@@ -1337,7 +1439,9 @@ fn composition(
             h.ids.clone(),
             h.clock(),
         )),
-        process_host: Arc::new(NativeProcessHost),
+        process_host: Arc::new(StopHookHost {
+            unverified: unverified_stop,
+        }),
         runs: devworks_engine::RunComposition::new(Arc::new(
             devworks_core::services::runs::ControlService::new(h.ids.clone()),
         )),
@@ -2325,7 +2429,7 @@ fn a_blocked_browser_close_never_delays_the_hold_and_is_abandoned_at_the_shutdow
     seed_project(&h);
     let user = principal(&*store, "user-a", PrincipalKind::Human);
     let real: Arc<dyn BrowserPlatform> = platform.clone();
-    let mut composition = composition(&h, store, real, config());
+    let mut composition = composition(&h, store, real, config(), platform.unverified_stop.clone());
     composition.config.shutdown_bound = Duration::from_millis(500);
     let app = rt.block_on(boot(composition)).unwrap();
     let mut fx = Fx {
@@ -2412,6 +2516,199 @@ fn closing_a_session_while_it_starts_never_leaves_a_browser_running() {
         assert_eq!(NativeProcessHost.probe(&fx.identity(&session)), Probe::Gone);
     }
     assert!(!fx.profile_root(&session).exists());
+}
+
+/// Opens a gate however the test ends (the runtime waits for its blocking threads).
+struct OpenOnDrop(Arc<Gate>);
+impl Drop for OpenOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+/// Clears the unverified-stop hook however the test ends.
+struct VerifyOnDrop(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for VerifyOnDrop {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A Close accepted while the session's Create holds it at its launch: the Create passed its
+/// `Starting` check and nothing is launched or recorded yet. The Close records its request and
+/// the session stays `Starting`; it never settles while the launch may still produce a tree.
+/// Returns the session, the Create and Close operations, and the launch gate's guard.
+fn close_while_launching(
+    fx: &Fx,
+    user: &InvocationContext,
+) -> (Id, OperationId, OperationId, OpenOnDrop) {
+    let gate = Arc::new(Gate::default());
+    *fx.platform.launch.lock().unwrap() = Some(gate.clone());
+    let guard = OpenOnDrop(gate.clone());
+    let create = fx.accepted(
+        user,
+        "browser.sessions",
+        json!({"action": {"kind": "Create", "scope": workspace(), "browserAssetId": "chrome"}}),
+    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !gate.entered.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "the Create reached its launch");
+        fx.drive(10);
+    }
+    *fx.platform.launch.lock().unwrap() = None;
+    let session = read(&**fx.app().store(), |s| {
+        s.browser()
+            .browser_sessions(&BrowserFilter::Scope(None), None, 10)
+    })[0]
+        .id
+        .clone();
+    let s = fx.session(&session);
+    assert_eq!(s.phase, BrowserPhase::Starting, "{s:?}");
+    let close = fx.accepted(
+        user,
+        "browser.sessions",
+        json!({"action": {"kind": "Close", "sessionId": session.as_str(), "expectedRevision": s.revision.to_string()}}),
+    );
+    // The Close's own effect runs meanwhile; it waits for the Create, settling nothing.
+    fx.drive(200);
+    let s = fx.session(&session);
+    assert_eq!(s.phase, BrowserPhase::Starting, "{s:?}");
+    assert_eq!(s.close_operation_id.as_ref(), Some(&close), "{s:?}");
+    assert_eq!(close_requested_state(fx, &session), "Starting");
+    (session, create, close, guard)
+}
+
+/// A short stop bound, so an unverified stop gives up quickly.
+fn quick_stop() -> BrowserConfig {
+    BrowserConfig {
+        close_grace: Duration::from_millis(50),
+        close_bound: Duration::from_millis(500),
+        ..config()
+    }
+}
+fn fx_with(browser: BrowserConfig) -> Fx {
+    let h = Harness::new();
+    let platform = Arc::new(FakePlatform::new(&h.root));
+    let real: Arc<dyn BrowserPlatform> = platform.clone();
+    Fx::boot_with(h, platform, real, browser)
+}
+
+#[test]
+fn a_close_during_launch_stops_the_launched_tree_before_it_settles_closed() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let (session, create, close, gate) = close_while_launching(&fx, &user);
+    gate.0.release();
+    assert_eq!(
+        failed_kind(fx.completion(&user, &create)),
+        "browser_session_state"
+    );
+    fx.succeeded(&user, &close);
+    let s = fx.session(&session);
+    assert_eq!(s.phase, BrowserPhase::Closed, "{s:?}");
+    // The tree the Create launched is recorded on the session and verified gone.
+    assert!(s.process_id.is_some(), "{s:?}");
+    assert_eq!(NativeProcessHost.probe(&fx.identity(&session)), Probe::Gone);
+    assert!(!fx.profile_root(&session).exists());
+    assert!(fx.app().processes().owned().is_empty());
+}
+
+#[test]
+fn a_close_during_launch_whose_stop_is_unverified_stays_uncertain_with_its_profile() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = fx_with(quick_stop());
+    let user = fx.user.clone();
+    let (session, create, close, gate) = close_while_launching(&fx, &user);
+    let hook = fx.platform.unverified_stop.clone();
+    let _verify = VerifyOnDrop(hook.clone());
+    hook.store(true, std::sync::atomic::Ordering::SeqCst);
+    gate.0.release();
+    let _ = fx.completion(&user, &create);
+    fx.succeeded(&user, &close);
+    let s = fx.session(&session);
+    // Never closed over a browser that may still run: the tree stays associated, the
+    // request stays recorded, and the profile is kept.
+    assert_eq!(s.phase, BrowserPhase::Uncertain, "{s:?}");
+    assert!(
+        s.detail
+            .as_deref()
+            .unwrap()
+            .contains("could not be verified stopped"),
+        "{s:?}"
+    );
+    assert!(s.process_id.is_some(), "{s:?}");
+    assert_eq!(s.close_operation_id.as_ref(), Some(&close));
+    assert!(fx.profile_root(&session).exists(), "the profile is kept");
+    // Once a stop can be verified, a later Close finishes the job.
+    hook.store(false, std::sync::atomic::Ordering::SeqCst);
+    let s = fx.close(&user, &session);
+    assert_eq!(s.phase, BrowserPhase::Closed, "{s:?}");
+    assert_eq!(NativeProcessHost.probe(&fx.identity(&session)), Probe::Gone);
+    assert!(!fx.profile_root(&session).exists());
+}
+
+#[test]
+fn a_close_during_a_launch_that_fails_settles_closed_with_nothing_running() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let (session, create, close, gate) = close_while_launching(&fx, &user);
+    fx.platform
+        .fail_launch
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    gate.0.release();
+    let _ = fx.completion(&user, &create);
+    fx.succeeded(&user, &close);
+    let s = fx.session(&session);
+    assert_eq!(s.phase, BrowserPhase::Closed, "{s:?}");
+    assert!(s.process_id.is_none(), "{s:?}");
+    assert!(!fx.profile_root(&session).exists());
+    assert!(fx.app().processes().owned().is_empty());
+}
+
+#[test]
+fn boot_recovery_finishes_a_close_requested_while_the_browser_was_launching() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let gone = fx.create(&user, workspace());
+    let unverified = fx.create(&user, workspace());
+    let (gone_root, unverified_root) = (fx.profile_root(&gone), fx.profile_root(&unverified));
+    let process = fx.session(&unverified).process_id.unwrap();
+    // As if each boot ended after its Close was accepted while the browser was launching: the
+    // sessions are still `Starting` with the request, and only the create operations' launch
+    // records name their trees. (The create operation stands in for the accepted Close: only
+    // the request's presence matters to recovery.) The second tree cannot be verified gone at
+    // the next boot (recorded for another platform).
+    let other = if cfg!(windows) { "unix" } else { "windows" };
+    let fx = fx.restart_with(false, |h| {
+        let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
+        for s in [&gone, &unverified] {
+            c.execute(
+                "UPDATE browser_sessions SET state='Starting', process_id=NULL, close_operation_id=create_operation_id WHERE id=?1",
+                [s.as_str()],
+            )
+            .unwrap();
+        }
+        c.execute(
+            "UPDATE owned_processes SET platform=?2 WHERE id=?1",
+            [process.as_str(), other],
+        )
+        .unwrap();
+    });
+    // Its tree verified gone, the session closes as requested and its profile is removed.
+    let s = fx.session(&gone);
+    assert_eq!(s.phase, BrowserPhase::Closed, "{s:?}");
+    assert!(!gone_root.exists());
+    // Unverified, it stays uncertain with its tree, its request and its profile.
+    let s = fx.session(&unverified);
+    assert_eq!(s.phase, BrowserPhase::Uncertain, "{s:?}");
+    assert_eq!(s.process_id.as_ref(), Some(&process), "{s:?}");
+    assert!(s.close_operation_id.is_some(), "{s:?}");
+    assert!(
+        unverified_root.exists(),
+        "the profile of an unverified tree is kept"
+    );
 }
 
 #[test]

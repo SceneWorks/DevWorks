@@ -498,6 +498,7 @@ fn seed_browser(engine: &devworks_desktop::host::Engine, session: &str, project:
             create_operation_id: op,
             uncertain_operation_id: None,
             last_action_operation_id: None,
+            close_operation_id: None,
             targets: vec![],
             observation_sequence: 0,
             detail: None,
