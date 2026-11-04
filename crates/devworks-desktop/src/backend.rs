@@ -67,6 +67,14 @@ pub enum Slot {
     DeleteAttachment(String),
     ArtifactsList,
     ResourcesList,
+    /// The router catalog for the composer's selectors.
+    RouterCatalog,
+    /// The availability (and pin) of a conversation's selection (conversation key).
+    RouteStatus(String),
+    /// An explicit route/effort change of a pinned conversation (session ID).
+    RoutePin(String),
+    /// The first routed request of a conversation (session ID): its selection becomes its pin.
+    RouteFirst(String),
 }
 
 /// A finished request.
@@ -127,11 +135,13 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 4] = [
+pub const COMMANDS: [&str; 6] = [
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
     "artifacts.delete",
+    "router.pin",
+    "router.route",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.

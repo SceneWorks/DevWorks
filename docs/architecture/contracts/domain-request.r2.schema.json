@@ -8853,6 +8853,10 @@
             },
             "requiredCapabilities": {
               "$ref": "#/$defs/List_Text1To256_0_128"
+            },
+            "sessionId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
             }
           },
           "required": [

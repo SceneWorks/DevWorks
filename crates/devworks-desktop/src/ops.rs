@@ -5,7 +5,8 @@ use crate::backend::Backend;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
 use devworks_core::protocol::records::{
-    ArtifactRecord, ResourceRecord, SessionRecord, SettingEntry, ValidationReport,
+    ArtifactRecord, EffortName, ResourceRecord, RouteAvailability, RouteChoice, RouteIntent,
+    RouteModel, SessionRecord, SettingEntry, ValidationReport,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, DomainFault};
@@ -362,5 +363,86 @@ pub fn resources(outcome: QueryOutcome) -> Result<(Vec<ResourceRecord>, bool), F
     match query_result(outcome)? {
         (OperationResult::ResourcesList { value }, _) => Ok((value.items.0, value.has_more)),
         (other, _) => Err(unexpected("resources.list", &other)),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Router (UI-10, ROUTE-19, ROUTE-20)
+
+/// `router.availability` reports a session's pin from schema revision 2.
+pub const ROUTER_AVAILABILITY_REVISION: u64 = 2;
+
+pub fn router_catalog(backend: &dyn Backend) -> Vec<u8> {
+    query_frame(
+        backend,
+        "router.catalog",
+        json!({"page": {"limit": PAGE_LIMIT}, "includeDisabled": false}),
+    )
+}
+pub fn route_models(outcome: QueryOutcome) -> Result<Vec<RouteModel>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RouterCatalog { value }, _) => Ok(value.items.0),
+        (other, _) => Err(unexpected("router.catalog", &other)),
+    }
+}
+pub fn router_availability(
+    backend: &dyn Backend,
+    intent: &RouteIntent,
+    effort: &EffortName,
+    session: Option<&str>,
+) -> Vec<u8> {
+    let mut body = json!({"intent": intent, "effort": effort, "requiredCapabilities": []});
+    if let Some(s) = session {
+        body["sessionId"] = json!(s);
+    }
+    at_revision(
+        query_frame(backend, "router.availability", body),
+        ROUTER_AVAILABILITY_REVISION,
+    )
+}
+pub fn availability(outcome: QueryOutcome) -> Result<RouteAvailability, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RouterAvailability { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("router.availability", &other)),
+    }
+}
+pub fn router_pin(
+    backend: &dyn Backend,
+    session: &str,
+    expected_pin_revision: i64,
+    intent: &RouteIntent,
+    effort: &EffortName,
+) -> Vec<u8> {
+    command_frame(
+        backend,
+        "router.pin",
+        json!({"sessionId": session, "expectedPinRevision": expected_pin_revision.to_string(),
+            "intent": intent, "effort": effort}),
+    )
+}
+pub fn router_route(
+    backend: &dyn Backend,
+    session: &str,
+    context_epoch: i64,
+    intent: &RouteIntent,
+    effort: &EffortName,
+) -> Vec<u8> {
+    command_frame(
+        backend,
+        "router.route",
+        json!({"sessionId": session, "expectedContextEpoch": context_epoch.to_string(),
+            "intent": intent, "effort": effort, "requiredCapabilities": []}),
+    )
+}
+pub fn routed(outcome: CommandOutcome) -> Result<RouteChoice, Failure> {
+    match command_result(outcome)? {
+        OperationResult::RouterRoute { value } => Ok(value),
+        other => Err(unexpected("router.route", &other)),
+    }
+}
+pub fn pinned(outcome: CommandOutcome) -> Result<RouteChoice, Failure> {
+    match command_result(outcome)? {
+        OperationResult::RouterPin { value } => Ok(value),
+        other => Err(unexpected("router.pin", &other)),
     }
 }

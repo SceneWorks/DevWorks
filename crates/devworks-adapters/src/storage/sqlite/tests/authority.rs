@@ -2245,6 +2245,9 @@ impl WriteTransaction for Lying<'_> {
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
         self.inner.diagnostics()
     }
+    fn router(&mut self) -> &mut dyn devworks_core::ports::storage::RouterRepository {
+        self.inner.router()
+    }
 }
 
 fn seams_run(
