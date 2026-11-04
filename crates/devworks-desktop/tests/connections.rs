@@ -477,3 +477,116 @@ fn an_editor_key_hidden_by_a_profile_change_is_not_sent() {
         other => panic!("{other:?}"),
     }
 }
+
+fn prepare_recovery_connection(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>) {
+    click_nav(h, "Settings");
+    click(h, Role::Button, "Provider connections");
+    click(h, Role::ComboBox, "Kind");
+    click(h, Role::Button, "OpenRouter");
+    type_into(h, NEW_NAME_LABEL, "Recoverable provider");
+    type_into(h, NEW_KEY_LABEL, "sk-recovery-private");
+}
+
+fn assert_provider_recovery(
+    root: &Root,
+    backend: Arc<dyn devworks_desktop::backend::Backend>,
+    expected: &[u8],
+) {
+    let again = LoseAcks::over(backend.clone(), "router.configure", 0);
+    let mut h = harness(
+        shell_with(Ok(again.clone()), root, Script::default(), None),
+        1440.0,
+        1000.0,
+    );
+    assert!(h.state().settings.connections.sequence >= 1);
+    settle(&mut h);
+    assert_eq!(h.state().unconfirmed_count(), 0);
+    assert!(h.state().settings.connections.busy.is_empty());
+    assert_eq!(
+        again.frames.lock().unwrap().as_slice(),
+        &[expected.to_vec()]
+    );
+    let records = ops::connection_records(backend.query(
+        "router.connections",
+        &ops::router_connections(&*backend, None),
+    ))
+    .unwrap()
+    .0;
+    assert_eq!(records.len(), 1, "exactly one logical connection");
+    assert_eq!(records[0].name.0.as_str(), "Recoverable provider");
+}
+
+#[test]
+fn provider_unknown_outcomes_retain_the_exact_command_across_relaunch() {
+    // Cover both a committed command with lost acknowledgments and a lost request that
+    // reaches the service for the first time only after restoration.
+    for lost_request in [false, true] {
+        let root = Root::new("provider-unknown");
+        let engine = start(&root);
+        let real = engine.backend();
+        let lossy = if lost_request {
+            LoseAcks::losing_requests(real.clone(), "router.configure", 4)
+        } else {
+            LoseAcks::over(real.clone(), "router.configure", 4)
+        };
+        let mut h = harness(
+            shell_with(Ok(lossy.clone()), &root, Script::default(), None),
+            1440.0,
+            1000.0,
+        );
+        settle(&mut h);
+        prepare_recovery_connection(&mut h);
+        click(&mut h, Role::Button, ADD_LABEL);
+        assert_eq!(h.state().unconfirmed_count(), 1);
+        assert_eq!(h.state().settings.connections.busy.len(), 1);
+        let frames = lossy.frames.lock().unwrap().clone();
+        assert_eq!(frames.len(), 4);
+        assert!(frames.iter().all(|f| f == &frames[0]));
+        assert!(!String::from_utf8_lossy(&frames[0]).contains("sk-recovery-private"));
+        h.state_mut().on_exit();
+        let saved = devworks_desktop::memory::Memory::load(&root.memory());
+        assert_eq!(saved.pending.commands.len(), 1);
+        assert_eq!(saved.pending.commands[0].operation, "router.configure");
+        assert_eq!(saved.pending.commands[0].frame, frames[0]);
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(root.memory()).unwrap())
+                .contains("sk-recovery-private")
+        );
+        drop(h);
+        assert_provider_recovery(&root, real, &frames[0]);
+    }
+}
+
+#[test]
+fn a_provider_command_held_during_close_is_confirmed_after_relaunch() {
+    let root = Root::new("provider-close");
+    let engine = start(&root);
+    let real = engine.backend();
+    let seen = LoseAcks::over(real.clone(), "router.configure", 0);
+    let gate = Gate::holding_replies("router.configure");
+    let mut h = harness(
+        shell_with(Ok(gate.over(seen.clone())), &root, Script::default(), None),
+        1440.0,
+        1000.0,
+    );
+    settle(&mut h);
+    prepare_recovery_connection(&mut h);
+    gate.close();
+    h.get_by_role_and_label(Role::Button, ADD_LABEL).click();
+    step_until(&mut h, "provider command admitted", |_| {
+        !seen.frames.lock().unwrap().is_empty()
+    });
+    h.state_mut().request_close();
+    step_until(&mut h, "closed with provider command still pending", |s| {
+        matches!(s.lifecycle(), devworks_desktop::shell::Lifecycle::Closed)
+    });
+    let saved = devworks_desktop::memory::Memory::load(&root.memory());
+    // Always release the worker, including if a following assertion fails.
+    gate.open();
+    let frame = seen.frames.lock().unwrap()[0].clone();
+    assert_eq!(saved.pending.commands.len(), 1);
+    assert_eq!(saved.pending.commands[0].frame, frame);
+    assert!(!String::from_utf8_lossy(&frame).contains("sk-recovery-private"));
+    drop(h);
+    assert_provider_recovery(&root, real, &frame);
+}

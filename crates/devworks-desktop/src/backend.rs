@@ -279,7 +279,7 @@ pub enum Reply {
 
 /// The output of a multi-step task.
 pub enum TaskOutput {
-    /// An attachment's prepared `artifacts.save` frame, not admitted yet.
+    /// A prepared command frame (attachment or provider configuration), not admitted yet.
     Prepared { frame: Vec<u8> },
     /// An attachment's `artifacts.save` outcome with the exact frame it submitted (an unknown
     /// outcome is confirmed by resubmitting that frame, never a new one).
@@ -343,6 +343,7 @@ pub const COMMANDS: &[&str] = &[
     "addons.rollback",
     "addons.uninstall",
     "addons.configure",
+    "router.configure",
     "router.pin",
     "router.route",
     "projects.create",
