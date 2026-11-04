@@ -86,6 +86,8 @@ struct Spec {
     extra: Option<(String, Vec<u8>)>,
     /// A configuration schema document the package ships as a schema asset.
     config_schema: Option<Value>,
+    /// Invocations the helper multiplexes (`requestedLimits.maxConcurrent`).
+    max_concurrent: u32,
 }
 impl Spec {
     fn new(package: &str, version: &str) -> Self {
@@ -108,6 +110,7 @@ impl Spec {
             publisher: "acme".into(),
             extra: None,
             config_schema: None,
+            max_concurrent: 4,
         }
     }
     fn ids(&self) -> Vec<String> {
@@ -181,7 +184,7 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
         "protocolMin": {"major": 1, "minor": 0}, "protocolMax": {"major": 1, "minor": 0},
         "minimumHostVersion": "0.1.0",
         "dependencies": spec.dependencies, "runtimes": spec.runtimes, "schemaAssets": assets,
-        "requestedLimits": {"maxConcurrent": 4, "queueCapacity": 16, "maxMemoryBytes": "1073741824", "streamCreditBytes": 65536},
+        "requestedLimits": {"maxConcurrent": spec.max_concurrent, "queueCapacity": 16, "maxMemoryBytes": "1073741824", "streamCreditBytes": 65536},
         "targets": spec.targets.iter().map(|t| json!({"targetTriple": t, "entrypoint": entry})).collect::<Vec<_>>(),
         "files": files.iter().map(|(p, b)| json!({"path": p, "sha256": sha256_hex(b), "byteLength": b.len().to_string()})).collect::<Vec<_>>(),
         "stateSchema": schema(&format!("{}/state", spec.package), &spec.state_schema),
@@ -1817,12 +1820,7 @@ fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versi
     std::fs::create_dir_all(&dir).unwrap();
     fake(&dir, "node", "echo v20.11.1", "echo v20.11.1");
     fake(&dir, "dotnet", "echo 8.0.204", "echo 8.0.204");
-    fake(
-        &dir,
-        "swift",
-        "exec /bin/sleep 20",
-        "ping -n 30 127.0.0.1 >nul",
-    );
+    fake(&dir, "swift", "exec /bin/sleep 20", ":spin\r\ngoto spin");
     fake(
         &dir,
         "cargo",
@@ -2418,4 +2416,262 @@ fn rollback_paths_never_restore_a_version_whose_prerequisites_are_gone() {
         !a.logs("guard-pack")
             .contains(&"PackageRolledBack".to_owned())
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review round 2: failure accounting, broker access, obsolete pending versions, reverse pins
+
+/// An invocation whose frame is large (128 long allowed-operation IDs, about 17 KB).
+fn big_invoke(a: &App, package: &str) -> devworks_engine::package_host::InvocationHandle {
+    let ops = (0..128)
+        .map(|n| wire::QualifiedId::try_from(format!("{n:0>64}/{}", "o".repeat(64))).unwrap())
+        .collect();
+    a.app()
+        .packages()
+        .unwrap()
+        .invoke(InvokeRequest {
+            package_id: package.into(),
+            contribution_id: format!("{package}/echo"),
+            scope: InvocationScope::Workspace,
+            input: serde_json::from_value(json!({"artifactId": "input-a", "versionId": "v1", "sha256": "e".repeat(64), "byteLength": "4", "mediaType": "application/json"})).unwrap(),
+            operation_id: id(&a.key("op")),
+            deadline: Duration::from_secs(60),
+            allowed_operations: ops,
+            kind: InvocationKind::Ordinary,
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_helper_that_stops_reading_is_restarted_through_its_budget_and_then_recorded_failed() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "deaf-after-ready".into(),
+            max_concurrent: 16,
+            ..Spec::new("deaf-pack", "1.0.0")
+        },
+    ));
+    for _ in 0..2 {
+        a.ready("deaf-pack");
+        // Far more than any pipe buffer: the writer stalls on the helper's input.
+        let handles: Vec<_> = (0..16).map(|_| big_invoke(&a, "deaf-pack")).collect();
+        for h in &handles {
+            assert!(
+                matches!(
+                    h.wait(Duration::from_secs(20)),
+                    Some(InvokeOutcome::Unknown(_))
+                ),
+                "the stalled helper's invocations end unknown"
+            );
+        }
+    }
+    // Each stall counted against the restart budget: at the limit the failure is durable.
+    let rec = a.until("deaf-pack", "the failure is recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    assert_eq!(rec.failure_code.unwrap().0, "HelperStalled");
+}
+
+#[test]
+fn ignored_cancellations_count_against_the_restart_budget() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(&a.user, &Spec::new("deafcancel-pack", "1.0.0")));
+    for _ in 0..2 {
+        a.ready("deafcancel-pack");
+        let h = a
+            .invoke("deafcancel-pack", "stubborn", InvocationKind::Ordinary)
+            .unwrap();
+        assert!(matches!(h.cancel(), InvokeOutcome::Unknown(_)));
+    }
+    let rec = a.until("deafcancel-pack", "the failure is recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    assert_eq!(rec.failure_code.unwrap().0, "CancellationIgnored");
+}
+
+/// Runs the fixture's `event` contribution of `package` on a fresh claimed delivery with the
+/// commit `extra` adds to; returns its progress.
+fn run_event(a: &App, package: &str, n: usize, extra: Value) -> Vec<String> {
+    let consumer = format!("pkg-{package}-sub-{n}");
+    let e = enqueue(&*a.store, &consumer, None, json!({}));
+    let c = consumer.clone();
+    let claimed = write(&*a.store, move |tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: c.clone(),
+            owner: id("package-host"),
+            lease_ms: 60_000,
+            limit: 1,
+        })
+    })
+    .unwrap()
+    .remove(0);
+    assert_eq!(claimed.id, e.id);
+    let pkg = package.to_owned();
+    let generation = read(&*a.store, move |s| s.packages().package_state(&pkg)).unwrap();
+    let mut commit = json!({"subscriptionId": format!("sub-{n}"), "eventId": claimed.event_id.0.as_str(), "expectedCheckpoint": "0",
+        "stateGeneration": generation.generation.to_string(), "expectedStateRevision": generation.revision.to_string(), "intents": []});
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        commit[k] = v;
+    }
+    let path = std::env::temp_dir().join(format!("devworks-fixture-{package}-commit.json"));
+    std::fs::write(&path, commit.to_string()).unwrap();
+    let inv = PackageInvocation {
+        package_id: String::new(),
+        subscription_id: id(&format!("sub-{n}")),
+        process_session_id: String::new(),
+        invocation_id: String::new(),
+        invocation_token: String::new(),
+        state_generation: 0,
+        delivery_id: claimed.id.clone(),
+        fence: claimed.fence().unwrap(),
+        cancellation_epoch: claimed.cancellation_epoch,
+        actor: a.store.info().host_actor,
+        broker_consumer: "package-broker".into(),
+    };
+    let h = a
+        .invoke(package, "event", InvocationKind::Event(Box::new(inv)))
+        .unwrap();
+    finished(h.wait(Duration::from_secs(10)));
+    let _ = std::fs::remove_file(&path);
+    h.progress().0
+}
+
+#[test]
+fn an_event_commit_that_changes_state_needs_state_write_access() {
+    let _s = serial();
+    let a = App::new();
+    // No StateWrite requested.
+    package(a.install(
+        &a.user,
+        &Spec {
+            permissions: vec![json!({"kind": "WorktreeRead"})],
+            ..Spec::new("readonly-pack", "1.0.0")
+        },
+    ));
+    a.ready("readonly-pack");
+    let before = read(&*a.store, |s| s.packages().package_state("readonly-pack")).unwrap();
+    let proposal = json!({"stateProposal": {"artifactId": "state-b", "versionId": "v1", "sha256": "b".repeat(64), "byteLength": "2", "mediaType": "application/json"}});
+    let refused = run_event(&a, "readonly-pack", 1, proposal);
+    assert_eq!(refused[2], "commit:PermissionDenied:-", "{refused:?}");
+    let after = read(&*a.store, |s| s.packages().package_state("readonly-pack")).unwrap();
+    assert_eq!(after.revision, before.revision);
+    // A commit without a state change (a processing receipt and a checkpoint) is allowed.
+    let accepted = run_event(&a, "readonly-pack", 2, json!({}));
+    assert!(
+        accepted[2].starts_with("commit:EventCommitAccepted"),
+        "{accepted:?}"
+    );
+}
+
+#[test]
+fn an_explicit_activation_retires_an_obsolete_approved_pending_version() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("obsolete-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("obsolete-pack");
+    // A person's v1.1 waits for a runtime: approved, pending for compatibility.
+    let needs_zig = Spec {
+        version: "1.1.0".into(),
+        runtimes: vec![
+            json!({"runtimeId": "zig", "versionRequirement": ">=0.12", "required": true}),
+        ],
+        ..spec.clone()
+    };
+    let rec = package(a.update(&a.user, &needs_zig));
+    assert_eq!(waits(&rec), vec!["Compatibility"]);
+    let obsolete = String::from(rec.pending_digest.clone().unwrap());
+    // The person then activates v1.2 explicitly.
+    let rec = package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.2.0".into(),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(rec.version.0, "1.2.0");
+    assert!(rec.pending_version.is_none());
+    let d = obsolete.clone();
+    let phase = read(&*a.store, move |s| {
+        s.packages().package_version("obsolete-pack", &d)
+    })
+    .unwrap()
+    .phase;
+    assert_eq!(phase, VersionPhase::Removed);
+    // Once the runtime appears, a retry has nothing to replace v1.2 with.
+    a.runtimes.set(std::collections::BTreeMap::from([
+        (
+            "dotnet".to_owned(),
+            RuntimeObservation::Found("8.0.4".into()),
+        ),
+        ("zig".to_owned(), RuntimeObservation::Found("0.13.0".into())),
+    ]));
+    let svc = a.app().packages().unwrap().service().clone();
+    assert!(!svc.retry_pending("obsolete-pack").unwrap());
+    assert_eq!(a.record("obsolete-pack").version.0, "1.2.0");
+    // A pending version still waiting on a person's decision stays pending.
+    let rec = package(a.update(
+        &a.agent,
+        &Spec {
+            version: "1.3.0".into(),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(waits(&rec), vec!["ExactVersionApproval"]);
+    let rec = package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.4.0".into(),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(rec.version.0, "1.4.0");
+    assert_eq!(rec.pending_version.as_ref().unwrap().0, "1.3.0");
+    assert_eq!(waits(&rec), vec!["ExactVersionApproval"]);
+}
+
+#[test]
+fn an_update_that_would_break_a_package_pinning_the_replaced_version_waits() {
+    let _s = serial();
+    let a = App::new();
+    let base = Spec::new("base-dep", "1.0.0");
+    let base_rec = package(a.install(&a.user, &base));
+    let pinned = Spec {
+        dependencies: vec![
+            json!({"packageId": "base-dep", "versionRequirement": "^1", "manifestDigest": digest_of(&base_rec), "required": true}),
+        ],
+        ..Spec::new("pinned-dep", "1.0.0")
+    };
+    let pinned_rec = package(a.install(&a.user, &pinned));
+    assert_eq!(availability(&a.record("pinned-dep")), "Ready");
+    // Replacing the pinned version would leave pinned-dep unavailable (a reverse pin).
+    let rec = package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            ..base.clone()
+        },
+    ));
+    assert_eq!(waits(&rec), vec!["Compatibility"]);
+    // And an update that requires the package pinning the old version: both would end
+    // unavailable once the candidate is the active version.
+    let rec = package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.2.0".into(),
+            dependencies: vec![
+                json!({"packageId": "pinned-dep", "versionRequirement": "^1", "manifestDigest": digest_of(&pinned_rec), "required": true}),
+            ],
+            ..base.clone()
+        },
+    ));
+    assert_eq!(waits(&rec), vec!["Compatibility"]);
+    assert_eq!(rec.version.0, "1.0.0");
+    for pkg in ["base-dep", "pinned-dep"] {
+        assert_eq!(availability(&a.record(pkg)), "Ready", "{pkg}");
+    }
 }

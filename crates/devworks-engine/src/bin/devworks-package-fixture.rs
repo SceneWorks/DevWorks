@@ -6,7 +6,8 @@
 //! is part of the verified, digest-bound package contents):
 //!
 //! * `mode`: `normal`, `hang-initialize` (never answers), `wrong-digest`, `wrong-inventory`,
-//!   `exit-on-activate` (exits 3) or `exit-after-ready` (exits 4 shortly after activation);
+//!   `exit-on-activate` (exits 3), `exit-after-ready` (exits 4 shortly after activation) or
+//!   `deaf-after-ready` (stops reading its input after activation, without exiting);
 //! * `inventory`: the contribution IDs it reports.
 //!
 //! Each invoked contribution's local name selects what the invocation does: `echo` (progress,
@@ -322,6 +323,11 @@ fn main() {
                         std::thread::sleep(Duration::from_millis(200));
                         std::process::exit(4);
                     });
+                }
+                if mode == "deaf-after-ready" {
+                    loop {
+                        std::thread::sleep(Duration::from_secs(3600));
+                    }
                 }
             }
             Some("host.invoke") => {

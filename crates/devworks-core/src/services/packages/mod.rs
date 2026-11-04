@@ -77,7 +77,10 @@
 //! staged (`Quiescence`) and the host retries ([`PackageService::retry_pending`]) with backoff,
 //! rechecking approval, trust and compatibility in the activation's unit of work (a candidate
 //! that would regress now stays pending for `Compatibility` and is retried); routine updates
-//! never interrupt work.
+//! never interrupt work. Compatibility is evaluated with the candidate as the active version
+//! ([`policy::activation_regresses`]): its own prerequisites and every package that would stop
+//! running (reverse pins). An explicit activation retires an obsolete pending version that
+//! waited only for the host; one waiting on a person's decision stays pending.
 //!
 //! **State.** Each activation publishes a new state generation, so a handler pinned to the old
 //! generation is fenced (`broker.commit_event` refuses a generation mismatch). A version with the
@@ -788,17 +791,10 @@ impl PackageService {
             }
             a
         });
-        // An update never replaces a working version with one that cannot run here.
-        if let Some(c) = &current {
-            let reg = self.registry(&*tx.packages())?;
-            let view = policy::Registry {
-                packages: &reg,
-                runtimes: &*self.runtimes,
-                host: &self.platform,
-            };
-            if policy::update_regresses(&view, c, &i).is_some() {
-                waits.push(PackageWaitReason::Compatibility);
-            }
+        // An update never replaces a working version with one that cannot run here, nor breaks
+        // another package (see `policy::activation_regresses`).
+        if current.is_some() && self.regresses(tx, &p, &version)?.is_some() {
+            waits.push(PackageWaitReason::Compatibility);
         }
         let running = p.enabled && p.active_digest.is_some();
         if waits.is_empty() && running && !prep.guard.held() {
@@ -854,6 +850,7 @@ impl PackageService {
                 // A first install that waits is listed with its pending version.
                 p.enabled = false;
             }
+            Self::retire_obsolete_pending(tx, &actor, &mut p, &i.manifest_digest)?;
             p.pending_digest = Some(i.manifest_digest.clone());
             Self::save(tx, &mut p, false)?;
             event(
@@ -881,32 +878,21 @@ impl PackageService {
         })
     }
 
-    /// Whether activating `next` in place of `p`'s active version would regress its
-    /// prerequisites or platform support against the current registry and runtimes.
+    /// Whether activating `next` in place of `p`'s active version would regress it or another
+    /// package against the current registry and runtimes ([`policy::activation_regresses`]).
     fn regresses(
         &self,
         tx: &mut dyn WriteTransaction,
         p: &StoredPackage,
-        next: &Inspection,
+        next: &StoredPackageVersion,
     ) -> Result<Option<String>, StorageError> {
-        let current = match &p.active_digest {
-            Some(a) => tx
-                .packages()
-                .package_version(&p.package_id, a)?
-                .as_ref()
-                .and_then(policy::inspection),
-            None => None,
-        };
-        let Some(c) = current else {
-            return Ok(None);
-        };
         let reg = self.registry(&*tx.packages())?;
         let view = policy::Registry {
             packages: &reg,
             runtimes: &*self.runtimes,
             host: &self.platform,
         };
-        Ok(policy::update_regresses(&view, &c, next))
+        Ok(policy::activation_regresses(&view, &p.package_id, next))
     }
 
     /// Publishes `version` as the active version of `p` (see the module documentation,
@@ -968,6 +954,7 @@ impl PackageService {
         if p.pending_digest.as_deref() == Some(version.manifest_digest.as_str()) {
             p.pending_digest = None;
         }
+        Self::retire_obsolete_pending(tx, actor, p, &version.manifest_digest)?;
         p.state_generation = generation;
         p.failure = None;
         tx.packages().update_version(
@@ -1008,6 +995,41 @@ impl PackageService {
             ),
             Some(DiagnosticOutcome::Succeeded),
         )
+    }
+
+    /// Another version became active or pending explicitly (`by`): a pending version that waited
+    /// only for the host (quiescence or compatibility, its approval already recorded) is an
+    /// obsolete activation request, retired (its files go, its identity and approval stay) so a
+    /// later retry never replaces that explicit choice with it. A pending version still waiting
+    /// on a person's decision stays pending.
+    fn retire_obsolete_pending(
+        tx: &mut dyn WriteTransaction,
+        actor: &ActorId,
+        p: &mut StoredPackage,
+        by: &str,
+    ) -> Result<(), StorageError> {
+        if let Some(obsolete) = p.pending_digest.clone().filter(|d| d != by)
+            && let Some(pv) = tx.packages().package_version(&p.package_id, &obsolete)?
+            && pv.phase == VersionPhase::Staged
+            && retryable(&pv.waits)
+        {
+            tx.packages().update_version(
+                &p.package_id,
+                &obsolete,
+                VersionPhase::Removed,
+                &[],
+                pv.approval.as_ref(),
+            )?;
+            p.pending_digest = None;
+            event(
+                tx,
+                actor,
+                p,
+                "PackagePendingRetired",
+                json!({"digest": obsolete, "version": pv.version, "supersededBy": by}),
+            )?;
+        }
+        Ok(())
     }
 
     /// Advances the registry head after a change to the active set that is not an activation.
@@ -1191,7 +1213,7 @@ impl PackageService {
         }
         // Like an update, a rollback never replaces a working version with one whose
         // prerequisites are not met now.
-        if self.regresses(tx, &p, &ti)?.is_some() {
+        if self.regresses(tx, &p, &version)?.is_some() {
             return Err(Refusal::new(
                 DomainErrorCode::UnsupportedTarget,
                 "package_compatibility",
@@ -1745,10 +1767,7 @@ impl PackageService {
                 }
             };
             // Compatibility against the registry and runtimes as they are now.
-            let regression = match policy::inspection(&v) {
-                Some(next) => svc.regresses(tx, &p, &next)?,
-                None => None,
-            };
+            let regression = svc.regresses(tx, &p, &v)?;
             if let Some(why) = regression {
                 if v.waits != ["Compatibility"] {
                     tx.packages().update_version(
@@ -1831,10 +1850,9 @@ impl PackageService {
                 && let Some(v) = tx.packages().package_version(&package_id, &pred)?
                 && v.phase == VersionPhase::Installed
                 && v.approval.is_some()
-                && policy::inspection(&v).is_some_and(|pi| {
-                    policy::static_incompatibility(&pi, &svc.platform).is_none()
-                        && svc.regresses(tx, &p, &pi).ok().flatten().is_none()
-                })
+                && policy::inspection(&v)
+                    .is_some_and(|pi| policy::static_incompatibility(&pi, &svc.platform).is_none())
+                && svc.regresses(tx, &p, &v)?.is_none()
             {
                 let failed = digest.clone();
                 let sp = tx.savepoint()?;

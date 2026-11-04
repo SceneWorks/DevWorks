@@ -393,33 +393,61 @@ pub fn auto_update(
     Ok(())
 }
 
-/// Whether the candidate's prerequisites or platform support regress against the running
-/// version: an update must not replace a working version with one that cannot run here.
-pub fn update_regresses(
+/// Whether activating `next` as `package_id`'s active version would regress anything that runs
+/// now: the candidate's platform support, its own prerequisite closure evaluated with its
+/// proposed active pointer substituted in (so a dependency that pins the version being
+/// replaced counts), and every other package that is ready now and would not be with the
+/// candidate active (reverse pins and requirements). An activation must not replace a working
+/// version with one that cannot run here, nor break another package. `None` without an active
+/// version (a first install has nothing to regress).
+pub fn activation_regresses(
     reg: &Registry<'_>,
-    current: &Inspection,
-    next: &Inspection,
+    package_id: &str,
+    next: &StoredPackageVersion,
 ) -> Option<String> {
-    if static_incompatibility(current, reg.host).is_none()
-        && let Some(why) = static_incompatibility(next, reg.host)
+    let (p, active) = reg.packages.get(package_id)?;
+    let current = active.as_ref().and_then(inspection)?;
+    let candidate = inspection(next)?;
+    if static_incompatibility(&current, reg.host).is_none()
+        && let Some(why) = static_incompatibility(&candidate, reg.host)
     {
         return Some(why);
     }
-    let met = |i: &Inspection| -> BTreeSet<(&'static str, String)> {
-        reg.prerequisites(i)
-            .into_iter()
-            .filter(|q| q.required && !q.satisfied)
-            .map(|q| (q.kind, q.id))
-            .collect()
+    let mut proposed = reg.packages.clone();
+    proposed.insert(package_id.to_owned(), (p.clone(), Some(next.clone())));
+    let after = Registry {
+        packages: &proposed,
+        runtimes: reg.runtimes,
+        host: reg.host,
     };
-    let before = met(current);
-    let after = reg.prerequisites(next);
-    let new_unmet: Vec<String> = after
+    let unmet_before: BTreeSet<(&'static str, String)> = reg
+        .prerequisites(&current)
         .into_iter()
-        .filter(|q| q.required && !q.satisfied && !before.contains(&(q.kind, q.id.clone())))
+        .filter(|q| q.required && !q.satisfied)
+        .map(|q| (q.kind, q.id))
+        .collect();
+    let mut reasons: Vec<String> = after
+        .prerequisites(&candidate)
+        .into_iter()
+        .filter(|q| q.required && !q.satisfied && !unmet_before.contains(&(q.kind, q.id.clone())))
         .filter_map(|q| q.reason)
         .collect();
-    (!new_unmet.is_empty()).then(|| new_unmet.join("; "))
+    for (id, (q, qa)) in reg
+        .packages
+        .iter()
+        .filter(|(id, _)| id.as_str() != package_id)
+    {
+        if matches!(
+            reg.availability(q, qa.as_ref()).0,
+            PackageAvailability::Ready
+        ) {
+            let (a, why) = after.availability(q, qa.as_ref());
+            if !matches!(a, PackageAvailability::Ready) {
+                reasons.push(format!("Package {id} would become unavailable: {why}"));
+            }
+        }
+    }
+    (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
 /// The wire name of a wait.

@@ -179,6 +179,8 @@ struct Instance {
     stderr: Arc<Mutex<Vec<u8>>>,
     /// The committed configuration delivered in activation: `(schema, value)`.
     configuration: Option<(Value, Value)>,
+    /// Whether this instance's failure was accounted (the restart budget counts it once).
+    accounted: AtomicBool,
     /// When the instance became ready, and whether its sustained health was recorded.
     ready_at: Mutex<Option<Instant>>,
     healthy: AtomicBool,
@@ -310,8 +312,9 @@ impl Running {
         }
         // Not stopped cooperatively: terminate the owned tree (its other invocations end
         // unknown too); nothing is claimed about what it did.
-        self.host.terminate(
+        self.host.start_failed(
             &self.instance,
+            "CancellationIgnored",
             "an invocation did not stop within its cancellation grace",
         );
     }
@@ -679,6 +682,7 @@ impl PackageHost {
                             admitted: AtomicU64::new(0),
                             stderr: Arc::new(Mutex::new(Vec::new())),
                             configuration: configuration.clone(),
+                            accounted: AtomicBool::new(false),
                             ready_at: Mutex::new(None),
                             healthy: AtomicBool::new(false),
                         });
@@ -777,22 +781,6 @@ impl PackageHost {
         let output = (!tail.is_empty()).then(|| String::from_utf8_lossy(&tail).into_owned());
         self.service
             .record_log(&inst.package_id, severity, code, message, output);
-    }
-
-    /// Terminates an instance's process tree now (its invocations end unknown).
-    fn terminate(&self, inst: &Instance, why: &str) {
-        if let Some(s) = inst.session() {
-            s.fail(why);
-        }
-        // The process lock is never held across the kill (abandon and stop need it).
-        let process = inst.process();
-        if let Some(p) = process {
-            let _ = self
-                .supervisor
-                .cancel(&p, Duration::from_millis(50), self.config.cancel_grace);
-        }
-        inst.set(InstanceStatus::Failed(why.to_owned()));
-        self.poke();
     }
 
     /// Records an invocation event in the package's history (best effort: the invocation's
@@ -903,7 +891,14 @@ impl PackageHost {
         }
     }
 
+    /// Every failure of an instance (startup, exit, stalled input, ignored cancellation) goes
+    /// through here exactly once: it terminates the tree (its invocations end unknown), counts
+    /// against the key's restart budget with backoff and, at the limit, records the failure
+    /// durably (or the guarded rollback).
     fn start_failed(&self, inst: &Instance, code: &str, message: &str) {
+        if inst.accounted.swap(true, Ordering::SeqCst) {
+            return;
+        }
         inst.set(InstanceStatus::Failed(message.to_owned()));
         if let Some(s) = inst.session() {
             s.fail(message);
@@ -954,16 +949,23 @@ impl PackageHost {
             .files()
             .verify(&inst.package_id, &inst.key.digest, &i.files)
         {
-            // Tampered or missing files are not retried: the failure is recorded at once.
+            // Tampered or missing files are not retried: the failure is recorded durably at once
+            // (the budget does not apply), and admissions re-read the changed registry.
+            inst.accounted.store(true, Ordering::SeqCst);
             inst.set(InstanceStatus::Failed(e.to_string()));
-            let _ = svc.startup_failed(
-                &inst.package_id,
-                &inst.key.digest,
-                "InstallIntegrity",
-                &e.to_string(),
-                1,
-                false,
-            );
+            if svc
+                .startup_failed(
+                    &inst.package_id,
+                    &inst.key.digest,
+                    "InstallIntegrity",
+                    &e.to_string(),
+                    1,
+                    false,
+                )
+                .is_ok()
+            {
+                self.epoch.fetch_add(1, Ordering::SeqCst);
+            }
             return;
         }
         let Some(entry) = i.entrypoint(&svc.platform().target_triple) else {
@@ -1200,7 +1202,11 @@ impl PackageHost {
                     if inst.status() == InstanceStatus::Ready
                         && session.write_stalled(host.config.cancel_grace * 2)
                     {
-                        host.terminate(&inst, "the helper stopped reading its input");
+                        host.start_failed(
+                            &inst,
+                            "HelperStalled",
+                            "the helper stopped reading its input",
+                        );
                     }
                     if !host.running.load(Ordering::SeqCst)
                         && host
@@ -1845,6 +1851,13 @@ impl Broker for HostBroker {
                         "only an event-handler invocation commits events",
                     ));
                 };
+                // A commit that changes state needs the same access as compare-and-set.
+                if params.state_proposal.is_some() && !ctx.access.contains("state.write") {
+                    return Err(rpc_error(
+                        RpcErrorClass::PermissionDenied,
+                        "the package did not request state writes",
+                    ));
+                }
                 let (inv, commit) = (inv.as_ref().clone(), params.clone());
                 let outcome = run_write(&*self.host.store, WriteOptions::default(), move |tx| {
                     commit_event(tx, &inv, &commit)
