@@ -24,6 +24,130 @@ fn type_into(
     h.step();
 }
 
+fn scope_label(h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>) -> String {
+    h.get_by_role_and_label(Role::ComboBox, "Knowledge scope")
+        .value()
+        .unwrap_or_default()
+}
+
+#[test]
+fn the_scope_comes_from_visible_projects_and_follows_the_navigation() {
+    let root = Root::new("knowledge-scope");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let made = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Engine", "", &[]),
+    ))
+    .unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    assert_eq!(scope_label(&h), knowledge_screen::GENERAL);
+    assert_eq!(
+        h.state().knowledge.projects,
+        vec![(made.id.0.as_str().to_owned(), "Engine".to_owned())],
+        "the choices are the listed projects"
+    );
+    // Selecting the project in the navigation scopes Knowledge to it.
+    h.state_mut()
+        .select_project(Some(made.id.0.as_str().to_owned()));
+    settle(&mut h);
+    assert_eq!(scope_label(&h), "Engine");
+    click(&mut h, Role::Button, "New entry");
+    type_into(&mut h, "Entry text", "Engine builds with cargo");
+    click(&mut h, Role::Button, "Save entry");
+    assert!(has_text(&h, "Entry recorded."));
+    let page = |scope: serde_json::Value| match ops::query_result(backend.query(
+        "knowledge.search",
+        &knowledge_screen::query(
+            &*backend,
+            "knowledge.search",
+            json!({"scope": scope, "text": "cargo", "tags": [], "kinds": [],
+                    "page": {"limit": 10}, "entityLimit": 10, "claimLimit": 10}),
+        ),
+    ))
+    .unwrap()
+    .0
+    {
+        devworks_core::protocol::results::OperationResult::KnowledgeSearch { value } => {
+            value.items.0.len()
+        }
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        page(json!({"kind": "Project", "projectId": made.id.0.as_str()})),
+        1
+    );
+    assert_eq!(
+        page(json!({"kind": "Workspace"})),
+        0,
+        "it stays in the project"
+    );
+    // A project that is no longer listed is never a scope: general Knowledge is.
+    assert!(h.state_mut().knowledge.set_projects(Vec::new()));
+    assert!(h.state().knowledge.project.is_none());
+    assert!(
+        !h.state_mut()
+            .knowledge
+            .follow_navigation(Some("not-a-listed-project"))
+    );
+}
+
+#[test]
+fn a_file_is_imported_by_dialog_or_drop_after_an_exact_preview() {
+    let root = Root::new("knowledge-import");
+    let engine = start(&root);
+    let file = root.file(
+        "memory.json",
+        serde_json::to_vec(
+            &json!({"format": "devworks/knowledge-import", "candidates": [
+            {"entry": {"kind": "decision", "summary": "Use SQLite for Knowledge"},
+                "sourceFile": "MEMORY.md", "verification": "verified"},
+            {"entry": {"kind": "fact", "summary": "My editor is vim"},
+                "sourceFile": "MEMORY.md", "verification": "personal"}]}),
+        )
+        .unwrap()
+        .as_slice(),
+    );
+    let script = Script::default();
+    script.files.lock().unwrap().push(vec![file.clone()]);
+    let mut h = harness(shell(&engine, &root, script), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    // The file chooser stores the file as the user's artifact, then previews exactly.
+    click(&mut h, Role::Button, "Import from file");
+    assert!(
+        has_text(&h, "Import memory.json"),
+        "{:?}",
+        h.state().knowledge.import
+    );
+    assert!(has_text(&h, "would store") && has_text(&h, "personal"));
+    assert!(has_text(&h, "stores 1 of 2 candidates"));
+    assert!(
+        h.state().knowledge.items.is_empty(),
+        "nothing is imported before Confirm"
+    );
+    click(&mut h, Role::Button, "Confirm import");
+    assert!(has_text(&h, "Imported 1 entries from memory.json"));
+    assert!(has_text(&h, "stored"));
+    assert_eq!(h.state().knowledge.items.len(), 1);
+    click(&mut h, Role::Button, "Close import");
+    // Dropping the same file on the screen stores a new copy and previews it: the entry it
+    // imported is now an active duplicate, so nothing would be imported twice.
+    h.input_mut()
+        .dropped_files
+        .push(std::sync::Arc::new(Dropped(file)));
+    settle(&mut h);
+    assert!(has_text(&h, "Import memory.json"));
+    assert!(has_text(&h, "duplicate"));
+    assert!(has_text(&h, "stores 0 of 2 candidates"));
+    click(&mut h, Role::Button, "Cancel import");
+    assert!(h.state().knowledge.import.is_none());
+}
+
 #[test]
 fn entries_are_created_searched_inspected_and_changed_through_the_shared_operations() {
     let root = Root::new("knowledge");

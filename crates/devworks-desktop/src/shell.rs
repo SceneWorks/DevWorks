@@ -409,8 +409,14 @@ impl Shell {
                 self.load_projects();
                 self.load_repositories();
             }
-            Route::Knowledge if !self.knowledge.loaded && self.knowledge.listing.is_none() => {
-                self.load_knowledge();
+            Route::Knowledge => {
+                // Scope choices are the projects the user can see.
+                if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
+                    self.load_projects();
+                }
+                if !self.knowledge.loaded && self.knowledge.listing.is_none() {
+                    self.load_knowledge();
+                }
             }
             _ => {}
         }
@@ -552,6 +558,78 @@ impl Shell {
             move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
         );
     }
+    /// Gives the Knowledge screen the projects the user can see (active and archived, from
+    /// `projects.list`) and follows the navigation's project selection; a changed scope lists
+    /// again.
+    fn sync_knowledge_scope(&mut self, actions: &mut Vec<KnowledgeAction>) {
+        use devworks_core::protocol::records::LifeState;
+        if !self.projects.list.loaded {
+            return;
+        }
+        let projects: Vec<(String, String)> = self
+            .projects
+            .list
+            .items
+            .iter()
+            .filter(|p| matches!(p.lifecycle, LifeState::Active | LifeState::Archived))
+            .map(|p| {
+                let name = match p.lifecycle {
+                    LifeState::Archived => format!("{} (archived)", p.name.0),
+                    _ => p.name.0.clone(),
+                };
+                (p.id.0.as_str().to_owned(), name)
+            })
+            .collect();
+        let mut changed = self.knowledge.set_projects(projects);
+        let nav = self.selected_project().map(str::to_owned);
+        if self.knowledge.followed.as_ref() != Some(&nav) {
+            self.knowledge.followed = Some(nav.clone());
+            changed |= self.knowledge.follow_navigation(nav.as_deref());
+        }
+        if changed && self.knowledge.loaded {
+            actions.push(KnowledgeAction::Search);
+        }
+    }
+    /// Stores the first of `paths` as the user's artifact (like a chat attachment), then
+    /// previews its import. One import at a time; nothing is imported before Confirm.
+    fn import_knowledge_file(&mut self, paths: Vec<PathBuf>) {
+        let Some(path) = paths.into_iter().next() else {
+            return;
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "import.json".into());
+        if !self.knowledge.begin_import(&name) {
+            self.knowledge.message = Some((
+                widgets::Tone::Attention,
+                "An import is already in progress.".into(),
+            ));
+            return;
+        }
+        let media = if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        {
+            "application/json"
+        } else {
+            attachments::media_type(&path)
+        };
+        let submitted = self.online().is_ok()
+            && self.client.as_mut().is_some_and(|c| {
+                c.task(
+                    Slot::KnowledgeImportSave,
+                    "Storing the import file",
+                    move |b| attachments::store_file(b, &path, &name, media, "knowledge-import"),
+                )
+            });
+        if !submitted {
+            self.knowledge.import = Some(knowledge_screen::ImportStage::Failed {
+                name: "the file".into(),
+                error: "DevWorks is offline or closing.".into(),
+            });
+        }
+    }
     fn read_knowledge(&mut self, claim: devworks_core::protocol::Id) {
         let body = self.knowledge.read_body(&claim);
         self.query(
@@ -619,6 +697,36 @@ impl Shell {
                     }
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
+                KnowledgeAction::ImportDialog => {
+                    let picked = self.dialogs.pick_files();
+                    self.import_knowledge_file(picked);
+                }
+                KnowledgeAction::ImportFiles(paths) => self.import_knowledge_file(paths),
+                KnowledgeAction::ConfirmImport => match self.knowledge.import_body() {
+                    Ok(body) => {
+                        if self.command(
+                            Slot::KnowledgeImport,
+                            "Importing Knowledge",
+                            "knowledge.import_user_data",
+                            move |b| {
+                                knowledge_screen::command(b, "knowledge.import_user_data", body)
+                            },
+                        ) {
+                            self.knowledge.import_started();
+                        } else {
+                            self.knowledge.message = Some((
+                                widgets::Tone::Attention,
+                                "The import was not sent: DevWorks is offline or closing.".into(),
+                            ));
+                        }
+                    }
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::CancelImport => {
+                    if !self.knowledge.import.as_ref().is_some_and(|s| s.busy()) {
+                        self.knowledge.import = None;
+                    }
+                }
                 KnowledgeAction::DeleteSource => match self.knowledge.delete_source_body() {
                     Ok((op, body)) => self.knowledge_write("Delete by source", op, body),
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
@@ -1665,6 +1773,25 @@ impl Shell {
             }
             (Slot::KnowledgeRead(claim), Reply::Query(q)) => self.knowledge.read_reply(&claim, q),
             (Slot::KnowledgeDiagnostics, Reply::Query(q)) => self.knowledge.diagnostics_reply(q),
+            (Slot::KnowledgeImportSave, Reply::Task(r)) => {
+                if let Some(body) = self.knowledge.import_saved(r) {
+                    let submitted = self.query(
+                        Slot::KnowledgeImportPreview,
+                        "Previewing an import",
+                        "knowledge.diagnostics",
+                        move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+                    );
+                    if !submitted {
+                        self.knowledge.import = None;
+                    }
+                }
+            }
+            (Slot::KnowledgeImportPreview, Reply::Query(q)) => self.knowledge.import_previewed(q),
+            (Slot::KnowledgeImport, Reply::Command(c)) => {
+                if self.knowledge.import_done(c) {
+                    self.load_knowledge();
+                }
+            }
             (Slot::KnowledgePreview(source), Reply::Query(q)) => {
                 self.knowledge.preview_reply(&source, q)
             }
@@ -2392,6 +2519,9 @@ impl Shell {
         if !dropped.is_empty() {
             if conversation_visible {
                 self.attach(dropped);
+            } else if self.route == Route::Knowledge {
+                // A file dropped on the Knowledge screen is imported (previewed first).
+                self.knowledge_actions(vec![KnowledgeAction::ImportFiles(dropped)]);
             } else {
                 self.announce("Open the workspace coordinator to attach dropped files.");
             }
@@ -2851,6 +2981,7 @@ impl Shell {
             Route::Knowledge => {
                 let online = self.online();
                 let mut actions = Vec::new();
+                self.sync_knowledge_scope(&mut actions);
                 // The selected subview is route memory, kept across navigation and restarts.
                 self.knowledge.tab = self.routes.entry(Route::Knowledge).or_default().tab;
                 self.knowledge.ui(

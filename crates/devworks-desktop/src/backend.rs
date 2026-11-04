@@ -105,6 +105,12 @@ pub enum Slot {
     KnowledgeDiagnostics,
     /// The preview of a delete by source (the source).
     KnowledgePreview(String),
+    /// Storing an import file as the user's artifact.
+    KnowledgeImportSave,
+    /// The exact preview of an import.
+    KnowledgeImportPreview,
+    /// The confirmed import.
+    KnowledgeImport,
     /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
     KnowledgeWrite,
 }
@@ -167,7 +173,7 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 24] = [
+pub const COMMANDS: [&str; 25] = [
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
@@ -192,6 +198,7 @@ pub const COMMANDS: [&str; 24] = [
     "knowledge.delete_selected",
     "knowledge.relate",
     "knowledge.delete_by_source",
+    "knowledge.import_user_data",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.

@@ -123,6 +123,30 @@ pub fn prepare(
     Ok(TaskOutput::Prepared { frame })
 }
 
+/// Stores `path` as the user's workspace artifact (the same upload ticket, digest check and
+/// `artifacts.save` as an attachment, tagged `tag` instead of a conversation): a Knowledge
+/// import's source. An unknown outcome is confirmed by resubmitting the identical frame.
+pub fn store_file(
+    backend: &dyn Backend,
+    path: &Path,
+    name: &str,
+    media_type: &str,
+    tag: &str,
+) -> Result<TaskOutput, String> {
+    let (digest, bytes) = sha256_file(path, max_attachment_bytes(backend))?;
+    let ticket = backend.mint_workspace_upload(path)?;
+    let frame = ops::save_workspace_artifact(
+        backend,
+        ticket.as_str(),
+        name,
+        media_type,
+        &digest,
+        bytes,
+        &[tag.to_owned()],
+    );
+    save(backend, frame, None)
+}
+
 /// Admits an attachment's prepared `artifacts.save` frame, or resubmits it unchanged (same
 /// request key) to confirm an unknown outcome. `owned` is a file the shell created (a pasted
 /// image): it is removed once the artifact service holds its copy, never before.

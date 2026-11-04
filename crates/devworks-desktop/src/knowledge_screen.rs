@@ -12,6 +12,7 @@ use crate::ops::{self, Failure};
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::{KnowledgeBundle, KnowledgeClaim};
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::{DomainErrorCode, Id};
@@ -35,6 +36,8 @@ pub const ENTRY_KINDS: [(&str, &str); 10] = [
 pub const LIFECYCLES: [&str; 4] = ["Active", "Superseded", "Retracted", "Deleted"];
 /// Rows one search page asks for.
 pub const PAGE: u32 = 100;
+/// The scope choice for general (workspace) Knowledge.
+pub const GENERAL: &str = "General (all projects)";
 
 /// The newest schema revision `op` registers (frames carry it, so revision-2 members are kept).
 pub fn revision_of(op: &str) -> u64 {
@@ -126,6 +129,70 @@ impl Change {
     }
 }
 
+/// One previewed candidate of an import: its outcome code and description.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportCandidate {
+    pub outcome: String,
+    pub text: String,
+}
+
+/// A user data import from a file (`knowledge.import_user_data`): saved as the user's
+/// artifact, previewed exactly, confirmed, and reported per candidate. Each stage moves only
+/// on its confirmed reply.
+#[derive(Clone, Debug)]
+pub enum ImportStage {
+    Saving {
+        name: String,
+    },
+    Previewing {
+        name: String,
+        source: ArtifactRef,
+        scope: Value,
+    },
+    Ready {
+        name: String,
+        source: ArtifactRef,
+        scope: Value,
+        digest: String,
+        candidates: Vec<ImportCandidate>,
+        summary: String,
+    },
+    Importing {
+        name: String,
+        source: ArtifactRef,
+        scope: Value,
+        digest: String,
+        candidates: Vec<ImportCandidate>,
+        summary: String,
+    },
+    Done {
+        name: String,
+        results: Vec<ImportCandidate>,
+        stored: usize,
+    },
+    Failed {
+        name: String,
+        error: String,
+    },
+}
+impl ImportStage {
+    /// Whether a request of this import is in flight.
+    pub fn busy(&self) -> bool {
+        matches!(
+            self,
+            Self::Saving { .. } | Self::Previewing { .. } | Self::Importing { .. }
+        )
+    }
+}
+/// The import format's schema reference.
+pub fn import_schema() -> Value {
+    use devworks_core::services::knowledge::import::{
+        IMPORT_SCHEMA_ID, IMPORT_SCHEMA_REVISION, import_schema_digest,
+    };
+    json!({"schemaId": IMPORT_SCHEMA_ID, "revision": IMPORT_SCHEMA_REVISION.to_string(),
+        "sha256": import_schema_digest()})
+}
+
 /// What the screen asks the shell to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum KnowledgeAction {
@@ -140,6 +207,13 @@ pub enum KnowledgeAction {
     PreviewSource,
     /// Deletes the previewed source contributions (the user only).
     DeleteSource,
+    /// Chooses a file to import (the native file dialog).
+    ImportDialog,
+    /// Imports these files (the first; a dropped file arrives here).
+    ImportFiles(Vec<std::path::PathBuf>),
+    /// Confirms the previewed import exactly.
+    ConfirmImport,
+    CancelImport,
 }
 
 /// The exact preview of a delete by source.
@@ -160,8 +234,13 @@ pub struct Listing {
 
 #[derive(Default)]
 pub struct KnowledgeScreen {
-    /// Empty: general (workspace) Knowledge; otherwise a project ID.
-    pub project: String,
+    /// `None`: general (workspace) Knowledge; otherwise one of [`Self::projects`].
+    pub project: Option<String>,
+    /// The projects the user can see (ID, name), from the projects listing; the only scope
+    /// choices besides general Knowledge.
+    pub projects: Vec<(String, String)>,
+    /// The navigation selection last followed (`None` until the projects are listed).
+    pub followed: Option<Option<String>>,
     pub text: String,
     pub tags: String,
     pub entry_kind: Option<&'static str>,
@@ -191,6 +270,8 @@ pub struct KnowledgeScreen {
     /// The source a cleanup names, and its preview once read.
     pub cleanup_source: String,
     pub source_preview: Option<SourcePreview>,
+    /// A user data import in progress or just finished.
+    pub import: Option<ImportStage>,
 }
 
 impl KnowledgeScreen {
@@ -200,14 +281,45 @@ impl KnowledgeScreen {
             ..Self::default()
         }
     }
-    /// The scope typed into the scope field (applied by the next search).
+    /// The scope chosen in the picker (applied by the next search). A project that is no longer
+    /// listed (deleted, or no longer visible) is never used: general Knowledge is.
     fn typed_scope(&self) -> Value {
-        let p = self.project.trim();
-        if p.is_empty() {
-            json!({"kind": "Workspace"})
-        } else {
-            json!({"kind": "Project", "projectId": p})
+        match self
+            .project
+            .as_deref()
+            .filter(|p| self.project_name(Some(p)).is_some())
+        {
+            None => json!({"kind": "Workspace"}),
+            Some(p) => json!({"kind": "Project", "projectId": p}),
         }
+    }
+    fn project_name(&self, id: Option<&str>) -> Option<&str> {
+        let id = id?;
+        self.projects
+            .iter()
+            .find(|(p, _)| p == id)
+            .map(|(_, n)| n.as_str())
+    }
+    /// Replaces the visible projects; a chosen project no longer among them falls back to
+    /// general Knowledge. Returns whether the choice changed.
+    pub fn set_projects(&mut self, projects: Vec<(String, String)>) -> bool {
+        self.projects = projects;
+        if self.project.is_some() && self.project_name(self.project.as_deref()).is_none() {
+            self.project = None;
+            return true;
+        }
+        false
+    }
+    /// Follows the navigation's project selection (`None`: general Knowledge).
+    pub fn follow_navigation(&mut self, project: Option<&str>) -> bool {
+        let next = project
+            .filter(|p| self.project_name(Some(p)).is_some())
+            .map(str::to_owned);
+        if next == self.project {
+            return false;
+        }
+        self.project = next;
+        true
     }
     /// The scope of the listing shown: reads and writes of its entries use it, never a scope
     /// typed but not searched yet.
@@ -562,6 +674,285 @@ impl KnowledgeScreen {
                 }
             });
     }
+    // -----------------------------------------------------------------------------------------
+    // Import from a file
+
+    /// Starts an import of `name`; `false` while another import is in flight.
+    pub fn begin_import(&mut self, name: &str) -> bool {
+        if self.import.as_ref().is_some_and(ImportStage::busy) {
+            return false;
+        }
+        self.import = Some(ImportStage::Saving {
+            name: name.to_owned(),
+        });
+        true
+    }
+    /// Applies the import file's `artifacts.save` outcome; returns the exact preview query
+    /// (`knowledge.diagnostics` with the saved version and the format's schema) once stored.
+    pub fn import_saved(
+        &mut self,
+        outcome: Result<crate::backend::TaskOutput, String>,
+    ) -> Option<Value> {
+        let Some(ImportStage::Saving { name }) = self.import.clone() else {
+            return None;
+        };
+        let stored = match outcome {
+            Ok(crate::backend::TaskOutput::Stored { outcome, .. }) => {
+                ops::saved_artifact(outcome).map_err(|e| e.describe())
+            }
+            Ok(_) => Err("unexpected task output".into()),
+            Err(e) => Err(e),
+        };
+        match stored {
+            Ok(record) => {
+                let scope = self.scope();
+                let body = json!({"scope": scope, "importSource": record.artifact,
+                    "importSchema": import_schema()});
+                self.import = Some(ImportStage::Previewing {
+                    name,
+                    source: record.artifact,
+                    scope,
+                });
+                Some(body)
+            }
+            Err(error) => {
+                self.import = Some(ImportStage::Failed {
+                    name,
+                    error: format!("The file was not stored: {error}"),
+                });
+                None
+            }
+        }
+    }
+    /// Applies the preview: one result per candidate and the digest that confirms exactly it.
+    pub fn import_previewed(&mut self, outcome: QueryOutcome) {
+        let Some(ImportStage::Previewing {
+            name,
+            source,
+            scope,
+        }) = self.import.clone()
+        else {
+            return;
+        };
+        let reply = match ops::query_result(outcome) {
+            Ok((OperationResult::KnowledgeDiagnostics { value }, _)) => Ok(value.items.0),
+            Ok((other, _)) => Err(format!("Unexpected {}", other.operation())),
+            Err(e) => Err(e.describe()),
+        };
+        self.import = Some(match reply {
+            Ok(items) => {
+                let candidates: Vec<ImportCandidate> = items
+                    .iter()
+                    .filter(|d| d.component.0 == "knowledge.import")
+                    .map(|d| ImportCandidate {
+                        outcome: d.code.0.clone(),
+                        text: d.message.0.clone(),
+                    })
+                    .collect();
+                match items.iter().find(|d| d.component.0 == "knowledge.preview") {
+                    Some(p) => ImportStage::Ready {
+                        name,
+                        source,
+                        scope,
+                        digest: p.id.as_str().to_owned(),
+                        candidates,
+                        summary: p.message.0.clone(),
+                    },
+                    None => ImportStage::Failed {
+                        name,
+                        error: "The preview was not returned.".into(),
+                    },
+                }
+            }
+            Err(error) => ImportStage::Failed {
+                name,
+                error: format!("The file cannot be imported: {error}"),
+            },
+        });
+    }
+    /// The import the preview shows, exactly (same source, scope, schema and digest).
+    pub fn import_body(&self) -> Result<Value, String> {
+        match &self.import {
+            Some(ImportStage::Ready {
+                source,
+                scope,
+                digest,
+                ..
+            }) => Ok(
+                json!({"scope": scope, "source": source, "schema": import_schema(),
+                "previewDigest": digest}),
+            ),
+            _ => Err("Preview a file first.".into()),
+        }
+    }
+    /// The confirmed import was submitted.
+    pub fn import_started(&mut self) {
+        if let Some(ImportStage::Ready {
+            name,
+            source,
+            scope,
+            digest,
+            candidates,
+            summary,
+        }) = self.import.clone()
+        {
+            self.import = Some(ImportStage::Importing {
+                name,
+                source,
+                scope,
+                digest,
+                candidates,
+                summary,
+            });
+        }
+    }
+    /// Applies the import's outcome; `true` when it was recorded. A refusal or an unknown
+    /// outcome returns to the preview (a resubmission can never import twice: imported
+    /// candidates no longer match the preview).
+    pub fn import_done(&mut self, outcome: CommandOutcome) -> bool {
+        let Some(ImportStage::Importing {
+            name,
+            source,
+            scope,
+            digest,
+            candidates,
+            summary,
+        }) = self.import.clone()
+        else {
+            // An import confirmed in an earlier launch: report its outcome only.
+            let recorded = ops::command_result(outcome).is_ok();
+            if recorded {
+                self.message = Some((Tone::Good, "An earlier import was recorded.".into()));
+            }
+            return recorded;
+        };
+        match ops::command_result(outcome) {
+            Ok(OperationResult::KnowledgeImportUserData { value }) => {
+                let results = candidates
+                    .iter()
+                    .map(|c| ImportCandidate {
+                        outcome: if c.outcome == "would_store" {
+                            "stored".into()
+                        } else {
+                            c.outcome.clone()
+                        },
+                        text: c.text.clone(),
+                    })
+                    .collect();
+                self.import = Some(ImportStage::Done {
+                    name,
+                    results,
+                    stored: value.claim_ids.0.len(),
+                });
+                true
+            }
+            other => {
+                let error = match other {
+                    Err(Failure::Refused(f)) if f.code == DomainErrorCode::Conflict => {
+                        "Knowledge changed since the preview; preview the file again.".to_owned()
+                    }
+                    Err(Failure::Unknown) => {
+                        "The import's outcome is not confirmed yet.".to_owned()
+                    }
+                    Err(e) => e.describe(),
+                    Ok(r) => format!("Unexpected {}", r.operation()),
+                };
+                self.message = Some((Tone::Bad, format!("Import not recorded. {error}")));
+                self.import = Some(ImportStage::Ready {
+                    name,
+                    source,
+                    scope,
+                    digest,
+                    candidates,
+                    summary,
+                });
+                false
+            }
+        }
+    }
+    fn import_section(&mut self, ui: &mut Ui, actions: &mut Vec<KnowledgeAction>) {
+        ui.horizontal_wrapped(|ui| {
+            let busy = self.import.as_ref().is_some_and(ImportStage::busy);
+            if ui
+                .add_enabled(!busy, egui::Button::new("Import from file"))
+                .clicked()
+            {
+                actions.push(KnowledgeAction::ImportDialog);
+            }
+            widgets::caption(ui, "or drop a devworks/knowledge-import file here");
+        });
+        let Some(stage) = self.import.clone() else {
+            return;
+        };
+        egui::Frame::new()
+            .stroke(theme::soft_line())
+            .corner_radius(theme::radius())
+            .inner_margin(theme::margin(12, 10))
+            .show(ui, |ui| {
+                let candidates = |ui: &mut Ui, list: &[ImportCandidate]| {
+                    for c in list {
+                        let tone = match c.outcome.as_str() {
+                            "would_store" | "stored" => Tone::Good,
+                            _ => Tone::Attention,
+                        };
+                        ui.horizontal_wrapped(|ui| {
+                            chip(ui, c.outcome.replace('_', " "), tone);
+                            ui.label(&c.text);
+                        });
+                    }
+                };
+                match &stage {
+                    ImportStage::Saving { name } => {
+                        ui.label(format!("Storing {name}…"));
+                    }
+                    ImportStage::Previewing { name, .. } => {
+                        ui.label(format!("Previewing {name}…"));
+                    }
+                    ImportStage::Ready {
+                        name,
+                        candidates: list,
+                        summary,
+                        ..
+                    } => {
+                        ui.label(RichText::new(format!("Import {name}")).strong());
+                        widgets::caption(ui, summary.clone());
+                        candidates(ui, list);
+                        ui.horizontal(|ui| {
+                            if ui.button("Confirm import").clicked() {
+                                actions.push(KnowledgeAction::ConfirmImport);
+                            }
+                            if ui.button("Cancel import").clicked() {
+                                actions.push(KnowledgeAction::CancelImport);
+                            }
+                        });
+                    }
+                    ImportStage::Importing { name, .. } => {
+                        ui.label(format!("Importing {name}…"));
+                    }
+                    ImportStage::Done {
+                        name,
+                        results,
+                        stored,
+                    } => {
+                        ui.label(
+                            RichText::new(format!("Imported {stored} entries from {name}"))
+                                .strong(),
+                        );
+                        candidates(ui, results);
+                        if ui.button("Close import").clicked() {
+                            actions.push(KnowledgeAction::CancelImport);
+                        }
+                    }
+                    ImportStage::Failed { name, error } => {
+                        chip(ui, format!("{name}: {error}"), Tone::Bad);
+                        if ui.button("Close import").clicked() {
+                            actions.push(KnowledgeAction::CancelImport);
+                        }
+                    }
+                }
+            });
+    }
+
     pub fn diagnostics_reply(&mut self, outcome: QueryOutcome) {
         if let Ok((OperationResult::KnowledgeDiagnostics { value }, _)) = ops::query_result(outcome)
         {
@@ -681,14 +1072,42 @@ impl KnowledgeScreen {
             return;
         }
         ui.horizontal_wrapped(|ui| {
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut self.project)
-                    .hint_text("General (all projects)")
-                    .desired_width(180.0),
-            );
-            r.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Project scope")
-            });
+            let current = self
+                .project_name(self.project.as_deref())
+                .unwrap_or(GENERAL)
+                .to_owned();
+            let mut pick: Option<Option<String>> = None;
+            egui::ComboBox::from_id_salt("knowledge-scope")
+                .selected_text(current.clone())
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(self.project.is_none(), GENERAL)
+                        .clicked()
+                    {
+                        pick = Some(None);
+                    }
+                    for (id, name) in &self.projects {
+                        if ui
+                            .selectable_label(self.project.as_deref() == Some(id), name)
+                            .clicked()
+                        {
+                            pick = Some(Some(id.clone()));
+                        }
+                    }
+                })
+                .response
+                .widget_info(|| {
+                    let mut info =
+                        egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Knowledge scope");
+                    info.current_text_value = Some(current.clone());
+                    info
+                });
+            if let Some(p) = pick
+                && p != self.project
+            {
+                self.project = p;
+                actions.push(KnowledgeAction::Search);
+            }
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.text)
                     .hint_text("Search words")
@@ -753,6 +1172,7 @@ impl KnowledgeScreen {
         if let Some((tone, text)) = &self.message {
             chip(ui, text.clone(), *tone);
         }
+        self.import_section(ui, actions);
         self.cleanup(ui, actions);
         if let Some(d) = self.draft.clone() {
             self.editor(ui, d, actions);
@@ -1044,7 +1464,8 @@ mod tests {
         let mut s = KnowledgeScreen::new();
         let (_, body) = s.begin_listing(false);
         assert_eq!(body["scope"], json!({"kind": "Workspace"}));
-        s.project = "project-x".into();
+        s.set_projects(vec![("project-x".into(), "Project X".into())]);
+        s.project = Some("project-x".into());
         let draft = Draft {
             value: "A fact".into(),
             ..Draft::default()
@@ -1067,7 +1488,7 @@ mod tests {
         );
         // A continuation stays in the listed scope even if the field changes again.
         s.cursor = Some("c".into());
-        s.project.clear();
+        s.project = None;
         let (_, body) = s.begin_listing(true);
         assert_eq!(
             body["scope"],
