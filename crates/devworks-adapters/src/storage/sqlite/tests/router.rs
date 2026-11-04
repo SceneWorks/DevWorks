@@ -2,10 +2,10 @@
 //! `.route`, `.pin`, `.availability` and `.request_status` through the gateway and host
 //! authority, with receipts, both availability schema revisions, durable round-robin cursors and
 //! pins across restart, failover within the pool, effort and capability constraints, cooldown
-//! waits, auxiliary routing and migration 14. Connections are a scripted directory; nothing
+//! waits, auxiliary routing and migration 13. Connections are a scripted directory; nothing
 //! here contacts a provider or runs inference.
 use super::{Harness, T0};
-use crate::storage::sqlite::{MIGRATION_0014_SHA256, MIGRATIONS, SqliteStore};
+use crate::storage::sqlite::{MIGRATION_0013_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
@@ -1255,14 +1255,14 @@ fn without_connections_every_route_reports_no_connection() {
 }
 
 #[test]
-fn migration_14_is_additive_and_seeds_the_catalog_once() {
+fn migration_13_is_additive_and_seeds_the_catalog_once() {
     let m = MIGRATIONS
         .iter()
-        .find(|m| m.version == 14)
-        .expect("migration 14");
+        .find(|m| m.version == 13)
+        .expect("migration 13");
     assert_eq!(
         m.checksum(),
-        MIGRATION_0014_SHA256,
+        MIGRATION_0013_SHA256,
         "an applied migration was edited"
     );
     assert_eq!((m.minimum_reader, m.minimum_writer), (8, 11));

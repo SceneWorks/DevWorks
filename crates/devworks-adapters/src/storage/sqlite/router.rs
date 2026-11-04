@@ -1,4 +1,4 @@
-//! SQLite inference router records (migration 14): `router_models`, `router_tier_cursors`,
+//! SQLite inference router records (migration 13): `router_models`, `router_tier_cursors`,
 //! `router_pins`, `router_cooldowns` and `router_requests`.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};

@@ -1,7 +1,7 @@
 -- Inference router records (ROUTE-14, ROUTE-15, ROUTE-19, DW-17): the conversational model
 -- catalog, persisted round-robin tier cursors, session route pins, router-reported cooldowns and
 -- logical request bindings. Additive: five new tables and their indexes; it references no table
--- of migrations 11-13.
+-- of migrations 11-12.
 --
 -- The catalog is editable configuration, seeded once here and kept as edited across restarts.
 -- The seed mirrors the retained simple-router catalog (revision a556b353): the default tier
