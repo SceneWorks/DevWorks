@@ -212,12 +212,18 @@ pub enum StopScope {
     All,
     Root(RootId),
     Project(ProjectId),
+    /// The project's trees launched under an archival epoch before `epoch` (the trees an
+    /// archival of `epoch` stops): a stop of one archival never reaches work launched under a
+    /// later epoch, after a restore.
+    ProjectBefore(ProjectId, i64),
     Lease(Id),
 }
 
 struct Live {
     tree: Box<dyn ProcessTree>,
     record: StoredProcess,
+    /// The archival epoch of its project the launch was recorded under (`None`: no project).
+    epoch: Option<i64>,
 }
 
 pub struct ProcessSupervisor {
@@ -406,6 +412,7 @@ impl ProcessSupervisor {
                     id.as_str().to_owned(),
                     Arc::new(Mutex::new(Live {
                         tree,
+                        epoch,
                         record: running.clone(),
                     })),
                 );
@@ -626,6 +633,10 @@ impl ProcessSupervisor {
                         StopScope::All => true,
                         StopScope::Root(root) => r.root_id.as_ref() == Some(root),
                         StopScope::Project(project) => r.project_id.as_ref() == Some(project),
+                        StopScope::ProjectBefore(project, epoch) => {
+                            r.project_id.as_ref() == Some(project)
+                                && live.epoch.is_some_and(|e| e < *epoch)
+                        }
                         StopScope::Lease(lease) => r.lease_id.as_ref() == Some(lease),
                     };
                     hit.then(|| r.id.clone())

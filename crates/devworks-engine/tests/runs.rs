@@ -1966,6 +1966,154 @@ fn a_launch_overlapping_an_archival_is_killed_when_it_registers() {
     assert_eq!(processes.owned().len(), 1);
 }
 
+/// Once shutdown began, a pending archival stop starts no project-wide kill (its blocking stop of
+/// a tree that will not stop would hold the trees shutdown stops within its one bound): the
+/// supervision pass and the post-commit stop return at once and leave the stop pending for the
+/// next boot.
+#[test]
+fn a_pending_archive_stop_starts_no_kill_once_shutdown_began() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    host.stubborn.store(true, Ordering::SeqCst);
+    let (sup, processes) = supervisor(&fx, host, None);
+    let mut sup = sup;
+    if let Some(s) = Arc::get_mut(&mut sup) {
+        s.stop_bound = Duration::from_secs(5);
+    }
+    spawn_owned(&fx, &processes, None, "project-a");
+    let reply = fx.command(
+        &fx.user,
+        "projects.archive",
+        archive_frame(&fx, "project-a", "1"),
+    );
+    assert!(
+        matches!(&reply, CommandReply::Recorded { receipt, .. }
+        if matches!(receipt.decision, DomainDecision::Applied { .. })),
+        "{reply:?}"
+    );
+    let pending = || read(&*fx.store, |s| s.projects().pending_archive_stops(10));
+    assert_eq!(pending().len(), 1);
+    // Shutdown begins (the supervisor stops admitting work).
+    sup.stop();
+    let rt = runtime();
+    let started = std::time::Instant::now();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    let direct = rt
+        .block_on(sup.stop_archived_project(&ProjectId(id("project-a"))))
+        .unwrap();
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_secs(2),
+        "no stop of the stubborn tree was started: {took:?}"
+    );
+    assert!(tick.archived.is_empty() && direct.is_empty());
+    assert_eq!(pending().len(), 1, "left for the next boot");
+    assert_eq!(
+        processes.owned().len(),
+        1,
+        "shutdown's own stop owns the tree"
+    );
+}
+
+/// Two stop paths of one archival interleaved with a restore and a new launch: the path that
+/// read the archival first finishes the stop; the project is restored and a tree launched; the
+/// other path, holding the epoch it read before the restore, then runs. It must not kill the new
+/// tree, now or after a second archival, and only the second archival's own stop reaches it. The
+/// kill of an archival stop is bound to the trees of earlier epochs.
+#[test]
+fn a_stale_archive_stop_never_kills_work_of_a_later_epoch() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host, None);
+    let rt = runtime();
+    let p = ProjectId(id("project-a"));
+    let lifecycle = |op: &str, revision: &str| {
+        let frame = json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": fx.key(),
+            "body": {"kind": op, "projectId": "project-a", "expectedRevision": revision}});
+        let reply = fx.command(&fx.user, op, frame);
+        assert!(
+            matches!(&reply, CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, DomainDecision::Applied { .. })),
+            "{op}: {reply:?}"
+        );
+    };
+    let epoch = || {
+        read(&*fx.store, |s| {
+            s.projects().project(&ProjectId(id("project-a")))
+        })
+        .unwrap()
+        .archive_epoch
+    };
+    spawn_owned(&fx, &processes, None, "project-a");
+    let old = processes.owned();
+    lifecycle("projects.archive", "1");
+    // Both paths (the post-commit task and a supervision pass) read archival epoch 1.
+    let stale = epoch();
+    assert_eq!(stale, 1);
+    // The first finishes: the old tree is killed and the stop is no longer pending.
+    rt.block_on(sup.stop_archived_epoch(&p, stale)).unwrap();
+    assert!(processes.owned().is_empty(), "{old:?} killed");
+    // Restored, and new work launched under epoch 1.
+    lifecycle("projects.restore", "2");
+    spawn_owned(&fx, &processes, None, "project-a");
+    let new = processes.owned();
+    assert_eq!(new.len(), 1);
+    // The second path now runs with what it read: nothing is killed.
+    let late = rt.block_on(sup.stop_archived_epoch(&p, stale)).unwrap();
+    assert!(late.is_empty());
+    assert_eq!(
+        processes.owned(),
+        new,
+        "work started after the restore survives"
+    );
+    // Archived again (epoch 2): the stale stop of epoch 1 still kills nothing ...
+    lifecycle("projects.archive", "3");
+    assert_eq!(epoch(), 2);
+    rt.block_on(sup.stop_archived_epoch(&p, stale)).unwrap();
+    assert_eq!(processes.owned(), new);
+    assert_eq!(
+        read(&*fx.store, |s| s.projects().pending_archive_stops(10)),
+        std::slice::from_ref(&p),
+        "nor ends the second archival's pending stop"
+    );
+    // ... and the second archival's own stop does.
+    rt.block_on(sup.stop_archived_project(&p)).unwrap();
+    assert!(processes.owned().is_empty());
+    assert!(read(&*fx.store, |s| s.projects().pending_archive_stops(10)).is_empty());
+}
+
+/// The project-wide kill of an archival of epoch E reaches exactly the project's trees launched
+/// under an earlier epoch.
+#[test]
+fn an_epoch_bound_kill_reaches_only_earlier_epochs() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    let (_sup, processes) = supervisor(&fx, host, None);
+    spawn_owned(&fx, &processes, None, "project-a");
+    let earlier = processes.owned();
+    write(&*fx.store, |tx| {
+        let p = ProjectId(id("project-a"));
+        let mut stored = tx.projects().project(&p)?.expect("project");
+        let revision = stored.revision;
+        stored.revision += 1;
+        stored.archive_epoch = 1;
+        tx.projects().update_project(&stored, revision)
+    })
+    .unwrap();
+    spawn_owned(&fx, &processes, None, "project-a");
+    spawn_owned(&fx, &processes, None, "project-b");
+    let all = processes.owned();
+    assert_eq!(all.len(), 3);
+    let stopped = processes.stop(
+        &devworks_core::services::process::StopScope::ProjectBefore(ProjectId(id("project-a")), 1),
+        Duration::ZERO,
+        Duration::from_secs(5),
+    );
+    let stopped: Vec<Id> = stopped.into_iter().map(|(id, _)| id).collect();
+    assert_eq!(stopped, earlier);
+    assert_eq!(processes.owned().len(), 2);
+}
+
 #[test]
 fn an_archive_whose_kill_never_ran_stays_fenced_after_a_restart() {
     let fx = Fx::new();
