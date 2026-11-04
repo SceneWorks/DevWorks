@@ -64,6 +64,31 @@ pub struct Routing {
     /// The cooldown expiry each conversation's status was last rechecked for, so a router
     /// that still reports it (clocks differ slightly) is not asked again every frame.
     pub rechecked: BTreeMap<String, i64>,
+    /// The catalog load being gathered page by page (the shown catalog changes only when it is
+    /// complete), and the generation of the latest load started.
+    pub catalog_load: Option<CatalogLoad>,
+    pub catalog_generation: u64,
+    /// Conversations whose first route is being saved: their selection is the one it carries,
+    /// so it cannot change until the pin is confirmed (or the route refused).
+    pub first_in_flight: std::collections::BTreeSet<String>,
+}
+
+/// One catalog load: the pages gathered so far.
+#[derive(Clone, Debug, Default)]
+pub struct CatalogLoad {
+    pub generation: u64,
+    pub items: Vec<RouteModel>,
+}
+
+/// What a catalog page did to the load it belongs to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CatalogPage {
+    /// A page of a load a newer one replaced: ignored.
+    Stale,
+    /// Gathered; the next page continues after this cursor.
+    More(String),
+    /// The last page: the gathered catalog is now shown.
+    Complete,
 }
 impl Routing {
     /// Forgets everything derived from the catalog and routing settings (after they changed):
@@ -72,6 +97,61 @@ impl Routing {
         self.catalog_loaded = false;
         self.status.clear();
         self.rechecked.clear();
+    }
+    /// Starts a new catalog load, replacing any load still gathering pages.
+    pub fn begin_catalog_load(&mut self) -> u64 {
+        self.catalog_generation += 1;
+        self.catalog_load = Some(CatalogLoad {
+            generation: self.catalog_generation,
+            items: Vec::new(),
+        });
+        self.catalog_generation
+    }
+    /// Takes one page of load `generation`; pages of any other load never mix in.
+    pub fn catalog_page(
+        &mut self,
+        generation: u64,
+        items: Vec<RouteModel>,
+        next: Option<String>,
+    ) -> CatalogPage {
+        let Some(load) = self
+            .catalog_load
+            .as_mut()
+            .filter(|l| l.generation == generation)
+        else {
+            return CatalogPage::Stale;
+        };
+        load.items.extend(items);
+        match next {
+            Some(cursor) => CatalogPage::More(cursor),
+            None => {
+                self.catalog = self
+                    .catalog_load
+                    .take()
+                    .map(|l| l.items)
+                    .unwrap_or_default();
+                self.catalog_loaded = true;
+                self.catalog_error = None;
+                CatalogPage::Complete
+            }
+        }
+    }
+    /// A failed page of load `generation` ends that load (the shown catalog is kept).
+    pub fn catalog_failed(&mut self, generation: u64, error: String) {
+        if self
+            .catalog_load
+            .as_ref()
+            .is_some_and(|l| l.generation == generation)
+        {
+            self.catalog_load = None;
+            self.catalog_loaded = true;
+            self.catalog_error = Some(error);
+        }
+    }
+    /// Whether the conversation's selection may change now: not while its first route, which
+    /// carries the current selection, is waiting or being saved.
+    pub fn selection_locked(&self, key: &str) -> bool {
+        self.first_route.contains(key) || self.first_in_flight.contains(key)
     }
 }
 
@@ -286,4 +366,51 @@ fn model_label(catalog: &[RouteModel], pin: &RouteChoice) -> String {
         || pin.model_id.as_str().to_owned(),
         |m| m.display_name.0.clone(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model(id: &str) -> RouteModel {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "displayName": id, "endpointProfile": "CompatibleChat",
+            "upstreamModelId": id, "enabled": true, "tierMemberships": [], "efforts": [],
+            "imageInput": false, "tools": true, "revision": "1"
+        }))
+        .unwrap()
+    }
+    fn ids(r: &Routing) -> Vec<String> {
+        r.catalog.iter().map(|m| m.id.as_str().to_owned()).collect()
+    }
+
+    #[test]
+    fn catalog_pages_are_gathered_and_never_mixed_across_loads() {
+        let mut r = Routing::default();
+        let first = r.begin_catalog_load();
+        assert_eq!(
+            r.catalog_page(first, vec![model("a1")], Some("c1".into())),
+            CatalogPage::More("c1".into())
+        );
+        assert!(!r.catalog_loaded, "not loaded until every page arrived");
+        // A refresh starts while the first load is still paging.
+        let second = r.begin_catalog_load();
+        assert_eq!(
+            r.catalog_page(first, vec![model("a2")], None),
+            CatalogPage::Stale
+        );
+        assert!(!r.catalog_loaded && r.catalog.is_empty());
+        r.catalog_page(second, vec![model("b1")], Some("c2".into()));
+        r.catalog_failed(first, "late".into());
+        assert!(
+            r.catalog_load.is_some(),
+            "a stale failure does not end the newer load"
+        );
+        assert_eq!(
+            r.catalog_page(second, vec![model("b2")], None),
+            CatalogPage::Complete
+        );
+        assert!(r.catalog_loaded);
+        assert_eq!(ids(&r), ["b1", "b2"]);
+    }
 }

@@ -517,3 +517,183 @@ fn returning_to_a_conversation_rereads_a_pin_changed_meanwhile() {
     assert!(has_text(&h, "Pinned: Haiku"), "not the stale Opus pin");
     assert_eq!(combo_text(&h, ROUTE_LABEL), "Haiku");
 }
+
+fn route_selector_enabled(h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>) -> bool {
+    !h.get_by_role_and_label(Role::ComboBox, ROUTE_LABEL)
+        .accesskit_node()
+        .is_disabled()
+}
+
+/// Sends one message in a started conversation whose availability (no pin yet) is known.
+fn send_first(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>) -> String {
+    click(h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().unwrap();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .type_text("first");
+    h.step();
+    h.get_by_role_and_label(Role::Button, SEND_LABEL).click();
+    session
+}
+
+#[test]
+fn the_selection_cannot_change_while_the_first_route_carrying_it_is_saved() {
+    let root = Root::new("routing-first-lock");
+    let engine = start_connected(&root);
+    let real = engine.backend();
+    let gate = Gate::new("router.route");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    gate.close();
+    let session = send_first(&mut h);
+    step_until(&mut h, "the first route is in flight", |s| {
+        s.chat.sending.is_none() && s.chat.routing.first_in_flight.contains(&session)
+    });
+    h.run_steps(2);
+    assert!(
+        !route_selector_enabled(&h),
+        "locked while the route carrying Tier High runs"
+    );
+    gate.open();
+    settle(&mut h);
+    assert!(route_selector_enabled(&h));
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
+    // Changed after the confirmed pin: the explicit router.pin, never dropped.
+    choose(&mut h, ROUTE_LABEL, "Sonnet");
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "sonnet");
+}
+
+#[test]
+fn an_unconfirmed_first_route_keeps_the_selection_locked_after_a_relaunch() {
+    let root = Root::new("routing-first-lock-restart");
+    let engine = start_connected(&root);
+    let real = engine.backend();
+    // The first route never reaches the runtime; its outcome stays unknown.
+    let lossy = LoseAcks::losing_requests(real.clone(), "router.route", 16);
+    let mut h = harness(
+        shell_with(Ok(lossy.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let session = send_first(&mut h);
+    settle(&mut h);
+    assert!(
+        !route_selector_enabled(&h),
+        "locked while its outcome is unknown"
+    );
+    h.state_mut().on_exit();
+    drop(h);
+    // At the next launch the identical request is resubmitted (held here): still locked.
+    let lost = lossy.request_keys();
+    assert!(
+        !lost.is_empty() && lost.iter().all(|k| *k == lost[0]),
+        "{lost:?}"
+    );
+    let gate = Gate::new("router.route");
+    gate.close();
+    let resubmitted = LoseAcks::over(gate.over(real.clone()), "router.route", 0);
+    let mut h = harness(
+        shell_with(Ok(resubmitted.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    for _ in 0..20 {
+        h.step();
+    }
+    step_until(&mut h, "the conversation is shown", |s| {
+        s.chat.selected.as_deref() == Some(session.as_str())
+            && s.chat
+                .routing
+                .status
+                .get(&session)
+                .is_some_and(|st| st.availability.is_some())
+    });
+    h.run_steps(2);
+    assert!(
+        !route_selector_enabled(&h),
+        "still locked after the relaunch"
+    );
+    gate.open();
+    settle(&mut h);
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
+    assert!(route_selector_enabled(&h));
+    let keys = resubmitted.request_keys();
+    assert!(
+        !keys.is_empty() && keys.iter().all(|k| *k == lost[0]),
+        "the identical request"
+    );
+}
+
+#[test]
+fn the_selectors_gather_every_catalog_page() {
+    let root = Root::new("routing-catalog-pages");
+    let engine = start(&root);
+    // More custom models than one page holds (catalog edits arrive with DW-18; seeded here).
+    let db = rusqlite::Connection::open(root.0.join("workspace.sqlite")).unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    for i in 0..250 {
+        db.execute(
+            "INSERT INTO router_models VALUES(?1,?2,'CompatibleChat',?1,1,'[]',0,1,NULL,?3,1,0)",
+            rusqlite::params![format!("custom-{i:03}"), format!("Custom {i:03}"), 1000 + i],
+        )
+        .unwrap();
+    }
+    drop(db);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    let catalog = &h.state().chat.routing.catalog;
+    assert_eq!(catalog.len(), 259, "every page of the catalog");
+    assert_eq!(catalog.last().unwrap().id.as_str(), "custom-249");
+    assert!(h.state().chat.routing.catalog_load.is_none());
+    let routes = options(&mut h, ROUTE_LABEL);
+    assert!(
+        routes.iter().any(|r| r == "Custom 249"),
+        "the last page reaches the selector"
+    );
+}
+
+#[test]
+fn a_waiting_first_route_of_a_conversation_beyond_the_listed_page_is_still_routed() {
+    let root = Root::new("routing-first-unlisted");
+    let engine = start_connected(&root);
+    let real = engine.backend();
+    let gate = Gate::new("router.availability");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let session = send_before_availability(&mut h, &gate);
+    h.state_mut().on_exit();
+    gate.open();
+    drop(h);
+    // More conversations start than one listed page holds; the waiting one is not on it.
+    for i in 0..ops::PAGE_LIMIT {
+        ops::started(real.command(
+            "sessions.start",
+            &ops::session_start(&*real, &format!("Later {i}")),
+        ))
+        .unwrap();
+    }
+    assert!(!listed_sessions(&*real).contains(&session));
+    let mut h = harness(
+        shell_with(Ok(real.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    assert_eq!(
+        pin_of(&*real, &session).unwrap().0,
+        "opus",
+        "its record is read, then routed"
+    );
+    assert!(h.state().chat.routing.first_route.is_empty());
+}

@@ -397,7 +397,7 @@ impl Shell {
         if !self.chat.sessions_loaded && !self.pending(&Slot::SessionsList) {
             self.load_sessions();
         }
-        if !self.chat.routing.catalog_loaded && !self.pending(&Slot::RouterCatalog) {
+        if !self.chat.routing.catalog_loaded && self.chat.routing.catalog_load.is_none() {
             self.load_router_catalog();
         }
         if let Some(id) = self.chat.selected.clone()
@@ -513,19 +513,25 @@ impl Shell {
     /// visible.
     fn invalidate_routing(&mut self) {
         self.chat.routing.invalidate();
-        if (self.route == Route::Chat || self.coordinator_open)
-            && !self.pending(&Slot::RouterCatalog)
-        {
+        // A load still paging may predate the change: it is replaced, not completed.
+        if self.route == Route::Chat || self.coordinator_open {
             self.load_router_catalog();
+        } else {
+            self.chat.routing.catalog_load = None;
         }
     }
 
+    /// Loads the whole catalog, page by page, as a new load (replacing one still paging).
     fn load_router_catalog(&mut self) {
+        if self.online().is_err() {
+            return;
+        }
+        let generation = self.chat.routing.begin_catalog_load();
         self.query(
-            Slot::RouterCatalog,
+            Slot::RouterCatalog(generation),
             "Loading models and tiers",
             "router.catalog",
-            ops::router_catalog,
+            |b| ops::router_catalog(b, None),
         );
     }
 
@@ -559,6 +565,15 @@ impl Shell {
     fn select_route(&mut self, sel: crate::routing::Selection) {
         let key = self.chat.draft_key();
         if self.chat.selection() == sel {
+            return;
+        }
+        if self.chat.routing.selection_locked(&key) {
+            self.chat.notice = Some((
+                Tone::Attention,
+                "The conversation's first route is still being saved; choose again once it \
+                 is pinned."
+                    .into(),
+            ));
             return;
         }
         let pin = self
@@ -611,6 +626,18 @@ impl Shell {
             .and_then(|s| s.availability.as_ref())
             .map(|a| a.pin.is_some());
         let Some(epoch) = self.chat.session(session).map(|r| r.context_epoch.get()) else {
+            // Its record may not be on the listed page: read it, then route.
+            if self.chat.routing.first_route.contains(session)
+                && !self.pending(&Slot::RouteSession(session.to_owned()))
+            {
+                let sid = session.to_owned();
+                self.query(
+                    Slot::RouteSession(session.to_owned()),
+                    "Reading the conversation",
+                    "sessions.get",
+                    move |b| ops::session_get(b, &sid),
+                );
+            }
             return;
         };
         if self.pending(&Slot::RouteFirst(session.to_owned()))
@@ -645,6 +672,7 @@ impl Shell {
             .cloned()
             .unwrap_or_default();
         let sid = session.to_owned();
+        self.chat.routing.first_in_flight.insert(session.to_owned());
         self.command(
             Slot::RouteFirst(session.to_owned()),
             "Routing the conversation",
@@ -971,18 +999,30 @@ impl Shell {
                 }
                 Err(e) => self.chat.sessions_error = Some(e.describe()),
             },
-            (Slot::RouterCatalog, Reply::Query(q)) => match ops::route_models(q) {
-                Ok(models) => {
-                    self.chat.routing.catalog = models;
-                    self.chat.routing.catalog_loaded = true;
-                    self.chat.routing.catalog_error = None;
+            (Slot::RouterCatalog(generation), Reply::Query(q)) => match ops::route_models(q) {
+                Ok((models, next)) => {
+                    if let crate::routing::CatalogPage::More(cursor) =
+                        self.chat.routing.catalog_page(generation, models, next)
+                    {
+                        self.query(
+                            Slot::RouterCatalog(generation),
+                            "Loading models and tiers",
+                            "router.catalog",
+                            move |b| ops::router_catalog(b, Some(&cursor)),
+                        );
+                    }
                 }
-                Err(e) => {
-                    self.chat.routing.catalog_loaded = true;
-                    self.chat.routing.catalog_error =
-                        Some(format!("Named models are unavailable: {}", e.describe()));
-                }
+                Err(e) => self.chat.routing.catalog_failed(
+                    generation,
+                    format!("Named models are unavailable: {}", e.describe()),
+                ),
             },
+            (Slot::RouteSession(id), Reply::Query(q)) => {
+                if let Ok(record) = ops::session_record(q) {
+                    self.chat.upsert(record);
+                    self.route_first(&id);
+                }
+            }
             (Slot::RouteStatus(key), Reply::Query(q)) => {
                 let status = match ops::availability(q) {
                     Ok(a) => {
@@ -1016,9 +1056,11 @@ impl Shell {
             }
             (Slot::RouteFirst(key), Reply::Command(c)) => {
                 if matches!(ops::routed(c), Err(Failure::Unknown)) {
-                    // Confirmed with its identical frame by Confirm outcomes or the next launch.
+                    // Confirmed with its identical frame by Confirm outcomes or the next launch;
+                    // the selection stays locked until then.
                     return;
                 }
+                self.chat.routing.first_in_flight.remove(&key);
                 // Pinned, or refused because nothing is eligible: the status line says which.
                 self.chat.routing.status.remove(&key);
                 if self.chat.draft_key() == key {
@@ -1532,7 +1574,7 @@ impl Shell {
         if self.route == Route::Chat || self.coordinator_open {
             self.refresh_route_status();
             // Catalog edits and membership changes made elsewhere reach the selectors too.
-            if !self.pending(&Slot::RouterCatalog) {
+            if self.chat.routing.catalog_load.is_none() {
                 self.load_router_catalog();
             }
         }
@@ -1905,6 +1947,9 @@ impl Shell {
                 Slot::SettingsSave => {
                     self.settings.saving = true;
                     self.settings.unconfirmed = true;
+                }
+                Slot::RouteFirst(id) => {
+                    self.chat.routing.first_in_flight.insert(id.clone());
                 }
                 _ => {}
             }
