@@ -1787,7 +1787,10 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
     assert!(fx.unit(&base, "b.py").is_some() && fx.unit(&base, "f.rs").is_none());
     let status = fx.status(&repo_id);
     let overlays = status.overlays.unwrap().0;
-    let o1 = overlays.iter().find(|o| o.worktree_id == w1).unwrap();
+    let o1 = overlays
+        .iter()
+        .find(|o| o.worktree_id.as_ref() == Some(&w1))
+        .unwrap();
     assert!(matches!(o1.state, OverlayState::Ready));
     assert_eq!(
         o1.head_commit.as_ref().map(|c| c.0.as_str()),
@@ -1795,7 +1798,11 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
     );
     assert!(o1.capture_digest.is_some());
     assert!(matches!(
-        overlays.iter().find(|o| o.worktree_id == w2).unwrap().state,
+        overlays
+            .iter()
+            .find(|o| o.worktree_id.as_ref() == Some(&w2))
+            .unwrap()
+            .state,
         OverlayState::Ready
     ));
     let _ = r2;
@@ -1820,7 +1827,7 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
         .unwrap()
         .0
         .into_iter()
-        .find(|o| o.worktree_id == w1)
+        .find(|o| o.worktree_id.as_ref() == Some(&w1))
         .unwrap();
     assert!(matches!(rebuilt.state, OverlayState::Ready));
     assert_ne!(
@@ -1884,7 +1891,7 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
     assert!(matches!(
         status_now
             .iter()
-            .find(|o| o.worktree_id == w1)
+            .find(|o| o.worktree_id.as_ref() == Some(&w1))
             .unwrap()
             .state,
         OverlayState::Stale
@@ -1907,7 +1914,10 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
         "{after:?}"
     );
     // Retirement: the derived view goes, the record and history stay.
-    let o = after.iter().find(|o| o.worktree_id == w2).unwrap();
+    let o = after
+        .iter()
+        .find(|o| o.worktree_id.as_ref() == Some(&w2))
+        .unwrap();
     let revision = {
         let oid = o.overlay_id.clone();
         fx.read(move |s| s.indexing().overlay(&oid))
@@ -1928,7 +1938,7 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
         .unwrap()
         .0
         .into_iter()
-        .find(|o| o.worktree_id == w2)
+        .find(|o| o.worktree_id.as_ref() == Some(&w2))
         .unwrap();
     assert!(matches!(o2.state, OverlayState::Unavailable));
     assert!(o2.view_id.is_none());
@@ -1940,7 +1950,7 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
         .unwrap()
         .0
         .into_iter()
-        .find(|o| o.worktree_id == w1)
+        .find(|o| o.worktree_id.as_ref() == Some(&w1))
         .unwrap();
     assert!(matches!(expired.state, OverlayState::Expired));
     fx.worker.housekeeping(false, &|| false).unwrap();
@@ -2024,4 +2034,336 @@ fn links_in_a_repository_or_worktree_are_recorded_never_followed() {
     );
     // The worktree view composes over the baseline either way.
     assert!(fx.unit(&v, "a.rs").is_some());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Schema revision 2: ref overlays, the status of one overlay and run listing filters
+
+/// `indexing.refresh_overlay` of a ref (schema revision 2) as the workspace user.
+fn refresh_ref(fx: &Fx, repository: &Id, r: &str) -> DomainCommandReply {
+    let key = format!("key-{}", fx.n.fetch_add(1, Ordering::SeqCst));
+    fx.command_frame(
+        &fx.user(),
+        "indexing.refresh_overlay",
+        json!({"protocol": "1.0-draft.1", "requestKey": key, "schemaRevision": 2,
+            "command": {"kind": "RefreshOverlay", "repositoryId": repository, "ref": r,
+                "expectedSourceRevision": "1"}}),
+    )
+}
+/// A query at `revision` (schema revision 1 when `None`) under `ctx`.
+fn query_as(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    op: &str,
+    mut body: Value,
+    revision: Option<u32>,
+) -> DomainQueryReply {
+    body["kind"] = json!(op);
+    let mut frame =
+        json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-1", "body": body});
+    if let Some(r) = revision {
+        frame["schemaRevision"] = json!(r);
+    }
+    let authority = fx.gateway_auth();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.ids,
+    };
+    fx.cases
+        .query(&gateway, ctx, op, frame.to_string().as_bytes())
+        .expect("addressable")
+}
+fn status_value(r: DomainQueryReply) -> RepositoryIndexStatus {
+    match result(r) {
+        OperationResult::IndexingStatus { value } => value,
+        other => panic!("{other:?}"),
+    }
+}
+fn overlay_at(fx: &Fx, repository: &Id, commit: &str) -> StoredOverlay {
+    let (r, c) = (repository.clone(), commit.to_owned());
+    fx.read(move |s| s.indexing().overlay_at(&r, &c))
+        .expect("a ref overlay at the commit")
+}
+fn exact_view(fx: &Fx, view: &Id) -> views::ViewLayers {
+    let ctx = fx.user();
+    let v = view.clone();
+    read_snapshot(&*fx.store, &ReadOptions::default(), |s| {
+        views::select(
+            s,
+            &ctx,
+            &devworks_core::protocol::data::ViewSelection::Exact { view_ids: vec![v] },
+        )
+        .map_err(|f| StorageError::InvalidRecord(format!("{f:?}")))
+    })
+    .expect("the overlay view")
+    .remove(0)
+}
+
+#[test]
+fn ref_overlays_index_a_branch_tag_or_commit_and_reuse_a_live_one() {
+    let _s = serial();
+    let fx = Fx::new(|s| s.overlay_ttl_ms = 3_600_000);
+    let src = Temp::new("src");
+    let dir = src.join("refs");
+    let base = repo(&dir, &[("a.rs", "fn a() {}\n"), ("b.rs", "fn b() {}\n")]);
+    let other = src.join("other");
+    repo(&other, &[("o.rs", "fn o() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    // A branch and a tag that exist only as refs: the checkout stays on main.
+    git(&dir, &["checkout", "-q", "-b", "factory/feature-x"]);
+    write(&dir, "c.rs", "fn feature_c() { a(); }\n");
+    std::fs::remove_file(dir.join("b.rs")).unwrap();
+    let feature = commit(&dir, "feature");
+    git(&dir, &["tag", "v1"]);
+    git(&dir, &["checkout", "-q", "main"]);
+
+    // Queued; the same ref again while it is queued returns the active build.
+    let queued = run_of(decision(refresh_ref(&fx, &repo_id, "factory/feature-x")));
+    let again = decision(refresh_ref(&fx, &repo_id, "factory/feature-x"));
+    assert!(
+        matches!(again, DomainDecision::NoChange { .. }),
+        "{again:?}"
+    );
+    assert_eq!(run_of(again).id, queued.id);
+    assert_eq!(fx.drain(), 1);
+    assert_eq!(
+        fx.run(&queued.id).state,
+        RUN_SUCCEEDED,
+        "{:?}",
+        fx.run(&queued.id)
+    );
+    // Identified by its repository and commit; no worktree, capture or worktree layer.
+    let stored = overlay_at(&fx, &repo_id, &feature);
+    assert_eq!(stored.worktree_id, None);
+    assert_eq!(stored.worktree_path, None);
+    assert_eq!(stored.worktree_generation_id, None);
+    assert_eq!(stored.capture_digest, None);
+
+    // indexing.status of the overlay: its repository's status listing exactly that overlay.
+    let s = status_value(query_as(
+        &fx,
+        &fx.user(),
+        "indexing.status",
+        json!({"overlayId": stored.id}),
+        Some(2),
+    ));
+    assert_eq!(s.repository_id, repo_id);
+    let overlays = s.overlays.unwrap().0;
+    assert_eq!(overlays.len(), 1, "{overlays:?}");
+    let o = &overlays[0];
+    assert_eq!(o.overlay_id, stored.id);
+    assert!(matches!(o.state, OverlayState::Ready), "{:?}", o.state);
+    assert_eq!(o.worktree_id, None);
+    assert_eq!(
+        o.head_commit.as_ref().map(|c| c.0.as_str()),
+        Some(feature.as_str())
+    );
+    assert_eq!(
+        o.head_ref.as_ref().map(|c| c.0.as_str()),
+        Some("refs/heads/factory/feature-x")
+    );
+    assert_eq!(
+        o.base_commit.as_ref().map(|c| c.0.as_str()),
+        Some(base.as_str())
+    );
+    assert!(o.capture_digest.is_none());
+
+    // The view: the branch layer (read from the commit) over the baseline.
+    let view = exact_view(&fx, o.view_id.as_ref().unwrap());
+    assert_eq!(view.layers.len(), 2, "branch and baseline");
+    assert!(
+        fx.nodes(&view, "c.rs")
+            .iter()
+            .any(|n| n.name == "feature_c")
+    );
+    assert!(fx.unit(&view, "b.rs").is_none(), "deleted on the branch");
+    assert_eq!(fx.unit(&view, "a.rs").unwrap().0, view.layers[1]);
+    let published = fx.published(&repo_id);
+    assert!(fx.unit(&published, "b.rs").is_some() && fx.unit(&published, "c.rs").is_none());
+
+    // The same commit by its ID or a tag reuses the live overlay: never rebuilt.
+    for r in [feature.as_str(), "v1", "refs/tags/v1"] {
+        let d = decision(refresh_ref(&fx, &repo_id, r));
+        assert!(matches!(d, DomainDecision::NoChange { .. }), "{r}: {d:?}");
+        assert_eq!(run_of(d).id, queued.id, "{r}");
+    }
+    assert_eq!(fx.drain(), 0);
+
+    // A ref at the baseline commit gets its own (empty) branch layer, never the published view.
+    run_of(decision(refresh_ref(&fx, &repo_id, "main")));
+    assert_eq!(fx.drain(), 1);
+    let at_base = overlay_at(&fx, &repo_id, &base);
+    assert_eq!(at_base.state, OVERLAY_READY);
+    assert_ne!(at_base.view_id.as_ref(), Some(&published.view.view_id));
+    assert_eq!(
+        exact_view(&fx, at_base.view_id.as_ref().unwrap())
+            .layers
+            .len(),
+        2
+    );
+    // The repository status lists both; the overlay status only the one asked for.
+    assert_eq!(fx.status(&repo_id).overlays.unwrap().0.len(), 2);
+    let only = status_value(query_as(
+        &fx,
+        &fx.user(),
+        "indexing.status",
+        json!({"overlayId": at_base.id}),
+        Some(2),
+    ))
+    .overlays
+    .unwrap()
+    .0;
+    assert_eq!(
+        only.iter().map(|o| &o.overlay_id).collect::<Vec<_>>(),
+        [&at_base.id]
+    );
+
+    // Past its retention it is no longer live: the next request queues a new build.
+    fx.now(T0 + 3_600_000 + 1);
+    let rebuilt = decision(refresh_ref(&fx, &repo_id, "v1"));
+    assert!(
+        matches!(rebuilt, DomainDecision::Applied { .. }),
+        "{rebuilt:?}"
+    );
+    let rebuilt = run_of(rebuilt);
+    assert_ne!(rebuilt.id, queued.id);
+    let requeued = overlay_at(&fx, &repo_id, &feature);
+    assert_eq!(requeued.id, stored.id, "one overlay per commit");
+    assert_eq!(requeued.state, OVERLAY_QUEUED);
+    assert_eq!(requeued.head_ref.as_deref(), Some("refs/tags/v1"));
+
+    // Unknown and abbreviated refs, and unknown repositories, are refused.
+    for r in ["no-such-branch", &feature[..12]] {
+        let f = refused(decision(refresh_ref(&fx, &repo_id, r)));
+        assert_eq!(f.code, DomainErrorCode::InvalidArgument, "{r}");
+        assert_eq!(f.target_kind.map(|k| k.0).as_deref(), Some("ref"), "{r}");
+    }
+    let f = refused(decision(refresh_ref(&fx, &id("repo-missing"), "main")));
+    assert_eq!(f.code, DomainErrorCode::NotFound);
+    // Revision 1 has no ref member: refused at admission.
+    let r1 = fx.command_frame(
+        &fx.user(),
+        "indexing.refresh_overlay",
+        json!({"protocol": "1.0-draft.1", "requestKey": "key-r1-ref",
+            "command": {"kind": "RefreshOverlay", "repositoryId": repo_id, "ref": "main",
+                "expectedSourceRevision": "1"}}),
+    );
+    assert!(matches!(r1, CommandReply::Rejected { .. }), "{r1:?}");
+
+    // An unknown overlay, and an overlay of a repository the caller cannot see, are not found
+    // (naming the overlay, never its repository).
+    let f = fault(query_as(
+        &fx,
+        &fx.user(),
+        "indexing.status",
+        json!({"overlayId": "overlay-missing"}),
+        Some(2),
+    ));
+    assert_eq!(f.code, DomainErrorCode::NotFound);
+    let other_id = fx.repository_at(&other);
+    let project = match decision(fx.command(
+        "projects.create",
+        json!({"name": "P", "description": "", "repositoryIds": [other_id]}),
+    )) {
+        DomainDecision::Applied {
+            result: OperationResult::ProjectsCreate { value },
+        } => value,
+        other => panic!("{other:?}"),
+    };
+    let in_project = fx.user().with_lineage(Some(project.id.clone()), None, None);
+    let f = fault(query_as(
+        &fx,
+        &in_project,
+        "indexing.status",
+        json!({"overlayId": stored.id}),
+        Some(2),
+    ));
+    assert_eq!(f.code, DomainErrorCode::NotFound);
+    assert_eq!(f.target_id.as_ref(), Some(&stored.id));
+    assert_eq!(f.target_kind.map(|k| k.0).as_deref(), Some("overlay"));
+}
+
+#[test]
+fn run_listings_filter_by_state_and_kind_and_page_within_the_filter() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let (a, b) = (src.join("a"), src.join("b"));
+    repo(&a, &[("a.rs", "fn a() {}\n")]);
+    repo(&b, &[("b.rs", "fn b() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let (ra, rb) = (fx.repository_at(&a), fx.repository_at(&b));
+    // Two baseline runs (succeeded), then a rebuild and an overlay build (queued).
+    let index_a = run_of(decision(fx.index(&ra, false, "1")));
+    fx.now(T0 + 1_000);
+    let index_b = run_of(decision(fx.index(&rb, false, "1")));
+    fx.drain();
+    fx.now(T0 + 2_000);
+    let reindex = run_of(decision(fx.index(&ra, true, "1")));
+    fx.now(T0 + 3_000);
+    let overlay = run_of(decision(refresh_ref(&fx, &rb, "main")));
+    let page = |filter: Value, limit: u32, cursor: Option<&str>| {
+        let mut body = json!({"scope": {"kind": "Workspace"}, "page": {"limit": limit}});
+        for (k, v) in filter.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        if let Some(c) = cursor {
+            body["page"]["cursor"] = json!(c);
+        }
+        query_as(&fx, &fx.user(), "indexing.runs", body, Some(2))
+    };
+    let ids = |r: DomainQueryReply| -> (Vec<Id>, Option<String>) {
+        match result(r) {
+            OperationResult::IndexingRuns { value } => (
+                value.items.0.into_iter().map(|r| r.id).collect(),
+                value.next_cursor.map(|c| c.0),
+            ),
+            other => panic!("{other:?}"),
+        }
+    };
+    let all = |filter: Value| ids(page(filter, 50, None)).0;
+    assert_eq!(all(json!({})).len(), 4);
+    assert_eq!(all(json!({"kinds": ["Overlay"]})), vec![overlay.id.clone()]);
+    assert_eq!(
+        all(json!({"states": ["Queued"]})),
+        vec![overlay.id.clone(), reindex.id.clone()]
+    );
+    assert_eq!(
+        all(json!({"states": ["Succeeded", "Failed"], "kinds": ["Index"]})),
+        vec![index_b.id.clone(), index_a.id.clone()]
+    );
+    assert!(all(json!({"states": ["Cancelled"]})).is_empty());
+    assert_eq!(
+        all(json!({"states": ["Queued"], "kinds": ["Reindex"], "repositoryId": ra})),
+        vec![reindex.id.clone()]
+    );
+    // Pages of one item continue within the filter and never skip or repeat a run.
+    let filter = json!({"kinds": ["Reindex", "Index"]});
+    let (first, next) = ids(page(filter.clone(), 1, None));
+    let (second, next) = ids(page(filter.clone(), 1, next.as_deref()));
+    let (third, last) = ids(page(filter.clone(), 1, next.as_deref()));
+    assert_eq!(
+        [first, second, third].concat(),
+        vec![reindex.id.clone(), index_b.id.clone(), index_a.id.clone()]
+    );
+    assert_eq!(last, None);
+    // A cursor is bound to its filter.
+    let (_, next) = ids(page(filter, 1, None));
+    let f = fault(page(json!({"kinds": ["Index"]}), 1, next.as_deref()));
+    assert_eq!(f.code, DomainErrorCode::CursorExpired);
+    // Revision 1 has no filters.
+    let r1 = query_as(
+        &fx,
+        &fx.user(),
+        "indexing.runs",
+        json!({"scope": {"kind": "Workspace"}, "page": {"limit": 5}, "states": ["Queued"]}),
+        None,
+    );
+    assert!(matches!(r1, DomainQueryReply::Rejected { .. }), "{r1:?}");
 }

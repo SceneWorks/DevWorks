@@ -82,8 +82,9 @@ pub fn select(
             for v in view_ids {
                 let l = layers(read.indexing(), v)?;
                 visible_repository(read.projects(), ctx, &l.view.repository_id)?;
-                // An overlay view that expired or was retired is no longer current.
-                if l.view.worktree_id.is_some() {
+                // An overlay view (a worktree or ref overlay's) that expired or was retired is
+                // no longer current.
+                if l.view.worktree_id.is_some() || l.view.branch_id.is_some() {
                     let current = read
                         .indexing()
                         .overlays(&l.view.repository_id)?

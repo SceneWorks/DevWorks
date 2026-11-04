@@ -190,11 +190,11 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `indexing.discover` | **Query**<br>`scope`: `DataScope`<br>`roots`: `Items<Id>`<br>`page`: `PageRequest` | `Page<RepositoryRecord>` |
 | `indexing.index` | **Command**<br>`scope`: `DataScope`<br>`repositoryIds`: `NonEmpty<Id>`<br>`expectedSourceRevision`: `Revision`<br>`views`: `ViewSelection` | `IndexRunRecord` |
 | `indexing.reindex` | **Command**<br>`scope`: `DataScope`<br>`repositoryIds`: `NonEmpty<Id>`<br>`expectedSourceRevision`: `Revision`<br>`views`: `ViewSelection` | `IndexRunRecord` |
-| `indexing.refresh_overlay` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'RefreshOverlay'} | `IndexRunRecord` |
+| `indexing.refresh_overlay` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'RefreshOverlay'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/index-command-request.r2.schema.json)) | `IndexRunRecord` |
 | `indexing.retire_view` | **Command**<br>`viewId`: `Id`<br>`expectedRevision`: `Revision` | `MutationSummary` |
 | `indexing.cancel` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Cancel'} | `IndexRunRecord` |
-| `indexing.status` | **Query**<br>`repositoryId`: `Id`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `RepositoryIndexStatus` |
-| `indexing.runs` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`page`: `PageRequest` | `Page<IndexRunRecord>` |
+| `indexing.status` | **Query**<br>`repositoryId`: `?Id`<br>`overlayId`: `?Id`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `RepositoryIndexStatus` |
+| `indexing.runs` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`states`: `?NonEmpty<IndexRunState>`<br>`kinds`: `?NonEmpty<IndexRunKind>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<IndexRunRecord>` |
 | `indexing.configure_sources` | **Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`config`: `IndexSourceConfig` | `MutationSummary` |
 
 ### Analysis
@@ -2508,7 +2508,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | --- | --- |
 | `overlayId` | `Id` |
 | `revision` | `Revision` |
-| `worktreeId` | `Id` |
+| `worktreeId` | `?Id` |
 | `state` | `OverlayState` |
 | `viewId` | `?Id` |
 | `baseCommit` | `?Label` |
@@ -2519,6 +2519,14 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `reason` | `?Content` |
 | `updatedAtMs` | `Counter` |
 | `expiresAtMs` | `Counter` |
+
+### IndexRunState
+
+`Queued`, `Running`, `Succeeded`, `Failed`, `Cancelled`.
+
+### IndexRunKind
+
+`Index`, `Reindex`, `Overlay`.
 
 ### ConsumerStatus
 

@@ -208,6 +208,10 @@ pub struct RunFilter {
     pub repository: Option<Id>,
     /// Only runs of these repositories (a project's members); `None` means every repository.
     pub repositories: Option<Vec<Id>>,
+    /// Only runs in one of these states ([`RUN_STATES`]); `None` means every state.
+    pub states: Option<Vec<String>>,
+    /// Only runs of one of these kinds ([`RUN_KINDS`]); `None` means every kind.
+    pub kinds: Option<Vec<String>>,
 }
 
 /// Position after which a run listing continues.
@@ -302,19 +306,23 @@ pub struct StoredPublished {
     pub revision: i64,
 }
 
-/// One overlay: the derived view of a worktree over its repository's baseline.
+/// One overlay: the derived view of a worktree, or of a commit named by a ref, over its
+/// repository's baseline. A ref overlay has no worktree (and no worktree layer or capture); it is
+/// identified by its repository and the commit (`head_oid`, set when it is requested).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredOverlay {
     pub id: Id,
     pub repository_id: Id,
-    pub worktree_id: Id,
-    pub worktree_path: String,
+    /// The worktree and its path (both `None` for a ref overlay).
+    pub worktree_id: Option<Id>,
+    pub worktree_path: Option<String>,
     pub state: String,
     pub revision: i64,
     /// The baseline generation and commit it composes over.
     pub base_generation_id: Option<Id>,
     pub base_oid: Option<String>,
-    /// The worktree `HEAD` commit and branch.
+    /// The worktree `HEAD` commit and branch, or a ref overlay's commit and the full ref name it
+    /// was requested by (`None` for a commit requested by its ID).
     pub head_oid: Option<String>,
     pub head_ref: Option<String>,
     /// Digest of the captured staged, unstaged and indexable untracked changes.
@@ -419,7 +427,13 @@ pub trait IndexRead {
         repository: &Id,
         worktree: &Id,
     ) -> Result<Option<StoredOverlay>, StorageError>;
-    /// The repository's overlays, by worktree ID.
+    /// The ref overlay of a repository at `commit` (one per commit).
+    fn overlay_at(
+        &self,
+        repository: &Id,
+        commit: &str,
+    ) -> Result<Option<StoredOverlay>, StorageError>;
+    /// The repository's overlays: worktree overlays by worktree ID, then ref overlays by commit.
     fn overlays(&self, repository: &Id) -> Result<Vec<StoredOverlay>, StorageError>;
     /// Overlays (not expired or unavailable) whose expiry is at or before `now_ms`.
     fn overlays_due(&self, now_ms: i64, limit: u16) -> Result<Vec<StoredOverlay>, StorageError>;

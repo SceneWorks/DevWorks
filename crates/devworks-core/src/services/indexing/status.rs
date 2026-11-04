@@ -267,14 +267,33 @@ fn gap_id(g: &str) -> Option<Id> {
     Id::new(s).ok()
 }
 
+/// `indexing.status` of one overlay (schema revision 2, `overlayId`): the status of the
+/// overlay's repository whose `overlays` holds exactly that overlay. An overlay of a repository
+/// the invocation cannot see is not found.
+pub fn overlay_status(
+    env: &IndexEnv,
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    overlay: &Id,
+    revision: u32,
+) -> Result<RepositoryIndexStatus, Failure> {
+    let hidden = || -> Failure { crate::services::sessions::not_found("overlay", overlay).into() };
+    let o = read.indexing().overlay(overlay)?.ok_or_else(hidden)?;
+    status(env, read, ctx, &o.repository_id, revision, Some(&o)).map_err(|f| match f {
+        Failure::Refused(_) => hidden(),
+        other => other,
+    })
+}
+
 /// `indexing.status` of one repository (schema revision 2 adds freshness, languages, packs and
-/// overlays).
+/// overlays; with `only`, the overlays member lists just that overlay).
 pub fn status(
     env: &IndexEnv,
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     repository: &Id,
     revision: u32,
+    only: Option<&StoredOverlay>,
 ) -> Result<RepositoryIndexStatus, Failure> {
     let r = visible_repository(read.projects(), ctx, repository)?;
     if let Some(own) = ctx.project_id()
@@ -500,10 +519,13 @@ pub fn status(
         });
     }
     status.semantic_packs = Some(BoundedList(packs.into_iter().take(128).collect()));
+    let listed: Vec<(StoredOverlay, bool)> = match only {
+        Some(o) => vec![(o.clone(), overlay_config_moved(idx, o, &current_config)?)],
+        None => overlays.into_iter().zip(moved).collect(),
+    };
     status.overlays = Some(BoundedList(
-        overlays
+        listed
             .iter()
-            .zip(&moved)
             .take(128)
             .map(|(o, m)| OverlayStatus {
                 overlay_id: o.id.clone(),

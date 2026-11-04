@@ -50,7 +50,10 @@
 //! baseline: a branch layer for the commits between the baseline and the worktree `HEAD`, and a
 //! worktree layer for its staged, unstaged and indexable untracked changes (see [`overlay`]).
 //! An overlay is identified by repository, baseline generation and commit, `HEAD`, worktree and
-//! capture digest; a request with the same snapshot reuses it, anything else rebuilds it. States
+//! capture digest; a request with the same snapshot reuses it, anything else rebuilds it. From
+//! schema revision 2 a refresh may name a ref (a branch, tag or full commit) instead of a
+//! worktree: the ref is resolved to its current commit, the overlay has only the branch layer
+//! of that commit and is identified by repository and commit, and a live one is reused. States
 //! are `Queued`, `Indexing`, `Ready`, `Failed`, `Stale`, `Expired` and `Unavailable`.
 //! `indexing.retire_view` retires an overlay (its derived view and generations go; its record and
 //! history stay). Overlays expire after their retention (72 hours by default, separate from
@@ -93,7 +96,9 @@ use crate::ports::{
     QueryAnswer, QueryHandler,
 };
 use crate::protocol::data::{DataScope, IndexCommand, ViewSelection};
-use crate::protocol::records::{IndexRunRecord, IndexSourceConfig, MutationSummary};
+use crate::protocol::records::{
+    IndexRunKind, IndexRunRecord, IndexRunState, IndexSourceConfig, MutationSummary,
+};
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{
@@ -537,12 +542,47 @@ impl IndexCoordinator {
         } else if let Some(p) = &project {
             filter.repositories = Some(read.projects().members(&p.id)?);
         }
+        // Schema revision 2: only runs in the listed states and of the listed kinds (sets).
+        let set = |names: Vec<&'static str>| {
+            let mut names: Vec<String> = names.into_iter().map(str::to_owned).collect();
+            names.sort();
+            names.dedup();
+            names
+        };
+        filter.states = i.states.as_ref().map(|s| {
+            set(s
+                .0
+                .iter()
+                .map(|x| match x {
+                    IndexRunState::Queued => RUN_QUEUED,
+                    IndexRunState::Running => RUN_RUNNING,
+                    IndexRunState::Succeeded => RUN_SUCCEEDED,
+                    IndexRunState::Failed => RUN_FAILED,
+                    IndexRunState::Cancelled => RUN_CANCELLED,
+                })
+                .collect())
+        });
+        filter.kinds = i.kinds.as_ref().map(|k| {
+            set(k
+                .0
+                .iter()
+                .map(|x| match x {
+                    IndexRunKind::Index => RUN_INDEX,
+                    IndexRunKind::Reindex => RUN_REINDEX,
+                    IndexRunKind::Overlay => RUN_OVERLAY,
+                })
+                .collect())
+        });
+        let states_part = filter.states.as_ref().map_or("*".into(), |s| s.join(","));
+        let kinds_part = filter.kinds.as_ref().map_or("*".into(), |k| k.join(","));
         let binding = CursorBinding::new(
             ctx,
             "indexing.runs",
             &[
                 project.as_ref().map_or("*", |p| p.id.0.as_str()),
                 filter.repository.as_ref().map_or("*", Id::as_str),
+                &states_part,
+                &kinds_part,
             ],
             scope_revision,
         );
@@ -1073,7 +1113,7 @@ impl IndexCoordinator {
             (OVERLAY_AGGREGATE, &o.id, revision),
             "IndexOverlayRetired",
             json!({
-                "worktreeId": o.worktree_id.as_str(), "viewId": o.view_id.as_ref().map(Id::as_str),
+                "worktreeId": o.worktree_id.as_ref().map(Id::as_str), "viewId": o.view_id.as_ref().map(Id::as_str),
                 "historyKept": true,
                 "principalKind": format!("{:?}", ctx.principal_kind()),
             }),
@@ -1111,8 +1151,12 @@ impl QueryHandler for IndexCoordinator {
             OperationInput::Indexing(iops::Input::Discover(i)) => self.discover(snapshot, ctx, i),
             OperationInput::Indexing(iops::Input::Runs(i)) => self.runs(snapshot, ctx, i),
             OperationInput::Indexing(iops::Input::Status(i)) => {
-                status::status(&self.env, snapshot, ctx, &i.repository_id, revision)
-                    .and_then(|value| Ok((OperationResult::IndexingStatus { value }, own_scope()?)))
+                match (&i.repository_id, &i.overlay_id) {
+                    (_, Some(o)) => status::overlay_status(&self.env, snapshot, ctx, o, revision),
+                    (Some(r), None) => status::status(&self.env, snapshot, ctx, r, revision, None),
+                    (None, None) => Err(refuse(DomainErrorCode::InvalidArgument, "status", None)),
+                }
+                .and_then(|value| Ok((OperationResult::IndexingStatus { value }, own_scope()?)))
             }
             _ => Err(refuse(
                 DomainErrorCode::UnsupportedCapability,
@@ -1140,18 +1184,33 @@ impl CommandHandler for IndexCoordinator {
         command: &AdmittedCommand,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, StorageError> {
-        // The overlay snapshot a refresh is decided against is observed before the unit of
-        // work (Git and file reads never run inside a transaction).
+        // The overlay snapshot (or the commit a ref names) a refresh is decided against is
+        // observed before the unit of work (Git and file reads never run inside a transaction).
         if let OperationInput::Indexing(iops::Input::RefreshOverlay(r)) = command.input()
             && let IndexCommand::RefreshOverlay {
                 repository_id,
                 worktree_id,
+                git_ref,
                 ..
             } = &r.command
         {
             let stop = || env.stopped(self.env.now());
-            let observed = overlay::observe(&self.env, ctx, repository_id, worktree_id, &stop);
-            return Ok(Some(Prepared::new(observed)));
+            return Ok(match (worktree_id, git_ref) {
+                (Some(w), _) => Some(Prepared::new(overlay::observe(
+                    &self.env,
+                    ctx,
+                    repository_id,
+                    w,
+                    &stop,
+                ))),
+                (None, Some(name)) => Some(Prepared::new(overlay::resolve(
+                    &self.env,
+                    repository_id,
+                    name,
+                    &stop,
+                ))),
+                (None, None) => None,
+            });
         }
         Ok(None)
     }
@@ -1193,16 +1252,31 @@ impl CommandHandler for IndexCoordinator {
                 IndexCommand::RefreshOverlay {
                     repository_id,
                     worktree_id,
+                    git_ref,
                     expected_source_revision,
-                } => overlay::refresh(
-                    &self.env,
-                    tx,
-                    ctx,
-                    repository_id,
-                    worktree_id,
-                    expected_source_revision.get(),
-                    command.prepared::<overlay::Observed>(),
-                ),
+                } => {
+                    let requested = match (worktree_id, git_ref) {
+                        (Some(id), _) => Some(overlay::Requested::Worktree {
+                            id,
+                            observed: command.prepared::<overlay::Observed>(),
+                        }),
+                        (None, Some(_)) => Some(overlay::Requested::Ref {
+                            resolved: command.prepared::<overlay::Resolved>(),
+                        }),
+                        (None, None) => None,
+                    };
+                    match requested {
+                        Some(requested) => overlay::refresh(
+                            &self.env,
+                            tx,
+                            ctx,
+                            repository_id,
+                            requested,
+                            expected_source_revision.get(),
+                        ),
+                        None => Err(refuse(DomainErrorCode::InvalidArgument, "command", None)),
+                    }
+                }
                 _ => Err(refuse(DomainErrorCode::InvalidArgument, "command", None)),
             },
             _ => Err(refuse(

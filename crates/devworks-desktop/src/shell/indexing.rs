@@ -267,7 +267,11 @@ pub fn index_block(
                             ui,
                             format!(
                                 "Overlay {} · {}{}",
-                                o.worktree_id.as_str(),
+                                // A ref overlay has no worktree: its commit names it.
+                                o.worktree_id.as_ref().map_or_else(
+                                    || o.head_commit.as_ref().map_or("ref", |c| c.0.as_str()),
+                                    |w| w.as_str()
+                                ),
                                 o.head_ref
                                     .as_ref()
                                     .map_or("detached".to_owned(), |r| r.0.clone()),
@@ -276,14 +280,15 @@ pub fn index_block(
                                     .map_or(String::new(), |r| format!(" · {}", r.0)),
                             ),
                         );
-                        if !matches!(o.state, OverlayState::Unavailable)
+                        if let Some(worktree) = &o.worktree_id
+                            && !matches!(o.state, OverlayState::Unavailable)
                             && ui
                                 .add_enabled(enabled, egui::Button::new("Refresh overlay"))
                                 .clicked()
                         {
                             actions.push(IndexAction::Refresh {
                                 repository: id.clone(),
-                                worktree: o.worktree_id.as_str().to_owned(),
+                                worktree: worktree.as_str().to_owned(),
                             });
                         }
                         if !matches!(o.state, OverlayState::Unavailable)

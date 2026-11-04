@@ -641,9 +641,23 @@ pub enum IndexLayer {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum IndexCommand {
+    // The overlay of exactly one source: a worktree, or from schema revision 2 a ref (a branch,
+    // tag or full commit, resolved to its current commit). Revision 1 requires `worktreeId`.
+    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "worktreeId", "expectedSourceRevision"]}, {"required": ["kind", "repositoryId", "ref", "expectedSourceRevision"], "x-since": 2}]))]
     RefreshOverlay {
         repository_id: Id,
-        worktree_id: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Id")]
+        worktree_id: Option<Id>,
+        /// Schema revision 2: a branch name, tag or full commit SHA instead of `worktreeId`.
+        #[serde(
+            rename = "ref",
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::domain_support::gated_member"
+        )]
+        #[schemars(with = "String", length(min = 1, max = 256), extend("x-since" = 2))]
+        git_ref: Option<String>,
         expected_source_revision: Revision,
     },
     Cancel {
@@ -664,6 +678,51 @@ pub struct IndexCommandRequest {
     pub protocol: Protocol,
     pub request_key: RequestKey,
     pub command: IndexCommand,
+}
+/// Whether `s` names a branch, tag or full commit: a full lowercase object ID, or a ref name
+/// under `git check-ref-format` rules (no revision syntax, no option spelling).
+pub fn overlay_ref_ok(s: &str) -> bool {
+    let oid =
+        matches!(s.len(), 40 | 64) && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    oid || (!s.is_empty()
+        && s.len() <= 256
+        && !s.starts_with(['-', '/'])
+        && !s.ends_with(['/', '.'])
+        && !s.ends_with(".lock")
+        && s != "@"
+        && !s.bytes().any(|b| b < 0x20 || b == 0x7f)
+        && !s.contains([' ', '~', '^', ':', '?', '*', '[', '\\'])
+        && !s.contains("..")
+        && !s.contains("@{")
+        && !s.contains("//")
+        && !s.split('/').any(|c| c.starts_with('.')))
+}
+impl IndexCommandRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if let IndexCommand::RefreshOverlay {
+            worktree_id,
+            git_ref,
+            ..
+        } = &self.command
+        {
+            match (worktree_id, git_ref) {
+                (Some(_), None) => {}
+                (None, Some(r)) if overlay_ref_ok(r) => {}
+                (None, Some(_)) => return Err("an overlay ref is a branch, tag or full commit"),
+                _ => return Err("an overlay names exactly one of a worktree and a ref"),
+            }
+        }
+        Ok(())
+    }
+}
+impl crate::domain_support::Revisioned for IndexCommandRequest {
+    fn retain_revision(&mut self, revision: u32) {
+        if let IndexCommand::RefreshOverlay { git_ref, .. } = &mut self.command
+            && revision < 2
+        {
+            *git_ref = None;
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

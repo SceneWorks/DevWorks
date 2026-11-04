@@ -5560,7 +5560,8 @@ impl Check for OverlayState {
 pub struct OverlayStatus {
     pub overlay_id: Id,
     pub revision: Revision,
-    pub worktree_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<Id>,
     pub state: OverlayState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_id: Option<Id>,
@@ -5598,6 +5599,32 @@ impl Check for OverlayStatus {
             "OverlayStatus",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexRunState {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+impl Check for IndexRunState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexRunKind {
+    Index,
+    Reindex,
+    Overlay,
+}
+impl Check for IndexRunKind {
+    fn check(&self) -> Result<(), String> {
         Ok(())
     }
 }
@@ -6929,12 +6956,38 @@ pub enum DomainQuery {
         page: PageRequest,
     },
     #[serde(rename = "indexing.status")]
-    IndexingStatus { repository_id: Id },
+    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId"]}, {"required": ["kind", "overlayId"], "x-since": 2}]))]
+    IndexingStatus {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Id")]
+        repository_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 2))]
+        overlay_id: Option<Id>,
+    },
     #[serde(rename = "indexing.runs")]
     IndexingRuns {
         scope: DataScope,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         repository_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "NonEmpty<IndexRunState>", extend("x-since" = 2))]
+        states: Option<NonEmpty<IndexRunState>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "NonEmpty<IndexRunKind>", extend("x-since" = 2))]
+        kinds: Option<NonEmpty<IndexRunKind>>,
         page: PageRequest,
     },
     #[serde(rename = "analysis.health")]
@@ -7925,16 +7978,24 @@ impl Check for DomainQuery {
                 roots.check()?;
                 page.check()?;
             }
-            Self::IndexingStatus { repository_id } => {
+            Self::IndexingStatus {
+                repository_id,
+                overlay_id,
+            } => {
                 repository_id.check()?;
+                overlay_id.check()?;
             }
             Self::IndexingRuns {
                 scope,
                 repository_id,
+                states,
+                kinds,
                 page,
             } => {
                 scope.check()?;
                 repository_id.check()?;
+                states.check()?;
+                kinds.check()?;
                 page.check()?;
             }
             Self::AnalysisHealth {
@@ -8781,6 +8842,19 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *workspace = None;
+                }
+            }
+            Self::IndexingStatus { overlay_id, .. } => {
+                if revision < 2 {
+                    *overlay_id = None;
+                }
+            }
+            Self::IndexingRuns { states, kinds, .. } => {
+                if revision < 2 {
+                    *states = None;
+                }
+                if revision < 2 {
+                    *kinds = None;
                 }
             }
             Self::RouterAvailability { session_id, .. } => {

@@ -193,6 +193,39 @@ impl Git<'_> {
             },
         )
     }
+    /// The commit `name` names now and the full ref it resolved through (`None` for a commit
+    /// ID): a full commit ID, a full `refs/...` name, or a branch, tag or `origin` branch, tried
+    /// in that order (`refs/heads/`, `refs/tags/`, `refs/remotes/origin/`, `refs/remotes/`). The
+    /// caller has checked `name` is a ref name or a commit ID (never revision or option syntax).
+    /// `None`: it names no commit.
+    pub fn resolve(
+        &self,
+        dir: &Path,
+        name: &str,
+    ) -> Result<Option<(String, Option<String>)>, GitFault> {
+        let candidates: Vec<String> = if oid_ok(name) || name.starts_with("refs/") {
+            vec![name.to_owned()]
+        } else {
+            [
+                "refs/heads/",
+                "refs/tags/",
+                "refs/remotes/origin/",
+                "refs/remotes/",
+            ]
+            .iter()
+            .map(|p| format!("{p}{name}"))
+            .collect()
+        };
+        for c in candidates {
+            let spec = format!("{c}^{{commit}}");
+            match self.line(dir, &["rev-parse", "-q", "--verify", &spec])? {
+                Some(o) if oid_ok(&o) => return Ok(Some((o, (!oid_ok(name)).then_some(c)))),
+                Some(o) => return Err(GitFault::Malformed(format!("{c} {o:?}"))),
+                None => {}
+            }
+        }
+        Ok(None)
+    }
     /// The configured `origin` remote URL.
     pub fn origin(&self, dir: &Path) -> Result<Option<String>, GitFault> {
         self.line(dir, &["config", "--get", "remote.origin.url"])

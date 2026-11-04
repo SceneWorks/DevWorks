@@ -2277,7 +2277,7 @@
       "fields": {
         "overlay_id": "Id",
         "revision": "Revision",
-        "worktree_id": "Id",
+        "worktree_id": "?Id",
         "state": "OverlayState",
         "view_id": "?Id",
         "base_commit": "?Label",
@@ -2289,6 +2289,24 @@
         "updated_at_ms": "Counter",
         "expires_at_ms": "Counter"
       }
+    },
+    "IndexRunState": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Running",
+        "Succeeded",
+        "Failed",
+        "Cancelled"
+      ]
+    },
+    "IndexRunKind": {
+      "kind": "enum",
+      "values": [
+        "Index",
+        "Reindex",
+        "Overlay"
+      ]
     },
     "ConsumerStatus": {
       "kind": "record",
@@ -3657,12 +3675,20 @@
       "operation": "indexing.status",
       "mode": "Query",
       "fields": {
-        "repository_id": "Id"
+        "repository_id": "?Id",
+        "overlay_id": "?Id"
       },
       "result": "RepositoryIndexStatus",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Schema revision 2: freshness (the indexed and observed HEAD commits, configuration currency and stale reasons), per-language structural/text coverage with grammar identity, semantic pack state, and every overlay of the repository with its lifecycle state (Queued, Indexing, Ready, Failed, Stale, Expired, Unavailable) and snapshot provenance."
+      "rules": "Exactly one of repositoryId and overlayId (revision 2). Schema revision 2: freshness (the indexed and observed HEAD commits, configuration currency and stale reasons), per-language structural/text coverage with grammar identity, semantic pack state, and every overlay of the repository with its lifecycle state (Queued, Indexing, Ready, Failed, Stale, Expired, Unavailable) and snapshot provenance. With overlayId (an overlay of a repository the caller may see), the result is that repository's status whose overlays member holds exactly that overlay. An overlay requested by ref has no worktreeId.",
+      "since": {
+        "overlay_id": 2
+      },
+      "exactlyOne": [
+        "repository_id",
+        "overlay_id"
+      ]
     },
     "indexing.runs": {
       "operation": "indexing.runs",
@@ -3670,12 +3696,18 @@
       "fields": {
         "scope": "DataScope",
         "repository_id": "?Id",
+        "states": "?NonEmpty<IndexRunState>",
+        "kinds": "?NonEmpty<IndexRunKind>",
         "page": "PageRequest"
       },
       "result": "Page<IndexRunRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: states keeps only runs in one of the listed run states (Queued, Running, Succeeded, Failed, Cancelled; a record reports Queued as IntentRecorded or RetryPending, Running as Dispatching, Succeeded as ObservedComplete and Cancelled as CancelledBeforeDispatch) and kinds only runs of one of the listed kinds (Index, Reindex, Overlay); both are optional and combine, and a continuation cursor is bound to them.",
+      "since": {
+        "states": 2,
+        "kinds": 2
+      }
     },
     "indexing.configure_sources": {
       "operation": "indexing.configure_sources",
@@ -6940,6 +6972,14 @@
       2
     ],
     "indexing.status": [
+      1,
+      2
+    ],
+    "indexing.runs": [
+      1,
+      2
+    ],
+    "indexing.refresh_overlay": [
       1,
       2
     ],

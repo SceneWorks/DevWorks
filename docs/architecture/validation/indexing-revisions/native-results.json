@@ -28668,6 +28668,733 @@
       "normalized": null,
       "passed": true,
       "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-web.search",
+      "normalized": {
+        "body": {
+          "kind": "web.search",
+          "page": {
+            "limit": 20
+          },
+          "providerId": "id-a",
+          "query": "fixture",
+          "scope": {
+            "kind": "Workspace"
+          }
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-web.fetch",
+      "normalized": {
+        "body": {
+          "kind": "web.fetch",
+          "maxBytes": 4096,
+          "scope": {
+            "kind": "Workspace"
+          },
+          "timeoutMs": "1",
+          "url": "https://fixture.invalid/path"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-web.search",
+      "normalized": {
+        "kind": "web.search",
+        "value": {
+          "hasMore": true,
+          "items": [
+            {
+              "observedAtMs": "0",
+              "providerId": "brave",
+              "snippet": "Fixture content",
+              "title": "fixture",
+              "trust": "Untrusted",
+              "url": "https://fixture.invalid/path"
+            }
+          ],
+          "nextCursor": "cursor-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-result-web-result-trust",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-web.fetch",
+      "normalized": {
+        "kind": "web.fetch",
+        "value": {
+          "content": {
+            "artifactId": "artifact-a",
+            "byteLength": "8",
+            "mediaType": "text/plain",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "versionId": "version-a"
+          },
+          "finalUrl": "https://fixture.invalid/path",
+          "mediaType": "fixture",
+          "observedAtMs": "0",
+          "redirects": [
+            {
+              "status": 301,
+              "url": "https://fixture.invalid/old"
+            },
+            {
+              "status": 308,
+              "url": "https://fixture.invalid/moved"
+            }
+          ],
+          "sourceByteLength": "4096",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "status": 200,
+          "truncated": false,
+          "trust": "Untrusted",
+          "url": "https://fixture.invalid/path"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-web.fetch-plain",
+      "normalized": {
+        "kind": "web.fetch",
+        "value": {
+          "content": {
+            "artifactId": "artifact-a",
+            "byteLength": "8",
+            "mediaType": "text/plain",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "versionId": "version-a"
+          },
+          "finalUrl": "https://fixture.invalid/path",
+          "mediaType": "fixture",
+          "observedAtMs": "0",
+          "truncated": false,
+          "url": "https://fixture.invalid/path"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-result-web-document-provenance",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "a fetched document is a 2xx answer",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-result-web-document-not-2xx",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "a redirect hop is a 3xx answer",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-result-web-redirect-not-3xx",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "unknown variant `Verified`, expected one of `Trusted`, `Untrusted`, `Inferred`, `Unresolved`",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-result-web-document-unknown-trust",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-indexing.refresh_overlay-ref",
+      "normalized": {
+        "command": {
+          "expectedSourceRevision": "1",
+          "kind": "RefreshOverlay",
+          "ref": "factory/feature-x",
+          "repositoryId": "repo-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "index-command",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-indexing.refresh_overlay-tag",
+      "normalized": {
+        "command": {
+          "expectedSourceRevision": "1",
+          "kind": "RefreshOverlay",
+          "ref": "refs/tags/v1.2.0",
+          "repositoryId": "repo-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "index-command",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-indexing.refresh_overlay-sha",
+      "normalized": {
+        "command": {
+          "expectedSourceRevision": "1",
+          "kind": "RefreshOverlay",
+          "ref": "0123456789abcdef0123456789abcdef01234567",
+          "repositoryId": "repo-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "index-command",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-indexing.refresh_overlay-worktree",
+      "normalized": {
+        "command": {
+          "expectedSourceRevision": "1",
+          "kind": "RefreshOverlay",
+          "repositoryId": "repo-a",
+          "worktreeId": "work-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "index-command",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "index-command-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r1-input-indexing.refresh_overlay-explicit",
+      "normalized": {
+        "command": {
+          "expectedSourceRevision": "1",
+          "kind": "RefreshOverlay",
+          "repositoryId": "repo-a",
+          "worktreeId": "work-a"
+        },
+        "protocol": "1.0-draft.1",
+        "requestKey": "index-command",
+        "schemaRevision": 1
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "index-command-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-refresh-overlay-ref",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-explicit-refresh-overlay-ref",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "schemaRevision 2 or later is required",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-refresh-overlay-not-negotiated",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay names exactly one of a worktree and a ref",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-refresh-overlay-worktree-and-ref",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay names exactly one of a worktree and a ref",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-refresh-overlay-no-source",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "a revision-gated member is omitted, never null at line 1 column 100",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-refresh-overlay-null-ref",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-refresh-overlay-empty-ref",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-0",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-1",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-2",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-3",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-4",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-5",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-6",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-7",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-8",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-9",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "index-command-request.r2",
+      "error": "an overlay ref is a branch, tag or full commit",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-refresh-overlay-ref-syntax-10",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-indexing.status-overlay",
+      "normalized": {
+        "body": {
+          "kind": "indexing.status",
+          "overlayId": "overlay-a"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-status-overlay",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "status names exactly one of a repository and an overlay",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-status-repository-and-overlay",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "status names exactly one of a repository and an overlay",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-status-no-target",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "a revision-gated member is omitted, never null",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-status-null-overlay",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-indexing.status-ref-overlay",
+      "normalized": {
+        "kind": "indexing.status",
+        "value": {
+          "coverage": {
+            "gaps": [],
+            "moreGaps": false,
+            "state": "Complete"
+          },
+          "currentViewIds": [],
+          "freshness": {
+            "configurationCurrent": true,
+            "headCommit": "0123456789abcdef0123456789abcdef01234567",
+            "headRef": "refs/heads/main",
+            "indexedAtMs": "1",
+            "indexedCommit": "0123456789abcdef0123456789abcdef01234567",
+            "observedAtMs": "2",
+            "reasons": [
+              "head-moved"
+            ],
+            "state": "Stale"
+          },
+          "languages": [
+            {
+              "files": "3",
+              "grammar": "tree-sitter-rust 0.24.2",
+              "languageId": "rust",
+              "mode": "Structural",
+              "name": "Rust",
+              "parseErrorFiles": "1",
+              "skippedFiles": "0",
+              "structuralFiles": "2",
+              "textFiles": "0"
+            }
+          ],
+          "overlays": [
+            {
+              "baseCommit": "0123456789abcdef0123456789abcdef01234567",
+              "expiresAtMs": "4",
+              "headCommit": "0123456789abcdef0123456789abcdef01234567",
+              "headRef": "refs/heads/factory/feature-x",
+              "overlayId": "overlay-b",
+              "revision": "3",
+              "runId": "operation-a",
+              "state": "Ready",
+              "updatedAtMs": "3",
+              "viewId": "view-a"
+            }
+          ],
+          "repositoryId": "id-a",
+          "semanticPacks": [
+            {
+              "languages": [
+                "rust"
+              ],
+              "note": "the managed Rust pack is not installed",
+              "packId": "rust",
+              "state": "NotInstalled"
+            }
+          ]
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-indexing.runs",
+      "normalized": {
+        "body": {
+          "kind": "indexing.runs",
+          "page": {
+            "limit": 20
+          },
+          "scope": {
+            "kind": "Workspace"
+          }
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-indexing.runs-filters",
+      "normalized": {
+        "body": {
+          "kind": "indexing.runs",
+          "kinds": [
+            "Overlay",
+            "Reindex"
+          ],
+          "page": {
+            "limit": 20
+          },
+          "scope": {
+            "kind": "Workspace"
+          },
+          "states": [
+            "Queued",
+            "Failed"
+          ]
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-runs-states",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-explicit-runs-kinds",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "unknown variant `Paused`, expected one of `Queued`, `Running`, `Succeeded`, `Failed`, `Cancelled`",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-runs-unknown-state",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "unknown variant `BranchOverlay`, expected one of `Index`, `Reindex`, `Overlay`",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-runs-unknown-kind",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "list length outside contract",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-runs-empty-states",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "a revision-gated member is omitted, never null",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-runs-null-kinds",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "a run filter names each state and kind once",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-runs-duplicate-states",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-indexing.refresh_overlay",
+      "normalized": {
+        "kind": "indexing.refresh_overlay",
+        "value": {
+          "completedUnits": "0",
+          "diagnostics": [],
+          "id": "id-a",
+          "outputViews": [],
+          "repositoryIds": [],
+          "revision": "1",
+          "stage": "fixture",
+          "state": "ObservedComplete"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-indexing.runs",
+      "normalized": {
+        "kind": "indexing.runs",
+        "value": {
+          "hasMore": true,
+          "items": [
+            {
+              "completedUnits": "0",
+              "diagnostics": [],
+              "id": "id-a",
+              "outputViews": [],
+              "repositoryIds": [],
+              "revision": "1",
+              "stage": "fixture",
+              "state": "ObservedComplete"
+            }
+          ],
+          "nextCursor": "cursor-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
     }
   ],
   "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"

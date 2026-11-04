@@ -4537,6 +4537,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "index-command-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -4687,7 +4695,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Schema revision 2: freshness (the indexed and observed HEAD commits, configuration currency and stale reasons), per-language structural/text coverage with grammar identity, semantic pack state, and every overlay of the repository with its lifecycle state (Queued, Indexing, Ready, Failed, Stale, Expired, Unavailable) and snapshot provenance.",
+          "semanticRules": "Exactly one of repositoryId and overlayId (revision 2). Schema revision 2: freshness (the indexed and observed HEAD commits, configuration currency and stale reasons), per-language structural/text coverage with grammar identity, semantic pack state, and every overlay of the repository with its lifecycle state (Queued, Indexing, Ready, Failed, Stale, Expired, Unavailable) and snapshot provenance. With overlayId (an overlay of a repository the caller may see), the result is that repository's status whose overlays member holds exactly that overlay. An overlay requested by ref has no worktreeId.",
           "familyRules": "Immutable staged views and current source fences; partial/canceled output cannot publish complete. Structural baseline survives optional semantic-tool absence.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -4729,11 +4737,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Schema revision 2: states keeps only runs in one of the listed run states (Queued, Running, Succeeded, Failed, Cancelled; a record reports Queued as IntentRecorded or RetryPending, Running as Dispatching, Succeeded as ObservedComplete and Cancelled as CancelledBeforeDispatch) and kinds only runs of one of the listed kinds (Index, Reindex, Overlay); both are optional and combine, and a continuation cursor is bound to them.",
           "familyRules": "Immutable staged views and current source fences; partial/canceled output cannot publish complete. Structural baseline survives optional semantic-tool absence.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

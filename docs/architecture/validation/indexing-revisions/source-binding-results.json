@@ -10481,8 +10481,8 @@
   ],
   "inputSha256": {
     "docs/architecture/codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
-    "docs/architecture/contracts/family-coverage.json": "e62a2d8c16434fd01afa4d8b135528dc25329d2d2c15a713c99aae85ff995967",
-    "docs/architecture/implementation-plan.json": "6f64f3d98f7a1117c5b8aa55b2ebcb66d5b1aa272a6abb8427c841381a808529",
+    "docs/architecture/contracts/family-coverage.json": "f02b8296d92936279f95132189193db854898a998d0c18c0d79cb07cd2e15040",
+    "docs/architecture/implementation-plan.json": "1048b0eaa9a574c229d1598f1e5df52065e2f2a53eb61bad5e81c20c63fe550c",
     "docs/architecture/devworks-capability-catalog.json": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb"
   },
   "noInference": true,

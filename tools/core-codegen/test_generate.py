@@ -37,11 +37,13 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'web.search',
-            'web.fetch', 'indexing.status'})
+            'web.fetch', 'indexing.status', 'indexing.runs', 'indexing.refresh_overlay'})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
         self.assertEqual(carried['web.search'], {2})
         self.assertEqual(carried['web.fetch'], {2})
+        self.assertEqual(carried['indexing.runs'], {2})
+        self.assertEqual(carried['indexing.refresh_overlay'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the

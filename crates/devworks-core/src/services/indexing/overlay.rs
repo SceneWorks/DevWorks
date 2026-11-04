@@ -11,6 +11,12 @@
 //! has the captured content, so a concurrent edit makes the build retry rather than publish a
 //! mix.
 //!
+//! A ref overlay (schema revision 2) has no worktree: it is identified by repository and the
+//! commit its ref resolved to (resolved by [`resolve`] before the unit of work), is built from
+//! the repository's own checkout and has only the branch layer (empty at the baseline commit,
+//! so its view is never a bare baseline view). A live one of the same commit is reused; the
+//! commit never moves, so only its baseline, configuration or retention can make it stale.
+//!
 //! # Layers
 //!
 //! The branch layer holds the units that differ between the baseline commit and `HEAD`
@@ -65,12 +71,14 @@ pub struct Observed(pub Result<Snapshot, String>);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
+    /// The checkout the build reads: the worktree, or the repository's for a ref overlay.
     pub worktree_path: String,
     pub base_generation: Id,
     pub base_oid: String,
     pub head_oid: Option<String>,
     pub head_ref: Option<String>,
-    pub capture_digest: String,
+    /// The worktree capture (`None` for a ref overlay, which has no worktree).
+    pub capture_digest: Option<String>,
     pub local: Vec<LocalChange>,
     pub refused: Vec<String>,
 }
@@ -256,9 +264,81 @@ fn observe_inner(
         base_oid: base.source_digest.clone(),
         head_oid: head,
         head_ref,
-        capture_digest: sha256_hex(basis.as_bytes()),
+        capture_digest: Some(sha256_hex(basis.as_bytes())),
         local,
         refused,
+    })
+}
+
+/// The commit a ref names now, observed before the unit of work (or why it names none).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Resolved {
+    /// The commit and the full ref it resolved through (`None` for a commit ID).
+    Commit {
+        oid: String,
+        full_ref: Option<String>,
+    },
+    /// The ref names no commit of the repository.
+    Unknown,
+    /// Git could not answer (the checkout is missing, a deadline, a cancellation).
+    Failed(String),
+}
+
+/// Where a repository's own checkout is (its observed source location, else its registration).
+fn checkout(read: &dyn ReadSnapshot, repository: &Id) -> Result<Option<String>, StorageError> {
+    Ok(match read.indexing().repository_source(repository)? {
+        Some(src) => Some(src.location),
+        None => read.projects().repository(repository)?.map(|r| r.location),
+    })
+}
+
+/// Resolves a ref overlay's ref in the repository's checkout (Git reads only; nothing is
+/// written).
+pub fn resolve(
+    env: &IndexEnv,
+    repository: &Id,
+    name: &str,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Resolved {
+    let location = match read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        checkout(s, repository)
+    }) {
+        Ok(Some(l)) => l,
+        Ok(None) => return Resolved::Failed("the repository is not registered".into()),
+        Err(e) => return Resolved::Failed(e.to_string()),
+    };
+    let ctx = env.host_context(None);
+    match super::worker::git_for(env, &ctx, stop).resolve(Path::new(&location), name) {
+        Ok(Some((oid, full_ref))) => Resolved::Commit { oid, full_ref },
+        Ok(None) => Resolved::Unknown,
+        Err(e) => Resolved::Failed(e.to_string()),
+    }
+}
+
+/// The snapshot a ref overlay is built from: its commit over the published baseline, read from
+/// the repository's checkout (no worktree capture).
+fn ref_snapshot(env: &IndexEnv, o: &StoredOverlay) -> Result<Snapshot, String> {
+    let (base, location) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        let base = match s.indexing().published(&o.repository_id)? {
+            Some(p) => match s.indexing().view(&p.view_id)? {
+                Some(v) => s.indexing().generation(&v.baseline_id)?,
+                None => None,
+            },
+            None => None,
+        };
+        Ok((base, checkout(s, &o.repository_id)?))
+    })
+    .map_err(|e| e.to_string())?;
+    let base = base.ok_or("the repository has no published baseline")?;
+    Ok(Snapshot {
+        worktree_path: location.ok_or("the repository is not registered")?,
+        base_generation: base.id.clone(),
+        base_oid: base.source_digest.clone(),
+        head_oid: o.head_oid.clone(),
+        head_ref: o.head_ref.clone(),
+        capture_digest: None,
+        local: Vec::new(),
+        refused: Vec::new(),
     })
 }
 
@@ -314,19 +394,30 @@ pub(crate) fn invalidate_for_configuration(
 fn same_snapshot(o: &StoredOverlay, s: &Snapshot) -> bool {
     o.base_generation_id.as_ref() == Some(&s.base_generation)
         && o.head_oid == s.head_oid
-        && o.capture_digest.as_deref() == Some(s.capture_digest.as_str())
+        && o.capture_digest == s.capture_digest
 }
 
-/// `indexing.refresh_overlay`: reuse a live overlay of the same snapshot, otherwise queue its
-/// build.
+/// What a refresh asks an overlay of: a worktree (with its snapshot observed before the unit
+/// of work), or from schema revision 2 a ref (with its resolution).
+pub(crate) enum Requested<'a> {
+    Worktree {
+        id: &'a Id,
+        observed: Option<&'a Observed>,
+    },
+    Ref {
+        resolved: Option<&'a Resolved>,
+    },
+}
+
+/// `indexing.refresh_overlay`: reuse a live overlay of the same snapshot (a worktree's
+/// capture, or a ref's commit), otherwise queue its build.
 pub(crate) fn refresh(
     env: &IndexEnv,
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     repository: &Id,
-    worktree: &Id,
+    requested: Requested<'_>,
     expected: i64,
-    observed: Option<&Observed>,
 ) -> Result<DomainDecision, Failure> {
     let r = visible_repository(tx.projects(), ctx, repository)?;
     if let Some(own) = ctx.project_id() {
@@ -366,17 +457,28 @@ pub(crate) fn refresh(
             rev(current.revision),
         )));
     }
-    let Some(wt) = tx
-        .indexing()
-        .worktrees(&r.id)?
-        .into_iter()
-        .find(|w| &w.worktree_id == worktree)
-    else {
-        return Err(refuse(
-            DomainErrorCode::NotFound,
-            "worktree",
-            Some(worktree),
-        ));
+    // The worktree (and its path), or the commit and full ref a ref names now.
+    let (wt, commit) = match requested {
+        Requested::Worktree { id, observed } => {
+            let Some(wt) = tx
+                .indexing()
+                .worktrees(&r.id)?
+                .into_iter()
+                .find(|w| &w.worktree_id == id)
+            else {
+                return Err(refuse(DomainErrorCode::NotFound, "worktree", Some(id)));
+            };
+            (Some((wt, observed)), None)
+        }
+        Requested::Ref { resolved } => match resolved {
+            Some(Resolved::Commit { oid, full_ref }) => (None, Some((oid, full_ref))),
+            Some(Resolved::Unknown) => {
+                return Err(refuse(DomainErrorCode::InvalidArgument, "ref", None));
+            }
+            Some(Resolved::Failed(_)) | None => {
+                return Err(refuse(DomainErrorCode::ExternalFailure, "ref", None));
+            }
+        },
     };
     let Some(published) = tx.indexing().published(&r.id)? else {
         return Err(refuse(
@@ -389,9 +491,15 @@ pub(crate) fn refresh(
         .indexing()
         .view(&published.view_id)?
         .map(|v| v.baseline_id);
-    let snapshot = observed.and_then(|o| o.0.as_ref().ok());
+    let snapshot = wt
+        .as_ref()
+        .and_then(|(_, observed)| observed.and_then(|o| o.0.as_ref().ok()));
     let now = tx.now_ms();
-    let existing = tx.indexing().overlay_for(&r.id, worktree)?;
+    let existing = match (&wt, &commit) {
+        (Some((w, _)), _) => tx.indexing().overlay_for(&r.id, &w.worktree_id)?,
+        (None, Some((oid, _))) => tx.indexing().overlay_at(&r.id, oid)?,
+        (None, None) => None,
+    };
     let effective = effective_config_tx(tx, &r.id)?;
     if let Some(o) = &existing {
         if let Some(active) = tx.indexing().active_run(&r.id, Some(&o.id))? {
@@ -402,11 +510,12 @@ pub(crate) fn refresh(
                 },
             });
         }
-        // The reuse identity is the snapshot and the configuration it was built under.
+        // The reuse identity is the snapshot (a ref overlay's is its commit, which `existing`
+        // already matched) and the configuration it was built under.
         let moved = super::status::overlay_config_moved(tx.indexing(), o, &effective.digest)?;
         let state = super::status::effective_overlay_state(o, base.as_ref(), now, moved);
         if state == OVERLAY_READY
-            && snapshot.is_some_and(|s| same_snapshot(o, s))
+            && (commit.is_some() || snapshot.is_some_and(|s| same_snapshot(o, s)))
             && let Some(run) = o
                 .run_id
                 .as_ref()
@@ -438,18 +547,21 @@ pub(crate) fn refresh(
     );
     tx.indexing().insert_run(&run)?;
     let ttl = env.settings.overlay_ttl_ms;
+    let worktree_id = wt.as_ref().map(|(w, _)| w.worktree_id.clone());
+    let worktree_path = wt.as_ref().map(|(w, _)| w.path.clone());
     let next = match existing {
         None => StoredOverlay {
             id: overlay_id.clone(),
             repository_id: r.id.clone(),
-            worktree_id: worktree.clone(),
-            worktree_path: wt.path.clone(),
+            worktree_id: worktree_id.clone(),
+            worktree_path,
             state: OVERLAY_QUEUED.into(),
             revision: 1,
             base_generation_id: None,
             base_oid: None,
-            head_oid: None,
-            head_ref: None,
+            // A ref overlay's commit (its identity) and the ref it was requested by.
+            head_oid: commit.map(|(oid, _)| oid.clone()),
+            head_ref: commit.and_then(|(_, r)| r.clone()),
             capture_digest: None,
             branch_generation_id: None,
             worktree_generation_id: None,
@@ -463,7 +575,11 @@ pub(crate) fn refresh(
         Some(o) => StoredOverlay {
             state: OVERLAY_QUEUED.into(),
             revision: o.revision + 1,
-            worktree_path: wt.path.clone(),
+            worktree_path,
+            head_ref: match commit {
+                Some((_, r)) => r.clone(),
+                None => o.head_ref.clone(),
+            },
             run_id: Some(run.id.clone()),
             reason: None,
             updated_at_ms: now,
@@ -480,8 +596,10 @@ pub(crate) fn refresh(
         (OVERLAY_AGGREGATE, &overlay_id, next.revision),
         "IndexOverlayRequested",
         json!({
-            "repositoryId": r.id.as_str(), "worktreeId": worktree.as_str(), "runId": run.id.as_str(),
-            "observedCapture": snapshot.map(|s| s.capture_digest.clone()),
+            "repositoryId": r.id.as_str(), "worktreeId": worktree_id.as_ref().map(Id::as_str),
+            "runId": run.id.as_str(),
+            "commit": commit.map(|(oid, _)| oid.as_str()), "ref": commit.and_then(|(_, r)| r.as_deref()),
+            "observedCapture": snapshot.and_then(|s| s.capture_digest.clone()),
             "observedHead": snapshot.and_then(|s| s.head_oid.clone()),
             "principalKind": format!("{:?}", ctx.principal_kind()),
         }),
@@ -606,7 +724,7 @@ pub(crate) fn expire_overlay(
         None,
         (OVERLAY_AGGREGATE, &o.id, revision),
         "IndexOverlayExpired",
-        json!({"worktreeId": o.worktree_id.as_str(), "principalKind": "Host"}),
+        json!({"worktreeId": o.worktree_id.as_ref().map(Id::as_str), "principalKind": "Host"}),
     )
 }
 
@@ -658,10 +776,14 @@ pub(crate) fn observe_all(
         if stop() {
             break;
         }
-        let moved = match observe(env, &ctx, &o.repository_id, &o.worktree_id, stop).0 {
-            Ok(s) => !same_snapshot(&o, &s),
-            // Unobservable (the worktree went away): leave it for retirement or expiry.
-            Err(_) => false,
+        // A ref overlay's commit never moves; only its baseline or configuration can.
+        let moved = match &o.worktree_id {
+            Some(w) => match observe(env, &ctx, &o.repository_id, w, stop).0 {
+                Ok(s) => !same_snapshot(&o, &s),
+                // Unobservable (the worktree went away): leave it for retirement or expiry.
+                Err(_) => false,
+            },
+            None => false,
         };
         let config_moved = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
             let c = super::effective_config(s.indexing(), s.projects(), &o.repository_id)?;
@@ -766,7 +888,11 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
     let stop_flag = exec.stop.clone();
     let stopping = &exec.w.stopping;
     let stop = move || stop_flag.load(Ordering::SeqCst) || stopping.load(Ordering::SeqCst);
-    let snap = observe_inner(&env, &repo_id, &overlay.worktree_id, &stop).map_err(|e| {
+    let observed = match &overlay.worktree_id {
+        Some(w) => observe_inner(&env, &repo_id, w, &stop),
+        None => ref_snapshot(&env, &overlay),
+    };
+    let snap = observed.map_err(|e| {
         if stop() {
             Stop::Cancelled
         } else if e.contains("no published baseline") {
@@ -802,7 +928,9 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         })?;
     }
 
-    // The branch layer: base..HEAD.
+    // The branch layer: base..HEAD. A ref overlay always has one (empty at the baseline commit),
+    // so its view is never a bare baseline view.
+    let ref_overlay = overlay.worktree_id.is_none();
     let mut layers: Vec<Id> = vec![snap.base_generation.clone()];
     let mut head_entries: Vec<TreeEntry> = Vec::new();
     let mut branch_generation: Option<Id> = None;
@@ -811,7 +939,10 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         let (entries, _) = git.tree(&root, h).map_err(Stop::git)?;
         head_entries = entries;
     }
-    if let Some(h) = head.as_ref().filter(|h| **h != snap.base_oid) {
+    if let Some(h) = head
+        .as_ref()
+        .filter(|h| **h != snap.base_oid || ref_overlay)
+    {
         exec.stage("branch")?;
         let git = exec.git(&stop);
         let (changes, _) = match git.diff(&root, &snap.base_oid, h) {
@@ -846,84 +977,90 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         branch_generation = Some(stored);
     }
 
-    // The worktree layer: staged, unstaged and untracked changes against HEAD.
-    exec.stage("worktree")?;
-    let local_changes: Vec<Change> = snap
-        .local
-        .iter()
-        .flat_map(|l| match (&l.content, &l.previous) {
-            (None, _) => vec![Change::Deleted(l.path.clone())],
-            (Some(_), Some(prev)) => vec![Change::Renamed {
-                from: prev.clone(),
-                to: l.path.clone(),
-            }],
-            (Some(_), None) => vec![Change::Modified(l.path.clone())],
-        })
-        .collect();
-    // The composed tree: HEAD's entries with the worktree's adds and deletes applied.
-    let mut composed: BTreeMap<String, TreeEntry> = head_entries
-        .iter()
-        .map(|e| (e.path.clone(), e.clone()))
-        .collect();
-    for l in &snap.local {
-        match &l.content {
-            None => {
-                composed.remove(&l.path);
-            }
-            Some(c) => {
-                composed.insert(
-                    l.path.clone(),
-                    TreeEntry {
-                        mode: match (c.link, c.digest.as_str()) {
-                            (true, "unreadable:") => super::worker::UNREADABLE_MODE.into(),
-                            (true, _) => "120000".into(),
-                            _ => "100644".into(),
+    // The worktree layer: staged, unstaged and untracked changes against HEAD (a ref overlay
+    // has none).
+    let wgen = if ref_overlay {
+        None
+    } else {
+        exec.stage("worktree")?;
+        let local_changes: Vec<Change> = snap
+            .local
+            .iter()
+            .flat_map(|l| match (&l.content, &l.previous) {
+                (None, _) => vec![Change::Deleted(l.path.clone())],
+                (Some(_), Some(prev)) => vec![Change::Renamed {
+                    from: prev.clone(),
+                    to: l.path.clone(),
+                }],
+                (Some(_), None) => vec![Change::Modified(l.path.clone())],
+            })
+            .collect();
+        // The composed tree: HEAD's entries with the worktree's adds and deletes applied.
+        let mut composed: BTreeMap<String, TreeEntry> = head_entries
+            .iter()
+            .map(|e| (e.path.clone(), e.clone()))
+            .collect();
+        for l in &snap.local {
+            match &l.content {
+                None => {
+                    composed.remove(&l.path);
+                }
+                Some(c) => {
+                    composed.insert(
+                        l.path.clone(),
+                        TreeEntry {
+                            mode: match (c.link, c.digest.as_str()) {
+                                (true, "unreadable:") => super::worker::UNREADABLE_MODE.into(),
+                                (true, _) => "120000".into(),
+                                _ => "100644".into(),
+                            },
+                            oid: c.digest.clone(),
+                            size: c.size,
+                            path: l.path.clone(),
                         },
-                        oid: c.digest.clone(),
-                        size: c.size,
-                        path: l.path.clone(),
-                    },
-                );
+                    );
+                }
             }
         }
-    }
-    let composed: Vec<TreeEntry> = composed.into_values().collect();
-    let (units, groups) = layer_units(
-        &env,
-        &cfg,
-        &composed,
-        &local_changes,
-        &mut exec.warnings,
-        env.source.case_insensitive(&root),
-    );
-    let capture = snap.capture_digest.clone();
-    let wgen = new_layer(exec, &repo_id, LAYER_WORKTREE, &capture, &snap, &layers)?;
-    let expected: BTreeMap<String, String> = snap
-        .local
-        .iter()
-        .filter_map(|l| {
-            l.content
-                .as_ref()
-                .map(|c| (l.path.clone(), c.digest.clone()))
-        })
-        .collect();
-    exec.shares.clear();
-    let groups: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
-        .iter()
-        .map(|(g, m)| (*g, m.iter().collect()))
-        .collect();
-    exec.group_shares(&root, &repo.name, &groups, Some(&expected), &stop)?;
-    stage_layer(
-        exec,
-        &root,
-        &repo.name,
-        &wgen,
-        &units,
-        Some(&expected),
-        &stop,
-    )?;
-    link_generation(exec, &wgen, &layers, &stop)?;
-    seal_layer(exec, &wgen)?;
+        let composed: Vec<TreeEntry> = composed.into_values().collect();
+        let (units, groups) = layer_units(
+            &env,
+            &cfg,
+            &composed,
+            &local_changes,
+            &mut exec.warnings,
+            env.source.case_insensitive(&root),
+        );
+        let capture = snap.capture_digest.clone().unwrap_or_default();
+        let wgen = new_layer(exec, &repo_id, LAYER_WORKTREE, &capture, &snap, &layers)?;
+        let expected: BTreeMap<String, String> = snap
+            .local
+            .iter()
+            .filter_map(|l| {
+                l.content
+                    .as_ref()
+                    .map(|c| (l.path.clone(), c.digest.clone()))
+            })
+            .collect();
+        exec.shares.clear();
+        let groups: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
+            .iter()
+            .map(|(g, m)| (*g, m.iter().collect()))
+            .collect();
+        exec.group_shares(&root, &repo.name, &groups, Some(&expected), &stop)?;
+        stage_layer(
+            exec,
+            &root,
+            &repo.name,
+            &wgen,
+            &units,
+            Some(&expected),
+            &stop,
+        )?;
+        link_generation(exec, &wgen, &layers, &stop)?;
+        seal_layer(exec, &wgen)?;
+        Some(wgen)
+    };
 
     // Publication: the view of exactly these layers, while the baseline is still the one it
     // composes over.
@@ -958,16 +1095,16 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
                 repo2.as_str(),
                 base_gen.as_str(),
                 branch_generation.as_ref().map_or("", Id::as_str),
-                wgen.as_str(),
-                o.worktree_id.as_str(),
-                &snap2.capture_digest,
+                wgen.as_ref().map_or("", Id::as_str),
+                o.worktree_id.as_ref().map_or("", Id::as_str),
+                snap2.capture_digest.as_deref().unwrap_or(""),
             ]),
             baseline_id: base_gen.clone(),
             branch_id: branch_generation.clone(),
-            worktree_id: Some(wgen.clone()),
+            worktree_id: wgen.clone(),
             coverage: json!({
                 "base": snap2.base_oid, "head": snap2.head_oid, "headRef": snap2.head_ref,
-                "worktreeId": o.worktree_id.as_str(), "captureDigest": snap2.capture_digest,
+                "worktreeId": o.worktree_id.as_ref().map(Id::as_str), "captureDigest": snap2.capture_digest,
             }),
         };
         tx.indexing().insert_view(&view)?;
@@ -989,9 +1126,9 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         o.base_oid = Some(snap2.base_oid.clone());
         o.head_oid = snap2.head_oid.clone();
         o.head_ref = snap2.head_ref.clone();
-        o.capture_digest = Some(snap2.capture_digest.clone());
+        o.capture_digest = snap2.capture_digest.clone();
         o.branch_generation_id = branch_generation.clone();
-        o.worktree_generation_id = Some(wgen.clone());
+        o.worktree_generation_id = wgen.clone();
         o.view_id = Some(view_id.clone());
         o.reason = None;
         o.updated_at_ms = now;
@@ -1026,7 +1163,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             "IndexOverlayReady",
             json!({
                 "viewId": view_id.as_str(), "base": snap2.base_oid, "head": snap2.head_oid,
-                "captureDigest": snap2.capture_digest, "worktreeId": o.worktree_id.as_str(),
+                "captureDigest": snap2.capture_digest, "worktreeId": o.worktree_id.as_ref().map(Id::as_str),
                 "principalKind": "Host",
             }),
         )?;

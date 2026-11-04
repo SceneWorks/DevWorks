@@ -2,11 +2,11 @@
   "date": "2026-11-04",
   "status": "Candidate schema/typed/binding checks passed; no production service, authority, source behavioral parity or platform acceptance",
   "host": "macOS-27.0.1-arm64-arm-64bit",
-  "schemaFiles": 56,
-  "domainTypeDefinitions": 234,
+  "schemaFiles": 57,
+  "domainTypeDefinitions": 237,
   "catalogOperations": 354,
   "inputCandidates": 354,
-  "revisionBindings": 380,
+  "revisionBindings": 384,
   "revisionedOperations": [
     "artifacts.list",
     "artifacts.save",
@@ -15,6 +15,8 @@
     "history.git_links",
     "history.tool_usage",
     "history.work_lineage",
+    "indexing.refresh_overlay",
+    "indexing.runs",
     "indexing.status",
     "resources.acquire",
     "resources.holders",
@@ -29,6 +31,8 @@
     "sessions.get",
     "sessions.list",
     "sessions.start",
+    "web.fetch",
+    "web.search",
     "workspace.diagnostics",
     "workspace.logs",
     "workspace.record_diagnostic"
@@ -44,10 +48,10 @@
     "github.account",
     "browser.sessions"
   ],
-  "allMessageFixtures": 1281,
-  "newMessageFixtures": 952,
-  "newPositiveFixtures": 773,
-  "newNegativeFixtures": 179,
+  "allMessageFixtures": 1331,
+  "newMessageFixtures": 1002,
+  "newPositiveFixtures": 789,
+  "newNegativeFixtures": 213,
   "coreAndPriorMessagesRerun": 329,
   "historicalHelperFramesReplayed": 55,
   "newHelperExecutionClaimed": false,
@@ -1873,7 +1877,8 @@
       "inputSchema": "index-command-request.schema.json",
       "resultSchema": "operation-result.schema.json",
       "inputFixtureIds": [
-        "index-RefreshOverlay"
+        "index-RefreshOverlay",
+        "r1-input-indexing.refresh_overlay-explicit"
       ],
       "resultFixtureIds": [
         "result-indexing.refresh_overlay"
@@ -1882,6 +1887,26 @@
         "Command"
       ],
       "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
+      "operation": "indexing.refresh_overlay",
+      "schemaRevision": 2,
+      "inputSchema": "index-command-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-indexing.refresh_overlay-ref",
+        "r2-input-indexing.refresh_overlay-tag",
+        "r2-input-indexing.refresh_overlay-sha",
+        "r2-input-indexing.refresh_overlay-worktree"
+      ],
+      "resultFixtureIds": [
+        "r2-result-indexing.refresh_overlay"
+      ],
+      "modes": [
+        "Command"
+      ],
+      "wrongOperationPayloadChecked": false,
       "wrongResultTagRejected": true
     },
     {
@@ -1941,11 +1966,13 @@
       "inputSchema": "domain-request.r2.schema.json",
       "resultSchema": "operation-result.r2.schema.json",
       "inputFixtureIds": [
-        "r2-input-indexing.status"
+        "r2-input-indexing.status",
+        "r2-input-indexing.status-overlay"
       ],
       "resultFixtureIds": [
         "r2-result-indexing.status",
-        "r2-result-indexing.status-plain"
+        "r2-result-indexing.status-plain",
+        "r2-result-indexing.status-ref-overlay"
       ],
       "modes": [
         "Query"
@@ -1963,6 +1990,24 @@
       ],
       "resultFixtureIds": [
         "result-indexing.runs"
+      ],
+      "modes": [
+        "Query"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
+      "operation": "indexing.runs",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-indexing.runs",
+        "r2-input-indexing.runs-filters"
+      ],
+      "resultFixtureIds": [
+        "r2-result-indexing.runs"
       ],
       "modes": [
         "Query"
@@ -4922,6 +4967,23 @@
       "wrongResultTagRejected": true
     },
     {
+      "operation": "web.search",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-web.search"
+      ],
+      "resultFixtureIds": [
+        "r2-result-web.search"
+      ],
+      "modes": [
+        "Query"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
       "operation": "web.fetch",
       "schemaRevision": 1,
       "inputSchema": "domain-request.schema.json",
@@ -4931,6 +4993,24 @@
       ],
       "resultFixtureIds": [
         "result-web.fetch"
+      ],
+      "modes": [
+        "Query"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
+      "operation": "web.fetch",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-web.fetch"
+      ],
+      "resultFixtureIds": [
+        "r2-result-web.fetch",
+        "r2-result-web.fetch-plain"
       ],
       "modes": [
         "Query"
@@ -15575,6 +15655,356 @@
       "schemaValid": false,
       "typedValid": false,
       "passed": true
+    },
+    {
+      "id": "r2-input-web.search",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-web.fetch",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-web.search",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-result-web-result-trust",
+      "entry": "operation-result",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "r2-result-web.fetch",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-web.fetch-plain",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-result-web-document-provenance",
+      "entry": "operation-result",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-result-web-document-not-2xx",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-result-web-redirect-not-3xx",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-result-web-document-unknown-trust",
+      "entry": "operation-result.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "r2-input-indexing.refresh_overlay-ref",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-indexing.refresh_overlay-tag",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-indexing.refresh_overlay-sha",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-indexing.refresh_overlay-worktree",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r1-input-indexing.refresh_overlay-explicit",
+      "entry": "index-command-request",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-refresh-overlay-ref",
+      "entry": "index-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-explicit-refresh-overlay-ref",
+      "entry": "index-command-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-not-negotiated",
+      "entry": "index-command-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-worktree-and-ref",
+      "entry": "index-command-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-no-source",
+      "entry": "index-command-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-null-ref",
+      "entry": "index-command-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-empty-ref",
+      "entry": "index-command-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-0",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-1",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-2",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-3",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-4",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-5",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-6",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-7",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-8",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-9",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-refresh-overlay-ref-syntax-10",
+      "entry": "index-command-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "r2-input-indexing.status-overlay",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-status-overlay",
+      "entry": "domain-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-status-repository-and-overlay",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-status-no-target",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-status-null-overlay",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "r2-result-indexing.status-ref-overlay",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-indexing.runs",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-indexing.runs-filters",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-runs-states",
+      "entry": "domain-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-explicit-runs-kinds",
+      "entry": "domain-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-runs-unknown-state",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-runs-unknown-kind",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-runs-empty-states",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-runs-null-kinds",
+      "entry": "domain-request.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-runs-duplicate-states",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "r2-result-indexing.refresh_overlay",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-indexing.runs",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
     }
   ],
   "scenarios": 12,
@@ -15586,24 +16016,24 @@
     "docs/architecture/contracts/provider-package-fixtures.json": "2646790fe630e1a84514bb48e49d787fcd056e093bcd8a46f92a943dda821b97",
     "docs/architecture/validation/provider-package-contracts/actual-frame-fixtures.json": "a8e38cbf3a4ccf3b957a32b2733b3db1e98ae9ee12b97d339447d51f73ab729e",
     "docs/architecture/contracts/data-delivery-fixtures.json": "54fc2fac8841b1591c0f2653f7548dbf5a79a16b4e4958b194be739d277083b6",
-    "docs/architecture/contracts/domain-fixtures.json": "9b6b8bf2ff6a84f518c241ba6a8732e8fef9f7c265892b6fd5fb44f769669c8e",
-    "docs/architecture/contracts/family-coverage.json": "e62a2d8c16434fd01afa4d8b135528dc25329d2d2c15a713c99aae85ff995967",
-    "docs/architecture/contracts/manifest.json": "27da74f9952d47f80af86c61d6842bd5c2e503b1a0fd4607fc8c48a7ff4336a1",
+    "docs/architecture/contracts/domain-fixtures.json": "e94f35c346810d70fcfa5c9925dc4a72445c4feb9285f46eeed79a9d62cfd3ca",
+    "docs/architecture/contracts/family-coverage.json": "f02b8296d92936279f95132189193db854898a998d0c18c0d79cb07cd2e15040",
+    "docs/architecture/contracts/manifest.json": "7f99232f2ea6b89b24397c211548e1b2075759edc683a849cf6c883ddcf4b961",
     "docs/architecture/devworks-capability-catalog.json": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
     "tools/contracts-eval/Cargo.lock": "cfb646cd5e037f4a97b1686830e7a582228b29c4ff3ba0ebcbc559b69786b34b",
     "tools/contracts-eval/domain_spec.py": "47e2e840854e19020b5f67066b128778d09b4b1a1c8670b0ba6f7351e3dc3d8f",
-    "tools/contracts-eval/domain-spec.json": "496000f2e9a2cf724af95fe73afb2d844c504b37ff9f41ec8f4feb2d84e961bb",
+    "tools/contracts-eval/domain-spec.json": "66b0ee9d6e5eb726d5dd57a4ec197e513c317c777d9a8a00fc439f373dda436a",
     "tools/contracts-eval/build_domain_contracts.py": "a4fc1eea7f7992744ff5f615bea538c80ed7505673e1696afaeb7037db9071b7",
     "tools/contracts-eval/build_register.py": "bab0f304b09de7a66b5f646fbc47cd08e43466e374d70dc71e62c8fa4dd65667",
     "tools/contracts-eval/build_domain_reference.py": "3e68b03c0124fc8744050889db7153903bb3b4f6e42b01c6caa8e0f5d939da5f",
-    "tools/contracts-eval/make_domain_fixtures.py": "5fa7b2418e89f193647392d77190fce5d3ab3145e19f39f403df9597114bd028",
+    "tools/contracts-eval/make_domain_fixtures.py": "3cbcf76d2166a518582c774fbd2ef1fb54ca658bb4006b30aa6f2e46781aed00",
     "tools/contracts-eval/verify_domain_contracts.py": "03d811606ca9d92e6e61eb45b2b2c5d9c7b1ba9a038598121a861d43b554cec9",
-    "tools/contracts-eval/src/data_delivery.rs": "f62c3062a84633fba38a16dc699a1cc58d131f6899757c76acd3e00a0c3d0d68",
-    "tools/contracts-eval/src/domain_generated.rs": "cbdf19c55c00836b801b2da4d1942472995b0105f37ad51f0f58afee88d99bc4",
-    "tools/contracts-eval/src/domain_rules.rs": "a260d76d635a6ad0ec1ad1695c69c2e2ba5370a367183172db5bb33c5cc0a197",
+    "tools/contracts-eval/src/data_delivery.rs": "86d60f43268b478280f0bf709290048c2ed89fd3f568acd173ca57cc20195529",
+    "tools/contracts-eval/src/domain_generated.rs": "59c9741cbb217c9b4649bb855d07579d0d5b126b6980200a1a5575087071891e",
+    "tools/contracts-eval/src/domain_rules.rs": "9d9103e2938514dc6d40849826f7847e6f3d6218bf47bf9d850a9c3ba8525c4b",
     "tools/contracts-eval/src/domain_support.rs": "4082061615ab8dfd7fb53c09c00e786cbae372df26f55c93634aaa56a49d123e",
     "tools/contracts-eval/src/lib.rs": "bee52b2eda05d91b44088ebfc8680245d5d33f7d84041be381eaa3a3a07d69b8",
-    "tools/contracts-eval/src/main.rs": "2ca63cc46628aad1729a50638fa4b37a4a1374eacbdb8b64b9e3374344755583",
+    "tools/contracts-eval/src/main.rs": "cbae1c23482c8eeb8e8685021ad4b0f1584d88027cb9ce23107a3df8c4a927af",
     "tools/contracts-eval/src/package.rs": "4ba7fec57f9430618570cd64c21a5f4291fd4e2aa5fff872b295c993155a8c8e",
     "tools/contracts-eval/src/package_probe.rs": "0573c4ffc5aee215526e2145e4c796f13a47320dc33730e57c5569bb8a21b7c9",
     "tools/contracts-eval/src/provider.rs": "a8ae01d15b7adb8011e41ba33941a7cddeb79a81848acfd261634eb27075a5c0",
@@ -15623,23 +16053,24 @@
     "docs/architecture/contracts/command-request.schema.json": "8e821e7c0f306e8870a698537f1cb86b1108679ac07d442650a7e818e67f880f",
     "docs/architecture/contracts/delivery-barrier.schema.json": "25aaa75a46cef7a0e3d055b8dff1a76fc25325f0a2efe5202abd80e3c28a72c2",
     "docs/architecture/contracts/delivery-snapshot.schema.json": "a5b59fd9d7dbed631c1445dbbda361b53a7c799f98717b9f9d131d6fee42806b",
-    "docs/architecture/contracts/domain-command-reply.r2.schema.json": "d1c8b4777482ce62f6c68ee4b27da88c93562bc1b3f9d5b22db7321b824d7193",
+    "docs/architecture/contracts/domain-command-reply.r2.schema.json": "c139ebcc90c70cde09a0e2e22a79fc3ab29366c90f083e1bbddab5e6a216997b",
     "docs/architecture/contracts/domain-command-reply.schema.json": "e04158c2b557d3d51a76fbb16530c736c9ee38163693bdde7aaf2e235ab8d9ed",
-    "docs/architecture/contracts/domain-query-reply.r2.schema.json": "21357c2260f7963b8beb8e0dacd38135c87bb09f06d7e9c80c59771f73b54e27",
+    "docs/architecture/contracts/domain-query-reply.r2.schema.json": "f5fe4dbe5c3c15992ca5ad3d8a0aa1fafc82192c6f3020a4a850ab89e324b25e",
     "docs/architecture/contracts/domain-query-reply.schema.json": "c28423264a36d66d72f867b88360cec8d6f013c48e2bcb1114ea91a7baa0a03f",
-    "docs/architecture/contracts/domain-request.r2.schema.json": "f6a834b30ddf8725608e115ce94cb90afc54d96e8ce3dca57901189c344ccf06",
+    "docs/architecture/contracts/domain-request.r2.schema.json": "2be307fd6be0581e2a2ffaeb2b427012a8daf372c9e301ef3506cd88291aa991",
     "docs/architecture/contracts/domain-request.schema.json": "20fc9c1487c441454a04ba4e25835e662b85196914157e703efbfac2ec6da5bb",
     "docs/architecture/contracts/event.r2.schema.json": "ce845cc2bfb0d1adcf2f89dd76f6a08d6f8798d7026c1ab75146c0daffd2290a",
     "docs/architecture/contracts/event.schema.json": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc",
     "docs/architecture/contracts/git-command-request.schema.json": "a1718e29fbd02c1c30c9ccd8155f2f98fedb60cb3a00b299d5b08d27fb14fa74",
     "docs/architecture/contracts/graph-page.schema.json": "aca9af7d0e3c8615e00434eadc5556085108c08ee2a4edc2c8279a14c6439231",
     "docs/architecture/contracts/graph-read-request.schema.json": "1eece9e6fd9260c3af95fe787623839c7bfa72ade43ab97bf7337121b5bf133c",
+    "docs/architecture/contracts/index-command-request.r2.schema.json": "5d7eb87ee89c8b15b5d5f79183593f73d2a9a10bfe08297463728c8cabb751f3",
     "docs/architecture/contracts/index-command-request.schema.json": "eb2bfdf772de716567bb0a6aaf11a1e0810a9cefa2d147a44b461d5045092845",
     "docs/architecture/contracts/inference-request.schema.json": "303b3a3d4bd49a39c44148658c2bc6320a4e77453960b75f07cfeb2051da8211",
     "docs/architecture/contracts/inference-spec.schema.json": "e4734b6a32933313adcdf74f07ada57c2a20f7d911eb676c7c63d44f1225d516",
-    "docs/architecture/contracts/operation-completion.r2.schema.json": "9845579809ccc7f080a50dbd97538ed2df231a2c076c4266c8e72228e97da974",
+    "docs/architecture/contracts/operation-completion.r2.schema.json": "db1061b8ddefeac0012c91bd0ec08fe1d5bacae2714e58436c03506cb6adedc7",
     "docs/architecture/contracts/operation-completion.schema.json": "71dac8f2d36375ec018002888c64bf4cac3aeeb66c3905f02e35ba05300057fb",
-    "docs/architecture/contracts/operation-result.r2.schema.json": "aca386fc38ca7c6adb5ce0227f0ee8c0f0f81a22120c350b4e95eacef3ceb924",
+    "docs/architecture/contracts/operation-result.r2.schema.json": "e328f0d965aba2aa7f4b6c55ad0175964ef37783d93a3acf6b6390c301d743f0",
     "docs/architecture/contracts/operation-result.schema.json": "6101efc5b26328981e7a4a6bee9fbea94284632ab2d7a34bf0d6b505536d876b",
     "docs/architecture/contracts/package-host-request.schema.json": "190beae90c974720523774ca4cb366033ba74ba104dc46dbcdd780b30811f5b9",
     "docs/architecture/contracts/package-manifest.schema.json": "7f5989387bc31c599cb97ffe0b43dc52227aa2e36c075c54be55e69d6edd8b21",

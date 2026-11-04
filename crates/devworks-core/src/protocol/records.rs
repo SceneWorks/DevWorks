@@ -5562,7 +5562,8 @@ impl Check for OverlayState {
 pub struct OverlayStatus {
     pub overlay_id: Id,
     pub revision: Revision,
-    pub worktree_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<Id>,
     pub state: OverlayState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_id: Option<Id>,
@@ -5600,6 +5601,32 @@ impl Check for OverlayStatus {
             "OverlayStatus",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexRunState {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+impl Check for IndexRunState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexRunKind {
+    Index,
+    Reindex,
+    Overlay,
+}
+impl Check for IndexRunKind {
+    fn check(&self) -> Result<(), String> {
         Ok(())
     }
 }

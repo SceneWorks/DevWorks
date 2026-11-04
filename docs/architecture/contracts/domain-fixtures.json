@@ -6732,5 +6732,285 @@
     "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Verified\",\"status\":200,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":301},{\"url\":\"https://fixture.invalid/moved\",\"status\":308}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r2-input-indexing.refresh_overlay-ref",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"factory/feature-x\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-indexing.refresh_overlay-tag",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"refs/tags/v1.2.0\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-indexing.refresh_overlay-sha",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"0123456789abcdef0123456789abcdef01234567\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-indexing.refresh_overlay-worktree",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"worktreeId\":\"work-a\",\"expectedSourceRevision\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r1-input-indexing.refresh_overlay-explicit",
+    "entry": "index-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"worktreeId\":\"work-a\",\"expectedSourceRevision\":\"1\"},\"schemaRevision\":1}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-refresh-overlay-ref",
+    "entry": "index-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"factory/feature-x\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-explicit-refresh-overlay-ref",
+    "entry": "index-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"factory/feature-x\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-refresh-overlay-not-negotiated",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"factory/feature-x\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-refresh-overlay-worktree-and-ref",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"worktreeId\":\"work-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"factory/feature-x\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-refresh-overlay-no-source",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-refresh-overlay-null-ref",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":null},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-refresh-overlay-empty-ref",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-0",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"--upload-pack=touch\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-1",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"main~1\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-2",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"topic^{tree}\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-3",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"HEAD@{1}\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-4",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"a..b\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-5",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"topic.lock\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-6",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\".hidden/x\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-7",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"x y\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-8",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"a\\\\b\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-9",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"topic/\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-refresh-overlay-ref-syntax-10",
+    "entry": "index-command-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"index-command\",\"command\":{\"kind\":\"RefreshOverlay\",\"repositoryId\":\"repo-a\",\"expectedSourceRevision\":\"1\",\"ref\":\"@\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-indexing.status-overlay",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.status\",\"overlayId\":\"overlay-a\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-status-overlay",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.status\",\"overlayId\":\"overlay-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-status-repository-and-overlay",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.status\",\"repositoryId\":\"id-a\",\"overlayId\":\"overlay-a\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-status-no-target",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.status\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-status-null-overlay",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.status\",\"overlayId\":null},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-indexing.status-ref-overlay",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"indexing.status\",\"value\":{\"repositoryId\":\"id-a\",\"currentViewIds\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"freshness\":{\"state\":\"Stale\",\"indexedCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/main\",\"indexedAtMs\":\"1\",\"observedAtMs\":\"2\",\"configurationCurrent\":true,\"reasons\":[\"head-moved\"]},\"languages\":[{\"languageId\":\"rust\",\"name\":\"Rust\",\"mode\":\"Structural\",\"grammar\":\"tree-sitter-rust 0.24.2\",\"files\":\"3\",\"structuralFiles\":\"2\",\"textFiles\":\"0\",\"parseErrorFiles\":\"1\",\"skippedFiles\":\"0\"}],\"semanticPacks\":[{\"packId\":\"rust\",\"state\":\"NotInstalled\",\"languages\":[\"rust\"],\"note\":\"the managed Rust pack is not installed\"}],\"overlays\":[{\"overlayId\":\"overlay-b\",\"revision\":\"3\",\"state\":\"Ready\",\"viewId\":\"view-a\",\"baseCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headCommit\":\"0123456789abcdef0123456789abcdef01234567\",\"headRef\":\"refs/heads/factory/feature-x\",\"runId\":\"operation-a\",\"updatedAtMs\":\"3\",\"expiresAtMs\":\"4\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-indexing.runs",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-indexing.runs-filters",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"states\":[\"Queued\",\"Failed\"],\"kinds\":[\"Overlay\",\"Reindex\"]},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-runs-states",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"states\":[\"Queued\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-explicit-runs-kinds",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"kinds\":[\"Index\"]},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-runs-unknown-state",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"states\":[\"Paused\"]},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-runs-unknown-kind",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"kinds\":[\"BranchOverlay\"]},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-runs-empty-states",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"states\":[]},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-runs-null-kinds",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"kinds\":null},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-runs-duplicate-states",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"states\":[\"Queued\",\"Queued\"]},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-indexing.refresh_overlay",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"indexing.refresh_overlay\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"repositoryIds\":[],\"stage\":\"fixture\",\"state\":\"ObservedComplete\",\"completedUnits\":\"0\",\"outputViews\":[],\"diagnostics\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-indexing.runs",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"indexing.runs\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"repositoryIds\":[],\"stage\":\"fixture\",\"state\":\"ObservedComplete\",\"completedUnits\":\"0\",\"outputViews\":[],\"diagnostics\":[]}],\"hasMore\":true,\"nextCursor\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
   }
 ]

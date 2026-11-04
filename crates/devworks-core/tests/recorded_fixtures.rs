@@ -142,7 +142,7 @@ fn envelope_dto(case: &Fixture) -> Result<(), String> {
         "artifact-query-request" => dto::<ArtifactQueryRequest>(raw, |v| s(v.validate())),
         "graph-read-request" => dto::<GraphReadRequest>(raw, |v| s(v.validate())),
         "git-command-request" => dto::<GitCommandRequest>(raw, |v| s(v.validate())),
-        "index-command-request" => dto::<IndexCommandRequest>(raw, ok),
+        "index-command-request" => dto::<IndexCommandRequest>(raw, |v| s(v.validate())),
         "release-command-request" => dto::<ReleaseCommandRequest>(raw, |v| s(v.validate())),
         "addon-command-request" => dto::<addons::AddonCommandRequest>(raw, |v| s(v.validate())),
         "command-request" => dto::<CommandRequest>(raw, |v| s(v.validate())),
@@ -308,7 +308,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 962), 962);
+    assert_eq!(run("domain-fixtures.json", 1002), 1002);
 }
 
 #[test]
@@ -377,9 +377,10 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // artifacts.list, history.events, .work_lineage, .git_links, .evidence_links, .tool_usage
     // and sessions.briefing, revision 2 of the six resources operations, of sessions.list,
     // .get, .append_message, .start and .end, and of workspace.diagnostics, .logs and
-    // .record_diagnostic, revision 2 of router.availability, web.search, web.fetch and
-    // indexing.status, and revision 3 of artifacts.save and artifacts.list.
-    assert_eq!(admitted.len(), 387);
+    // .record_diagnostic, revision 2 of router.availability, web.search, web.fetch,
+    // indexing.status, indexing.runs and indexing.refresh_overlay, and revision 3 of
+    // artifacts.save and artifacts.list.
+    assert_eq!(admitted.len(), 389);
 }
 
 #[test]
@@ -508,6 +509,7 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
             "artifact-command-request/workspace",
             "artifact-query-request/tags",
             "artifact-query-request/workspace",
+            "index-command-request/ref",
             "query-request/projectId"
         ]
     );

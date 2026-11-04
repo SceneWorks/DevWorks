@@ -496,5 +496,51 @@ case('reject-r1-result-web-document-provenance','operation-result',{'kind':'web.
 case('reject-r2-result-web-document-not-2xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'status':404}},False,True)
 case('reject-r2-result-web-redirect-not-3xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'redirects':[{'url':'https://fixture.invalid/old','status':200}]}},False,True)
 case('reject-r2-result-web-document-unknown-trust','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'trust':'Verified'}},False,False)
+# Schema revision 2 (indexing): a ref-only overlay (a branch, tag or full commit instead of a
+# worktree), indexing.status of one overlay, and indexing.runs filtered by run state and kind.
+refresh=recorded('index-RefreshOverlay')
+def ref_overlay(revision=2,ref='factory/feature-x',worktree=DELETE):
+ obj=copy.deepcopy(refresh)
+ if revision is not None:obj['schemaRevision']=revision
+ if worktree is DELETE:obj['command'].pop('worktreeId')
+ else:obj['command']['worktreeId']=worktree
+ if ref is not DELETE:obj['command']['ref']=ref
+ return obj
+case('r2-input-indexing.refresh_overlay-ref','index-command-request.r2',ref_overlay())
+case('r2-input-indexing.refresh_overlay-tag','index-command-request.r2',ref_overlay(ref='refs/tags/v1.2.0'))
+case('r2-input-indexing.refresh_overlay-sha','index-command-request.r2',ref_overlay(ref=oid))
+case('r2-input-indexing.refresh_overlay-worktree','index-command-request.r2',ref_overlay(ref=DELETE,worktree='work-a'))
+case('r1-input-indexing.refresh_overlay-explicit','index-command-request',ref_overlay(1,DELETE,'work-a'))
+case('reject-r1-refresh-overlay-ref','index-command-request',ref_overlay(None),False,False)
+case('reject-r1-explicit-refresh-overlay-ref','index-command-request',ref_overlay(1),False,False)
+case('reject-r2-refresh-overlay-not-negotiated','index-command-request.r2',ref_overlay(None),False,False)
+case('reject-r2-refresh-overlay-worktree-and-ref','index-command-request.r2',ref_overlay(worktree='work-a'),False,False)
+case('reject-r2-refresh-overlay-no-source','index-command-request.r2',ref_overlay(ref=DELETE),False,False)
+case('reject-r2-refresh-overlay-null-ref','index-command-request.r2',ref_overlay(ref=None),False,False)
+case('reject-r2-refresh-overlay-empty-ref','index-command-request.r2',ref_overlay(ref=''),False,False)
+# Option and revision spellings fit the length bound; the typed reader refuses them.
+for i,bad in enumerate(['--upload-pack=touch','main~1','topic^{tree}','HEAD@{1}','a..b','topic.lock','.hidden/x','x y','a\\b','topic/','@']):
+ case(f'reject-r2-refresh-overlay-ref-syntax-{i}','index-command-request.r2',ref_overlay(ref=bad),False,True)
+def overlay_target(revision=2,**kw):
+ obj=domain('indexing.status',revision,**kw);obj['body'].pop('repositoryId');return obj
+case('r2-input-indexing.status-overlay','domain-request.r2',overlay_target(overlayId='overlay-a'))
+case('reject-r1-status-overlay','domain-request',overlay_target(None,overlayId='overlay-a'),False,False)
+case('reject-r2-status-repository-and-overlay','domain-request.r2',domain('indexing.status',overlayId='overlay-a'),False,False)
+case('reject-r2-status-no-target','domain-request.r2',overlay_target(),False,False)
+case('reject-r2-status-null-overlay','domain-request.r2',overlay_target(overlayId=None),False,False)
+ref_status={**{k:v for k,v in overlay.items() if k not in ('worktreeId','captureDigest')},'overlayId':'overlay-b','headRef':'refs/heads/factory/feature-x'}
+case('r2-result-indexing.status-ref-overlay','operation-result.r2',{'kind':'indexing.status','value':{**status_r2,'overlays':[ref_status]}})
+case('r2-input-indexing.runs','domain-request.r2',domain('indexing.runs'))
+case('r2-input-indexing.runs-filters','domain-request.r2',domain('indexing.runs',states=['Queued','Failed'],kinds=['Overlay','Reindex']))
+case('reject-r1-runs-states','domain-request',domain('indexing.runs',None,states=['Queued']),False,False)
+case('reject-r1-explicit-runs-kinds','domain-request',domain('indexing.runs',1,kinds=['Index']),False,False)
+case('reject-r2-runs-unknown-state','domain-request.r2',domain('indexing.runs',states=['Paused']),False,False)
+case('reject-r2-runs-unknown-kind','domain-request.r2',domain('indexing.runs',kinds=['BranchOverlay']),False,False)
+case('reject-r2-runs-empty-states','domain-request.r2',domain('indexing.runs',states=[]),False,False)
+case('reject-r2-runs-null-kinds','domain-request.r2',domain('indexing.runs',kinds=None),False,False)
+case('reject-r2-runs-duplicate-states','domain-request.r2',domain('indexing.runs',states=['Queued','Queued']),False,True)
+# Their results are unchanged at revision 2.
+case('r2-result-indexing.refresh_overlay','operation-result.r2',{'kind':'indexing.refresh_overlay','value':sample('IndexRunRecord')})
+case('r2-result-indexing.runs','operation-result.r2',{'kind':'indexing.runs','value':{'items':[sample('IndexRunRecord')],'hasMore':True,'nextCursor':'cursor-a'}})
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

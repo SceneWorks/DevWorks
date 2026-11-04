@@ -1624,6 +1624,9 @@ impl IndexRead for Unsupported {
     fn overlay_for(&self, _: &Id, _: &Id) -> Result<Option<StoredOverlay>, StorageError> {
         nope()
     }
+    fn overlay_at(&self, _: &Id, _: &str) -> Result<Option<StoredOverlay>, StorageError> {
+        nope()
+    }
     fn overlays(&self, _: &Id) -> Result<Vec<StoredOverlay>, StorageError> {
         nope()
     }

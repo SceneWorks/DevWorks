@@ -428,8 +428,8 @@ fn overlay_from(v: Vec<rusqlite::types::Value>) -> Result<StoredOverlay, Storage
     Ok(StoredOverlay {
         id: id_of(s(0)?)?,
         repository_id: id_of(s(1)?)?,
-        worktree_id: id_of(s(2)?)?,
-        worktree_path: s(3)?,
+        worktree_id: opt_id(os(2))?,
+        worktree_path: os(3),
         state: s(4)?,
         revision: n(5)?,
         base_generation_id: opt_id(os(6))?,
@@ -574,6 +574,24 @@ macro_rules! index_reads {
                         }
                         sql.push('?');
                         values.push(r.as_str().to_owned().into());
+                    }
+                    sql.push(')');
+                }
+                for (column, set) in [("state", &filter.states), ("kind", &filter.kinds)] {
+                    let Some(set) = set else { continue };
+                    if set.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    if set.len() > 16 {
+                        return Err(invalid("a run listing names at most 16 states and kinds"));
+                    }
+                    sql.push_str(&format!(" AND {column} IN ("));
+                    for (i, v) in set.iter().enumerate() {
+                        if i > 0 {
+                            sql.push(',');
+                        }
+                        sql.push('?');
+                        values.push(v.clone().into());
                     }
                     sql.push(')');
                 }
@@ -819,9 +837,21 @@ macro_rules! index_reads {
                 .optional())?;
                 raw.map(overlay_from).transpose()
             }
+            fn overlay_at(
+                &self,
+                repository: &Id,
+                commit: &str,
+            ) -> Result<Option<StoredOverlay>, StorageError> {
+                let raw = db(db(self.conn.prepare_cached(&format!(
+                    "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE repository_id=?1 AND worktree_id IS NULL AND head_oid=?2"
+                )))?
+                .query_row(params![repository.as_str(), commit], overlay_of)
+                .optional())?;
+                raw.map(overlay_from).transpose()
+            }
             fn overlays(&self, repository: &Id) -> Result<Vec<StoredOverlay>, StorageError> {
                 let mut s = db(self.conn.prepare_cached(&format!(
-                    "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE repository_id=?1 ORDER BY worktree_id LIMIT 256"
+                    "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE repository_id=?1 ORDER BY worktree_id IS NULL, worktree_id, head_oid LIMIT 256"
                 )))?;
                 let rows = db(db(s.query_map([repository.as_str()], overlay_of))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
@@ -1404,9 +1434,19 @@ impl IndexRepository for Unit<'_> {
         if !OVERLAY_STATES.contains(&o.state.as_str())
             || !oid_ok(&o.base_oid)
             || !oid_ok(&o.head_oid)
-            || o.worktree_path.is_empty()
+            || o.worktree_path.as_ref().is_some_and(String::is_empty)
+            || o.worktree_id.is_some() != o.worktree_path.is_some()
         {
             return Err(invalid("overlay state, commits or path"));
+        }
+        if o.worktree_id.is_none()
+            && (o.head_oid.is_none()
+                || o.capture_digest.is_some()
+                || o.worktree_generation_id.is_some())
+        {
+            return Err(invalid(
+                "a ref overlay names its commit and has no worktree layer",
+            ));
         }
         let current = self.overlay(&o.id)?;
         match (expected, &current) {
@@ -1440,6 +1480,7 @@ impl IndexRepository for Unit<'_> {
                 if o.revision != e + 1
                     || o.repository_id != c.repository_id
                     || o.worktree_id != c.worktree_id
+                    || (o.worktree_id.is_none() && o.head_oid != c.head_oid)
                 {
                     return Err(invalid("an overlay keeps its identity and advances by one"));
                 }
@@ -1452,7 +1493,7 @@ impl IndexRepository for Unit<'_> {
         .execute(rusqlite::params_from_iter([
             rusqlite::types::Value::from(o.id.as_str().to_owned()),
             o.repository_id.as_str().to_owned().into(),
-            o.worktree_id.as_str().to_owned().into(),
+            o.worktree_id.as_ref().map(|x| x.as_str().to_owned()).into(),
             o.worktree_path.clone().into(),
             o.state.clone().into(),
             o.revision.into(),

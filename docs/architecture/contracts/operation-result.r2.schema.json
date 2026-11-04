@@ -5694,13 +5694,19 @@
           ]
         },
         "worktreeId": {
-          "$ref": "#/$defs/Id"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "overlayId",
         "revision",
-        "worktreeId",
         "state",
         "updatedAtMs",
         "expiresAtMs"

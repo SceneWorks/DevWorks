@@ -78,12 +78,14 @@ CREATE INDEX index_runs_by_time ON index_runs(created_at DESC, id);
 CREATE INDEX index_runs_by_batch ON index_runs(batch_id, id);
 CREATE INDEX index_runs_claimable ON index_runs(state, next_attempt_at, created_at)
  WHERE state IN ('Queued','Running');
--- Worktree overlays over a repository's baseline.
+-- Worktree and ref overlays over a repository's baseline.
 CREATE TABLE index_overlays (
  id TEXT PRIMARY KEY,
  repository_id TEXT NOT NULL REFERENCES repositories,
- worktree_id TEXT NOT NULL CHECK(length(worktree_id) BETWEEN 1 AND 128),
- worktree_path TEXT NOT NULL CHECK(length(worktree_path) BETWEEN 1 AND 32768),
+ -- A worktree overlay names its worktree; a ref overlay (no worktree) is identified by the
+ -- commit its ref resolved to (head_oid).
+ worktree_id TEXT CHECK(worktree_id IS NULL OR length(worktree_id) BETWEEN 1 AND 128),
+ worktree_path TEXT CHECK(worktree_path IS NULL OR length(worktree_path) BETWEEN 1 AND 32768),
  state TEXT NOT NULL CHECK(state IN ('Queued','Indexing','Ready','Failed','Stale','Expired','Unavailable')),
  revision INTEGER NOT NULL CHECK(revision > 0),
  base_generation_id TEXT, base_oid TEXT, head_oid TEXT, head_ref TEXT, capture_digest TEXT,
@@ -92,8 +94,13 @@ CREATE TABLE index_overlays (
  created_at INTEGER NOT NULL CHECK(created_at >= 0),
  updated_at INTEGER NOT NULL CHECK(updated_at >= 0),
  expires_at INTEGER NOT NULL CHECK(expires_at >= 0),
+ CHECK((worktree_id IS NULL) = (worktree_path IS NULL)),
+ CHECK(worktree_id IS NOT NULL OR (head_oid IS NOT NULL AND capture_digest IS NULL
+  AND worktree_generation_id IS NULL)),
  UNIQUE(repository_id, worktree_id)
 ) STRICT;
+CREATE UNIQUE INDEX index_overlays_by_commit ON index_overlays(repository_id, head_oid)
+ WHERE worktree_id IS NULL;
 CREATE INDEX index_overlays_due ON index_overlays(expires_at)
  WHERE state NOT IN ('Expired','Unavailable');
 -- Unit and edge provenance (language, mode, spans live in node payloads; resolution and
