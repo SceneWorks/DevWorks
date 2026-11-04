@@ -2826,3 +2826,89 @@ fn repository_texts_are_readable_wherever_their_repository_is_a_member() {
         &text.content,
     ));
 }
+
+#[test]
+fn an_overlay_over_a_baseline_of_another_configuration_reconciles_its_inherited_units() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("configured");
+    repo(
+        &dir,
+        &[
+            ("src/lib.rs", "pub fn kept() {}\n"),
+            ("gen/a.rs", "pub fn generated() {}\n"),
+            ("tools/b.py", "def tool():\n    pass\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let configure = |expected: &str, languages: Value, excludes: Value| {
+        let d = decision(fx.command(
+            "indexing.configure_sources",
+            json!({"scope": {"kind": "Workspace"}, "expectedRevision": expected, "config": {
+                "structuralLanguages": languages, "semanticPackageIds": [], "excludePatterns": excludes,
+                "maxFileBytes": "524288"}}),
+        ));
+        assert!(matches!(d, DomainDecision::Applied { .. }), "{d:?}");
+    };
+    // The baseline: Rust only, nothing excluded.
+    configure("1", json!(["rust"]), json!([]));
+    run_of(decision(fx.index(&repo_id, false, "2")));
+    fx.drain();
+    let baseline = fx.published(&repo_id);
+    assert!(!has_node(
+        &fx.nodes(&baseline, "tools/b.py"),
+        "Function",
+        "#function:tool()"
+    ));
+    assert!(fx.unit(&baseline, "gen/a.rs").is_some());
+    // Then every language, with gen/ excluded; the baseline is not rebuilt.
+    configure("2", json!([]), json!(["**/gen/**"]));
+    let worktree = worktree_id(&repo_id, &fx.identity(&dir));
+    let run = run_of(decision(fx.index_command(
+        "indexing.refresh_overlay",
+        json!({"kind": "RefreshOverlay", "repositoryId": repo_id, "worktreeId": worktree,
+            "expectedSourceRevision": "3"}),
+    )));
+    fx.drain();
+    assert_eq!(
+        fx.run(&run.id).state,
+        RUN_SUCCEEDED,
+        "{:?}",
+        fx.run(&run.id)
+    );
+    let (r, w) = (repo_id.clone(), worktree.clone());
+    let record = fx
+        .read(move |s| s.indexing().overlay_for(&r, &w))
+        .expect("the overlay");
+    let view = exact_view(&fx, record.view_id.as_ref().expect("a view"));
+    // A clean worktree at the baseline commit still gets a layer that reconciles: the newly
+    // selected Python file is extracted...
+    assert!(
+        has_node(
+            &fx.nodes(&view, "tools/b.py"),
+            "Function",
+            "#function:tool()"
+        ),
+        "{:?}",
+        fx.nodes(&view, "tools/b.py")
+    );
+    // ...the newly excluded file is masked...
+    assert!(fx.unit(&view, "gen/a.rs").is_none());
+    // ...and an unaffected unit is still the baseline's.
+    assert!(has_node(
+        &fx.nodes(&view, "src/lib.rs"),
+        "Function",
+        "#function:kept()"
+    ));
+    let (_, lib) = fx.unit(&view, "src/lib.rs").unwrap();
+    assert_eq!(
+        lib.generation_id, baseline.view.baseline_id,
+        "inherited, not restaged"
+    );
+    // The baseline itself is unchanged.
+    let baseline = fx.published(&repo_id);
+    assert!(fx.unit(&baseline, "gen/a.rs").is_some());
+}

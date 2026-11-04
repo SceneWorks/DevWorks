@@ -1027,13 +1027,26 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         let (entries, _) = git.tree(&root, h).map_err(Stop::git)?;
         head_entries = entries;
     }
+    // A baseline built under another configuration (or extractor) is reconciled in the branch
+    // layer, even at the baseline commit: units the effective configuration plans differently
+    // (newly selected or deselected languages, size limits) are staged again from the commit
+    // and units it now excludes are masked, so the overlay never shows the earlier
+    // configuration's definitions.
+    let reconciled = configuration_changes(
+        &env,
+        &cfg,
+        &snap.base_generation,
+        &head_entries,
+        env.source.case_insensitive(&root),
+    )
+    .map_err(Stop::storage)?;
     if let Some(h) = head
         .as_ref()
-        .filter(|h| **h != snap.base_oid || ref_overlay)
+        .filter(|h| **h != snap.base_oid || ref_overlay || !reconciled.is_empty())
     {
         exec.stage("branch")?;
         let git = exec.git(&stop);
-        let (changes, _) = match git.diff(&root, &snap.base_oid, h) {
+        let (mut changes, _) = match git.diff(&root, &snap.base_oid, h) {
             Ok(c) => c,
             Err(e) if e.cancelled() => return Err(Stop::Cancelled),
             Err(e) => {
@@ -1043,6 +1056,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
                 ));
             }
         };
+        changes.extend(reconciled.iter().cloned());
         let (units, groups) = layer_units(
             &env,
             &cfg,
@@ -1265,6 +1279,65 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         Err(why) if why.contains("baseline moved") => Err(Stop::transient("base_moved", why)),
         Err(why) => Err(Stop::det("overlay_superseded", why)),
     }
+}
+
+/// The file units an overlay over `base` must reconcile because the baseline was built under
+/// another configuration digest or extractor version: under another extractor every planned
+/// file; otherwise each file `tree` plans with another mode or language than the baseline unit
+/// (or that the baseline lacks), as modified, and each baseline file the plan no longer has
+/// (excluded now), as deleted. Empty when the baseline was built under this configuration.
+fn configuration_changes(
+    env: &IndexEnv,
+    cfg: &EffectiveConfig,
+    base: &Id,
+    tree: &[TreeEntry],
+    case_insensitive: bool,
+) -> Result<Vec<Change>, StorageError> {
+    let manifest = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        s.indexing().generation(base)
+    })?
+    .map(|g| g.manifest)
+    .unwrap_or_default();
+    let same_extractor = manifest
+        .get("extractorVersion")
+        .and_then(serde_json::Value::as_i64)
+        == Some(super::config::EXTRACTOR_VERSION);
+    if same_extractor
+        && manifest
+            .get("configDigest")
+            .and_then(serde_json::Value::as_str)
+            == Some(cfg.digest.as_str())
+    {
+        return Ok(Vec::new());
+    }
+    let base_units = super::worker::unit_index(env, base)?;
+    let mut ignored = Vec::new();
+    let (planned, _) = plan(
+        env,
+        cfg,
+        tree,
+        &BTreeMap::new(),
+        &mut ignored,
+        case_insensitive,
+    );
+    let mut out = Vec::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for u in planned.iter().filter(|u| !u.key.starts_with('/')) {
+        seen.insert(u.key.as_str());
+        let same = same_extractor
+            && base_units.get(&u.key).is_some_and(|(_, mode, language)| {
+                mode == u.mode && language.as_deref() == u.language
+            });
+        if !same {
+            out.push(Change::Modified(u.key.clone()));
+        }
+    }
+    for key in base_units.keys() {
+        if !key.starts_with('/') && !seen.contains(key.as_str()) {
+            out.push(Change::Deleted(key.clone()));
+        }
+    }
+    Ok(out)
 }
 
 /// The units of one layer: changed files (replaced or deleted) and the directories they affect,
