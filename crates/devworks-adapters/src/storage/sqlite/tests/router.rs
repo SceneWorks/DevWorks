@@ -1332,3 +1332,40 @@ fn pins_and_cursors_are_compare_and_set_in_the_store() {
     assert_eq!(fx.cursor("High"), 1);
     assert_eq!(fx.pin_row("s1").unwrap().model_id.as_str(), "opus");
 }
+
+#[test]
+fn a_reused_pin_records_the_latest_requests_requirements() {
+    let fx = Fx::new();
+    fx.add_model(custom("plain", CLAUDE, false, None));
+    let (text, _) = chosen(fx.route("s1", tier("High"), "Default", &[]));
+    assert_eq!(text.model_id.as_str(), "opus");
+    // The same pinned route serves an image request: it is kept, and the pin now records that
+    // the conversation needs vision, atomically with this request's receipt.
+    let body = json!({"sessionId": "s1", "expectedContextEpoch": "0", "intent": tier("High"),
+        "effort": "Default", "requiredCapabilities": ["vision"]});
+    let (vision, wrote) =
+        chosen(fx.command_keyed(&fx.user(), "router.route", "vision-1", body.clone()));
+    assert!(wrote, "the requirements changed");
+    assert_eq!(
+        (vision.model_id.as_str(), &vision.pin_id),
+        ("opus", &text.pin_id)
+    );
+    assert_eq!(vision.pin_revision.get(), 2);
+    let pin = fx.pin_row("s1").unwrap();
+    assert_eq!(pin.required_capabilities, ["vision"]);
+    assert_eq!(pin.reason, "Initial", "the route was not re-chosen");
+    assert_eq!(fx.cursor("High"), 1, "no round-robin turn");
+    // A replay is the recorded decision; it writes nothing more.
+    let (decision, replayed) =
+        recorded(fx.command_keyed(&fx.user(), "router.route", "vision-1", body));
+    assert!(replayed && matches!(decision, DomainDecision::Applied { .. }));
+    assert_eq!(fx.pin_row("s1").unwrap().revision, 2);
+    // So an explicit change cannot move the conversation to a model without vision.
+    let fault = refused(fx.pin("s1", 2, named("plain"), "Default"));
+    assert_eq!(fault.code, DomainErrorCode::UnsupportedCapability);
+    assert_eq!(fx.pin_row("s1").unwrap().model_id.as_str(), "opus");
+    // Unchanged requirements reuse the pin without a write.
+    let (same, wrote) = chosen(fx.route("s1", tier("High"), "Default", &["vision"]));
+    assert!(!wrote);
+    assert_eq!(same.pin_revision.get(), 2);
+}

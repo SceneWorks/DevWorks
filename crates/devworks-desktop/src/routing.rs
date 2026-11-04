@@ -58,6 +58,21 @@ pub struct Routing {
     /// Selections by conversation key (a session ID, or the new-chat draft key).
     pub selections: BTreeMap<String, Selection>,
     pub status: BTreeMap<String, Status>,
+    /// Conversations whose first message is saved but whose routing waits for the router to
+    /// say whether they are pinned yet (kept across a restart).
+    pub first_route: std::collections::BTreeSet<String>,
+    /// The cooldown expiry each conversation's status was last rechecked for, so a router
+    /// that still reports it (clocks differ slightly) is not asked again every frame.
+    pub rechecked: BTreeMap<String, i64>,
+}
+impl Routing {
+    /// Forgets everything derived from the catalog and routing settings (after they changed):
+    /// the catalog is reloaded and each conversation's availability asked again.
+    pub fn invalidate(&mut self) {
+        self.catalog_loaded = false;
+        self.status.clear();
+        self.rechecked.clear();
+    }
 }
 
 /// Accessible names of the two selectors.

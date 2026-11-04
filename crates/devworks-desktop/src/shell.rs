@@ -253,6 +253,7 @@ impl Shell {
         }
         chat.scrolls = Scrolls::restoring(&memory.scroll);
         chat.routing.selections = memory.routing.clone();
+        chat.routing.first_route = memory.routing_first.clone();
         let mut settings = SettingsScreen::default();
         settings.restore(&memory.settings);
         settings.scrolls = Scrolls::restoring(&memory.scroll);
@@ -508,6 +509,17 @@ impl Shell {
         );
     }
 
+    /// Drops the catalog and availability derived from routing settings, reloading what is
+    /// visible.
+    fn invalidate_routing(&mut self) {
+        self.chat.routing.invalidate();
+        if (self.route == Route::Chat || self.coordinator_open)
+            && !self.pending(&Slot::RouterCatalog)
+        {
+            self.load_router_catalog();
+        }
+    }
+
     fn load_router_catalog(&mut self) {
         self.query(
             Slot::RouterCatalog,
@@ -519,9 +531,20 @@ impl Shell {
 
     /// Asks the router about the active conversation's selection (and pin).
     fn refresh_route_status(&mut self) {
-        // A newer query supersedes one still running (its selection may be stale).
         let key = self.chat.draft_key();
-        let sel = self.chat.selection();
+        self.refresh_route_status_of(key);
+    }
+
+    /// Asks the router about one conversation's selection (and pin). A newer query supersedes
+    /// one still running (its selection may be stale).
+    fn refresh_route_status_of(&mut self, key: String) {
+        let sel = self
+            .chat
+            .routing
+            .selections
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
         let session = (key != chat::NEW_DRAFT).then(|| key.clone());
         self.query(
             Slot::RouteStatus(key),
@@ -587,16 +610,33 @@ impl Shell {
             .get(session)
             .and_then(|s| s.availability.as_ref())
             .map(|a| a.pin.is_some());
-        let Some(record) = self.chat.session(session) else {
+        let Some(epoch) = self.chat.session(session).map(|r| r.context_epoch.get()) else {
             return;
         };
-        if pinned != Some(false)
-            || self.pending(&Slot::RouteFirst(session.to_owned()))
+        if self.pending(&Slot::RouteFirst(session.to_owned()))
             || self.pending(&Slot::RoutePin(session.to_owned()))
         {
             return;
         }
-        let epoch = record.context_epoch.get();
+        match pinned {
+            Some(true) => {
+                self.chat.routing.first_route.remove(session);
+                return;
+            }
+            // Not known yet whether it is pinned: routed once the router says (this reply or
+            // a later one, also after a restart), never over a pin it does not know about.
+            None => {
+                if self.chat.routing.first_route.insert(session.to_owned())
+                    && !self.pending(&Slot::RouteStatus(session.to_owned()))
+                {
+                    self.refresh_route_status_of(session.to_owned());
+                }
+                return;
+            }
+            Some(false) => {
+                self.chat.routing.first_route.remove(session);
+            }
+        }
         let sel = self
             .chat
             .routing
@@ -922,6 +962,12 @@ impl Shell {
                     self.chat.sessions_loaded = true;
                     self.chat.sessions_error = None;
                     self.reconcile_selection();
+                    // A waiting first route needs its session's record (its context epoch).
+                    let waiting: Vec<String> =
+                        self.chat.routing.first_route.iter().cloned().collect();
+                    for key in waiting {
+                        self.route_first(&key);
+                    }
                 }
                 Err(e) => self.chat.sessions_error = Some(e.describe()),
             },
@@ -962,7 +1008,11 @@ impl Shell {
                         error: Some(e.describe()),
                     },
                 };
-                self.chat.routing.status.insert(key, status);
+                let known = status.availability.is_some();
+                self.chat.routing.status.insert(key.clone(), status);
+                if known && self.chat.routing.first_route.contains(&key) {
+                    self.route_first(&key);
+                }
             }
             (Slot::RouteFirst(key), Reply::Command(c)) => {
                 if matches!(ops::routed(c), Err(Failure::Unknown)) {
@@ -1288,6 +1338,9 @@ impl Shell {
                         self.announce("Settings: outcome not confirmed.");
                     }
                     Ok(()) => {
+                        // Tier membership and other routing settings may have changed: the
+                        // selectors' catalog and every availability are read again.
+                        self.invalidate_routing();
                         // Still saving until the follow-up read settles the drafts.
                         self.settings.after_save = true;
                         self.settings.message = Some((Tone::Good, "Settings saved.".into()));
@@ -1478,7 +1531,12 @@ impl Shell {
         }
         if self.route == Route::Chat || self.coordinator_open {
             self.refresh_route_status();
+            // Catalog edits and membership changes made elsewhere reach the selectors too.
+            if !self.pending(&Slot::RouterCatalog) {
+                self.load_router_catalog();
+            }
         }
+        self.refresh_waiting_first_routes();
         match self.route {
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
@@ -1496,6 +1554,10 @@ impl Shell {
                 ChatAction::Select(id) => {
                     self.chat.selected = Some(id.clone());
                     self.chat.notice = None;
+                    if self.chat.routing.status.contains_key(&id) {
+                        // Shown as last known while its pin is read again.
+                        self.refresh_route_status();
+                    }
                     if !self.chat.transcripts.contains_key(&id) {
                         self.load_transcript(&id);
                     }
@@ -1719,6 +1781,7 @@ impl Shell {
                 .collect(),
             pending: self.pending_memory(),
             routing: self.chat.routing.selections.clone(),
+            routing_first: self.chat.routing.first_route.clone(),
         }
     }
 
@@ -1897,6 +1960,8 @@ impl Shell {
             self.load_sessions();
             self.load_route();
             self.restore_previews();
+            // First messages saved before their routing was known, at the last close.
+            self.refresh_waiting_first_routes();
             // Outcomes left unknown at the last close: confirmed with their exact frames.
             if self.unconfirmed_count() > 0 {
                 self.confirm_outcomes();
@@ -1948,6 +2013,18 @@ impl Shell {
         ctx.request_repaint_after(Duration::from_secs(5));
     }
 
+    /// Asks again about conversations whose first message still waits to be routed.
+    fn refresh_waiting_first_routes(&mut self) {
+        let waiting: Vec<String> = self.chat.routing.first_route.iter().cloned().collect();
+        for key in waiting {
+            if !self.pending(&Slot::RouteStatus(key.clone()))
+                && !self.pending(&Slot::RouteFirst(key.clone()))
+            {
+                self.refresh_route_status_of(key);
+            }
+        }
+    }
+
     /// Asks about the visible conversation's selection when nothing is known yet, and again when
     /// the earliest cooldown it waits for has ended (never earlier).
     fn route_status_due(&mut self, ctx: &egui::Context) {
@@ -1974,7 +2051,12 @@ impl Shell {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as i64);
             if now >= at {
-                self.refresh_route_status();
+                // Once per reported expiry: a router still reporting it (its clock may lag) is
+                // asked again by the periodic refresh, not every frame.
+                if self.chat.routing.rechecked.get(&key) != Some(&at) {
+                    self.chat.routing.rechecked.insert(key, at);
+                    self.refresh_route_status();
+                }
             } else {
                 ctx.request_repaint_after(Duration::from_millis((at - now) as u64));
             }

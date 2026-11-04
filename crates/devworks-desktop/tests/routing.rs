@@ -337,3 +337,183 @@ fn an_unconfirmed_pin_change_is_confirmed_with_its_frame_at_the_next_launch() {
     assert_eq!(pin_of(&*real, &session).unwrap().0, "haiku");
     assert!(has_text(&h, "Pinned: Haiku"));
 }
+
+/// Starts a conversation and saves one message while every availability query is held, so the
+/// message is saved before the router has said whether the conversation is pinned.
+fn send_before_availability(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    gate: &Gate,
+) -> String {
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "New Chat").click();
+    step_until(h, "the conversation starts", |s| s.chat.selected.is_some());
+    let session = h.state().chat.selected.clone().unwrap();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .type_text("before availability");
+    h.step();
+    h.get_by_role_and_label(Role::Button, SEND_LABEL).click();
+    step_until(h, "the message is saved", |s| {
+        s.chat.sending.is_none()
+            && s.chat
+                .drafts
+                .get(&session)
+                .is_some_and(|d| d.text.is_empty())
+    });
+    assert!(
+        !h.state().chat.routing.status.contains_key(&session),
+        "its availability is still unknown"
+    );
+    session
+}
+
+#[test]
+fn a_first_message_saved_before_availability_is_known_is_routed_once_it_is() {
+    let root = Root::new("routing-first-late");
+    let engine = start_connected(&root);
+    let real = engine.backend();
+    let gate = Gate::new("router.availability");
+    let routes = LoseAcks::over(gate.over(real.clone()), "router.route", 0);
+    let mut h = harness(
+        shell_with(Ok(routes.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let session = send_before_availability(&mut h, &gate);
+    assert!(
+        routes.request_keys().is_empty(),
+        "not routed over an unknown pin"
+    );
+    gate.open();
+    settle(&mut h);
+    assert_eq!(
+        routes.request_keys().len(),
+        1,
+        "routed once the router answered"
+    );
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
+    assert!(h.state().chat.routing.first_route.is_empty());
+    // A later message of the pinned conversation is not routed again by the composer.
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .type_text("second");
+    settle(&mut h);
+    click(&mut h, Role::Button, SEND_LABEL);
+    assert_eq!(routes.request_keys().len(), 1);
+}
+
+#[test]
+fn a_first_route_still_waiting_at_close_is_routed_once_at_the_next_launch() {
+    let root = Root::new("routing-first-restart");
+    let engine = start_connected(&root);
+    let real = engine.backend();
+    let gate = Gate::new("router.availability");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let session = send_before_availability(&mut h, &gate);
+    h.state_mut().on_exit();
+    gate.open();
+    drop(h);
+    assert!(
+        pin_of(&*real, &session).is_none(),
+        "nothing was routed before the close"
+    );
+    let routes = LoseAcks::over(real.clone(), "router.route", 0);
+    let mut h = harness(
+        shell_with(Ok(routes.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    assert_eq!(
+        routes.request_keys().len(),
+        1,
+        "routed exactly once after the relaunch"
+    );
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
+    assert!(has_text(&h, "Pinned: Opus"));
+}
+
+#[test]
+fn a_routing_settings_save_refreshes_the_selectors_catalog() {
+    use devworks_desktop::memory::Memory;
+    let root = Root::new("routing-settings");
+    // An unsaved draft of Tier Low's membership, applied when Settings loads.
+    let mut memory = Memory::default();
+    memory
+        .settings
+        .drafts
+        .insert("routing.tierLow.members".into(), json!(["astra"]));
+    memory.save(&root.memory()).unwrap();
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    choose(&mut h, ROUTE_LABEL, "Tier Low");
+    let before = options(&mut h, EFFORT_LABEL);
+    assert!(
+        !before.iter().any(|e| e == "Minimal"),
+        "Haiku and Luna declare no Minimal"
+    );
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, "Save changes");
+    click_nav(&mut h, "Chat");
+    // The selectors now offer what the router allocates from: Astra, which declares Minimal.
+    let after = options(&mut h, EFFORT_LABEL);
+    assert!(after.iter().any(|e| e == "Minimal"), "{after:?}");
+}
+
+#[test]
+fn returning_to_a_conversation_rereads_a_pin_changed_meanwhile() {
+    let root = Root::new("routing-reselect");
+    let engine = start_connected(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let first = h.state().chat.selected.clone().unwrap();
+    let route = ops::command_frame(
+        &*backend,
+        "router.route",
+        json!({"sessionId": first, "expectedContextEpoch": "0",
+            "intent": {"kind": "Tier", "tier": "High"}, "effort": "Default",
+            "requiredCapabilities": []}),
+    );
+    ops::command_result(backend.command("router.route", &route)).unwrap();
+    click_nav(&mut h, "Artifacts");
+    click_nav(&mut h, "Chat");
+    step_until(&mut h, "the pin is known", |s| {
+        s.chat
+            .routing
+            .status
+            .get(&first)
+            .and_then(|st| st.availability.as_ref())
+            .is_some_and(|a| a.pin.is_some())
+    });
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    // Meanwhile another surface (an agent, the sidebar of another window) repins the first.
+    let pin = ops::router_pin(
+        &*backend,
+        &first,
+        1,
+        &RouteIntent::Model {
+            model_id: Id::new("haiku").unwrap(),
+        },
+        &devworks_core::protocol::records::EffortName::Default,
+    );
+    ops::pinned(backend.command("router.pin", &pin)).unwrap();
+    click(&mut h, Role::Button, "Chat History");
+    click(&mut h, Role::Button, "Conversation 1");
+    assert_eq!(h.state().chat.selected.as_deref(), Some(first.as_str()));
+    assert!(has_text(&h, "Pinned: Haiku"), "not the stale Opus pin");
+    assert_eq!(combo_text(&h, ROUTE_LABEL), "Haiku");
+}
