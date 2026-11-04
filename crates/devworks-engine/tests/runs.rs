@@ -4419,6 +4419,41 @@ fn linked_running_issue(fx: &Fx, processes: &ProcessSupervisor) -> StoredActivat
 }
 
 #[test]
+fn a_feature_stop_covers_a_linked_process_with_implicit_controls() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host.clone(), None);
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    spawn_tree(&fx, &processes, "root-b", "project-b");
+    assert!(read(&*fx.store, |s| s.runs().root_control(&rid("root-i"))).is_none());
+    applied(&fx.set_feature("root-i", Some("root-f")));
+    assert!(read(&*fx.store, |s| s.runs().root_control(&rid("root-i"))).is_none());
+    let stop = fx.stop(&fx.user, "root-f");
+    let op = match decision(&stop) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("the process must keep Stop pending: {other:?}"),
+    };
+    let intent = read(&*fx.store, |s| s.operations().operation(&op)).unwrap();
+    assert_eq!(
+        intent.payload["linkedRoots"],
+        json!([{"rootId":"root-i", "generation":0, "reactivate":false}])
+    );
+    let tick = runtime().block_on(sup.tick()).unwrap();
+    assert!(
+        tick.stops
+            .contains(&(rid("root-f"), OperationState::ObservedComplete))
+    );
+    assert_eq!(host.stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(processes.owned().len(), 1, "unrelated work keeps running");
+    assert_eq!(
+        read(&*fx.store, |s| s.operations().operation(&op))
+            .unwrap()
+            .state,
+        OperationState::ObservedComplete
+    );
+}
+
+#[test]
 fn a_feature_pause_and_stop_reach_a_linked_cards_running_activation_and_its_trees() {
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());

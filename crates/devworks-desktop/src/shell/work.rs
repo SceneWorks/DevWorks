@@ -86,7 +86,7 @@ fn status_name(cols: &[Column], status: &str) -> String {
 }
 
 /// A new feature, task or issue being written.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CreateForm {
     /// `feature`, `task` or `issue`.
     pub kind: String,
@@ -131,11 +131,11 @@ pub struct Entry {
     pub id: String,
     pub text: String,
 }
-/// The next free `<prefix><n>` ID among `entries`.
-pub fn next_id(entries: &[Entry], prefix: &str) -> String {
+/// The next free `<prefix><n>` ID, excluding visible entries and reserved base IDs.
+pub fn next_id(entries: &[Entry], prefix: &str, reserved: &[String]) -> String {
     (1..)
         .map(|n| format!("{prefix}{n}"))
-        .find(|c| !entries.iter().any(|e| &e.id == c))
+        .find(|c| !reserved.contains(c) && !entries.iter().any(|e| &e.id == c))
         .expect("a free identifier")
 }
 
@@ -371,6 +371,8 @@ pub struct WorkUi {
     /// The selected card of the board.
     pub card: Option<String>,
     pub create: Option<CreateForm>,
+    /// Submitted creation drafts by project, retained across project switches.
+    pub create_saving: BTreeMap<String, CreateForm>,
     pub edit: Option<EditForm>,
     pub plan: Option<PlanForm>,
     /// The exact plan form a save submitted, while that save runs: its upload and its command
@@ -526,6 +528,7 @@ impl Shell {
                 archive_counts: std::mem::take(&mut self.work.archive_counts),
                 plan_saving: std::mem::take(&mut self.work.plan_saving),
                 edit_saving: std::mem::take(&mut self.work.edit_saving),
+                create_saving: std::mem::take(&mut self.work.create_saving),
                 ..WorkUi::default()
             };
             return;
@@ -536,6 +539,7 @@ impl Shell {
                 archive_counts: std::mem::take(&mut self.work.archive_counts),
                 plan_saving: std::mem::take(&mut self.work.plan_saving),
                 edit_saving: std::mem::take(&mut self.work.edit_saving),
+                create_saving: std::mem::take(&mut self.work.create_saving),
                 ..WorkUi::default()
             };
         }
@@ -692,12 +696,14 @@ impl Shell {
                             ("tasks.create", b)
                         }
                     };
-                    self.command(
+                    if self.command(
                         Slot::WorkCreate(p.clone()),
                         "Creating work",
                         op,
                         move |be| wops::work_command(be, op, body),
-                    );
+                    ) {
+                        self.work.create_saving.insert(p, form);
+                    }
                 }
                 Action::Edit(form) => {
                     let w = form.snapshot.clone();
@@ -1116,10 +1122,15 @@ impl Shell {
                     }
                 }
             }
-            (Slot::WorkCreate(_), Reply::Command(c)) => match wops::work_changed(c) {
+            (Slot::WorkCreate(project), Reply::Command(c)) => match wops::work_changed(c) {
                 Ok(w) => {
                     self.work.mutations += 1;
-                    self.work.create = None;
+                    if let Some(saved) = self.work.create_saving.remove(&project)
+                        && self.work.of.as_ref() == Some(&project)
+                        && self.work.create.as_ref() == Some(&saved)
+                    {
+                        self.work.create = None;
+                    }
                     let text = format!("Created {} {}.", kind_label(&w).to_lowercase(), w.title.0);
                     self.work.message = Some((Tone::Good, text.clone()));
                     self.announce(text);
@@ -2733,9 +2744,15 @@ fn plan_form(
             .desired_rows(4),
     );
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Plan text"));
-    entry_list(ui, "Requirement", "E", &mut form.requirements);
-    entry_list(ui, "Acceptance criterion", "A", &mut form.acceptance);
-    entry_list(ui, "Acceptance test", "T", &mut form.acceptance_tests);
+    let reserved = form
+        .base
+        .requirements
+        .iter()
+        .map(|r| r.id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    entry_list(ui, "Requirement", "E", &mut form.requirements, &reserved);
+    entry_list(ui, "Acceptance criterion", "A", &mut form.acceptance, &[]);
+    entry_list(ui, "Acceptance test", "T", &mut form.acceptance_tests, &[]);
     ui.label(RichText::new("Goals").strong());
     let mut remove: Option<usize> = None;
     for (i, g) in form.goals.iter_mut().enumerate() {
@@ -2813,7 +2830,13 @@ pub fn blocker_change(w: &WorkRecord, edit: BlockerEdit<'_>) -> Option<Value> {
 
 /// An editable list of entries, one ID field and one multi-line text field each, with add and
 /// remove controls.
-fn entry_list(ui: &mut Ui, what: &str, prefix: &str, entries: &mut Vec<Entry>) {
+fn entry_list(
+    ui: &mut Ui,
+    what: &str,
+    prefix: &str,
+    entries: &mut Vec<Entry>,
+    reserved: &[String],
+) {
     ui.label(RichText::new(format!("{what}s")).strong());
     let mut remove: Option<usize> = None;
     for (i, e) in entries.iter_mut().enumerate() {
@@ -2849,7 +2872,7 @@ fn entry_list(ui: &mut Ui, what: &str, prefix: &str, entries: &mut Vec<Entry>) {
         .small_button(format!("Add {}", what.to_lowercase()))
         .clicked()
     {
-        let id = next_id(entries, prefix);
+        let id = next_id(entries, prefix, reserved);
         entries.push(Entry {
             id,
             text: String::new(),

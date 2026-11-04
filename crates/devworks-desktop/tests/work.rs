@@ -245,6 +245,44 @@ fn the_plan_editor_keeps_what_it_does_not_show() {
         json!(["task-1"])
     );
     assert_eq!(body["requirements"][1], draft["requirements"][1]);
+    let root = Root::new("requirement-id-reserved");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let feature =
+        features_from_screen(&mut h, &*backend, project.id.0.as_str(), &["Checkout"]).remove(0);
+    click_row(&mut h, "Checkout  ·");
+    click(&mut h, Role::Button, "Edit plan");
+    form.snapshot = feature;
+    h.state_mut().work.plan = Some(form);
+    click(&mut h, Role::Button, "Add requirement");
+    let form = h.state().work.plan.as_ref().unwrap();
+    assert_eq!(form.requirements.last().unwrap().id, "E3");
+    let mut form = form.clone();
+    form.requirements.last_mut().unwrap().text = "new requirement".into();
+    let saved = plan_body(&form, &content);
+    let added = saved["requirements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "E3")
+        .unwrap();
+    assert_eq!(added["status"], "Confirmed");
+    assert_eq!(
+        saved["requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "E2")
+            .unwrap(),
+        &draft["requirements"][1]
+    );
 }
 
 #[test]
@@ -471,6 +509,77 @@ fn a_creation_locks_its_form_while_it_runs() {
     gate.open();
     settle(&mut h);
     assert_eq!(list(&*real, "issues.list", &pid).len(), 1);
+}
+
+#[test]
+fn a_creation_reply_keeps_another_projects_draft() {
+    creation_reply_preserves_draft(true);
+}
+
+#[test]
+fn a_creation_reply_keeps_later_edits_in_the_same_project() {
+    creation_reply_preserves_draft(false);
+}
+
+fn creation_reply_preserves_draft(switch_project: bool) {
+    let root = Root::new("create-reply-scope");
+    let engine = start(&root);
+    let real = engine.backend();
+    let make_project = |title| {
+        ops::project_changed(real.command(
+            "projects.create",
+            &ops::project_create(&*real, title, "", &[]),
+        ))
+        .unwrap()
+    };
+    let a = make_project("Shop A");
+    let b = make_project("Shop B");
+    let gate = Gate::new("issues.create");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1600.0,
+        1000.0,
+    );
+    settle(&mut h);
+    h.state_mut()
+        .select_project(Some(a.id.0.as_str().to_owned()));
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New issue");
+    type_into(&mut h, Role::TextInput, "Title", "Submitted issue");
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Create").click();
+    h.run_steps(3);
+    if switch_project {
+        h.state_mut()
+            .select_project(Some(b.id.0.as_str().to_owned()));
+        h.state_mut().work.create = Some(devworks_desktop::shell::work::CreateForm {
+            kind: "issue".into(),
+            title: "Unsaved issue".into(),
+            ..Default::default()
+        });
+        h.run_steps(3);
+    } else {
+        // Preserve any later draft edits even if they arrived outside the disabled widget.
+        h.state_mut().work.create.as_mut().unwrap().title = "Unsaved issue".into();
+    }
+    gate.open();
+    settle(&mut h);
+    assert_eq!(
+        list(&*real, "issues.list", a.id.0.as_str())[0].title.0,
+        "Submitted issue"
+    );
+    assert!(list(&*real, "issues.list", b.id.0.as_str()).is_empty());
+    assert_eq!(
+        h.state()
+            .work
+            .create
+            .as_ref()
+            .expect("the unsaved draft stays open")
+            .title,
+        "Unsaved issue"
+    );
+    assert!(h.state().work.create_saving.is_empty());
 }
 
 /// A project with features `titles`, created from the Features screen of `h`.

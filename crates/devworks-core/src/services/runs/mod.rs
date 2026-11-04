@@ -260,7 +260,7 @@ pub(crate) fn linked_roots(
         after = page.last().map(WorkPosition::of);
         for w in &page {
             let id = RootId(w.id.clone());
-            if tx.runs().root_control(&id)?.is_some()
+            if (tx.runs().root_control(&id)?.is_some() || ControlService::root_has_work(tx, &id)?)
                 && let Some(r) = tx.sessions().work_root(&id)?
             {
                 out.push(r);
@@ -1893,7 +1893,7 @@ impl ControlService {
                 && !control.reactivate
                 && paused_by_hold;
             let live = tx.runs().live_activation(&root.id)?;
-            let mut nothing_live = live.is_none() && !self.root_has_work(tx, &root.id)?;
+            let mut nothing_live = live.is_none() && !Self::root_has_work(tx, &root.id)?;
             // A linked card counts only with what the stop covered: once it moved past that
             // (a newer generation, or a Continue since), its newer work is not this stop's.
             for card in stop_linked_roots(tx, op)? {
@@ -1901,7 +1901,7 @@ impl ControlService {
                 nothing_live &= if card.superseded(&control_of(tx.runs(), &card.root)?) {
                     !live.is_some_and(|a| a.generation <= card.generation)
                 } else {
-                    live.is_none() && !self.root_has_work(tx, &card.root)?
+                    live.is_none() && !Self::root_has_work(tx, &card.root)?
                 };
             }
             if intent && (!is_terminal(rec.state) || nothing_live) {
@@ -1951,11 +1951,7 @@ impl ControlService {
 
     /// Whether anything of the root may still be running: an unsettled root-scoped delivery or
     /// an unsettled owned process.
-    fn root_has_work(
-        &self,
-        tx: &mut dyn WriteTransaction,
-        root: &RootId,
-    ) -> Result<bool, StorageError> {
+    fn root_has_work(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
         if !tx.runs().root_deliveries(root, None, 1)?.is_empty() {
             return Ok(true);
         }
@@ -2047,7 +2043,7 @@ impl ControlService {
         for card in &linked {
             cancelled.extend(self.cancel_root_deliveries(tx, &card.id)?);
             linked_work |= tx.runs().live_activation(&card.id)?.is_some()
-                || self.root_has_work(tx, &card.id)?;
+                || Self::root_has_work(tx, &card.id)?;
             covered.push(LinkedStop::of(&control_of(tx.runs(), &card.id)?).value());
         }
         let op = OperationId(tx.new_id(IdKind::Operation));
@@ -2078,7 +2074,7 @@ impl ControlService {
         let before = after.clone();
         after.stop_operation_id = Some(op.clone());
         save_control(tx, &before, &mut after)?;
-        let nothing_live = live.is_none() && !linked_work && !self.root_has_work(tx, &root.id)?;
+        let nothing_live = live.is_none() && !linked_work && !Self::root_has_work(tx, &root.id)?;
         if nothing_live {
             recovery::complete_stop_operation(tx, &op, &[], "nothing of the root was running")?;
         }
