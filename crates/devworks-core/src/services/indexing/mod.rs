@@ -762,7 +762,7 @@ impl IndexCoordinator {
                 }
             }
         }
-        let record = status::batch_record(&runs);
+        let record = status::batch_record(&runs, batch.as_ref());
         let result = if rebuild {
             OperationResult::IndexingReindex { value: record }
         } else {
@@ -1016,7 +1016,7 @@ impl IndexCoordinator {
         let value = if current.len() == 1 {
             status::run_record(&current[0])
         } else {
-            status::batch_record(&current)
+            status::batch_record(&current, Some(&named.id))
         };
         let result = OperationResult::IndexingCancel { value };
         Ok(if changed.is_empty() {

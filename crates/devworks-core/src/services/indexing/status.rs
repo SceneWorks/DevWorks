@@ -112,14 +112,21 @@ pub fn run_record(run: &StoredIndexRun) -> IndexRunRecord {
 }
 
 /// The reply of a request that recorded or reused several runs: one record naming every
-/// repository, identified by the request's batch (cancelling it cancels the batch).
-pub fn batch_record(runs: &[StoredIndexRun]) -> IndexRunRecord {
+/// repository, identified by `batch` (the batch this request recorded, whose cancellation
+/// cancels every run it recorded) when it has one. Runs it reused keep their own batch: they are
+/// listed as reused, and their own IDs cancel them. Without a batch of its own (every run
+/// reused) the record takes the largest batch among them, else the first opener.
+pub fn batch_record(runs: &[StoredIndexRun], batch: Option<&Id>) -> IndexRunRecord {
     if runs.len() == 1 {
         return run_record(&runs[0]);
     }
-    let opener = runs
-        .iter()
-        .find(|r| r.batch_id == r.id && runs.iter().filter(|x| x.batch_id == r.id).count() > 1)
+    let opener = batch
+        .and_then(|b| runs.iter().find(|r| &r.id == b))
+        .or_else(|| {
+            runs.iter().find(|r| {
+                r.batch_id == r.id && runs.iter().filter(|x| x.batch_id == r.id).count() > 1
+            })
+        })
         .or_else(|| runs.iter().find(|r| r.batch_id == r.id))
         .unwrap_or(&runs[0]);
     let states: Vec<&str> = runs.iter().map(|r| r.state.as_str()).collect();

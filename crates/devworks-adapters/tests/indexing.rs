@@ -2912,3 +2912,49 @@ fn an_overlay_over_a_baseline_of_another_configuration_reconciles_its_inherited_
     let baseline = fx.published(&repo_id);
     assert!(fx.unit(&baseline, "gen/a.rs").is_some());
 }
+
+#[test]
+fn a_request_mixing_reused_and_new_runs_is_identified_by_its_own_batch() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let (da, db) = (src.join("a"), src.join("b"));
+    repo(&da, &[("a.rs", "fn a() {}\n")]);
+    repo(&db, &[("b.rs", "fn b() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let (ra, rb) = (fx.repository_at(&da), fx.repository_at(&db));
+    // An earlier request queued A.
+    let earlier = run_of(decision(fx.index(&ra, false, "1")));
+    // This request reuses A's active run and records a new one for B.
+    let reply = run_of(decision(fx.command(
+        "indexing.index",
+        json!({"scope": {"kind": "Workspace"}, "repositoryIds": [ra, rb], "expectedSourceRevision": "1",
+            "views": {"kind": "Published", "repositoryIds": [ra, rb]}}),
+    )));
+    let b = fx
+        .read({
+            let rb = rb.clone();
+            move |s| s.indexing().active_run(&rb, None)
+        })
+        .expect("B's new run");
+    assert_eq!(
+        reply.id, b.id,
+        "the record names the batch this request recorded"
+    );
+    assert_ne!(reply.id, earlier.id);
+    let listed = serde_json::to_string(&reply.diagnostics).unwrap();
+    assert!(
+        listed.contains(&format!("run {} Queued (reused)", earlier.id.as_str())),
+        "{listed}"
+    );
+    // Cancelling by the reply's ID cancels what this request recorded; the reused run belongs
+    // to the earlier request and its own ID cancels it.
+    let cancelled = run_of(decision(fx.index_command(
+        "indexing.cancel",
+        json!({"kind": "Cancel", "operationId": reply.id}),
+    )));
+    assert_eq!(cancelled.id, b.id);
+    assert_eq!(fx.run(&b.id).state, RUN_CANCELLED);
+    assert_eq!(fx.run(&earlier.id).state, RUN_QUEUED);
+}
