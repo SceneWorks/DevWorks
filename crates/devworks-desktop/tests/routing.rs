@@ -697,3 +697,291 @@ fn a_waiting_first_route_of_a_conversation_beyond_the_listed_page_is_still_route
     );
     assert!(h.state().chat.routing.first_route.is_empty());
 }
+
+#[test]
+fn a_first_route_refused_while_the_window_closes_is_routed_at_the_next_launch() {
+    use devworks_desktop::shell::Lifecycle;
+    let root = Root::new("routing-first-closing");
+    let engine = start_connected(&root);
+    let real = engine.backend();
+    // The message's save commits; its reply is held until the window is closing.
+    let gate = Gate::holding_replies("sessions.append_message");
+    let routes = LoseAcks::over(gate.over(real.clone()), "router.route", 0);
+    let mut h = harness(
+        shell_with(Ok(routes.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().unwrap();
+    assert!(
+        h.state()
+            .chat
+            .routing
+            .status
+            .get(&session)
+            .and_then(|s| s.availability.as_ref())
+            .is_some_and(|a| a.pin.is_none()),
+        "known to have no pin"
+    );
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .type_text("sent while closing");
+    h.step();
+    gate.close();
+    h.get_by_role_and_label(Role::Button, SEND_LABEL).click();
+    step_until(&mut h, "the message is being saved", |s| {
+        s.chat.sending.is_some()
+    });
+    h.state_mut().request_close();
+    h.step();
+    // The save's success is applied while quiescing; the route it asks for is not admitted.
+    gate.open();
+    step_until(&mut h, "the window closed", |s| {
+        matches!(s.lifecycle(), Lifecycle::Closed)
+    });
+    assert!(
+        h.state().chat.sending.is_none(),
+        "the save was applied before closing"
+    );
+    assert!(
+        routes.request_keys().is_empty(),
+        "nothing is admitted while closing"
+    );
+    assert!(
+        h.state().chat.routing.first_route.contains(&session),
+        "it keeps waiting"
+    );
+    drop(h);
+    let again = LoseAcks::over(real.clone(), "router.route", 0);
+    let mut h = harness(
+        shell_with(Ok(again.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    assert_eq!(
+        again.request_keys().len(),
+        1,
+        "routed once at the next launch"
+    );
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
+    assert!(h.state().chat.routing.first_route.is_empty());
+}
+
+/// A backend whose calls of held operations wait until the test releases them, so the order in
+/// which their replies reach the shell is chosen by the test, not by thread timing. Released
+/// calls are counted when they returned; the shell then receives them in that order.
+struct Held {
+    inner: Arc<dyn Backend>,
+    state: std::sync::Mutex<HeldState>,
+    changed: std::sync::Condvar,
+}
+#[derive(Default)]
+struct HeldState {
+    held: std::collections::BTreeSet<String>,
+    /// Per operation: calls arrived, calls released, calls returned.
+    counts: std::collections::BTreeMap<String, (u64, u64, u64)>,
+}
+impl Held {
+    fn over(inner: Arc<dyn Backend>, held: &[&str]) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            state: std::sync::Mutex::new(HeldState {
+                held: held.iter().map(|s| (*s).to_owned()).collect(),
+                counts: Default::default(),
+            }),
+            changed: std::sync::Condvar::new(),
+        })
+    }
+    fn gated<T>(&self, operation: &str, call: impl FnOnce() -> T) -> T {
+        let mut st = self.state.lock().unwrap();
+        if !st.held.contains(operation) {
+            drop(st);
+            return call();
+        }
+        let c = st.counts.entry(operation.to_owned()).or_default();
+        let ticket = c.0;
+        c.0 += 1;
+        self.changed.notify_all();
+        while st.held.contains(operation) && st.counts[operation].1 <= ticket {
+            st = self.changed.wait(st).unwrap();
+        }
+        drop(st);
+        let out = call();
+        let mut st = self.state.lock().unwrap();
+        st.counts.entry(operation.to_owned()).or_default().2 += 1;
+        self.changed.notify_all();
+        out
+    }
+    fn arrived(&self, operation: &str) -> u64 {
+        self.state
+            .lock()
+            .unwrap()
+            .counts
+            .get(operation)
+            .map_or(0, |c| c.0)
+    }
+    /// Releases every call of `operation` that has arrived and waits until each returned, then
+    /// gives the client's worker a moment to hand its reply over (failure-only bound).
+    fn release(&self, operation: &str) {
+        let mut st = self.state.lock().unwrap();
+        let c = st.counts.entry(operation.to_owned()).or_default();
+        c.1 = c.0;
+        let target = c.1;
+        self.changed.notify_all();
+        while st.counts[operation].2 < target {
+            st = self.changed.wait(st).unwrap();
+        }
+        drop(st);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    /// Stops holding every operation.
+    fn open_all(&self) {
+        self.state.lock().unwrap().held.clear();
+        self.changed.notify_all();
+    }
+}
+impl Backend for Held {
+    fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
+        self.gated(operation, || self.inner.query(operation, frame))
+    }
+    fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+        self.gated(operation, || self.inner.command(operation, frame))
+    }
+    fn mint_workspace_upload(&self, file: &std::path::Path) -> Result<Id, String> {
+        self.inner.mint_workspace_upload(file)
+    }
+    fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
+        self.inner.keep_awake_health()
+    }
+    fn hints(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        // No change hints: only the replies the test releases reach the shell.
+        None
+    }
+    fn set_waker(&self, waker: devworks_desktop::backend::Waker) {
+        self.inner.set_waker(waker)
+    }
+    fn token(&self, prefix: &str) -> String {
+        self.inner.token(prefix)
+    }
+    fn scratch_dir(&self) -> std::path::PathBuf {
+        self.inner.scratch_dir()
+    }
+    fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
+        self.inner.read_stream(stream, max)
+    }
+}
+
+/// The reply orders after a relaunch with a first route waiting: which of the availability and
+/// sessions-list replies comes first, and in which order the session-record and route replies
+/// reach the shell in one frame.
+#[derive(Clone, Copy, Debug)]
+enum Order {
+    /// Availability first (the record is not listed yet: it is read), then one frame applying
+    /// the record's reply before the route's (the CI race).
+    StatusThenRecordBeforeRoute,
+    /// Availability first, then one frame applying the route's reply before the record's.
+    StatusThenRouteBeforeRecord,
+    /// The sessions list first, then availability.
+    ListThenStatus,
+}
+
+fn relaunch_in_order(order: Order) {
+    let root = Root::new(&format!("routing-order-{order:?}"));
+    let engine = start_connected(&root);
+    let real = engine.backend();
+    let gate = Gate::new("router.availability");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let session = send_before_availability(&mut h, &gate);
+    h.state_mut().on_exit();
+    gate.open();
+    drop(h);
+
+    let held = Held::over(
+        real.clone(),
+        &[
+            "router.availability",
+            "sessions.list",
+            "sessions.get",
+            "router.route",
+        ],
+    );
+    let routes = LoseAcks::over(held.clone(), "router.route", 0);
+    let mut h = harness(
+        shell_with(Ok(routes.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    let wait = |h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+                what: &str,
+                op: &str,
+                n: u64| {
+        step_until(h, what, |_| held.arrived(op) >= n);
+    };
+    wait(
+        &mut h,
+        "the waiting route's availability is asked",
+        "router.availability",
+        1,
+    );
+    wait(&mut h, "the conversations are listed", "sessions.list", 1);
+    match order {
+        Order::StatusThenRecordBeforeRoute | Order::StatusThenRouteBeforeRecord => {
+            held.release("router.availability");
+            h.step();
+            // Not listed yet: its record is read before routing.
+            wait(&mut h, "the record is read", "sessions.get", 1);
+            assert!(routes.request_keys().is_empty());
+            held.release("sessions.list");
+            h.step();
+            wait(&mut h, "the route is submitted", "router.route", 1);
+            let (first, second) = match order {
+                Order::StatusThenRecordBeforeRoute => ("sessions.get", "router.route"),
+                _ => ("router.route", "sessions.get"),
+            };
+            held.release(first);
+            held.release(second);
+            // Both replies are applied in this one frame, in that order.
+            h.step();
+        }
+        Order::ListThenStatus => {
+            held.release("sessions.list");
+            h.step();
+            held.release("router.availability");
+            h.step();
+            wait(&mut h, "the route is submitted", "router.route", 1);
+            held.release("router.route");
+            h.step();
+        }
+    }
+    held.open_all();
+    settle(&mut h);
+    assert_eq!(
+        routes.request_keys().len(),
+        1,
+        "{order:?}: routed exactly once after the relaunch"
+    );
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
+    assert!(h.state().chat.routing.first_route.is_empty());
+    assert!(h.state().chat.routing.first_in_flight.is_empty());
+}
+
+#[test]
+fn a_waiting_first_route_is_sent_once_in_every_reply_order_after_a_relaunch() {
+    for order in [
+        Order::StatusThenRecordBeforeRoute,
+        Order::StatusThenRouteBeforeRecord,
+        Order::ListThenStatus,
+    ] {
+        relaunch_in_order(order);
+    }
+}

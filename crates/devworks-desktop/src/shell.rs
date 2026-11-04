@@ -414,37 +414,45 @@ impl Shell {
     // -----------------------------------------------------------------------------------------
     // Requests
 
+    /// Submits a query; `false` when nothing was submitted (offline, or closing: the shell
+    /// admits nothing new once the window is closing).
     fn query(
         &mut self,
         slot: Slot,
         label: &str,
         op: &'static str,
         frame: impl FnOnce(&dyn Backend) -> Vec<u8>,
-    ) {
+    ) -> bool {
         if self.online().is_err() {
-            return;
+            return false;
         }
-        let Some(b) = self.backend() else { return };
+        let Some(b) = self.backend() else {
+            return false;
+        };
         let frame = frame(&*b);
-        if let Some(c) = &mut self.client {
-            c.query(slot, label, op, frame);
-        }
+        self.client
+            .as_mut()
+            .is_some_and(|c| c.query(slot, label, op, frame))
     }
+    /// Submits a command; `false` when it was not submitted now (offline or closing; a closed
+    /// client keeps it unresolved). A caller that marked state for it restores that state.
     fn command(
         &mut self,
         slot: Slot,
         label: &str,
         op: &'static str,
         frame: impl FnOnce(&dyn Backend) -> Vec<u8>,
-    ) {
+    ) -> bool {
         if self.online().is_err() {
-            return;
+            return false;
         }
-        let Some(b) = self.backend() else { return };
+        let Some(b) = self.backend() else {
+            return false;
+        };
         let frame = frame(&*b);
-        if let Some(c) = &mut self.client {
-            c.command(slot, label, op, frame);
-        }
+        self.client
+            .as_mut()
+            .is_some_and(|c| c.command(slot, label, op, frame))
     }
 
     pub fn load_sessions(&mut self) {
@@ -527,23 +535,26 @@ impl Shell {
             return;
         }
         let generation = self.chat.routing.begin_catalog_load();
-        self.query(
+        if !self.query(
             Slot::RouterCatalog(generation),
             "Loading models and tiers",
             "router.catalog",
             |b| ops::router_catalog(b, None),
-        );
+        ) {
+            // Never left "loading": the next visible load (or launch) starts it again.
+            self.chat.routing.abandon_catalog_load(generation);
+        }
     }
 
     /// Asks the router about the active conversation's selection (and pin).
-    fn refresh_route_status(&mut self) {
+    fn refresh_route_status(&mut self) -> bool {
         let key = self.chat.draft_key();
-        self.refresh_route_status_of(key);
+        self.refresh_route_status_of(key)
     }
 
     /// Asks the router about one conversation's selection (and pin). A newer query supersedes
     /// one still running (its selection may be stale).
-    fn refresh_route_status_of(&mut self, key: String) {
+    fn refresh_route_status_of(&mut self, key: String) -> bool {
         let sel = self
             .chat
             .routing
@@ -557,7 +568,7 @@ impl Shell {
             "Checking model availability",
             "router.availability",
             move |b| ops::router_availability(b, &sel.intent, &sel.effort, session.as_deref()),
-        );
+        )
     }
 
     /// A new route or effort for the active conversation: the explicit `router.pin` change of a
@@ -586,7 +597,9 @@ impl Shell {
             .map(|p| p.pin_revision.get());
         match pin {
             Some(revision) if key != chat::NEW_DRAFT => {
-                if self.pending(&Slot::RoutePin(key.clone())) {
+                if self.chat.routing.pin_in_flight.contains(&key)
+                    || self.pending(&Slot::RoutePin(key.clone()))
+                {
                     self.chat.notice = Some((
                         Tone::Attention,
                         "The previous model change is still being saved; choose again once it \
@@ -595,17 +608,26 @@ impl Shell {
                     ));
                     return;
                 }
-                self.chat
-                    .routing
-                    .selections
-                    .insert(key.clone(), sel.clone());
                 let session = key.clone();
-                self.command(
-                    Slot::RoutePin(key),
+                let submitted = sel.clone();
+                if self.command(
+                    Slot::RoutePin(key.clone()),
                     "Changing the conversation's model",
                     "router.pin",
-                    move |b| ops::router_pin(b, &session, revision, &sel.intent, &sel.effort),
-                );
+                    move |b| {
+                        ops::router_pin(b, &session, revision, &submitted.intent, &submitted.effort)
+                    },
+                ) {
+                    self.chat.routing.pin_in_flight.insert(key.clone());
+                    self.chat.routing.selections.insert(key, sel);
+                } else {
+                    // Not submitted: the pin (and so the selection) is unchanged.
+                    self.chat.notice = Some((
+                        Tone::Attention,
+                        "The model selection was not changed: DevWorks is offline or closing."
+                            .into(),
+                    ));
+                }
             }
             _ => {
                 self.chat.routing.selections.insert(key, sel);
@@ -640,7 +662,12 @@ impl Shell {
             }
             return;
         };
-        if self.pending(&Slot::RouteFirst(session.to_owned()))
+        // A route submitted for it is authoritative until its decided reply is applied. The
+        // slot alone is not: a reply already collected in this frame's batch, but applied after
+        // the reply that called us, is no longer pending.
+        if self.chat.routing.first_in_flight.contains(session)
+            || self.chat.routing.pin_in_flight.contains(session)
+            || self.pending(&Slot::RouteFirst(session.to_owned()))
             || self.pending(&Slot::RoutePin(session.to_owned()))
         {
             return;
@@ -672,13 +699,18 @@ impl Shell {
             .cloned()
             .unwrap_or_default();
         let sid = session.to_owned();
-        self.chat.routing.first_in_flight.insert(session.to_owned());
-        self.command(
+        if self.command(
             Slot::RouteFirst(session.to_owned()),
             "Routing the conversation",
             "router.route",
             move |b| ops::router_route(b, &sid, epoch, &sel.intent, &sel.effort),
-        );
+        ) {
+            self.chat.routing.first_in_flight.insert(session.to_owned());
+        } else {
+            // Not submitted (offline, or the window is closing): it keeps waiting in the
+            // persisted list and is routed when the router next answers (or at the next launch).
+            self.chat.routing.first_route.insert(session.to_owned());
+        }
     }
 
     fn send(&mut self) {
@@ -1003,13 +1035,14 @@ impl Shell {
                 Ok((models, next)) => {
                     if let crate::routing::CatalogPage::More(cursor) =
                         self.chat.routing.catalog_page(generation, models, next)
-                    {
-                        self.query(
+                        && !self.query(
                             Slot::RouterCatalog(generation),
                             "Loading models and tiers",
                             "router.catalog",
                             move |b| ops::router_catalog(b, Some(&cursor)),
-                        );
+                        )
+                    {
+                        self.chat.routing.abandon_catalog_load(generation);
                     }
                 }
                 Err(e) => self.chat.routing.catalog_failed(
@@ -1020,14 +1053,23 @@ impl Shell {
             (Slot::RouteSession(id), Reply::Query(q)) => {
                 if let Ok(record) = ops::session_record(q) {
                     self.chat.upsert(record);
-                    self.route_first(&id);
+                    if self.chat.routing.first_route.contains(&id) {
+                        self.route_first(&id);
+                    }
                 }
+            }
+            (Slot::RouteStatus(key), Reply::Query(_))
+                if self.pending(&Slot::RouteStatus(key.clone())) =>
+            {
+                // A newer query was issued after this reply was collected (by a reply applied
+                // before it in the same batch): it may predate a route or pin just applied.
             }
             (Slot::RouteStatus(key), Reply::Query(q)) => {
                 let status = match ops::availability(q) {
                     Ok(a) => {
                         // A pinned conversation's selection is its durable pin.
                         if let Some(pin) = &a.pin
+                            && !self.chat.routing.pin_in_flight.contains(&key)
                             && !self.pending(&Slot::RoutePin(key.clone()))
                         {
                             self.chat.routing.selections.insert(
@@ -1061,11 +1103,13 @@ impl Shell {
                     return;
                 }
                 self.chat.routing.first_in_flight.remove(&key);
-                // Pinned, or refused because nothing is eligible: the status line says which.
+                // Decided: a wait recorded for it (it was also kept while the window closed) is
+                // over, so it is never routed a second time.
+                self.chat.routing.first_route.remove(&key);
+                // Pinned, or refused because nothing is eligible: the status line says which. It
+                // is reread even when not shown, so no older reply stands for it.
                 self.chat.routing.status.remove(&key);
-                if self.chat.draft_key() == key {
-                    self.refresh_route_status();
-                }
+                self.refresh_route_status_of(key);
             }
             (Slot::RoutePin(key), Reply::Command(c)) => {
                 match ops::pinned(c) {
@@ -1096,11 +1140,11 @@ impl Shell {
                         self.announce("The model selection was not changed.");
                     }
                 }
-                // The pin (or the unchanged one) is re-read; its selection is adopted.
+                // Decided: the pin (or the unchanged one) is re-read, shown or not, and its
+                // selection adopted.
+                self.chat.routing.pin_in_flight.remove(&key);
                 self.chat.routing.status.remove(&key);
-                if self.chat.draft_key() == key {
-                    self.refresh_route_status();
-                }
+                self.refresh_route_status_of(key);
             }
             (Slot::SessionStart, Reply::Command(c)) => {
                 let reason = self.chat.starting.take();
@@ -1951,6 +1995,9 @@ impl Shell {
                 Slot::RouteFirst(id) => {
                     self.chat.routing.first_in_flight.insert(id.clone());
                 }
+                Slot::RoutePin(id) => {
+                    self.chat.routing.pin_in_flight.insert(id.clone());
+                }
                 _ => {}
             }
             if let Some(client) = &mut self.client {
@@ -2098,9 +2145,9 @@ impl Shell {
             if now >= at {
                 // Once per reported expiry: a router still reporting it (its clock may lag) is
                 // asked again by the periodic refresh, not every frame.
-                if self.chat.routing.rechecked.get(&key) != Some(&at) {
+                if self.chat.routing.rechecked.get(&key) != Some(&at) && self.refresh_route_status()
+                {
                     self.chat.routing.rechecked.insert(key, at);
-                    self.refresh_route_status();
                 }
             } else {
                 ctx.request_repaint_after(Duration::from_millis((at - now) as u64));

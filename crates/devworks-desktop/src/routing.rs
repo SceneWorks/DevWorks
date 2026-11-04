@@ -71,6 +71,9 @@ pub struct Routing {
     /// Conversations whose first route is being saved: their selection is the one it carries,
     /// so it cannot change until the pin is confirmed (or the route refused).
     pub first_in_flight: std::collections::BTreeSet<String>,
+    /// Conversations whose explicit pin change is submitted and not yet decided (kept while its
+    /// outcome is unknown, and restored with it after a relaunch).
+    pub pin_in_flight: std::collections::BTreeSet<String>,
 }
 
 /// One catalog load: the pages gathered so far.
@@ -136,6 +139,17 @@ impl Routing {
             }
         }
     }
+    /// Load `generation` stopped without a reply (its next page could not be submitted): it is
+    /// no longer in progress, and the catalog stays as shown (and unloaded if it never was).
+    pub fn abandon_catalog_load(&mut self, generation: u64) {
+        if self
+            .catalog_load
+            .as_ref()
+            .is_some_and(|l| l.generation == generation)
+        {
+            self.catalog_load = None;
+        }
+    }
     /// A failed page of load `generation` ends that load (the shown catalog is kept).
     pub fn catalog_failed(&mut self, generation: u64, error: String) {
         if self
@@ -151,7 +165,9 @@ impl Routing {
     /// Whether the conversation's selection may change now: not while its first route, which
     /// carries the current selection, is waiting or being saved.
     pub fn selection_locked(&self, key: &str) -> bool {
-        self.first_route.contains(key) || self.first_in_flight.contains(key)
+        self.first_route.contains(key)
+            || self.first_in_flight.contains(key)
+            || self.pin_in_flight.contains(key)
     }
 }
 
