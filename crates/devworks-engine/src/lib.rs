@@ -175,6 +175,7 @@
 //! clocks and scripted handlers, without inference, network or containers.
 pub mod diagnostics;
 pub mod dispatch;
+pub mod jobs;
 pub mod knowledge;
 pub mod package;
 pub mod replies;
@@ -188,6 +189,7 @@ pub use dispatch::{
     DeliveryHandler, Dispatcher, DispatcherConfig, EffectExecutor, EffectFuture, EffectResult,
     Outcome, RecoveryReport, RetryPolicy, RootEligibility, TickReport, Wakeup,
 };
+pub use jobs::{Scheduler, SchedulerTick};
 pub use runs::{
     ActivationLauncher, Launch, LaunchEnd, LaunchFuture, RunGate, RunSupervisor, RunTick,
 };

@@ -118,14 +118,19 @@ pub struct PendingMemory {
     /// deleted if it turns out not to have committed.
     pub removed_while_sending: Vec<Value>,
     pub removed: Vec<RemovedMemory>,
-    /// A Knowledge import file whose `artifacts.save` outcome was not known at close: its exact
-    /// frame, confirmed at the next launch.
+    /// A Knowledge import whose save outcome is confirmed at the next launch.
     #[serde(default)]
     pub knowledge_import: Option<UnconfirmedImport>,
+    /// Plan saves still running, one snapshot per feature, finished at the next launch.
+    #[serde(default)]
+    pub plans: Vec<Value>,
 }
 impl PendingMemory {
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty() && self.removed.is_empty() && self.knowledge_import.is_none()
+        self.commands.is_empty()
+            && self.removed.is_empty()
+            && self.knowledge_import.is_none()
+            && self.plans.is_empty()
     }
 }
 

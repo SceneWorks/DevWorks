@@ -27,14 +27,14 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `features.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel` | `Page<WorkRecord>` |
-| `features.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest` | `WorkRecord` |
-| `features.create` | **Command**<br>`projectId`: `ProjectId`<br>`creation`: `FeatureCreation` | `Page<WorkRecord>` |
-| `features.edit_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`plan`: `PlanDraft` | `WorkRecord` |
-| `features.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `NonEmpty<Id>` | `MutationSummary` |
-| `features.dependencies` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement` | `WorkRecord` |
+| `features.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `features.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `features.create` | **Command**<br>`projectId`: `ProjectId`<br>`creation`: `FeatureCreation`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `features.edit_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`plan`: `PlanDraft`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `features.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `?NonEmpty<Id>`<br>`placement`: `?QueuePlacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
+| `features.dependencies` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 | `features.request_plan_approval` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`planRevision`: `Revision`<br>`planDigest`: `Digest` | `ProposalRecord` |
-| `features.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `FeaturePatch` | `WorkRecord` |
+| `features.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `FeaturePatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 
 ### Issues
 
@@ -42,11 +42,11 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `issues.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel` | `Page<WorkRecord>` |
-| `issues.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest` | `WorkRecord` |
-| `issues.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`statusId`: `Id`<br>`priority`: `i32`<br>`featureId`: `?RootId` | `WorkRecord` |
-| `issues.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `IssuePatch` | `WorkRecord` |
-| `issues.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `NonEmpty<Id>` | `MutationSummary` |
+| `issues.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `issues.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `issues.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`statusId`: `Id`<br>`priority`: `i32`<br>`featureId`: `?RootId`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `issues.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `IssuePatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `issues.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `?NonEmpty<Id>`<br>`placement`: `?QueuePlacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
 | `issues.publish` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`expectedRemoteRevision`: `?Text` | `GitLink` |
 | `issues.link` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`remoteIssueNumber`: `PositiveCounter` | `GitLink` |
 
@@ -56,17 +56,17 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `tasks.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel` | `Page<WorkRecord>` |
-| `tasks.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest` | `WorkRecord` |
-| `tasks.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`parentId`: `?RootId`<br>`statusId`: `Id`<br>`priority`: `i32` | `WorkRecord` |
-| `tasks.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `TaskPatch` | `WorkRecord` |
-| `tasks.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`featureId`: `?RootId`<br>`expectedQueueRevision`: `Revision`<br>`priority`: `i32`<br>`orderedTaskIds`: `NonEmpty<Id>` | `MutationSummary` |
-| `tasks.move` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`statusId`: `Id`<br>`expectedWorkflowRevision`: `Revision` | `WorkRecord` |
-| `tasks.assign` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`assignmentId`: `?AssignmentId`<br>`clearAssignment`: `bool` | `WorkRecord` |
-| `tasks.dependency_links` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement` | `WorkRecord` |
-| `tasks.acceptance_evidence` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`criteria`: `NonEmpty<AcceptanceCriterion>` | `WorkRecord` |
-| `tasks.sync_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedPlanRevision`: `Revision`<br>`expectedTaskSetRevision`: `Revision`<br>`tasks`: `PlanItems<TaskPlanEntry>`<br>`projectPlan`: `?AtomicWorkPlan`<br>`stagedProjectPlan`: `?ArtifactRef` | `Page<WorkRecord>` |
-| `tasks.set_feature` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`featureId`: `?RootId`<br>`clearFeature`: `bool` | `WorkRecord` |
+| `tasks.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `tasks.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`parentId`: `?RootId`<br>`statusId`: `Id`<br>`priority`: `i32`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `TaskPatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`featureId`: `?RootId`<br>`expectedQueueRevision`: `Revision`<br>`priority`: `i32`<br>`orderedTaskIds`: `?NonEmpty<Id>`<br>`placement`: `?QueuePlacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
+| `tasks.move` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`statusId`: `Id`<br>`expectedWorkflowRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.assign` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`assignmentId`: `?AssignmentId`<br>`clearAssignment`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.dependency_links` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.acceptance_evidence` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`criteria`: `NonEmpty<AcceptanceCriterion>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.sync_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedPlanRevision`: `Revision`<br>`expectedTaskSetRevision`: `Revision`<br>`tasks`: `PlanItems<TaskPlanEntry>`<br>`projectPlan`: `?AtomicWorkPlan`<br>`stagedProjectPlan`: `?ArtifactRef`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `tasks.set_feature` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`featureId`: `?RootId`<br>`clearFeature`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 
 ### Workflows
 
@@ -528,15 +528,15 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `jobs.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`enabled`: `?bool` | `Page<JobRecord>` |
-| `jobs.create` | **Command**<br>`scope`: `DataScope`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition`<br>`enabled`: `bool` | `JobRecord` |
-| `jobs.edit` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition` | `JobRecord` |
-| `jobs.enable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRecord` |
-| `jobs.run_now` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRun` |
-| `jobs.inspect` | **Query**<br>`jobId`: `Id`<br>`runId`: `?Id` | `JobInspection` |
-| `jobs.cancel` | **Command**<br>`jobId`: `Id`<br>`runId`: `Id`<br>`expectedRevision`: `Revision` | `JobRun` |
-| `jobs.delete` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRecord` |
-| `jobs.disable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRecord` |
+| `jobs.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`enabled`: `?bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<JobRecord>` |
+| `jobs.create` | **Command**<br>`scope`: `DataScope`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition`<br>`enabled`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.edit` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.enable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.run_now` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRun` |
+| `jobs.inspect` | **Query**<br>`jobId`: `Id`<br>`runId`: `?Id`<br>`history`: `?PageRequest`<br>`usage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobInspection` |
+| `jobs.cancel` | **Command**<br>`jobId`: `Id`<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRun` |
+| `jobs.delete` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.disable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
 
 ### Settings
 
@@ -959,6 +959,11 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `dependentIds` | `Items<Id>` |
 | `manualOrder` | `?Counter` |
 | `githubIssue` | `?GithubIssueTracking` |
+| `readiness` | `?ReadinessAssessment` · *revision 2+* |
+| `queueRevision` | `?Revision` · *revision 2+* |
+| `workflowRevision` | `?Revision` · *revision 2+* |
+| `acceptanceTests` | `?Items<AcceptanceCriterion>` · *revision 2+* |
+| `pendingReadiness` | `?ReadinessAssessment` · *revision 2+* |
 
 ### PlanDraft
 
@@ -1929,6 +1934,18 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `enabled` | `bool` |
 | `interruptedRunId` | `?Id` |
 | `lastRunId` | `?Id` |
+| `scope` | `?DataScope` · *revision 2+* |
+| `nextRunAtMs` | `?Counter` · *revision 2+* |
+| `lastRunStartedAtMs` | `?Counter` · *revision 2+* |
+| `lastRunFinishedAtMs` | `?Counter` · *revision 2+* |
+| `lastRunStatus` | `?JobRunStatus` · *revision 2+* |
+| `lastError` | `?Text` · *revision 2+* |
+| `activeRunId` | `?Id` · *revision 2+* |
+| `hold` | `?JobHold` · *revision 2+* |
+| `authorized` | `?bool` · *revision 2+* |
+| `createdAtMs` | `?Counter` · *revision 2+* |
+| `updatedAtMs` | `?Counter` · *revision 2+* |
+| `deletedAtMs` | `?Counter` · *revision 2+* |
 
 ### JobRun
 
@@ -1941,6 +1958,18 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `state` | `OperationState` |
 | `operationId` | `?OperationId` |
 | `usage` | `UsageReport` |
+| `status` | `?JobRunStatus` · *revision 2+* |
+| `trigger` | `?JobTrigger` · *revision 2+* |
+| `occurrenceAtMs` | `?Counter` · *revision 2+* |
+| `startedAtMs` | `?Counter` · *revision 2+* |
+| `finishedAtMs` | `?Counter` · *revision 2+* |
+| `reason` | `?Text` · *revision 2+* |
+| `hold` | `?Label` · *revision 2+* |
+| `cancelRequested` | `?bool` · *revision 2+* |
+| `resumptions` | `?Counter` · *revision 2+* |
+| `sessionId` | `?Id` · *revision 2+* |
+| `linkedRootIds` | `?Items<RootId>` · *revision 2+* |
+| `skippedForRunId` | `?Id` · *revision 2+* |
 
 ### SchemaValue
 
@@ -2574,6 +2603,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | --- | --- |
 | `job` | `JobRecord` |
 | `run` | `?JobRun` |
+| `runs` | `?Rows<JobRun>` · *revision 2+* |
+| `runsNextCursor` | `?Cursor` · *revision 2+* |
 
 ### RepositoryIndexStatus
 
@@ -2838,6 +2869,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `addLinks` | `?Items<WorkLink>` |
 | `removeLinkIds` | `?Items<Id>` |
 | `addComment` | `?WorkComment` |
+| `readiness` | `?ReadinessChange` · *revision 2+* |
+| `acceptanceEvidence` | `?NonEmpty<AcceptanceCriterion>` · *revision 2+* |
 
 ### IssuePatch
 
@@ -3104,6 +3137,98 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `lifecycle` | `KnowledgeLifecycle` |
 | `writeId` | `?Id` |
 | `value` | `?Content` |
+
+### JobRunStatus
+
+`Queued`, `Running`, `Holding`, `Succeeded`, `Failed`, `Skipped`, `Cancelled`, `OutcomeUnknown`.
+
+### JobTrigger
+
+`Scheduled`, `Manual`.
+
+### JobHold
+
+`ReactivationRequired`, `AuthorizationRequired`, `ProjectClosed`.
+
+### ReadinessDisposition
+
+`ResolvedDecision`, `BoundedInvestigation`, `NeedsUserDecision`.
+
+### FindingState
+
+`Open`, `Resolved`, `RiskAccepted`.
+
+### ConfidenceLevel
+
+`High`, `Medium`, `Low`.
+
+### ReadinessFreshness
+
+`Current`, `Stale`.
+
+### ReadinessFinding
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `disposition` | `ReadinessDisposition` |
+| `blocking` | `bool` |
+| `prerequisite` | `bool` |
+| `state` | `FindingState` |
+| `requirementIds` | `Items<Id>` |
+| `scopeKey` | `?Id` |
+| `affectedWorkIds` | `Items<Id>` |
+| `summary` | `Content` |
+| `missing` | `Content` |
+| `consequence` | `Content` |
+| `attempts` | `Items<Content>` |
+| `insufficiency` | `Content` |
+| `closureCondition` | `Content` |
+| `decision` | `?Content` |
+| `confidence` | `?ConfidenceLevel` |
+| `evidence` | `Items<ArtifactRef>` |
+| `objective` | `?Content` |
+| `limits` | `?Content` |
+| `question` | `?Content` |
+| `recommendation` | `?Content` |
+| `closureNote` | `?Content` |
+| `closureEvidence` | `Items<ArtifactRef>` |
+
+### ReadinessAssessment
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `planRevision` | `Revision` |
+| `planDigest` | `Digest` |
+| `reviewedPending` | `bool` |
+| `freshness` | `ReadinessFreshness` |
+| `staleScopeKeys` | `Items<Id>` |
+| `ready` | `bool` |
+| `summary` | `Content` |
+| `findings` | `Items<ReadinessFinding>` |
+| `assessedBy` | `ActorId` |
+| `assessedAtMs` | `Counter` |
+
+### ReadinessChange
+
+| Kind | Fields |
+| --- | --- |
+| `Assess` | `expectedAssessmentRevision`: `?Revision`<br>`planRevision`: `Revision`<br>`planDigest`: `Digest`<br>`summary`: `Content`<br>`findings`: `Items<ReadinessFinding>` |
+| `CloseFinding` | `expectedAssessmentRevision`: `Revision`<br>`findingId`: `Id`<br>`note`: `Content`<br>`evidence`: `Items<ArtifactRef>` |
+
+### QueuePlacement
+
+| Field | Type |
+| --- | --- |
+| `workId` | `Id` |
+| `anchorId` | `Id` |
+| `side` | `QueueSide` |
+
+### QueueSide
+
+`Before`, `After`.
 
 ## Machine sources
 

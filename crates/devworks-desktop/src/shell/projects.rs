@@ -138,6 +138,8 @@ enum Action {
     InheritBase(String),
     LoadTexts(String),
     RemoveIndex(RepositoryRecord),
+    /// Scheduled jobs scoped to the project.
+    OpenJobs(String),
 }
 
 pub fn life_label(l: &LifeState) -> &'static str {
@@ -267,6 +269,12 @@ impl Shell {
         if self.route == Route::Repositories {
             self.load_repositories();
         }
+        if matches!(
+            self.route,
+            Route::Overview | Route::Features | Route::Issues
+        ) {
+            self.load_work();
+        }
     }
 
     fn act(&mut self, actions: Vec<Action>) {
@@ -276,6 +284,13 @@ impl Shell {
                     self.load_projects();
                     self.load_deleted_projects();
                     self.load_repositories();
+                    if let Some(p) = self
+                        .routes
+                        .get(&Route::Portfolio)
+                        .and_then(|m| m.selection.clone())
+                    {
+                        self.load_project_jobs(&p);
+                    }
                 }
                 Action::Create(form) => {
                     let (name, description, repos) = (
@@ -390,6 +405,10 @@ impl Shell {
                     }
                 }
                 Action::LoadTexts(r) => self.load_texts(&r),
+                Action::OpenJobs(p) => {
+                    self.jobs.set_scope(Some(p));
+                    self.navigate(Route::Jobs);
+                }
                 Action::RemoveIndex(r) => {
                     let slot = Slot::RemoveIndex(r.id.as_str().to_owned());
                     self.command(
@@ -542,6 +561,12 @@ impl Shell {
                         && self.selected_project.as_deref() == Some(id.as_str())
                     {
                         self.select_project(None);
+                    }
+                    // Its lifecycle changed: the work screens re-read it (archived work is
+                    // closed to change), and an archive count is taken afresh next time.
+                    self.work.archive_counts.remove(&id);
+                    if self.work.of.as_deref() == Some(id.as_str()) {
+                        self.load_work();
                     }
                     self.load_projects();
                     self.load_deleted_projects();
@@ -861,6 +886,7 @@ impl Shell {
             .cloned()
             .collect();
         let selected_nav = self.selected_project.clone();
+        let job_status = self.jobs.project_status.clone();
         let projects = &mut self.projects;
         let scrolls = &mut self.scrolls;
         let mut new_tab = tab;
@@ -1006,6 +1032,16 @@ impl Shell {
                                     selected_nav.as_deref() == Some(id.as_str()),
                                     actions,
                                 );
+                                // The project's scheduled jobs and their run status (JOB-01).
+                                widgets::divider(ui);
+                                ui.label(RichText::new("Scheduled jobs").strong());
+                                match job_status.get(&id) {
+                                    Some(s) => widgets::caption(ui, s.clone()),
+                                    None => widgets::caption(ui, "Loading…"),
+                                }
+                                if widgets::secondary_button(ui, "Open scheduled jobs").clicked() {
+                                    actions.push(Action::OpenJobs(id.clone()));
+                                }
                             }
                         }
                     });
@@ -1013,7 +1049,16 @@ impl Shell {
             );
         }
         mem.tab = new_tab;
+        let selection = mem.selection.clone();
         self.routes.insert(Route::Portfolio, mem);
+        // The selected project's scheduled jobs (their run status), once per selection.
+        if let Some(p) = selection
+            && !self.jobs.project_status.contains_key(&p)
+            && !self.pending(&Slot::ProjectJobs(p.clone()))
+            && online.is_ok()
+        {
+            self.load_project_jobs(&p);
+        }
         self.confirm_dialog(ui.ctx(), &mut actions);
         if reload {
             actions.push(Action::Reload);
@@ -1032,8 +1077,9 @@ impl Shell {
                     "Archive {}? DevWorks stops all of this project's running work immediately, \
                      without waiting for agents to reach a safe step, and admits no new work for \
                      it. Work already accepted by a remote system may still finish there. \
-                     Restoring the project later leaves its work stopped until you continue it.",
-                    p.name.0
+                     Restoring the project later leaves its work stopped until you continue it.{}",
+                    p.name.0,
+                    self.archive_work_line(p.id.0.as_str())
                 ),
                 "Archive project",
             ),
@@ -1077,6 +1123,12 @@ impl Shell {
                     }
                 });
             });
+        if decided.is_some()
+            && let Confirm::Archive(p) = &confirm
+        {
+            // A later confirmation counts the running work afresh.
+            self.work.forget_archive_count(p.id.0.as_str());
+        }
         match decided {
             Some(true) => {
                 self.projects.confirm = None;

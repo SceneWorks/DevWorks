@@ -215,6 +215,7 @@ pub fn png() -> Vec<u8> {
 #[derive(Clone)]
 pub struct Gate {
     operation: &'static str,
+    frame_field: Option<&'static str>,
     open: Arc<(Mutex<bool>, std::sync::Condvar)>,
     /// Hold the reply after the request ran (its snapshot or commit is already taken), rather
     /// than the request before it runs.
@@ -227,6 +228,7 @@ impl Gate {
     pub fn new(operation: &'static str) -> Self {
         Self {
             operation,
+            frame_field: None,
             open: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
             after: false,
             hints: true,
@@ -246,6 +248,13 @@ impl Gate {
             ..self
         }
     }
+    /// Hold only frames containing this JSON-pointer field (for example a later-page cursor).
+    pub fn with_frame_field(self, pointer: &'static str) -> Self {
+        Self {
+            frame_field: Some(pointer),
+            ..self
+        }
+    }
     pub fn close(&self) {
         *self.open.0.lock().unwrap() = false;
     }
@@ -259,8 +268,12 @@ impl Gate {
             gate: self.clone(),
         })
     }
-    fn wait(&self, operation: &str) {
-        if operation == self.operation {
+    fn wait(&self, operation: &str, frame: &[u8]) {
+        let matches_frame = self.frame_field.is_none_or(|pointer| {
+            serde_json::from_slice::<serde_json::Value>(frame)
+                .is_ok_and(|v| v.pointer(pointer).is_some())
+        });
+        if operation == self.operation && matches_frame {
             let mut open = self.open.0.lock().unwrap();
             while !*open {
                 open = self.open.1.wait(open).unwrap();
@@ -276,26 +289,33 @@ struct Gated {
 impl Backend for Gated {
     fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
         if !self.gate.after {
-            self.gate.wait(operation);
+            self.gate.wait(operation, frame);
         }
         let out = self.inner.query(operation, frame);
         if self.gate.after {
-            self.gate.wait(operation);
+            self.gate.wait(operation, frame);
         }
         out
     }
     fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
         if !self.gate.after {
-            self.gate.wait(operation);
+            self.gate.wait(operation, frame);
         }
         let out = self.inner.command(operation, frame);
         if self.gate.after {
-            self.gate.wait(operation);
+            self.gate.wait(operation, frame);
         }
         out
     }
     fn mint_workspace_upload(&self, file: &Path) -> Result<devworks_core::protocol::Id, String> {
         self.inner.mint_workspace_upload(file)
+    }
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_project_upload(project, file)
     }
     fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
         self.inner.keep_awake_health()
@@ -398,6 +418,13 @@ impl Backend for LoseAcks {
     }
     fn mint_workspace_upload(&self, file: &Path) -> Result<devworks_core::protocol::Id, String> {
         self.inner.mint_workspace_upload(file)
+    }
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_project_upload(project, file)
     }
     fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
         self.inner.keep_awake_health()

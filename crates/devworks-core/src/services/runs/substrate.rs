@@ -137,11 +137,20 @@ fn boot(tx: &dyn WriteTransaction) -> Result<Id, StorageError> {
         .clone()
         .ok_or_else(|| StorageError::IncompatibleSchema("store is read-only".into()))
 }
+/// The root `root` as the substrate drives it: a run root, or a card linked to a feature that
+/// keeps run controls of its own (an issue linked while its agent was running continues and
+/// finishes under its own activation, held by its feature's gates; an archival stops it).
 fn work_root(
     tx: &mut dyn WriteTransaction,
     root: &RootId,
 ) -> Result<Option<WorkRoot>, StorageError> {
-    Ok(tx.sessions().work_root(root)?.filter(is_run_root))
+    let Some(w) = tx.sessions().work_root(root)? else {
+        return Ok(None);
+    };
+    if is_run_root(&w) || tx.runs().root_control(&w.id)?.is_some() {
+        return Ok(Some(w));
+    }
+    Ok(None)
 }
 
 impl ControlService {
@@ -415,11 +424,23 @@ impl ControlService {
             Ok(x) => x,
             Err(f) => return Ok(Err(f)),
         };
+        // A linked card's retained activation runs under its feature's controls: once they hold
+        // it, the lease is not extended; the activation is asked to stop instead (it finishes at
+        // its next safe boundary, or its lease runs out).
+        if a.phase != ActivationPhase::Stopping
+            && let Some(why) = super::inherited_hold(tx.runs(), &root)?
+        {
+            let actor = tx.store().host_actor.clone();
+            let stopping = self
+                .request_stop(tx, &actor, &root, StopCause::Pause)?
+                .unwrap_or(a);
+            let _ = why;
+            return Ok(Ok(stopping));
+        }
         let mut renewed = a.clone();
         renewed.lease_until_ms = Some(tx.now_ms() + self.config.lease_ms);
         renewed.revision = a.revision + 1;
         tx.runs().update_activation(&renewed, a.revision)?;
-        let _ = root;
         Ok(Ok(renewed))
     }
 

@@ -609,6 +609,24 @@ impl Backend for DesktopBackend {
                 other => format!("{other:?}"),
             })
     }
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &Path,
+    ) -> Result<Id, String> {
+        let ctx = self
+            .host
+            .ctx
+            .clone()
+            .with_lineage(Some(project.clone()), None, None);
+        self.host
+            .sources
+            .mint_upload(&ctx, file, UPLOAD_TICKET_MS)
+            .map_err(|e| match e {
+                IssueRefusal::NotAFile => "only regular files can be attached".to_owned(),
+                other => format!("{other:?}"),
+            })
+    }
     fn keep_awake_health(&self) -> Health {
         self.host.runtime.keep_awake_health()
     }
@@ -623,6 +641,9 @@ impl Backend for DesktopBackend {
     }
     fn scratch_dir(&self) -> PathBuf {
         self.host.data_root.join("staging-ui")
+    }
+    fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
+        self.host.runtime.jobs().catalog().capabilities()
     }
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
         use std::io::Read;

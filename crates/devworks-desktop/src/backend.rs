@@ -33,6 +33,14 @@ pub trait Backend: Send + Sync {
     /// Mints a workspace upload ticket for a file the user picked, dropped or pasted (user
     /// ingress only; the artifact service resolves and verifies it at `artifacts.save`).
     fn mint_workspace_upload(&self, file: &Path) -> Result<Id, String>;
+    /// Mints an upload ticket bound to `project` for a file the app wrote for the user (a
+    /// feature's plan text): it resolves only for an `artifacts.save` into that project, so
+    /// the project's agents can read the artifact.
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &Path,
+    ) -> Result<Id, String>;
     /// Keep-awake runtime health, distinct from the configured value (SET-02).
     fn keep_awake_health(&self) -> Health;
     /// "Queue state may have changed" hints.
@@ -46,6 +54,11 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// The native maintenance capabilities a scheduled job may run in this build (only those
+    /// with a registered use case; none are advertised otherwise).
+    fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
+        Vec::new()
+    }
     /// Writes an API key the user typed into the OS secret store and returns its opaque handle
     /// for the user's `router.configure` `Connection` action (user ingress only; DW-18). The
     /// key never passes through a frame, receipt or log.
@@ -162,6 +175,52 @@ pub enum Slot {
     KnowledgeImport,
     /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
     KnowledgeWrite,
+    /// The jobs of the selected scope, and a further page of them.
+    JobsList,
+    /// A further page of the shown jobs list (that list's generation).
+    JobsMore(u64),
+    /// A further page re-read by a refresh of the shown jobs list (the refresh's generation).
+    JobsRefresh(u64),
+    /// The jobs of one project, for its run status on All projects.
+    ProjectJobs(String),
+    /// One job's inspection (its first run-history page) and an older history page (job ID).
+    JobInspect(String),
+    JobHistory(String),
+    /// The job's active run, inspected by its ID (job ID): the latest occurrence may be a
+    /// skipped one while the active run continues.
+    JobActiveRun(String),
+    /// A project's artifacts, as prompt candidates of a job form (project ID).
+    JobPrompts(String),
+    JobCreate,
+    /// A command of one job or its run (one at a time per job).
+    JobCommand(String),
+    /// Every feature of a project (all pages, read in order).
+    WorkFeatures(String),
+    /// Every card (feature task or standalone issue) of a project.
+    WorkCards(String),
+    /// The project change feed (Activity) of a project.
+    WorkActivity(String),
+    /// One work item's current record (readiness included).
+    WorkDetail(String),
+    /// A change of one work item (one at a time per item).
+    WorkCommand(String),
+    /// A new feature, task or issue in a project.
+    WorkCreate(String),
+    /// A prioritization of one queue (`<project>/<queue>`).
+    WorkOrder(String),
+    /// A plan text stored as an artifact for a feature's pending plan.
+    WorkPlanText(String),
+    /// Project-owned decisions for requirements dropped by a plan save.
+    WorkPlanDrop(String),
+    /// A feature's plan draft save (`features.edit_plan`).
+    WorkPlan(String),
+    /// A root's run controls (inspect) and one Start/Pause/Continue.
+    WorkInspect(String),
+    WorkRun(String),
+    /// The roots and running work of a project an archival would stop (features, issues).
+    ArchiveCount(String, bool),
+    /// Work opened from elsewhere (a completion card): read as a card (`false`) or a feature.
+    WorkOpen(String, bool),
     /// A page of `router.connections` for Settings → Provider connections (load generation).
     Connections(u64),
     /// A page of the full catalog (disabled models included) for the connections panel.
@@ -228,7 +287,7 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 25] = [
+pub const COMMANDS: &[&str] = &[
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
@@ -254,6 +313,29 @@ pub const COMMANDS: [&str; 25] = [
     "knowledge.relate",
     "knowledge.delete_by_source",
     "knowledge.import_user_data",
+    "jobs.create",
+    "jobs.edit",
+    "jobs.enable",
+    "jobs.disable",
+    "jobs.delete",
+    "jobs.run_now",
+    "jobs.cancel",
+    "features.create",
+    "features.edit",
+    "features.edit_plan",
+    "features.prioritize",
+    "features.request_plan_approval",
+    "issues.create",
+    "issues.prioritize",
+    "tasks.create",
+    "tasks.edit",
+    "tasks.move",
+    "tasks.prioritize",
+    "tasks.dependency_links",
+    "tasks.set_feature",
+    "runs.start",
+    "runs.pause",
+    "runs.continue",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.
@@ -273,7 +355,7 @@ impl Unresolved {
     }
     /// One kept across a restart; `None` for an operation the shell does not admit.
     pub fn restored(slot: Slot, label: String, operation: &str, frame: Vec<u8>) -> Option<Self> {
-        let operation = COMMANDS.into_iter().find(|c| *c == operation)?;
+        let operation = COMMANDS.iter().copied().find(|c| *c == operation)?;
         Some(Self {
             slot,
             label,

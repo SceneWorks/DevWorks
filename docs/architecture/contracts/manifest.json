@@ -81,7 +81,7 @@
     },
     {
       "file": "domain-command-reply.r2.schema.json",
-      "sha256": "611fce9d7d7d364cbea0df6ac5fe3faf21b073f08cb1e856257fd8bf68f9a58a"
+      "sha256": "25f0775f8fae38a6baad69652a260114536146ccdf826d89724ac71578ae95b5"
     },
     {
       "file": "domain-command-reply.schema.json",
@@ -89,7 +89,7 @@
     },
     {
       "file": "domain-query-reply.r2.schema.json",
-      "sha256": "e5b53f056d17e2ba997b3bad993af0981c082a79c33a3e12cc2f0bf3eb35b993"
+      "sha256": "baa98a1773d8fc6dde1e41e5b61d91cf7b7612e582a3ff17edf69bdf40eb3d91"
     },
     {
       "file": "domain-query-reply.schema.json",
@@ -97,7 +97,7 @@
     },
     {
       "file": "domain-request.r2.schema.json",
-      "sha256": "82ce85b3454d9f805d6489114afaafd056c16f1031eac54e96a8556e3ba3345f"
+      "sha256": "fb7c1fe79e296c41babdfd6cc89c58c3a610c387c9787ce6a84ab403a9e24d95"
     },
     {
       "file": "domain-request.schema.json",
@@ -137,7 +137,7 @@
     },
     {
       "file": "operation-completion.r2.schema.json",
-      "sha256": "2cbf26aa8c86cdd9c9f02c80ff3aa5d3bad69bbee09acb3af7f0223f9147159e"
+      "sha256": "7d0880daae3ab3af7f712d5223be6fc59171a4086de6052d7869497d068bf9a2"
     },
     {
       "file": "operation-completion.schema.json",
@@ -145,7 +145,7 @@
     },
     {
       "file": "operation-result.r2.schema.json",
-      "sha256": "a592e4d441ef58e35657bf1028d626b573955a1b680aa5eede440594aa523ead"
+      "sha256": "ae9c70a5c2092a6d625d4918aafc40581798f49ca86e35545341f44a58ab82b2"
     },
     {
       "file": "operation-result.schema.json",

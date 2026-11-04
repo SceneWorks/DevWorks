@@ -37,25 +37,34 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
-            'router.connections', 'router.configure',
             'knowledge.search', 'knowledge.read', 'knowledge.record', 'knowledge.revise',
-            'knowledge.verify', 'knowledge.challenge', 'knowledge.diagnostics',
-            'knowledge.subgraph', 'knowledge.entity_bundle', 'knowledge.entity_graph',
-            'knowledge.claim_bundle', 'knowledge.expand_frontier', 'knowledge.query',
-            'knowledge.promote', 'knowledge.tagged_lessons', 'knowledge.relate', 'knowledge.tag',
-            'knowledge.retract', 'knowledge.scope', 'knowledge.write_status',
-            'knowledge.import_user_data', 'dreaming.revert', 'web.search', 'web.fetch'})
+            'knowledge.verify', 'knowledge.challenge', 'knowledge.diagnostics', 'knowledge.subgraph',
+            'knowledge.entity_bundle', 'knowledge.entity_graph', 'knowledge.claim_bundle', 'knowledge.expand_frontier',
+            'knowledge.query', 'knowledge.promote', 'knowledge.tagged_lessons', 'knowledge.relate',
+            'knowledge.tag', 'knowledge.retract', 'knowledge.scope', 'knowledge.write_status',
+            'knowledge.import_user_data', 'dreaming.revert',
+            'router.connections', 'router.configure', 'jobs.list', 'jobs.create', 'jobs.edit',
+            'jobs.enable', 'jobs.run_now', 'jobs.inspect', 'jobs.cancel', 'jobs.delete',
+            'jobs.disable', 'web.search', 'web.fetch',
+            # Feature readiness and queue/workflow revisions on every work record result.
+            'features.list', 'features.get', 'features.create', 'features.edit_plan',
+            'features.dependencies', 'features.edit', 'issues.list', 'issues.get',
+            'issues.create', 'issues.edit', 'tasks.list', 'tasks.get', 'tasks.create',
+            'tasks.edit', 'tasks.move', 'tasks.assign', 'tasks.dependency_links',
+            'tasks.acceptance_evidence', 'tasks.sync_plan', 'tasks.set_feature',
+            # A prioritization's bounded placement (one move, any bucket size).
+            'features.prioritize', 'issues.prioritize', 'tasks.prioritize'})
+        self.assertEqual(carried['features.edit'], {2})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
         self.assertEqual(carried['router.connections'], {2})
         self.assertEqual(carried['router.configure'], {2})
-        # Knowledge revision 2 reaches every operation whose input or result carries a gated
-        # claim, entity, evidence, bundle or receipt member (every receipt carries its totals and
-        # continuation); the deletions return a summary and stay at 1.
+        # Knowledge projections and paged receipts negotiate revision 2; deletions stay at 1.
         self.assertEqual(carried['knowledge.subgraph'], {2})
         self.assertEqual(carried['knowledge.tag'], {2})
         self.assertEqual(carried['dreaming.revert'], {2})
         self.assertEqual(carried['knowledge.delete_by_source'], set())
+        self.assertEqual(carried['jobs.run_now'], {2})
         self.assertEqual(carried['web.search'], {2})
         self.assertEqual(carried['web.fetch'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})

@@ -52,6 +52,7 @@ pub mod theme;
 pub mod virtual_list;
 pub mod web_panel;
 pub mod widgets;
+pub mod work_ops;
 
 /// The application version shown in the sidebar footer.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

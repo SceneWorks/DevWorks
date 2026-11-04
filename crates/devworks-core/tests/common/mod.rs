@@ -384,6 +384,12 @@ impl ReadSnapshot for MemSnapshot {
     fn knowledge(&self) -> &dyn KnowledgeRead {
         &self.unsupported
     }
+    fn jobs(&self) -> &dyn JobRead {
+        &self.unsupported
+    }
+    fn work(&self) -> &dyn WorkRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -464,6 +470,12 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository {
+        &mut self.unsupported
+    }
+    fn jobs(&mut self) -> &mut dyn JobRepository {
+        &mut self.unsupported
+    }
+    fn work(&mut self) -> &mut dyn WorkRepository {
         &mut self.unsupported
     }
 }
@@ -1410,6 +1422,122 @@ impl ResourceRead for Unsupported {
         nope()
     }
 }
+impl JobRead for Unsupported {
+    fn job(&self, _: &Id) -> Result<Option<StoredJob>, StorageError> {
+        nope()
+    }
+    fn jobs(
+        &self,
+        _: &JobScope,
+        _: Option<bool>,
+        _: Option<(&str, &str)>,
+        _: u16,
+    ) -> Result<Vec<StoredJob>, StorageError> {
+        nope()
+    }
+    fn job_titled(
+        &self,
+        _: Option<&ProjectId>,
+        _: &str,
+    ) -> Result<Option<StoredJob>, StorageError> {
+        nope()
+    }
+    fn due_jobs(&self, _: i64, _: u16) -> Result<Vec<StoredJob>, StorageError> {
+        nope()
+    }
+    fn all_jobs(&self, _: Option<&Id>, _: u16) -> Result<Vec<StoredJob>, StorageError> {
+        nope()
+    }
+    fn job_run(&self, _: &Id) -> Result<Option<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn job_runs(&self, _: &Id, _: Option<i64>, _: u16) -> Result<Vec<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn active_run(&self, _: &Id) -> Result<Option<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn runs_where(
+        &self,
+        _: &RunFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn run_links(&self, _: &Id) -> Result<Vec<RootId>, StorageError> {
+        nope()
+    }
+    fn checkpoint(&self, _: &Id, _: &str) -> Result<Option<StoredJobCheckpoint>, StorageError> {
+        nope()
+    }
+    fn action(&self, _: &Id, _: &str) -> Result<Option<StoredJobAction>, StorageError> {
+        nope()
+    }
+    fn unsettled_actions(&self, _: &Id) -> Result<Vec<StoredJobAction>, StorageError> {
+        nope()
+    }
+    fn run_usage(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<StoredJobUsage>, StorageError> {
+        nope()
+    }
+    fn usage_totals(&self, _: &Id) -> Result<JobUsageTotals, StorageError> {
+        nope()
+    }
+}
+impl JobRepository for Unsupported {
+    fn insert_job(&mut self, _: &StoredJob) -> Result<StoredJob, StorageError> {
+        nope()
+    }
+    fn update_job(&mut self, _: &StoredJob, _: i64) -> Result<StoredJob, StorageError> {
+        nope()
+    }
+    fn set_job_schedule(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: Option<i64>,
+        _: Option<&Id>,
+    ) -> Result<StoredJob, StorageError> {
+        nope()
+    }
+    fn insert_run(&mut self, _: &StoredJobRun) -> Result<StoredJobRun, StorageError> {
+        nope()
+    }
+    fn update_run(&mut self, _: &StoredJobRun, _: i64) -> Result<StoredJobRun, StorageError> {
+        nope()
+    }
+    fn set_run_checkpoint(&mut self, _: &Id, _: &str) -> Result<(), StorageError> {
+        nope()
+    }
+    fn link_root(&mut self, _: &Id, _: &RootId) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_checkpoint(
+        &mut self,
+        _: &StoredJobCheckpoint,
+        _: Option<i64>,
+    ) -> Result<StoredJobCheckpoint, StorageError> {
+        nope()
+    }
+    fn insert_action(&mut self, _: &StoredJobAction) -> Result<StoredJobAction, StorageError> {
+        nope()
+    }
+    fn update_action(
+        &mut self,
+        _: &StoredJobAction,
+        _: i64,
+    ) -> Result<StoredJobAction, StorageError> {
+        nope()
+    }
+    fn record_usage(&mut self, _: &StoredJobUsage) -> Result<StoredJobUsage, StorageError> {
+        nope()
+    }
+}
 impl RouterRead for Unsupported {
     fn route_model(&self, _: &Id) -> Result<Option<StoredRouteModel>, StorageError> {
         nope()
@@ -1541,6 +1669,91 @@ impl ProjectRead for Unsupported {
         nope()
     }
     fn pending_archive_stops(&self, _: u16) -> Result<Vec<ProjectId>, StorageError> {
+        nope()
+    }
+}
+impl WorkRead for Unsupported {
+    fn work(&self, _: &Id) -> Result<Option<StoredWork>, StorageError> {
+        nope()
+    }
+    fn works(
+        &self,
+        _: &WorkFilter,
+        _: Option<&WorkPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredWork>, StorageError> {
+        nope()
+    }
+    fn work_repositories(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn prerequisites(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn dependents(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn open_prerequisites(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn queue_revision(&self, _: &ProjectId, _: &str) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn next_rank(&self, _: &ProjectId, _: &str) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn statuses(&self, _: &ProjectId) -> Result<Vec<StoredStatus>, StorageError> {
+        nope()
+    }
+    fn by_caller_ref(&self, _: &ProjectId, _: &Id) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
+    fn feature_plan(&self, _: &Id) -> Result<Option<StoredFeaturePlan>, StorageError> {
+        nope()
+    }
+    fn proposal(&self, _: &Id) -> Result<Option<StoredProposal>, StorageError> {
+        nope()
+    }
+    fn latest_proposal(&self, _: &Id) -> Result<Option<StoredProposal>, StorageError> {
+        nope()
+    }
+    fn readiness(&self, _: &Id) -> Result<Option<StoredReadiness>, StorageError> {
+        nope()
+    }
+}
+impl WorkRepository for Unsupported {
+    fn insert_work(&mut self, _: &StoredWork) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_work(&mut self, _: &StoredWork, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_rank(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_work_repositories(&mut self, _: &Id, _: &[Id]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_prerequisites(&mut self, _: &Id, _: &[Id]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn bump_queue(&mut self, _: &ProjectId, _: &str) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn insert_status(&mut self, _: &StoredStatus) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_feature_plan(
+        &mut self,
+        _: &StoredFeaturePlan,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_proposal(&mut self, _: &StoredProposal, _: Option<i64>) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_readiness(&mut self, _: &StoredReadiness, _: Option<i64>) -> Result<(), StorageError> {
         nope()
     }
 }
@@ -1723,6 +1936,15 @@ impl RunRead for Unsupported {
     fn feature_plan(&self, _: &RootId) -> Result<Option<StoredPlanState>, StorageError> {
         nope()
     }
+    fn work_parent(&self, _: &RootId) -> Result<Option<Option<RootId>>, StorageError> {
+        nope()
+    }
+    fn work_repository_ids(&self, _: &RootId) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn open_prerequisites(&self, _: &RootId) -> Result<Vec<RootId>, StorageError> {
+        nope()
+    }
     fn project_lifecycle(&self, _: &ProjectId) -> Result<Option<String>, StorageError> {
         nope()
     }
@@ -1735,6 +1957,14 @@ impl RunRead for Unsupported {
         nope()
     }
     fn root_deliveries(&self, _: &RootId, _: Option<&Id>, _: u16) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn stop_coverage(
+        &self,
+        _: &OperationId,
+        _: Option<&RootId>,
+        _: u16,
+    ) -> Result<Vec<StoredStopCoverage>, StorageError> {
         nope()
     }
 }
@@ -1773,6 +2003,9 @@ impl RunRepository for Unsupported {
         nope()
     }
     fn delete_turn(&mut self, _: &Id, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn cover_stop(&mut self, _: &StoredStopCoverage) -> Result<(), StorageError> {
         nope()
     }
 }

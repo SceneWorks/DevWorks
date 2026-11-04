@@ -466,7 +466,19 @@
         "pending_plan": "?PendingFeaturePlan",
         "dependent_ids": "Items<Id>",
         "manual_order": "?Counter",
-        "github_issue": "?GithubIssueTracking"
+        "github_issue": "?GithubIssueTracking",
+        "readiness": "?ReadinessAssessment",
+        "queue_revision": "?Revision",
+        "workflow_revision": "?Revision",
+        "acceptance_tests": "?Items<AcceptanceCriterion>",
+        "pending_readiness": "?ReadinessAssessment"
+      },
+      "since": {
+        "readiness": 2,
+        "queue_revision": 2,
+        "workflow_revision": 2,
+        "acceptance_tests": 2,
+        "pending_readiness": 2
       }
     },
     "PlanDraft": {
@@ -1599,7 +1611,33 @@
         "definition": "JobDefinition",
         "enabled": "bool",
         "interrupted_run_id": "?Id",
-        "last_run_id": "?Id"
+        "last_run_id": "?Id",
+        "scope": "?DataScope",
+        "next_run_at_ms": "?Counter",
+        "last_run_started_at_ms": "?Counter",
+        "last_run_finished_at_ms": "?Counter",
+        "last_run_status": "?JobRunStatus",
+        "last_error": "?Text",
+        "active_run_id": "?Id",
+        "hold": "?JobHold",
+        "authorized": "?bool",
+        "created_at_ms": "?Counter",
+        "updated_at_ms": "?Counter",
+        "deleted_at_ms": "?Counter"
+      },
+      "since": {
+        "scope": 2,
+        "next_run_at_ms": 2,
+        "last_run_started_at_ms": 2,
+        "last_run_finished_at_ms": 2,
+        "last_run_status": 2,
+        "last_error": 2,
+        "active_run_id": 2,
+        "hold": 2,
+        "authorized": 2,
+        "created_at_ms": 2,
+        "updated_at_ms": 2,
+        "deleted_at_ms": 2
       }
     },
     "JobRun": {
@@ -1611,7 +1649,33 @@
         "occurrence_key": "Text",
         "state": "OperationState",
         "operation_id": "?OperationId",
-        "usage": "UsageReport"
+        "usage": "UsageReport",
+        "status": "?JobRunStatus",
+        "trigger": "?JobTrigger",
+        "occurrence_at_ms": "?Counter",
+        "started_at_ms": "?Counter",
+        "finished_at_ms": "?Counter",
+        "reason": "?Text",
+        "hold": "?Label",
+        "cancel_requested": "?bool",
+        "resumptions": "?Counter",
+        "session_id": "?Id",
+        "linked_root_ids": "?Items<RootId>",
+        "skipped_for_run_id": "?Id"
+      },
+      "since": {
+        "status": 2,
+        "trigger": 2,
+        "occurrence_at_ms": 2,
+        "started_at_ms": 2,
+        "finished_at_ms": 2,
+        "reason": 2,
+        "hold": 2,
+        "cancel_requested": 2,
+        "resumptions": 2,
+        "session_id": 2,
+        "linked_root_ids": 2,
+        "skipped_for_run_id": 2
       }
     },
     "SchemaValue": {
@@ -2424,7 +2488,13 @@
       "kind": "record",
       "fields": {
         "job": "JobRecord",
-        "run": "?JobRun"
+        "run": "?JobRun",
+        "runs": "?Rows<JobRun>",
+        "runs_next_cursor": "?Cursor"
+      },
+      "since": {
+        "runs": 2,
+        "runs_next_cursor": 2
       }
     },
     "RepositoryIndexStatus": {
@@ -2743,7 +2813,13 @@
         "goals": "?Items<Content>",
         "add_links": "?Items<WorkLink>",
         "remove_link_ids": "?Items<Id>",
-        "add_comment": "?WorkComment"
+        "add_comment": "?WorkComment",
+        "readiness": "?ReadinessChange",
+        "acceptance_evidence": "?NonEmpty<AcceptanceCriterion>"
+      },
+      "since": {
+        "readiness": 2,
+        "acceptance_evidence": 2
       }
     },
     "IssuePatch": {
@@ -3112,6 +3188,143 @@
         "write_id": "?Id",
         "value": "?Content"
       }
+    },
+    "JobRunStatus": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Running",
+        "Holding",
+        "Succeeded",
+        "Failed",
+        "Skipped",
+        "Cancelled",
+        "OutcomeUnknown"
+      ]
+    },
+    "JobTrigger": {
+      "kind": "enum",
+      "values": [
+        "Scheduled",
+        "Manual"
+      ]
+    },
+    "JobHold": {
+      "kind": "enum",
+      "values": [
+        "ReactivationRequired",
+        "AuthorizationRequired",
+        "ProjectClosed"
+      ]
+    },
+    "ReadinessDisposition": {
+      "kind": "enum",
+      "values": [
+        "ResolvedDecision",
+        "BoundedInvestigation",
+        "NeedsUserDecision"
+      ]
+    },
+    "FindingState": {
+      "kind": "enum",
+      "values": [
+        "Open",
+        "Resolved",
+        "RiskAccepted"
+      ]
+    },
+    "ConfidenceLevel": {
+      "kind": "enum",
+      "values": [
+        "High",
+        "Medium",
+        "Low"
+      ]
+    },
+    "ReadinessFreshness": {
+      "kind": "enum",
+      "values": [
+        "Current",
+        "Stale"
+      ]
+    },
+    "ReadinessFinding": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "disposition": "ReadinessDisposition",
+        "blocking": "bool",
+        "prerequisite": "bool",
+        "state": "FindingState",
+        "requirement_ids": "Items<Id>",
+        "scope_key": "?Id",
+        "affected_work_ids": "Items<Id>",
+        "summary": "Content",
+        "missing": "Content",
+        "consequence": "Content",
+        "attempts": "Items<Content>",
+        "insufficiency": "Content",
+        "closure_condition": "Content",
+        "decision": "?Content",
+        "confidence": "?ConfidenceLevel",
+        "evidence": "Items<ArtifactRef>",
+        "objective": "?Content",
+        "limits": "?Content",
+        "question": "?Content",
+        "recommendation": "?Content",
+        "closure_note": "?Content",
+        "closure_evidence": "Items<ArtifactRef>"
+      }
+    },
+    "ReadinessAssessment": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "plan_revision": "Revision",
+        "plan_digest": "Digest",
+        "reviewed_pending": "bool",
+        "freshness": "ReadinessFreshness",
+        "stale_scope_keys": "Items<Id>",
+        "ready": "bool",
+        "summary": "Content",
+        "findings": "Items<ReadinessFinding>",
+        "assessed_by": "ActorId",
+        "assessed_at_ms": "Counter"
+      }
+    },
+    "ReadinessChange": {
+      "kind": "union",
+      "variants": {
+        "Assess": {
+          "expected_assessment_revision": "?Revision",
+          "plan_revision": "Revision",
+          "plan_digest": "Digest",
+          "summary": "Content",
+          "findings": "Items<ReadinessFinding>"
+        },
+        "CloseFinding": {
+          "expected_assessment_revision": "Revision",
+          "finding_id": "Id",
+          "note": "Content",
+          "evidence": "Items<ArtifactRef>"
+        }
+      }
+    },
+    "QueuePlacement": {
+      "kind": "record",
+      "fields": {
+        "work_id": "Id",
+        "anchor_id": "Id",
+        "side": "QueueSide"
+      }
+    },
+    "QueueSide": {
+      "kind": "enum",
+      "values": [
+        "Before",
+        "After"
+      ]
     }
   },
   "operations": {
@@ -3245,7 +3458,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read one feature at its work revision. Schema revision 2: the record carries the feature's current execution-readiness assessment (AGENT-12, AGENT-18-20): the reviewed plan revision and digest, freshness against the active approved plan (stale scope units by requirement ID; the absent key is feature-wide), whether it is ready (current with no open blocking finding) and every finding with its requirement links, disposition, affected work, attempts, closure condition, decision with confidence and evidence, investigation objective/limits, question/recommendation and closure evidence. Readiness is reported separately from plan approval. Every work record at revision 2 also carries the revision of the queue it is ranked in (queueRevision: the project queue for features and standalone issues, its feature queue for a card) and of its project workflow (workflowRevision), the expected revisions of prioritization and workflow moves. A feature record at revision 2 also carries its active plan's acceptance tests (acceptanceTests), so a client revising the plan keeps them."
     },
     "features.create": {
       "operation": "features.create",
@@ -3270,7 +3483,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority."
+      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents."
     },
     "issues.list": {
       "operation": "issues.list",
@@ -3396,12 +3609,20 @@
       "fields": {
         "project_id": "ProjectId",
         "expected_queue_revision": "Revision",
-        "ordered_work_ids": "NonEmpty<Id>"
+        "ordered_work_ids": "?NonEmpty<Id>",
+        "placement": "?QueuePlacement"
       },
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue."
+      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
+      "since": {
+        "placement": 2
+      },
+      "exactlyOne": [
+        "ordered_work_ids",
+        "placement"
+      ]
     },
     "issues.prioritize": {
       "operation": "issues.prioritize",
@@ -3409,12 +3630,20 @@
       "fields": {
         "project_id": "ProjectId",
         "expected_queue_revision": "Revision",
-        "ordered_work_ids": "NonEmpty<Id>"
+        "ordered_work_ids": "?NonEmpty<Id>",
+        "placement": "?QueuePlacement"
       },
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue."
+      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
+      "since": {
+        "placement": 2
+      },
+      "exactlyOne": [
+        "ordered_work_ids",
+        "placement"
+      ]
     },
     "features.edit_plan": {
       "operation": "features.edit_plan",
@@ -6084,7 +6313,7 @@
       "result": "Page<JobRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Bounded page of the visible jobs of one scope (Workspace: app-level jobs; Project: that project's) in title then ID order, optionally filtered by enabled; deleted jobs are omitted; cursors bind the scope, filter and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.create": {
       "operation": "jobs.create",
@@ -6099,7 +6328,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization."
+      "rules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization (a person); other principals create disabled drafts. Titles are unique per scope; a calendar schedule is a standard five-field cron expression (Cronos semantics) in an IANA time zone and must produce a future occurrence. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.edit": {
       "operation": "jobs.edit",
@@ -6114,7 +6343,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Replaces title, schedule and definition at the expected revision and recomputes the next future occurrence (no catch-up). Only a person may edit an enabled or authorized job; another principal's edit of a draft leaves it unauthorized. A run already claimed keeps its own definition snapshot. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.enable": {
       "operation": "jobs.enable",
@@ -6126,7 +6355,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects."
+      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Enabling (a person only) authorizes the current definition, clears a restore or project hold of an open project and computes the next future occurrence without replaying missed ones. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.disable": {
       "operation": "jobs.disable",
@@ -6138,7 +6367,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects."
+      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Disabling stops future occurrences; a run already active continues to its outcome. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.delete": {
       "operation": "jobs.delete",
@@ -6150,7 +6379,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects."
+      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Delete tombstones the job (history kept, no longer listed or inspectable) and requests cancellation of its active run. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.run_now": {
       "operation": "jobs.run_now",
@@ -6162,19 +6391,25 @@
       "result": "JobRun",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature."
+      "rules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature. A run while another run of the job is active is recorded Skipped and nothing is queued; another principal may run only an authorized job; a closed project refuses. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.inspect": {
       "operation": "jobs.inspect",
       "mode": "Query",
       "fields": {
         "job_id": "Id",
-        "run_id": "?Id"
+        "run_id": "?Id",
+        "history": "?PageRequest",
+        "usage": "?PageRequest"
       },
       "result": "JobInspection",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "The job and its selected (or latest) run. Schema revision 2: a newest-first page of the job's run history (history) and of the selected run's usage items (usage), each continued by a cursor bound to the job, run and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
+      "since": {
+        "history": 2,
+        "usage": 2
+      }
     },
     "jobs.cancel": {
       "operation": "jobs.cancel",
@@ -6187,7 +6422,7 @@
       "result": "JobRun",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Cancels the named run only (never a later run of the job): a run not yet dispatched is cancelled at once; a dispatched run is asked to stop through the process owner and its outcome is recorded when known (Accepted). A finished run answers unchanged. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "settings.read_effective": {
       "operation": "settings.read_effective",
@@ -7132,12 +7367,20 @@
         "feature_id": "?RootId",
         "expected_queue_revision": "Revision",
         "priority": "i32",
-        "ordered_task_ids": "NonEmpty<Id>"
+        "ordered_task_ids": "?NonEmpty<Id>",
+        "placement": "?QueuePlacement"
       },
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order."
+      "rules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
+      "since": {
+        "placement": 2
+      },
+      "exactlyOne": [
+        "ordered_task_ids",
+        "placement"
+      ]
     },
     "tasks.set_feature": {
       "operation": "tasks.set_feature",
@@ -7334,6 +7577,14 @@
       1,
       2
     ],
+    "web.search": [
+      1,
+      2
+    ],
+    "web.fetch": [
+      1,
+      2
+    ],
     "knowledge.search": [
       1,
       2
@@ -7422,11 +7673,131 @@
       1,
       2
     ],
-    "web.search": [
+    "features.get": [
       1,
       2
     ],
-    "web.fetch": [
+    "features.edit": [
+      1,
+      2
+    ],
+    "features.list": [
+      1,
+      2
+    ],
+    "features.create": [
+      1,
+      2
+    ],
+    "issues.list": [
+      1,
+      2
+    ],
+    "issues.get": [
+      1,
+      2
+    ],
+    "issues.create": [
+      1,
+      2
+    ],
+    "issues.edit": [
+      1,
+      2
+    ],
+    "tasks.list": [
+      1,
+      2
+    ],
+    "tasks.get": [
+      1,
+      2
+    ],
+    "tasks.create": [
+      1,
+      2
+    ],
+    "tasks.edit": [
+      1,
+      2
+    ],
+    "features.edit_plan": [
+      1,
+      2
+    ],
+    "features.dependencies": [
+      1,
+      2
+    ],
+    "tasks.move": [
+      1,
+      2
+    ],
+    "tasks.assign": [
+      1,
+      2
+    ],
+    "tasks.dependency_links": [
+      1,
+      2
+    ],
+    "tasks.acceptance_evidence": [
+      1,
+      2
+    ],
+    "tasks.sync_plan": [
+      1,
+      2
+    ],
+    "tasks.set_feature": [
+      1,
+      2
+    ],
+    "tasks.prioritize": [
+      1,
+      2
+    ],
+    "features.prioritize": [
+      1,
+      2
+    ],
+    "issues.prioritize": [
+      1,
+      2
+    ],
+    "jobs.list": [
+      1,
+      2
+    ],
+    "jobs.create": [
+      1,
+      2
+    ],
+    "jobs.edit": [
+      1,
+      2
+    ],
+    "jobs.enable": [
+      1,
+      2
+    ],
+    "jobs.disable": [
+      1,
+      2
+    ],
+    "jobs.delete": [
+      1,
+      2
+    ],
+    "jobs.run_now": [
+      1,
+      2
+    ],
+    "jobs.inspect": [
+      1,
+      2
+    ],
+    "jobs.cancel": [
       1,
       2
     ]

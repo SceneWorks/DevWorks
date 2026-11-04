@@ -953,6 +953,14 @@
       ],
       "type": "object"
     },
+    "ConfidenceLevel": {
+      "enum": [
+        "High",
+        "Medium",
+        "Low"
+      ],
+      "type": "string"
+    },
     "ConnectionLifecycle": {
       "enum": [
         "Disconnected",
@@ -2891,6 +2899,14 @@
       ],
       "type": "object"
     },
+    "FindingState": {
+      "enum": [
+        "Open",
+        "Resolved",
+        "RiskAccepted"
+      ],
+      "type": "string"
+    },
     "Finite": {
       "type": "number"
     },
@@ -3592,6 +3608,14 @@
         }
       ]
     },
+    "JobHold": {
+      "enum": [
+        "ReactivationRequired",
+        "AuthorizationRequired",
+        "ProjectClosed"
+      ],
+      "type": "string"
+    },
     "JobInspection": {
       "additionalProperties": false,
       "properties": {
@@ -3607,6 +3631,14 @@
               "type": "null"
             }
           ]
+        },
+        "runs": {
+          "$ref": "#/$defs/List_JobRun_0_500",
+          "x-since": 2
+        },
+        "runsNextCursor": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         }
       },
       "required": [
@@ -3617,11 +3649,31 @@
     "JobRecord": {
       "additionalProperties": false,
       "properties": {
+        "activeRunId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "authorized": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "definition": {
           "$ref": "#/$defs/JobDefinition"
         },
+        "deletedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "enabled": {
           "type": "boolean"
+        },
+        "hold": {
+          "$ref": "#/$defs/JobHold",
+          "x-since": 2
         },
         "id": {
           "$ref": "#/$defs/Id"
@@ -3636,6 +3688,14 @@
             }
           ]
         },
+        "lastError": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
+        "lastRunFinishedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "lastRunId": {
           "anyOf": [
             {
@@ -3646,14 +3706,34 @@
             }
           ]
         },
+        "lastRunStartedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "lastRunStatus": {
+          "$ref": "#/$defs/JobRunStatus",
+          "x-since": 2
+        },
+        "nextRunAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
         "schedule": {
           "$ref": "#/$defs/Schedule"
         },
+        "scope": {
+          "$ref": "#/$defs/DataScope",
+          "x-since": 2
+        },
         "title": {
           "$ref": "#/$defs/Text1To256"
+        },
+        "updatedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         }
       },
       "required": [
@@ -3669,11 +3749,31 @@
     "JobRun": {
       "additionalProperties": false,
       "properties": {
+        "cancelRequested": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "finishedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "hold": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
         "jobId": {
           "$ref": "#/$defs/Id"
+        },
+        "linkedRootIds": {
+          "$ref": "#/$defs/List_Id_0_128",
+          "x-since": 2
+        },
+        "occurrenceAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         },
         "occurrenceKey": {
           "$ref": "#/$defs/Text1To4096"
@@ -3688,11 +3788,39 @@
             }
           ]
         },
+        "reason": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
+        "resumptions": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
+        "sessionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "skippedForRunId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "startedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "state": {
           "$ref": "#/$defs/OperationState"
+        },
+        "status": {
+          "$ref": "#/$defs/JobRunStatus",
+          "x-since": 2
+        },
+        "trigger": {
+          "$ref": "#/$defs/JobTrigger",
+          "x-since": 2
         },
         "usage": {
           "$ref": "#/$defs/UsageReport"
@@ -3707,6 +3835,26 @@
         "usage"
       ],
       "type": "object"
+    },
+    "JobRunStatus": {
+      "enum": [
+        "Queued",
+        "Running",
+        "Holding",
+        "Succeeded",
+        "Failed",
+        "Skipped",
+        "Cancelled",
+        "OutcomeUnknown"
+      ],
+      "type": "string"
+    },
+    "JobTrigger": {
+      "enum": [
+        "Scheduled",
+        "Manual"
+      ],
+      "type": "string"
     },
     "KnowledgeBundle": {
       "additionalProperties": false,
@@ -4905,6 +5053,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_JobRun_0_500": {
+      "items": {
+        "$ref": "#/$defs/JobRun"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_KnowledgeClaim_0_500": {
       "items": {
         "$ref": "#/$defs/KnowledgeClaim"
@@ -5086,6 +5242,14 @@
         "$ref": "#/$defs/QueueDelivery"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_ReadinessFinding_0_128": {
+      "items": {
+        "$ref": "#/$defs/ReadinessFinding"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },
@@ -14424,6 +14588,225 @@
       ],
       "type": "object"
     },
+    "ReadinessAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "assessedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "assessedBy": {
+          "$ref": "#/$defs/Id"
+        },
+        "findings": {
+          "$ref": "#/$defs/List_ReadinessFinding_0_128"
+        },
+        "freshness": {
+          "$ref": "#/$defs/ReadinessFreshness"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "planDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "planRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "reviewedPending": {
+          "type": "boolean"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "staleScopeKeys": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "planRevision",
+        "planDigest",
+        "reviewedPending",
+        "freshness",
+        "staleScopeKeys",
+        "ready",
+        "summary",
+        "findings",
+        "assessedBy",
+        "assessedAtMs"
+      ],
+      "type": "object"
+    },
+    "ReadinessDisposition": {
+      "enum": [
+        "ResolvedDecision",
+        "BoundedInvestigation",
+        "NeedsUserDecision"
+      ],
+      "type": "string"
+    },
+    "ReadinessFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "affectedWorkIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "attempts": {
+          "$ref": "#/$defs/List_Text0To65536_0_128"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "closureCondition": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "closureEvidence": {
+          "$ref": "#/$defs/List_ArtifactRef_0_128"
+        },
+        "closureNote": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfidenceLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consequence": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disposition": {
+          "$ref": "#/$defs/ReadinessDisposition"
+        },
+        "evidence": {
+          "$ref": "#/$defs/List_ArtifactRef_0_128"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "insufficiency": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "missing": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "objective": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prerequisite": {
+          "type": "boolean"
+        },
+        "question": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recommendation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requirementIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "scopeKey": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/FindingState"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "id",
+        "disposition",
+        "blocking",
+        "prerequisite",
+        "state",
+        "requirementIds",
+        "affectedWorkIds",
+        "summary",
+        "missing",
+        "consequence",
+        "attempts",
+        "insufficiency",
+        "closureCondition",
+        "evidence",
+        "closureEvidence"
+      ],
+      "type": "object"
+    },
+    "ReadinessFreshness": {
+      "enum": [
+        "Current",
+        "Stale"
+      ],
+      "type": "string"
+    },
     "ReceiptLookupState": {
       "enum": [
         "NotFound",
@@ -17313,6 +17696,10 @@
             }
           ]
         },
+        "acceptanceTests": {
+          "$ref": "#/$defs/List_AcceptanceCriterion_0_128",
+          "x-since": 2
+        },
         "approval": {
           "anyOf": [
             {
@@ -17451,6 +17838,10 @@
             }
           ]
         },
+        "pendingReadiness": {
+          "$ref": "#/$defs/ReadinessAssessment",
+          "x-since": 2
+        },
         "plan": {
           "anyOf": [
             {
@@ -17467,6 +17858,14 @@
         },
         "projectId": {
           "$ref": "#/$defs/Id"
+        },
+        "queueRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 2
+        },
+        "readiness": {
+          "$ref": "#/$defs/ReadinessAssessment",
+          "x-since": 2
         },
         "repositoryIds": {
           "$ref": "#/$defs/List_Id_0_128"
@@ -17485,6 +17884,10 @@
         },
         "touches": {
           "$ref": "#/$defs/List_TouchRef_0_128"
+        },
+        "workflowRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 2
         }
       },
       "required": [

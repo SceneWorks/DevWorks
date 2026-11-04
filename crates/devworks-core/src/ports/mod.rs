@@ -68,6 +68,9 @@ pub enum IdKind {
     KnowledgeRelation,
     KnowledgeChallenge,
     KnowledgeWrite,
+    /// Schedules (jobs) and their runs.
+    Job,
+    JobRun,
     /// Provider connections.
     Connection,
     /// Secret-store credential handles (immutable; a replacement gets a new one).
