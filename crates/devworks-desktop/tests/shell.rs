@@ -1132,6 +1132,14 @@ fn foreign_bundle(dir: &std::path::Path) -> std::path::PathBuf {
 }
 /// [`foreign_bundle`], optionally shipping `config` as its configuration schema document.
 fn foreign_bundle_with(dir: &std::path::Path, config: Option<&[u8]>) -> std::path::PathBuf {
+    foreign_bundle_for(dir, config, "riscv64gc-unknown-none-elf")
+}
+/// [`foreign_bundle_with`] declaring `target` (its helper is never a real executable).
+fn foreign_bundle_for(
+    dir: &std::path::Path,
+    config: Option<&[u8]>,
+    target: &str,
+) -> std::path::PathBuf {
     use devworks_core::fingerprint::sha256_hex;
     let helper: &[u8] = b"not an executable for this platform";
     let help: &[u8] = b"# Foreign pack\n";
@@ -1156,7 +1164,7 @@ fn foreign_bundle_with(dir: &std::path::Path, config: Option<&[u8]>) -> std::pat
         "minimumHostVersion": "0.1.0", "dependencies": [], "runtimes": [], "schemaAssets": assets,
         "requestedLimits": {"maxConcurrent": 1, "queueCapacity": 4,
             "maxMemoryBytes": "1048576", "streamCreditBytes": 4096},
-        "targets": [{"targetTriple": "riscv64gc-unknown-none-elf", "entrypoint": "bin/helper"}],
+        "targets": [{"targetTriple": target, "entrypoint": "bin/helper"}],
         "files": files,
         "stateSchema": {"schemaId": "foreign-pack/state", "revision": "1", "sha256": "a".repeat(64)},
         "configurationSchema": {"schemaId": "foreign-pack/config", "revision": "1",
@@ -1380,4 +1388,84 @@ fn the_add_ons_catalog_follows_every_page() {
     step_until(&mut h, "every offered pack is listed", |s| {
         s.addons.items.len() == count
     });
+}
+
+#[test]
+fn installing_an_offered_pack_leaves_no_download_behind() {
+    use devworks_core::ports::packages::PackageInspector;
+    use ed25519_dalek::SigningKey;
+    let root = Root::new("addons-offer-download");
+    let engine = start(&root);
+    let backend = engine.backend();
+    // A local signed index offering one real bundle.
+    let dir = root.0.with_extension("offer-index");
+    // Declared for this platform, so the screen offers it (its helper never starts).
+    let host = devworks_adapters::packages::host_target_triple();
+    let bundle = foreign_bundle_for(&dir, None, &host);
+    let bytes = std::fs::read(&bundle).unwrap();
+    let inspected = devworks_adapters::packages::BundleInspector
+        .inspect(&bytes)
+        .unwrap()
+        .inspection;
+    let key = SigningKey::from_bytes(&[11; 32]);
+    let index = json!({"publisherId": "acme", "generatedAtMs": 1, "entries": [{
+        "packageId": "foreign-pack", "version": inspected.version,
+        "manifestDigest": inspected.manifest_digest,
+        "bundleDigest": devworks_core::fingerprint::sha256_hex(&bytes),
+        "bundleBytes": bytes.len(), "targets": [host],
+        "kind": "LanguagePack", "languages": ["csharp"], "bundle": "foreign-pack.dwpkg"}]});
+    std::fs::write(
+        dir.join("devworks-index.json"),
+        devworks_adapters::packages::write_index(&index, &key),
+    )
+    .unwrap();
+    let hex: String = key
+        .verifying_key()
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let d = descriptor(devworks_core::settings::catalog::PACKAGE_INDEX_SOURCES_KEY).unwrap();
+    let body = json!({"scope": {"kind": "Workspace"}, "expectedRevision": "1", "entries": [
+        {"key": d.key, "value": {"schema": d.schema_ref(), "value": [{"location": dir.display().to_string(), "publicKey": hex}]}}]});
+    ops::settings_saved(backend.command(
+        "settings.save_revision",
+        &ops::command_frame(&*backend, "settings.save_revision", body),
+    ))
+    .expect("an index source");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Refresh");
+    step_until(&mut h, "the offered pack is listed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack")
+    });
+    h.state_mut().addons.selected = Some("foreign-pack".into());
+    settle(&mut h);
+    click(
+        &mut h,
+        Role::Button,
+        &format!("Install {}", inspected.version),
+    );
+    step_until(&mut h, "the offered pack is installed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack" && r.trust_state.0 != "Available")
+    });
+    settle(&mut h);
+    // The verified download was saved as an artifact; the scratch copy is gone.
+    let downloads = root.0.join("staging-ui").join("packages");
+    assert!(
+        downloads.is_dir(),
+        "the bundle was downloaded through the scratch directory"
+    );
+    let left: Vec<_> = std::fs::read_dir(&downloads)
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
 }

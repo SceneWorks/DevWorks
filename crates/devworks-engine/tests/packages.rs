@@ -38,7 +38,7 @@ use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::packages::index::AVAILABILITY_CHANGED;
 use devworks_core::services::packages::{
-    PROJECT_ENABLEMENT_SCHEMA, PackageService, UPDATE_POLICY_SCHEMA, host_schema_ref,
+    HelperKey, PROJECT_ENABLEMENT_SCHEMA, PackageService, UPDATE_POLICY_SCHEMA, host_schema_ref,
 };
 use devworks_core::services::resources::ResourceService;
 use devworks_core::settings::catalog::AgentRole;
@@ -47,8 +47,8 @@ use devworks_core::settings::model;
 use devworks_engine::package::PackageInvocation;
 use devworks_engine::package_host::discovery::resolve_command;
 use devworks_engine::package_host::{
-    HostConfig, IndexPorts, InvocationKind, InvokeOutcome, InvokeRefusal, InvokeRequest,
-    LaunchPorts, RuntimePorts,
+    HostConfig, IndexPorts, InstanceStatus, InvocationKind, InvokeOutcome, InvokeRefusal,
+    InvokeRequest, LaunchPorts, RuntimePorts,
 };
 use devworks_engine::{Composition, PackageComposition, Runtime, RuntimeConfig, boot};
 use devworks_extension_protocol::package::{InvocationOutcome, InvocationScope};
@@ -327,6 +327,15 @@ impl App {
         Self::build(h, probe_path, None)
     }
     fn build(h: Harness, probe_path: Option<String>, files: Option<Arc<dyn PackageFiles>>) -> Self {
+        let mut me = Self::unbooted(h, probe_path, files);
+        me.boot();
+        me
+    }
+    fn unbooted(
+        h: Harness,
+        probe_path: Option<String>,
+        files: Option<Arc<dyn PackageFiles>>,
+    ) -> Self {
         let rt = runtime();
         let store = h.open();
         seed_project(&h);
@@ -349,7 +358,7 @@ impl App {
         });
         let sources = h.root.with_extension("sources");
         std::fs::create_dir_all(&sources).unwrap();
-        let mut me = Self {
+        let me = Self {
             h,
             rt,
             app: None,
@@ -370,10 +379,13 @@ impl App {
                 RuntimeObservation::Found("8.0.4".into()),
             )]));
         }
-        me.boot();
         me
     }
     fn boot(&mut self) {
+        let composition = self.composition();
+        self.app = Some(self.rt.block_on(boot(composition)).expect("boot"));
+    }
+    fn composition(&self) -> Composition {
         let h = &self.h;
         let store = self.store.clone();
         let location = self.sources.clone();
@@ -422,7 +434,7 @@ impl App {
         let mut config_rt = RuntimeConfig::new(id("dispatcher-1"));
         config_rt.collect_interval = Duration::from_secs(3600);
         config_rt.shutdown_bound = Duration::from_secs(10);
-        let composition = Composition {
+        Composition {
             store: store.clone(),
             clock: h.clock(),
             ids: h.ids.clone(),
@@ -455,8 +467,7 @@ impl App {
             use_cases: UseCases::new(),
             consumers: Vec::new(),
             config: config_rt,
-        };
-        self.app = Some(self.rt.block_on(boot(composition)).expect("boot"));
+        }
     }
     fn shutdown(&mut self) {
         if let Some(app) = self.app.take() {
@@ -2441,24 +2452,24 @@ fn rollback_paths_never_restore_a_version_whose_prerequisites_are_gone() {
 // Review round 2: failure accounting, broker access, obsolete pending versions, reverse pins
 
 /// An invocation whose frame is large (128 long allowed-operation IDs, about 17 KB).
-fn big_invoke(a: &App, package: &str) -> devworks_engine::package_host::InvocationHandle {
+fn big_invoke(
+    a: &App,
+    package: &str,
+    deadline: Duration,
+) -> Result<devworks_engine::package_host::InvocationHandle, InvokeRefusal> {
     let ops = (0..128)
         .map(|n| wire::QualifiedId::try_from(format!("{n:0>64}/{}", "o".repeat(64))).unwrap())
         .collect();
-    a.app()
-        .packages()
-        .unwrap()
-        .invoke(InvokeRequest {
-            package_id: package.into(),
-            contribution_id: format!("{package}/echo"),
-            scope: InvocationScope::Workspace,
-            input: serde_json::from_value(json!({"artifactId": "input-a", "versionId": "v1", "sha256": "e".repeat(64), "byteLength": "4", "mediaType": "application/json"})).unwrap(),
-            operation_id: id(&a.key("op")),
-            deadline: Duration::from_secs(60),
-            allowed_operations: ops,
-            kind: InvocationKind::Ordinary,
-        })
-        .unwrap()
+    a.app().packages().unwrap().invoke(InvokeRequest {
+        package_id: package.into(),
+        contribution_id: format!("{package}/echo"),
+        scope: InvocationScope::Workspace,
+        input: serde_json::from_value(json!({"artifactId": "input-a", "versionId": "v1", "sha256": "e".repeat(64), "byteLength": "4", "mediaType": "application/json"})).unwrap(),
+        operation_id: id(&a.key("op")),
+        deadline,
+        allowed_operations: ops,
+        kind: InvocationKind::Ordinary,
+    })
 }
 
 #[test]
@@ -2473,25 +2484,38 @@ fn a_helper_that_stops_reading_is_restarted_through_its_budget_and_then_recorded
             ..Spec::new("deaf-pack", "1.0.0")
         },
     ));
-    for _ in 0..2 {
-        a.ready("deaf-pack");
-        // Far more than any pipe buffer: the writer stalls on the helper's input.
-        let handles: Vec<_> = (0..16).map(|_| big_invoke(&a, "deaf-pack")).collect();
+    // Work keeps arriving: far more than most pipe buffers. Where writes block, the writer
+    // stalls on the helper's input; where the pipe takes it all (its capacity is the
+    // platform's), the invocations' deadlines expire and the cancellation is ignored. Either way
+    // each instance is terminated and its failure counted, however the work and the restarts
+    // interleave.
+    let until = Instant::now() + Duration::from_secs(60);
+    while !matches!(
+        a.record("deaf-pack").availability,
+        Some(PackageAvailability::Failed)
+    ) {
+        assert!(Instant::now() < until, "the failure was never recorded");
+        let handles: Vec<_> = (0..16)
+            .filter_map(|_| big_invoke(&a, "deaf-pack", Duration::from_secs(3)).ok())
+            .collect();
         for h in &handles {
+            let outcome = h.wait(Duration::from_secs(20));
             assert!(
-                matches!(
-                    h.wait(Duration::from_secs(20)),
-                    Some(InvokeOutcome::Unknown(_))
-                ),
-                "the stalled helper's invocations end unknown"
+                matches!(outcome, Some(InvokeOutcome::Unknown(_))),
+                "the deaf helper's invocations end unknown: {outcome:?}"
             );
         }
+        std::thread::sleep(Duration::from_millis(20));
     }
-    // Each stall counted against the restart budget: at the limit the failure is durable.
-    let rec = a.until("deaf-pack", "the failure is recorded", |r| {
-        matches!(r.availability, Some(PackageAvailability::Failed))
-    });
-    assert_eq!(rec.failure_code.unwrap().0, "HelperStalled");
+    let rec = a.record("deaf-pack");
+    let code = rec.failure_code.unwrap().0;
+    assert!(
+        code == "HelperStalled" || code == "CancellationIgnored",
+        "{code}"
+    );
+    // Restarted through its budget (2 instances), then never again.
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(helper_ready_events(&*a.store, "deaf-pack"), 2);
 }
 
 #[test]
@@ -2805,11 +2829,25 @@ fn a_cancellation_shares_one_grace_between_the_acknowledgement_and_the_stop() {
     let h = a
         .invoke("graceful-pack", "wait", InvocationKind::Ordinary)
         .unwrap();
+    let host = a.app().packages().unwrap().clone();
     let started = Instant::now();
+    // When the termination begins (the instance is marked failed before the kill).
+    let terminating = std::thread::spawn(move || {
+        loop {
+            if host
+                .instance_status("graceful-pack")
+                .iter()
+                .any(|(_, s)| matches!(s, InstanceStatus::Failed(_)))
+            {
+                return started.elapsed();
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
     assert!(matches!(h.cancel(), InvokeOutcome::Unknown(_)));
-    // One 500 ms grace, then the tree is killed (not a grace per phase).
-    let took = started.elapsed();
-    assert!(took < Duration::from_millis(900), "{took:?}");
+    // One 500 ms grace, then the tree is terminated (not a grace per phase: 1 s).
+    let took = terminating.join().unwrap();
+    assert!(took < Duration::from_millis(850), "{took:?}");
 }
 
 #[test]
@@ -2998,4 +3036,315 @@ fn a_re_proposal_of_retired_contents_waits_for_approval_and_activates_once_appro
     a.until("repropose-pack", "the approved proposal activates", |r| {
         r.version.0 == "1.1.0"
     });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review round 4: full instance keys, single proposals, abandoned versions, boot cleanup
+
+#[test]
+fn host_seams_act_only_for_the_complete_current_instance_key() {
+    let _s = serial();
+    let a = App::new();
+    let rec = package(a.install(&a.user, &Spec::new("keyed-pack", "1.0.0")));
+    a.ready("keyed-pack");
+    let svc = a.app().packages().unwrap().service().clone();
+    let current = read(&*a.store, |s| s.packages().package("keyed-pack")).unwrap();
+    let key = |generation: i64, config: i64| HelperKey {
+        package_id: "keyed-pack".into(),
+        digest: digest_of(&rec),
+        state_generation: generation,
+        config_revision: config,
+    };
+    // A stale attempt (an earlier configuration or state generation) changes nothing.
+    for stale in [
+        key(current.state_generation, current.config_revision + 1),
+        key(current.state_generation + 1, current.config_revision),
+    ] {
+        assert!(
+            !svc.startup_failed(&stale, "HelperExited", "stale", 2, true)
+                .unwrap()
+        );
+        assert_eq!(availability(&a.record("keyed-pack")), "Ready");
+    }
+    // The current instance's failure is recorded.
+    svc.startup_failed(
+        &key(current.state_generation, current.config_revision),
+        "HelperExited",
+        "current",
+        2,
+        false,
+    )
+    .unwrap();
+    assert_eq!(availability(&a.record("keyed-pack")), "Failed");
+}
+
+#[test]
+fn identical_contents_have_one_pending_proposal() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("twice-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    let next = Spec {
+        version: "1.1.0".into(),
+        ..spec.clone()
+    };
+    let (first, d, source) = propose(&a, &next);
+    // Submitting the same contents again is the same proposal, not a second one.
+    let body = json!({"kind": "addons.propose", "source": source, "manifestDigest": d, "basePackageId": "twice-pack"});
+    let again = match a.domain(&a.agent, "addons.propose", body) {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::NoChange {
+                result: OperationResult::AddonsPropose { value },
+            } => value,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(again.id, first.id);
+    // The person installs exactly those contents: the one proposal is approved, and nothing
+    // left pending can later reject the active version.
+    package(a.update(&a.user, &next));
+    let pid = first.id.clone();
+    let stored = read(&*a.store, move |s| s.packages().proposal(&pid)).unwrap();
+    assert_eq!(stored.state, "Approved");
+    let svc = a.app().packages().unwrap().service().clone();
+    assert!(
+        svc.decide_proposal(&a.user, &first.id, stored.revision, &d, false, "no")
+            .unwrap()
+            .is_err()
+    );
+    let dd = d.clone();
+    let phase = read(&*a.store, move |s| {
+        s.packages().package_version("twice-pack", &dd)
+    })
+    .unwrap()
+    .phase;
+    assert_eq!(phase, VersionPhase::Installed);
+}
+
+#[test]
+fn a_displaced_staged_version_without_a_live_proposal_is_collected() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("displaced-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    // Two agent bundles in a row: each waits for the person; the second displaces the first.
+    let v2 = package(a.update(
+        &a.agent,
+        &Spec {
+            version: "1.1.0".into(),
+            ..spec.clone()
+        },
+    ));
+    let d2 = String::from(v2.pending_digest.clone().unwrap());
+    let v3 = package(a.update(
+        &a.agent,
+        &Spec {
+            version: "1.2.0".into(),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(v3.pending_version.as_ref().unwrap().0, "1.2.0");
+    // Nothing points at 1.1.0 any more and no proposal waits for it: it is retired and its
+    // install directory removed (the pending 1.2.0 is kept).
+    let dir = a.h.root.join("packages").join("displaced-pack").join(&d2);
+    let until = Instant::now() + Duration::from_secs(20);
+    loop {
+        let d = d2.clone();
+        let phase = read(&*a.store, move |s| {
+            s.packages().package_version("displaced-pack", &d)
+        })
+        .unwrap()
+        .phase;
+        if phase == VersionPhase::Removed && !dir.exists() {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "the abandoned version stays {phase:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let d3 = String::from(v3.pending_digest.clone().unwrap());
+    assert!(
+        a.h.root
+            .join("packages")
+            .join("displaced-pack")
+            .join(&d3)
+            .exists()
+    );
+}
+
+/// Native install directories that cannot be listed (a collection I/O error at boot).
+struct UnlistableFiles(NativePackageFiles);
+impl PackageFiles for UnlistableFiles {
+    fn publish(
+        &self,
+        package_id: &str,
+        manifest_digest: &str,
+        files: &[BundleFile],
+        expected: &[InspectedFile],
+    ) -> Result<(), PackageFileError> {
+        self.0.publish(package_id, manifest_digest, files, expected)
+    }
+    fn verify(
+        &self,
+        package_id: &str,
+        manifest_digest: &str,
+        expected: &[InspectedFile],
+    ) -> Result<(), PackageFileError> {
+        self.0.verify(package_id, manifest_digest, expected)
+    }
+    fn path(&self, package_id: &str, manifest_digest: &str, relative: &str) -> std::path::PathBuf {
+        self.0.path(package_id, manifest_digest, relative)
+    }
+    fn directory(&self, package_id: &str, manifest_digest: &str) -> std::path::PathBuf {
+        self.0.directory(package_id, manifest_digest)
+    }
+    fn remove(&self, package_id: &str, manifest_digest: &str) -> Result<(), PackageFileError> {
+        self.0.remove(package_id, manifest_digest)
+    }
+    fn idle_for(&self, package_id: &str, manifest_digest: &str) -> Option<Duration> {
+        self.0.idle_for(package_id, manifest_digest)
+    }
+    fn installed(&self) -> Result<Vec<(String, String)>, PackageFileError> {
+        Err(PackageFileError::Io(
+            "the install directory cannot be listed".into(),
+        ))
+    }
+    fn clean_staging(&self, older_than: Option<Duration>) -> Result<usize, PackageFileError> {
+        self.0.clean_staging(older_than)
+    }
+}
+
+#[test]
+fn a_boot_that_fails_after_the_package_host_started_releases_the_store() {
+    let _s = serial();
+    let h = Harness::new();
+    let files: Arc<dyn PackageFiles> = Arc::new(UnlistableFiles(NativePackageFiles::new(
+        h.root.join("packages"),
+    )));
+    let a = App::unbooted(h, None, Some(files));
+    let store = Arc::downgrade(&a.store);
+    let booted = a.rt.block_on(boot(a.composition()));
+    assert!(booted.is_err(), "the package boot fails");
+    drop(booted);
+    drop(a);
+    // Nothing (no service<->host cycle) keeps the store, and its workspace lock, alive.
+    assert!(
+        store.upgrade().is_none(),
+        "the store outlived a failed boot"
+    );
+}
+
+fn helper_ready_events(store: &dyn ApplicationStore, package: &str) -> usize {
+    let p = package.to_owned();
+    read(store, move |s| {
+        s.history().page(
+            &EventFilter::Aggregate {
+                kind: "package".into(),
+                id: p,
+            },
+            0,
+            500,
+        )
+    })
+    .events
+    .iter()
+    .filter(|e| e.kind == "PackageHelperReady")
+    .count()
+}
+
+#[test]
+fn a_spent_restart_budget_never_starts_its_key_again_before_the_failure_is_recorded() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "exit-after-ready".into(),
+            ..Spec::new("spent-pack", "1.0.0")
+        },
+    ));
+    // The second (last budgeted) instance is running: from now on recording its failure has
+    // to wait for the database, while reconciliation keeps reading the old registry.
+    let until = Instant::now() + Duration::from_secs(20);
+    while helper_ready_events(&*a.store, "spent-pack") < 2 {
+        assert!(Instant::now() < until, "the second instance never started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let lock = rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap();
+    lock.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    let host = a.app().packages().unwrap().clone();
+    // The second instance exits and its failure is accounted (in memory) while the durable
+    // record cannot be written yet.
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let s = host.instance_status("spent-pack");
+        if s.iter()
+            .any(|(_, st)| matches!(st, InstanceStatus::Failed(_)))
+            && !s.iter().any(|(_, st)| *st == InstanceStatus::Ready)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "the second instance never failed: {s:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Past any restart backoff, a reconciliation pass reads the registry that still says the
+    // package should run.
+    std::thread::sleep(Duration::from_millis(200));
+    let pass = {
+        let host = host.clone();
+        std::thread::spawn(move || host.reconcile())
+    };
+    std::thread::sleep(Duration::from_millis(1000));
+    lock.execute_batch("COMMIT;").unwrap();
+    drop(lock);
+    pass.join().unwrap();
+    a.until("spent-pack", "the failure is recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    std::thread::sleep(Duration::from_secs(1));
+    // No third instance was started on the spent budget.
+    assert_eq!(helper_ready_events(&*a.store, "spent-pack"), 2);
+    assert_eq!(availability(&a.record("spent-pack")), "Failed");
+    // And the spent budget itself is forgotten once the key is no longer the intent.
+    let host = a.app().packages().unwrap().clone();
+    let until = Instant::now() + Duration::from_secs(5);
+    while host.tracked_budgets() != 0 {
+        assert!(Instant::now() < until, "budgets accumulate");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn only_the_current_state_generation_and_its_seed_are_retained() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("generations-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    for v in ["1.1.0", "1.2.0", "1.3.0"] {
+        package(a.update(
+            &a.user,
+            &Spec {
+                version: v.into(),
+                ..spec.clone()
+            },
+        ));
+    }
+    let current = read(&*a.store, |s| s.packages().package("generations-pack")).unwrap();
+    assert_eq!(current.state_generation, 4);
+    let kept: Vec<i64> = (1..=4)
+        .filter(|g| {
+            let g = *g;
+            read(&*a.store, move |s| {
+                s.packages().state_generation("generations-pack", g)
+            })
+            .is_some()
+        })
+        .collect();
+    assert_eq!(kept, vec![3, 4]);
 }

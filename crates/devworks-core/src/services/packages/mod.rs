@@ -1559,6 +1559,19 @@ impl PackageService {
         if p.active_digest.as_deref() == Some(candidate.manifest_digest.as_str()) {
             return Err(conflict("package_version", &p.package_id).into());
         }
+        // Identical contents already waiting for the person: that is the proposal (one decision
+        // per contents, so a later decision can never reach a stale duplicate).
+        if let Some(pending) = tx
+            .packages()
+            .proposal_for(&p.package_id, &candidate.manifest_digest)?
+            .filter(|pr| pr.state == "Pending")
+        {
+            return Ok(DomainDecision::NoChange {
+                result: OperationResult::AddonsPropose {
+                    value: view::proposal_record(&pending, p.revision, p.active_digest.is_some()),
+                },
+            });
+        }
         let base_version = match &p.active_digest {
             Some(d) => tx.packages().package_version(&p.package_id, d)?,
             None => None,
@@ -1863,17 +1876,17 @@ impl PackageService {
     /// Returns whether it rolled back.
     pub fn startup_failed(
         &self,
-        package_id: &str,
-        digest: &str,
+        key: &HelperKey,
         code: &str,
         message: &str,
         attempts: i64,
         admitted_nothing: bool,
     ) -> Result<bool, StorageError> {
         let svc = self.clone_ports();
+        let key = key.clone();
         let (package_id, digest, code, message) = (
-            package_id.to_owned(),
-            digest.to_owned(),
+            key.package_id.clone(),
+            key.digest.clone(),
             code.to_owned(),
             message.to_owned(),
         );
@@ -1881,7 +1894,9 @@ impl PackageService {
             let Some(mut p) = tx.packages().package(&package_id)? else {
                 return Ok(false);
             };
-            if p.active_digest.as_deref() != Some(digest.as_str()) {
+            // Only the current instance's failure counts: an attempt under another state
+            // generation or configuration (a stale one) changes nothing.
+            if !key.is_current(&p) {
                 return Ok(false);
             }
             let host = tx.store().host_actor.clone();
@@ -1954,20 +1969,16 @@ impl PackageService {
 
     /// Records that the helper of `digest` is running and ready (clears an earlier failure of
     /// it) and attributes it in history.
-    pub fn record_running(
-        &self,
-        package_id: &str,
-        digest: &str,
-        process: &Id,
-    ) -> Result<(), StorageError> {
+    pub fn record_running(&self, key: &HelperKey, process: &Id) -> Result<(), StorageError> {
         let svc = self.clone_ports();
+        let key = key.clone();
         let (package_id, digest, process) =
-            (package_id.to_owned(), digest.to_owned(), process.clone());
+            (key.package_id.clone(), key.digest.clone(), process.clone());
         run_write(&*self.store, WriteOptions::default(), move |tx| {
             let Some(mut p) = tx.packages().package(&package_id)? else {
                 return Ok(());
             };
-            if p.active_digest.as_deref() != Some(digest.as_str()) {
+            if !key.is_current(&p) {
                 return Ok(());
             }
             let host = tx.store().host_actor.clone();
@@ -2054,13 +2065,23 @@ impl PackageService {
                         out.push((pkg, digest, true));
                         continue;
                     };
+                    // The pending pointer pins a version whether or not the package is installed
+                    // yet (a first install that waits); active and predecessor only while it is.
                     let pinned = p.as_ref().is_some_and(|p| {
-                        p.installed
-                            && [&p.active_digest, &p.predecessor_digest, &p.pending_digest]
-                                .iter()
-                                .any(|d| d.as_deref() == Some(digest.as_str()))
+                        p.pending_digest.as_deref() == Some(digest.as_str())
+                            || (p.installed
+                                && [&p.active_digest, &p.predecessor_digest]
+                                    .iter()
+                                    .any(|d| d.as_deref() == Some(digest.as_str())))
                     });
-                    let staged = v.phase == VersionPhase::Staged;
+                    // A staged version is genuinely pending while the pending pointer or a
+                    // proposal waiting for the person names it; otherwise it was displaced and
+                    // abandoned: retired like any unreferenced version.
+                    let live_proposal = tx
+                        .packages()
+                        .proposal_for(&pkg, &digest)?
+                        .is_some_and(|pr| pr.state == "Pending");
+                    let staged = v.phase == VersionPhase::Staged && (pinned || live_proposal);
                     if !pinned && v.phase == VersionPhase::Rejected {
                         // A rejected version's files go; the rejection itself stays recorded.
                         out.push((pkg, digest, false));
@@ -2155,6 +2176,14 @@ impl PackageService {
             }
             if pr.state != "Pending" {
                 return Ok(Err(conflict("package_proposal", proposal_id.as_str())));
+            }
+            // A rejection never reaches contents that are active (they were approved since).
+            if !approve
+                && tx.packages().package(&pr.package_id)?.is_some_and(|p| {
+                    p.active_digest.as_deref() == Some(pr.manifest_digest.as_str())
+                })
+            {
+                return Ok(Err(conflict("package_version", pr.package_id.as_str())));
             }
             let now = tx.now_ms();
             let mut d = pr.clone();
@@ -2288,6 +2317,25 @@ impl PackageService {
                 Some((diagnostic, package.to_owned(), errors));
         }
         DomainDecision::Refused { fault }
+    }
+}
+
+/// The complete identity of one helper instance: package, active version, state generation and
+/// configuration revision. A host seam acts only when every part is still current.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HelperKey {
+    pub package_id: String,
+    pub digest: String,
+    pub state_generation: i64,
+    pub config_revision: i64,
+}
+impl HelperKey {
+    /// Whether this is the instance the committed record of `p` describes now.
+    pub fn is_current(&self, p: &StoredPackage) -> bool {
+        p.package_id == self.package_id
+            && p.active_digest.as_deref() == Some(self.digest.as_str())
+            && p.state_generation == self.state_generation
+            && p.config_revision == self.config_revision
     }
 }
 

@@ -385,6 +385,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     // Packages (after owned processes are recovered, before any command is admitted): remove
     // interrupted publications and unreferenced install directories, then start every enabled,
     // available package's helper against the committed registry.
+    let mut package_guard = PackageBootGuard(None);
     let package_host = match packages {
         Some(p) => {
             let host = PackageHost::new(
@@ -398,6 +399,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 p.index,
             );
             p.service.set_activity(host.clone());
+            // From here every early return abandons the host (breaks the service<->host cycle
+            // that would keep the store and its workspace lock alive, and kills any started
+            // helper) until the completed Runtime owns it.
+            package_guard.0 = Some(host.clone());
             let booting = host.clone();
             tokio::task::spawn_blocking(move || booting.boot())
                 .await
@@ -465,6 +470,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         config.diagnostics_interval,
     );
     let monitoring = tokio::spawn(async move { watcher.run(svc, every).await });
+    // Ownership of the package host moves to the Runtime.
+    package_guard.0 = None;
     Ok(Runtime {
         store,
         ids,
@@ -490,6 +497,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         monitoring: Mutex::new(Some(monitoring)),
         handle: tokio::runtime::Handle::current(),
     })
+}
+
+/// Abandons a package host whose boot did not complete (see `boot`).
+struct PackageBootGuard(Option<Arc<PackageHost>>);
+impl Drop for PackageBootGuard {
+    fn drop(&mut self) {
+        if let Some(host) = self.0.take() {
+            host.abandon();
+        }
+    }
 }
 
 fn panicked(what: &str) -> StorageError {

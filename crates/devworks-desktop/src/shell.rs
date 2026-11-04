@@ -596,12 +596,16 @@ impl Shell {
                         self.addons.busy =
                             c.task(Slot::AddonsCommand, "Downloading the add-on", move |b| {
                                 let path = b.fetch_index_bundle(&package, &digest)?;
-                                a::install_from_file(
+                                let installed = a::install_from_file(
                                     b,
                                     &path,
                                     update.then_some(package.as_str()),
                                     registry,
-                                )
+                                );
+                                // The download was saved as an artifact (or refused): it
+                                // never accumulates in the scratch directory.
+                                let _ = std::fs::remove_file(&path);
+                                installed
                             });
                     }
                     None

@@ -73,7 +73,7 @@ use devworks_core::ports::storage::{
 use devworks_core::ports::{IdKind, IdSource};
 use devworks_core::protocol::records::{PackageAvailability, Severity};
 use devworks_core::protocol::{Counter, Id, Revision};
-use devworks_core::services::packages::{ORPHAN_AGE, PackageService, policy};
+use devworks_core::services::packages::{HelperKey, ORPHAN_AGE, PackageService, policy};
 use devworks_core::services::process::{
     LaunchPolicy, LaunchRequest, OwnedProcess, ProcessSupervisor,
 };
@@ -200,6 +200,15 @@ impl Instance {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
+    }
+    /// The instance's full identity for the service's host seams.
+    fn helper_key(&self) -> HelperKey {
+        HelperKey {
+            package_id: self.package_id.clone(),
+            digest: self.key.digest.clone(),
+            state_generation: self.key.generation,
+            config_revision: self.key.config_revision,
+        }
     }
     /// The owned process (a copy: the lock is never held across a wait or a kill).
     fn process(&self) -> Option<OwnedProcess> {
@@ -400,6 +409,9 @@ struct Attempts {
     failures: u32,
     next_at: Option<Instant>,
     admitted: bool,
+    /// The budget is spent: the key is never started again (the durable failure or guarded
+    /// rollback being recorded changes the activation intent; an enable starts a new budget).
+    exhausted: bool,
 }
 
 pub struct PackageHost {
@@ -423,6 +435,9 @@ pub struct PackageHost {
     epoch: AtomicU64,
     /// Serializes reconciliation passes.
     pass: Mutex<()>,
+    /// The shutdown deadline once shutdown began: every stop in progress or started later
+    /// (a reconciliation's retirement included) observes it, never a longer one of its own.
+    shutdown_by: Mutex<Option<Instant>>,
     me: Mutex<std::sync::Weak<PackageHost>>,
 }
 
@@ -475,6 +490,7 @@ impl PackageHost {
             running: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
             pass: Mutex::new(()),
+            shutdown_by: Mutex::new(None),
             me: Mutex::new(std::sync::Weak::new()),
         });
         *host.me.lock().unwrap_or_else(|p| p.into_inner()) = Arc::downgrade(&host);
@@ -489,6 +505,13 @@ impl PackageHost {
     }
     pub fn service(&self) -> &Arc<PackageService> {
         &self.service
+    }
+    /// How many restart budgets the host tracks (one per desired instance key at most).
+    pub fn tracked_budgets(&self) -> usize {
+        self.attempts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len()
     }
     /// How many registry publications this host has announced (the admission epoch).
     pub fn publications(&self) -> u64 {
@@ -640,6 +663,13 @@ impl PackageHost {
         let Ok((registry, desired, known)) = view else {
             return;
         };
+        // Restart budgets of keys that are no longer the activation intent (another version,
+        // generation or configuration, or a recorded failure) are forgotten, so they never
+        // accumulate; a person's enable starts a fresh budget.
+        self.attempts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|(pkg, key), _| desired.get(pkg).is_some_and(|(k, _)| k == key));
         // Retire whatever no longer matches.
         let mut to_start = Vec::new();
         {
@@ -671,7 +701,7 @@ impl PackageHost {
                         .get(&(pkg.clone(), k.clone()))
                         .cloned()
                         .unwrap_or_default();
-                    if attempts.next_at.is_none_or(|t| Instant::now() >= t) {
+                    if !attempts.exhausted && attempts.next_at.is_none_or(|t| Instant::now() >= t) {
                         let inst = Arc::new(Instance {
                             package_id: pkg.clone(),
                             key: k.clone(),
@@ -717,8 +747,16 @@ impl PackageHost {
         self.changed.notify_all();
     }
 
-    /// Stops every retiring instance with nothing in flight.
+    /// Stops every retiring instance with nothing in flight (not once shutdown owns stopping).
     fn retire_idle(&self) {
+        if self
+            .barriers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .stopping
+        {
+            return;
+        }
         let idle: Vec<Arc<Instance>> = self
             .instances
             .lock()
@@ -750,7 +788,13 @@ impl PackageHost {
     /// has passed nothing is waited for (the tree is killed at once).
     fn stop_instance(&self, inst: &Instance, deadline: Instant) {
         let grace = self.config.cancel_grace;
-        let left = || deadline.saturating_duration_since(Instant::now());
+        // Recomputed before every phase, against the earlier of this stop's deadline and the
+        // shutdown deadline (which may begin while this stop runs).
+        let left = || {
+            let by = (*self.shutdown_by.lock().unwrap_or_else(|p| p.into_inner()))
+                .map_or(deadline, |s| s.min(deadline));
+            by.saturating_duration_since(Instant::now())
+        };
         if let Some(s) = inst.session() {
             let wait = left().min(grace);
             if !s.is_closed() && !wait.is_zero() {
@@ -915,13 +959,8 @@ impl PackageHost {
         if let Some(s) = inst.session() {
             s.fail(message);
         }
-        let process = inst.take_process();
-        if let Some(p) = process {
-            let _ = self
-                .supervisor
-                .cancel(&p, Duration::from_millis(50), self.config.cancel_grace);
-        }
-        self.log_stderr(inst, Severity::Warning, code, message);
+        // Accounted first, in memory: the kill and the log below write to the store and may
+        // wait, and no reconciliation pass may restart a spent key meanwhile.
         let key = (inst.package_id.clone(), inst.key.clone());
         let mut attempts = self.attempts.lock().unwrap_or_else(|p| p.into_inner());
         let a = attempts.entry(key).or_default();
@@ -929,25 +968,57 @@ impl PackageHost {
         a.admitted |= inst.admitted.load(Ordering::SeqCst) > 0;
         let failures = a.failures;
         let admitted = a.admitted;
-        a.next_at = Some(
-            Instant::now()
-                + self.config.restart_backoff
-                    * 2u32.saturating_pow(failures.saturating_sub(1)).min(64),
-        );
+        // No restart until the failed tree is stopped (the backoff starts after it).
+        a.next_at = Some(Instant::now() + Duration::from_secs(3600));
+        // Spent before the durable record is written: no reconciliation pass (whose registry
+        // snapshot may predate the record) starts this key again in the meantime.
+        a.exhausted = failures >= self.config.restart_limit;
         drop(attempts);
+        let process = inst.take_process();
+        if let Some(p) = process {
+            let _ = self
+                .supervisor
+                .cancel(&p, Duration::from_millis(50), self.config.cancel_grace);
+        }
+        self.log_stderr(inst, Severity::Warning, code, message);
+        if let Some(a) = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(&(inst.package_id.clone(), inst.key.clone()))
+        {
+            a.next_at = Some(
+                Instant::now()
+                    + self.config.restart_backoff
+                        * 2u32.saturating_pow(failures.saturating_sub(1)).min(64),
+            );
+        }
         if failures >= self.config.restart_limit {
             let changed = self.service.startup_failed(
-                &inst.package_id,
-                &inst.key.digest,
+                &inst.helper_key(),
                 code,
                 message,
                 i64::from(failures),
                 !admitted,
             );
-            // A recorded failure or a guarded rollback changed the registry: admissions that
-            // read it earlier read it again (no reconciliation here: this may run inside one).
-            if changed.is_ok() {
-                self.epoch.fetch_add(1, Ordering::SeqCst);
+            match changed {
+                // A recorded failure or a guarded rollback changed the registry: admissions
+                // that read it earlier read it again (no reconciliation here: this may run
+                // inside one).
+                Ok(_) => {
+                    self.epoch.fetch_add(1, Ordering::SeqCst);
+                }
+                // Nothing was recorded: the budget is not spent, the next failure records it.
+                Err(_) => {
+                    if let Some(a) = self
+                        .attempts
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .get_mut(&(inst.package_id.clone(), inst.key.clone()))
+                    {
+                        a.exhausted = false;
+                    }
+                }
             }
         }
         self.poke();
@@ -967,8 +1038,7 @@ impl PackageHost {
             inst.set(InstanceStatus::Failed(e.to_string()));
             if svc
                 .startup_failed(
-                    &inst.package_id,
-                    &inst.key.digest,
+                    &inst.helper_key(),
                     "InstallIntegrity",
                     &e.to_string(),
                     1,
@@ -1051,7 +1121,7 @@ impl PackageHost {
             Ok(()) => {
                 // Recorded before it admits work, so a ready helper is always attributed.
                 if let Some(p) = inst.process() {
-                    let _ = svc.record_running(&inst.package_id, &inst.key.digest, &p.id);
+                    let _ = svc.record_running(&inst.helper_key(), &p.id);
                 }
                 inst.set(InstanceStatus::Ready);
                 // The failure budget resets only after sustained health (see `healthy`).
@@ -1579,6 +1649,9 @@ impl PackageHost {
     /// closes, in-flight invocations are cancelled, each helper gets `host.shutdown`, then the
     /// remaining trees are stopped.
     pub fn shutdown(&self, bound: Duration) {
+        // The deadline is fixed first: any stop already in progress observes it from here.
+        let deadline = Instant::now() + bound;
+        *self.shutdown_by.lock().unwrap_or_else(|p| p.into_inner()) = Some(deadline);
         self.running.store(false, Ordering::SeqCst);
         self.detach();
         self.poke();
@@ -1595,7 +1668,6 @@ impl PackageHost {
             .flatten()
             .cloned()
             .collect();
-        let deadline = Instant::now() + bound;
         for inst in &all {
             inst.set(InstanceStatus::Retiring);
         }

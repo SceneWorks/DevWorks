@@ -763,6 +763,13 @@ impl PackageRegistry for Unit<'_> {
                 g.created_at_ms,
             ],
         ))?;
+        // Only the new generation and the one it was seeded from can ever be read again (a
+        // rollback carries the current state forward or restores exactly its seed): older
+        // retained generations are dropped, so activations never accumulate them.
+        db(self.conn.execute(
+            "DELETE FROM package_state_generations WHERE package_id=?1 AND generation<>?2 AND generation IS NOT ?3",
+            params![g.package_id, g.generation, g.seeded_from],
+        ))?;
         let state = state.cloned().unwrap_or(Value::Null);
         // (The live handler state of the new generation.)
         db(self.conn.execute(
