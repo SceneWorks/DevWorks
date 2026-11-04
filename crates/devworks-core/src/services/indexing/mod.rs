@@ -534,7 +534,7 @@ impl IndexCoordinator {
     ) -> Result<(OperationResult, i64), Failure> {
         let project = request_scope(read.projects(), ctx, &i.scope, false)?;
         let scope_revision = project.as_ref().map_or(1, |p| p.scope_revision);
-        let mut filter = RunFilter::default();
+        let mut filter = IndexRunFilter::default();
         if let Some(r) = &i.repository_id {
             let repo = visible_repository(read.projects(), ctx, r)?;
             if let Some(p) = &project

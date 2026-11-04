@@ -176,6 +176,8 @@
 pub mod diagnostics;
 pub mod dispatch;
 pub mod indexing;
+pub mod jobs;
+pub mod knowledge;
 pub mod package;
 pub mod replies;
 pub mod resources;
@@ -189,6 +191,7 @@ pub use dispatch::{
     Outcome, RecoveryReport, RetryPolicy, RootEligibility, TickReport, Wakeup,
 };
 pub use indexing::{IndexSupervisor, IndexingConfig, IndexingStatus};
+pub use jobs::{Scheduler, SchedulerTick};
 pub use runs::{
     ActivationLauncher, Launch, LaunchEnd, LaunchFuture, RunGate, RunSupervisor, RunTick,
 };

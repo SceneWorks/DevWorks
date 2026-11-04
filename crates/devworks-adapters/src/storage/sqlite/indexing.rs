@@ -1,4 +1,4 @@
-//! SQLite repository indexing records (DW-023): migration 20's `index_source_configs`,
+//! SQLite repository indexing records (DW-023): migration 19's `index_source_configs`,
 //! `repository_sources`, `repository_worktrees`, `index_runs` and `index_overlays`, and the
 //! migration 1 graph payload tables (`index_generations`, `source_units`, `index_batches`,
 //! `graph_nodes`, `graph_edges`, `index_views`, `published_views`, `index_pins`).
@@ -549,7 +549,7 @@ macro_rules! index_reads {
             }
             fn runs(
                 &self,
-                filter: &RunFilter,
+                filter: &IndexRunFilter,
                 after: Option<&RunPosition>,
                 n: u16,
             ) -> Result<Vec<StoredIndexRun>, StorageError> {
@@ -1029,10 +1029,7 @@ impl IndexRepository for Unit<'_> {
                 id: run.id.as_str().to_owned(),
             });
         }
-        if self
-            .active_run(&run.repository_id, run.overlay_id.as_ref())?
-            .is_some()
-        {
+        if IndexRead::active_run(self, &run.repository_id, run.overlay_id.as_ref())?.is_some() {
             return Err(StorageError::Duplicate {
                 kind: "active_index_run",
                 id: run.repository_id.as_str().to_owned(),

@@ -203,7 +203,7 @@ pub struct StoredIndexRun {
 
 /// Which runs a listing covers (newest first, then by ID).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RunFilter {
+pub struct IndexRunFilter {
     /// Only runs of this repository.
     pub repository: Option<Id>,
     /// Only runs of these repositories (a project's members); `None` means every repository.
@@ -359,7 +359,7 @@ pub trait IndexRead {
     /// At most `limit` runs after `after`, newest first.
     fn runs(
         &self,
-        filter: &RunFilter,
+        filter: &IndexRunFilter,
         after: Option<&RunPosition>,
         limit: u16,
     ) -> Result<Vec<StoredIndexRun>, StorageError>;

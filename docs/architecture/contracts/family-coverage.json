@@ -422,6 +422,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -468,11 +476,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Read one feature at its work revision. Schema revision 2: the record carries the feature's current execution-readiness assessment (AGENT-12, AGENT-18-20): the reviewed plan revision and digest, freshness against the active approved plan (stale scope units by requirement ID; the absent key is feature-wide), whether it is ready (current with no open blocking finding) and every finding with its requirement links, disposition, affected work, attempts, closure condition, decision with confidence and evidence, investigation objective/limits, question/recommendation and closure evidence. Readiness is reported separately from plan approval. Every work record at revision 2 also carries the revision of the queue it is ranked in (queueRevision: the project queue for features and standalone issues, its feature queue for a card) and of its project workflow (workflowRevision), the expected revisions of prioritization and workflow moves. A feature record at revision 2 also carries its active plan's acceptance tests (acceptanceTests), so a client revising the plan keeps them.",
           "familyRules": "Features own their plan. One active approved plan plus at most one pending revision; no independent plan work item or user-facing version management. Draft edits/approval requests/rejection preserve the active plan and eligible execution. Exact human approval atomically replaces it; current authority/controls and affected task checks still apply.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -514,6 +530,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -560,6 +584,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -606,11 +638,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue.",
+          "semanticRules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
           "familyRules": "Features own their plan. One active approved plan plus at most one pending revision; no independent plan work item or user-facing version management. Draft edits/approval requests/rejection preserve the active plan and eligible execution. Exact human approval atomically replaces it; current authority/controls and affected task checks still apply.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -652,6 +692,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -744,11 +792,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority.",
+          "semanticRules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents.",
           "familyRules": "Features own their plan. One active approved plan plus at most one pending revision; no independent plan work item or user-facing version management. Draft edits/approval requests/rejection preserve the active plan and eligible execution. Exact human approval atomically replaces it; current authority/controls and affected task checks still apply.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -797,6 +853,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -841,6 +905,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -889,6 +961,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -935,6 +1015,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -981,11 +1069,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue.",
+          "semanticRules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
           "familyRules": "Clear standalone issues may implement immediately under explicit Start. Remote publish/link preserves exact issue/repository identity and conflict observations.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1126,6 +1222,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -1170,6 +1274,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -1218,6 +1330,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1264,6 +1384,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1310,11 +1438,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order.",
+          "semanticRules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
           "familyRules": "ProjectTask belongs to one project and has an optional feature relationship. Standalone tasks are shown as issues and share the same stable work identity across task/issue entry points. Task/Issue wire tags cannot establish feature membership or execution authority. Feature-linked work stays in feature allocation; standalone work uses issue allocation/execution/usage/delivery. Assignment parentage is separate; no manual child-assignment Pause/Continue. Humans and agents share task priority and project-wide blocking-link operations. Cross-feature links do not change membership. Eligibility precedes descending priority and ascending queue rank; graph-cycle and current controls apply on every claim/dispatch.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1356,6 +1492,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1402,6 +1546,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1448,6 +1600,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1494,6 +1654,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1540,6 +1708,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1586,6 +1762,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6153,11 +6337,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Scoped lexical search, newest first: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies before any candidate is materialized. Every word of text must appear (Unicode case-folded) in the claim or its subject entity. Lifecycle Active by default (revision 1: Active only). Cursors bind the query and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6199,11 +6391,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "One visible claim with its subject/object entities, evidence, open conflicts (active claims of the same subject and predicate with another value) and supersession chain; revision reads a recorded past revision. Schema revision 2: relations, revision history and the scope revision.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6245,6 +6445,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6291,11 +6499,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "A new revision of an active claim at its exact revision.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6337,11 +6553,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Typed attributed relation between visible entities or claims of the scope. Lessons: same_as merges the subject into the object as recurrence, contradicts keeps both with an open conflict, unmerge reverses a same_as merge.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6383,11 +6607,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Replace each selected claim's tag set (Unicode case-folded, sorted, unique) at its exact revision.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6429,11 +6661,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision.",
+          "semanticRules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: the source revision verified against; a later observed source revision marks the claim stale until verified again.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6475,11 +6715,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision.",
+          "semanticRules": "Mark an active claim wrong at its exact revision; it stays readable as Retracted.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6521,6 +6769,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6567,11 +6823,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Counts, retrieval mode and recent write outcomes of a visible scope; the reply stamp carries the scope revision. Diagnostic codes: component knowledge.retrieval code LexicalOnly while no embedding route exists (vector search is never claimed); component knowledge.counts per lifecycle and lesson state; component knowledge.writes for recent writes. Schema revision 2: sourceId previews a delete by source and importSource with importSchema previews a user data import, each as a component knowledge.preview diagnostic whose id is the exact preview digest, plus one knowledge.import diagnostic per candidate with its outcome.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6617,7 +6881,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Exact preview match; tombstone selected source contributions, preserve independent surviving evidence and journal count.",
+          "semanticRules": "Exact preview match; tombstone selected source contributions, preserve independent surviving evidence and journal count. Any size of source is deleted whole: past one batch it continues as a durable job (each batch its own transaction, resumed at boot), the source of the scope is read-only until it finishes, and knowledge.write_status of the summary id reports Dispatching, then ObservedComplete with every ID.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6663,7 +6927,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "The user or host only. Exact revisions; tombstone the selected claims (provenance kept, content purged) and evidence no surviving claim uses; journal counts.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6705,11 +6969,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "The durable receipt of a committed Knowledge write. Schema revision 2: entityCount and claimCount are the totals the write changed; a receipt names at most 128 entity IDs, claim IDs and diagnostics, and nextCursor (when any list has more) continues through write_status with cursor, so every ID and note of a bulk write is readable and none is dropped.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6749,6 +7021,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -6797,6 +7077,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -6841,6 +7129,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -6889,6 +7185,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -6933,6 +7237,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -7027,6 +7339,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -7073,6 +7393,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7119,11 +7447,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Authorize both scopes and preserve original provenance/version. Promotion grants no instruction or execution authority.",
+          "semanticRules": "Authorize both scopes and preserve original provenance/version. Promotion grants no instruction or execution authority. Schema revision 2: action Effective (default; the user makes a lesson an effective rule early), Propose, Reject (the user, with reason) or Address (a lesson addressed in code, instructions, a skill, documentation or a test). No rule waits for approval.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -7165,11 +7501,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision.",
+          "semanticRules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: resolve an open challenge (Uphold or Retire) or, with outcome Retire and no challenge, retire the rule; a resolution is the user's and nothing waits on a challenge.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -7211,11 +7555,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Lessons carrying every tag, newest first: a project scope reads its own and general lessons. Schema revision 2: rule states, activity and views (recently learned, recurring, unaddressed, undelivered).",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -7552,6 +7904,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -12984,11 +13344,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Bounded page of the visible jobs of one scope (Workspace: app-level jobs; Project: that project's) in title then ID order, optionally filtered by enabled; deleted jobs are omitted; cursors bind the scope, filter and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13030,11 +13398,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization.",
+          "semanticRules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization (a person); other principals create disabled drafts. Titles are unique per scope; a calendar schedule is a standard five-field cron expression (Cronos semantics) in an IANA time zone and must produce a future occurrence. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13076,11 +13452,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Replaces title, schedule and definition at the expected revision and recomputes the next future occurrence (no catch-up). Only a person may edit an enabled or authorized job; another principal's edit of a draft leaves it unauthorized. A run already claimed keeps its own definition snapshot. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13122,11 +13506,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects.",
+          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Enabling (a person only) authorizes the current definition, clears a restore or project hold of an open project and computes the next future occurrence without replaying missed ones. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13168,11 +13560,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Journaled",
-          "semanticRules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature.",
+          "semanticRules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature. A run while another run of the job is active is recorded Skipped and nothing is queued; another principal may run only an authorized job; a closed project refuses. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13214,11 +13614,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "The job and its selected (or latest) run. Schema revision 2: a newest-first page of the job's run history (history) and of the selected run's usage items (usage), each continued by a cursor bound to the job, run and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13260,11 +13668,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Journaled",
-          "semanticRules": "",
+          "semanticRules": "Cancels the named run only (never a later run of the job): a run not yet dispatched is cancelled at once; a dispatched run is asked to stop through the process owner and its outcome is recorded when known (Accepted). A finished run answers unchanged. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13306,11 +13722,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects.",
+          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Delete tombstones the job (history kept, no longer listed or inspectable) and requests cancellation of its active run. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13352,11 +13776,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects.",
+          "semanticRules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Disabling stops future occurrences; a run already active continues to its outcome. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
           "familyRules": "Durable occurrence identity; skip missed/overlap and reconcile interrupted runs. No job cap; linked features retain budgets. Restore requires reactivation.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13596,11 +14028,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it).",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13642,11 +14082,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Read-only provider connections in ID order; never a credential value, token or key (credentialRef is an opaque handle). subscriptionRiskAccepted is the effective acceptance: false once the notice, profile, endpoint, account or restore epoch changed. Schema revision 2: the endpoint, the authentication lifecycle (Disconnected, Authorizing, Connected, Refreshing, ReauthenticationRequired, Unavailable, Disabled) with a safe reason, the credential revision, the last connection test (healthy, checkedAtMs), the last successful model discovery (discoveredAtMs, discoveredModelCount and, for at most 128 models, discoveredModelIds), the access-token expiry and, for a human caller only, the open sign-in challenge (device user code and verification URL, or browser authorization URL). Revision 2 also reports whether the connection is enabled (a disabled connection keeps its credential and is never routed through) and, for an OpenRouter connection, its constraints: allowed and excluded model patterns (applied to discovery and routing eligibility), the auto-router cost tier and the OpenRouter provider-routing object sent with its requests.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -14064,11 +14512,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "HumanConfiguration",
           "effect": "External",
-          "semanticRules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound.",
+          "semanticRules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value).",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

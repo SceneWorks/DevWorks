@@ -61,8 +61,8 @@ use crate::ports::storage::{
     BlockerState, DesiredExecution, GrantRecord, HoldCause, InstructionStage, NewEvent,
     NewOperation, ProcessFilter, QueueState, ReadSnapshot, RunRead, SessionRead, StopCause,
     StorageError, StoredActivation, StoredAssignment, StoredBlocker, StoredInstruction,
-    StoredRootControl, WorkRoot, WriteTransaction, cancellation_applies, is_terminal,
-    possibly_dispatched,
+    StoredRootControl, StoredStopCoverage, WorkRoot, WriteTransaction, cancellation_applies,
+    is_terminal, possibly_dispatched,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
@@ -196,6 +196,186 @@ pub(crate) fn run_root(
         .into());
     }
     Ok(root)
+}
+/// The root `id` for a control of its own holds and activation: a run root, or a card linked
+/// to a feature that has controls of its own (it ran as a root, or carries its unlink pause).
+/// Such a card keeps its holds through relinking, and only its own Continue clears them; its
+/// feature's coordinator runs its work, so Start stays root-only.
+pub(crate) fn controlled_root(
+    sessions: &dyn SessionRead,
+    runs: &dyn RunRead,
+    ctx: &InvocationContext,
+    id: &RootId,
+) -> Result<WorkRoot, Failure> {
+    let root = crate::services::sessions::visible_root(sessions, ctx, id)?;
+    if is_run_root(&root) || runs.root_control(&root.id)?.is_some() {
+        return Ok(root);
+    }
+    Err(Refusal::new(
+        DomainErrorCode::UnsupportedTarget,
+        "root",
+        Some(root.id.0.clone()),
+    )
+    .into())
+}
+pub(crate) fn controlled_root_tx(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    id: &RootId,
+) -> Result<WorkRoot, Failure> {
+    let root = crate::services::sessions::visible_root(tx.sessions(), ctx, id)?;
+    if is_run_root(&root) || tx.runs().root_control(&root.id)?.is_some() {
+        return Ok(root);
+    }
+    Err(Refusal::new(
+        DomainErrorCode::UnsupportedTarget,
+        "root",
+        Some(root.id.0.clone()),
+    )
+    .into())
+}
+/// Whether this card retains controls or unsettled root-owned work. Both initial Stop
+/// coverage and late-link extension use this predicate; controls may still be implicit.
+fn has_run_state(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
+    Ok(tx.runs().root_control(root)?.is_some() || ControlService::root_has_work(tx, root)?)
+}
+/// The cards linked to `feature` that keep run controls of their own: a retained activation (an
+/// issue linked while its agent ran), its root-scoped deliveries and its process trees. The
+/// feature's Pause and Stop reach them, and the feature's stop settles only once they quiesced.
+pub(crate) fn linked_roots(
+    tx: &mut dyn WriteTransaction,
+    feature: &WorkRoot,
+) -> Result<Vec<WorkRoot>, StorageError> {
+    use crate::ports::storage::{WorkFilter, WorkPosition, WorkSelection};
+    if feature.kind != "feature" {
+        return Ok(Vec::new());
+    }
+    let filter = WorkFilter {
+        project: feature.project_id.clone(),
+        selection: WorkSelection::FeatureTasks(feature.id.0.clone()),
+        status_ids: Vec::new(),
+        repository_ids: Vec::new(),
+        text: None,
+    };
+    let mut out = Vec::new();
+    let mut after: Option<WorkPosition> = None;
+    loop {
+        let page = tx.work().works(&filter, after.as_ref(), 500)?;
+        let more = page.len() == 500;
+        after = page.last().map(WorkPosition::of);
+        for w in &page {
+            let id = RootId(w.id.clone());
+            if has_run_state(tx, &id)?
+                && let Some(r) = tx.sessions().work_root(&id)?
+            {
+                out.push(r);
+            }
+        }
+        if !more {
+            return Ok(out);
+        }
+    }
+}
+/// A linked card a feature's stop covers, fenced to what it covered when the stop was decided:
+/// the card's activation generation then, and whether a reactivation was already pending.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkedStop {
+    pub root: RootId,
+    pub generation: i64,
+    pub reactivate: bool,
+}
+impl LinkedStop {
+    fn of(control: &StoredRootControl) -> Self {
+        Self {
+            root: control.root_id.clone(),
+            generation: control.generation,
+            reactivate: control.reactivate,
+        }
+    }
+    fn value(&self) -> Value {
+        json!({"rootId": self.root.0.as_str(), "generation": self.generation,
+            "reactivate": self.reactivate})
+    }
+    /// Whether the card moved past what the stop covered (the linked-card form of
+    /// [`recovery::stop_superseded`]): a newer activation exists, or a Continue was accepted
+    /// since (a reactivation is pending). The stop then observes only the generation it covered
+    /// and never stops the card's work or process trees beyond those it holds for
+    /// reconciliation.
+    pub fn superseded(&self, control: &StoredRootControl) -> bool {
+        control.generation > self.generation || (control.reactivate && !self.reactivate)
+    }
+}
+
+/// The linked cards a feature's stop operation covers, each with the generation it covered: the
+/// cards its journaled intent names (covered when the stop was decided), and those it came to
+/// cover while it was pending (a card linked since, or reached again by a reapply at a newer
+/// generation), whose recorded coverage takes the place of the intent's.
+pub fn stop_linked_roots(
+    tx: &mut dyn WriteTransaction,
+    op: &OperationId,
+) -> Result<Vec<LinkedStop>, StorageError> {
+    let mut out: Vec<LinkedStop> = tx
+        .operations()
+        .operation(op)?
+        .and_then(|o| {
+            o.payload
+                .get("linkedRoots")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|v| {
+            Some(LinkedStop {
+                root: RootId(Id::new(v.get("rootId")?.as_str()?).ok()?),
+                generation: v.get("generation")?.as_i64()?,
+                reactivate: v.get("reactivate")?.as_bool()?,
+            })
+        })
+        .collect();
+    let mut after: Option<RootId> = None;
+    loop {
+        let page = tx.runs().stop_coverage(op, after.as_ref(), PAGE)?;
+        let more = page.len() == usize::from(PAGE);
+        after = page.last().map(|c| c.root_id.clone());
+        for c in page {
+            let card = LinkedStop {
+                root: c.root_id,
+                generation: c.generation,
+                reactivate: c.reactivate,
+            };
+            match out.iter_mut().find(|l| l.root == card.root) {
+                Some(l) => *l = card,
+                None => out.push(card),
+            }
+        }
+        if !more {
+            return Ok(out);
+        }
+    }
+}
+/// Why a linked card's retained activation may not keep running: its feature is paused or holds
+/// it at the root level, or the project is closed to work (the conditions its feature's
+/// controls impose; plan and readiness gates hold new dispatch only).
+pub(crate) fn inherited_hold(
+    runs: &dyn RunRead,
+    root: &WorkRoot,
+) -> Result<Option<String>, StorageError> {
+    if runs
+        .project_lifecycle(&root.project_id)?
+        .is_some_and(|l| closed_to_work(&l))
+    {
+        return Ok(Some("the project is archived or deleted".into()));
+    }
+    let (false, Some(f)) = (is_run_root(root), &root.parent_feature_id) else {
+        return Ok(None);
+    };
+    if control_of(runs, f)?.desired == DesiredExecution::Paused {
+        return Ok(Some("its feature is paused".into()));
+    }
+    Ok(active_blockers(runs, &BlockerFilter::RootLevel(f.clone()))?
+        .first()
+        .map(|b| format!("its feature is held: {}", b.reason)))
 }
 /// Whether a work item is a run root (a feature, or a task/issue without a feature).
 pub fn is_run_root(w: &WorkRoot) -> bool {
@@ -469,6 +649,64 @@ fn stored(b: &StoredBlocker) -> Condition {
         stored: true,
     }
 }
+/// A card's repository references must remain within its feature's active approved scope.
+/// Pending replacements change no authority; unaffected requirement evidence stays current.
+fn repository_gate(
+    runs: &dyn RunRead,
+    feature: &RootId,
+    work: &RootId,
+    subject: Subject,
+    conditions: &mut Vec<Condition>,
+) -> Result<(), StorageError> {
+    let Some(plan) = runs
+        .feature_plan(feature)?
+        .and_then(|p| p.approved_plan)
+        .and_then(|v| crate::services::work::model::active_of(Some(&v)))
+    else {
+        return Ok(());
+    };
+    if let Some(repository) = runs
+        .work_repository_ids(work)?
+        .into_iter()
+        .find(|id| !plan.draft.repository_ids.0.contains(id))
+    {
+        conditions.push(derived(
+            "repository-scope",
+            subject,
+            plan.plan_revision,
+            HoldCause::Policy,
+            &format!(
+                "repository {} is outside the active approved plan",
+                repository.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Holds implementation of `work` while it has a prerequisite not completed with verified
+/// acceptance.
+fn prerequisite_gate(
+    runs: &dyn RunRead,
+    work: &RootId,
+    subject: Subject,
+    c: &mut Vec<Condition>,
+) -> Result<(), StorageError> {
+    let open = runs.open_prerequisites(work)?;
+    if let Some(p) = open.first() {
+        c.push(derived(
+            &format!("prerequisites-{}", work.0.as_str()),
+            subject,
+            open.len() as i64,
+            HoldCause::Dependency,
+            &format!(
+                "prerequisite {} is not complete with verified acceptance",
+                p.0.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
 fn derived(
     kind: &str,
     subject: Subject,
@@ -528,6 +766,78 @@ impl ControlService {
             ));
         }
         c.extend(root_level.iter().map(stored));
+        // A card that keeps an activation of its own after it was linked to a feature (an
+        // existing agent continues) is governed by its feature's controls as well.
+        if !is_run_root(root)
+            && let Some(f) = &root.parent_feature_id
+        {
+            let feature_control = control_of(runs, f)?;
+            let feature_level = active_blockers(runs, &BlockerFilter::RootLevel(f.clone()))?;
+            if feature_control.desired == DesiredExecution::Paused
+                && !feature_level.iter().any(|b| b.cause.manual_resume())
+            {
+                c.push(derived(
+                    "feature-paused",
+                    Subject::Root(f.clone()),
+                    feature_control.revision,
+                    HoldCause::HumanPause,
+                    "its feature is paused",
+                ));
+            }
+            c.extend(feature_level.iter().map(stored));
+            // Its implementation is the feature's: the feature's prerequisites, approved plan,
+            // readiness and the findings that gate this card hold it as they hold the feature's
+            // own assignments.
+            if purpose == ActivationPurpose::Implementation {
+                let feature = WorkRoot {
+                    id: f.clone(),
+                    project_id: root.project_id.clone(),
+                    kind: "feature".into(),
+                    title: String::new(),
+                    revision: 1,
+                    scope_revision: 1,
+                    parent_feature_id: None,
+                    created_at_ms: 0,
+                };
+                prerequisite_gate(runs, f, Subject::Root(f.clone()), &mut c)?;
+                repository_gate(runs, f, &root.id, root_subject.clone(), &mut c)?;
+                match self.scope.plan(runs, &feature)? {
+                    PlanState::Approved { feature: unit, .. } if unit.readiness.is_current() => {}
+                    PlanState::Approved { feature: unit, revision, .. } => c.push(derived(
+                        "feature-readiness",
+                        Subject::Root(f.clone()),
+                        unit.readiness.revision().unwrap_or(revision),
+                        HoldCause::Policy,
+                        &unit.readiness.describe(),
+                    )),
+                    other => c.push(derived(
+                        "feature-plan",
+                        Subject::Root(f.clone()),
+                        other.pending_revision().unwrap_or(1),
+                        HoldCause::Approval,
+                        "its feature has no approved plan; a pending revision cannot authorize implementation",
+                    )),
+                }
+                if let Some((_, readiness)) = runs.feature_plan(f)?.and_then(|p| p.readiness)
+                    && let Some(x) =
+                        crate::services::work::readiness::gating_finding(&readiness, &root.id.0)
+                {
+                    c.push(derived(
+                        "finding-gate",
+                        root_subject.clone(),
+                        control.revision,
+                        HoldCause::Policy,
+                        &format!("readiness finding {x} gates this work"),
+                    ));
+                }
+            }
+        }
+        // A root's unsatisfied prerequisites (a feature's `features.dependencies`, a standalone
+        // card's blockers) hold its implementation and, through the root, every assignment of
+        // its work: a manual Done label is not verified completion.
+        if purpose == ActivationPurpose::Implementation {
+            prerequisite_gate(runs, &root.id, root_subject.clone(), &mut c)?;
+        }
         let mut readiness_revision = None;
         let assignment = match target {
             Target::Root => None,
@@ -572,6 +882,60 @@ impl ControlService {
                     .iter()
                     .map(stored),
             );
+            if a.work_id != root.id {
+                // The card's own holds travel with it (an unlink pause survives relinking), a
+                // card that left this root is fenced, and its unsatisfied prerequisites hold
+                // its implementation.
+                c.extend(
+                    active_blockers(runs, &BlockerFilter::RootLevel(a.work_id.clone()))?
+                        .iter()
+                        .map(stored),
+                );
+                if let Some(parent) = runs.work_parent(&a.work_id)?
+                    && parent.as_ref() != Some(&root.id)
+                {
+                    c.push(derived(
+                        "membership",
+                        subject.clone(),
+                        a.revision,
+                        HoldCause::Policy,
+                        "the work is no longer part of this root",
+                    ));
+                }
+                if purpose == ActivationPurpose::Implementation
+                    && is_feature(root)
+                    && let Some((_, readiness)) =
+                        runs.feature_plan(&root.id)?.and_then(|p| p.readiness)
+                    && let Some(f) =
+                        crate::services::work::readiness::gating_finding(&readiness, &a.work_id.0)
+                {
+                    c.push(derived(
+                        "finding-gate",
+                        subject.clone(),
+                        a.revision,
+                        HoldCause::Policy,
+                        &format!("readiness finding {f} gates this work"),
+                    ));
+                }
+                if purpose == ActivationPurpose::Implementation {
+                    if is_feature(root) {
+                        repository_gate(runs, &root.id, &a.work_id, subject.clone(), &mut c)?;
+                    }
+                    let open = runs.open_prerequisites(&a.work_id)?;
+                    if let Some(p) = open.first() {
+                        c.push(derived(
+                            "prerequisites",
+                            subject.clone(),
+                            open.len() as i64,
+                            HoldCause::Dependency,
+                            &format!(
+                                "prerequisite {} is not complete with verified acceptance",
+                                p.0.as_str()
+                            ),
+                        ));
+                    }
+                }
+            }
             if a.parent_id.is_none() && a.instruction_revision < control.instruction_revision {
                 c.push(derived(
                     "redirect",
@@ -990,7 +1354,11 @@ impl ControlService {
         })
     }
 
-    /// Records a new `Pending` activation of the root's next generation.
+    /// Records a new `Pending` activation of the root's next generation. Every path that creates
+    /// an activation comes through here (Start, Continue, and the reactivation a Continue
+    /// deferred until the stopping activation ended), so membership is checked once, as it is
+    /// now: a card linked to a feature never gets an activation of its own (its feature's
+    /// coordinator runs its work); a reactivation still pending for it is withdrawn instead.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_activation(
         &self,
@@ -1001,7 +1369,30 @@ impl ControlService {
         purpose: ActivationPurpose,
         plan_revision: Option<i64>,
         why: &str,
-    ) -> Result<StoredActivation, StorageError> {
+    ) -> Result<Option<StoredActivation>, StorageError> {
+        if !is_run_root(root) {
+            if control.reactivate {
+                let mut after = control.clone();
+                after.reactivate = false;
+                save_control(tx, control, &mut after)?;
+                record(
+                    tx,
+                    actor,
+                    root,
+                    None,
+                    CONTROL_AGGREGATE,
+                    root.id.0.as_str(),
+                    after.revision,
+                    "ReactivationWithdrawn",
+                    json!({
+                        "via": why,
+                        "featureId": root.parent_feature_id.as_ref().map(|f| f.0.as_str()),
+                        "reason": "the work is linked to a feature, whose coordinator runs it",
+                    }),
+                )?;
+            }
+            return Ok(None);
+        }
         let boot = tx
             .store()
             .boot_id
@@ -1051,7 +1442,7 @@ impl ControlService {
                 "via": why,
             }),
         )?;
-        Ok(a)
+        Ok(Some(a))
     }
 
     /// Asks the root's live activation to stop: one never launched stops at once (`Prevented`);
@@ -1108,7 +1499,7 @@ impl ControlService {
         root_id: &RootId,
         expected: i64,
     ) -> Result<DomainDecision, Fail> {
-        let root = run_root(tx.sessions(), ctx, root_id)?;
+        let root = controlled_root_tx(tx, ctx, root_id)?;
         let control = ensure_control(tx, &root.id)?;
         control_conflict(&control, expected)?;
         let paused = active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?
@@ -1168,6 +1559,17 @@ impl ControlService {
             json!({"clearsWith": "Continue", "stopCause": cause.as_str()}),
         )?;
         let activation = self.request_stop(tx, actor, root, cause)?;
+        // A linked card's retained activation is run under its feature's controls: the
+        // feature's Pause or Stop asks it to stop as well.
+        let mut linked = Vec::new();
+        for card in linked_roots(tx, root)? {
+            if let Some(a) = self.request_stop(tx, actor, &card, cause)? {
+                linked.push(
+                    json!({"rootId": card.id.0.as_str(), "executionId": a.id.as_str(),
+                    "phase": a.phase.as_str()}),
+                );
+            }
+        }
         record(
             tx,
             actor,
@@ -1185,6 +1587,7 @@ impl ControlService {
                     "executionId": a.id.as_str(),
                     "phase": a.phase.as_str(),
                 })),
+                "linkedActivations": linked,
             }),
         )?;
         Ok((after, hold))
@@ -1199,7 +1602,7 @@ impl ControlService {
         expected: i64,
         covered: &[HoldRef],
     ) -> Result<DomainDecision, Fail> {
-        let root = run_root(tx.sessions(), ctx, root_id)?;
+        let root = controlled_root_tx(tx, ctx, root_id)?;
         // An archived project allocates no work: Continue, like Start, is refused (its holds
         // and the archival stop stay in place).
         if tx
@@ -1328,8 +1731,11 @@ impl ControlService {
         after.desired = DesiredExecution::Enabled;
         after.restart_boot_id = None;
         let live = tx.runs().live_activation(&root.id)?;
+        // A linked card's work is run by its feature's coordinator: Continue clears its own
+        // holds but records (or arms) no activation of its own; [`Self::new_activation`] also
+        // refuses one for it whenever a reactivation would be created.
         let reactivate = match &live {
-            Some(a) if a.phase == ActivationPhase::Stopping => {
+            Some(a) if a.phase == ActivationPhase::Stopping && is_run_root(&root) => {
                 after.reactivate = true;
                 true
             }
@@ -1376,7 +1782,8 @@ impl ControlService {
         ctx: &InvocationContext,
         input: &ops::RedirectInput,
     ) -> Result<DomainDecision, Fail> {
-        let root = run_root(tx.sessions(), ctx, &input.root_id)?;
+        // A linked card's own running agent stays redirectable.
+        let root = controlled_root_tx(tx, ctx, &input.root_id)?;
         let control = ensure_control(tx, &root.id)?;
         control_conflict(&control, input.expected_control_revision.get())?;
         for a in &input.attachments.0 {
@@ -1513,7 +1920,7 @@ impl ControlService {
         ctx: &InvocationContext,
         input: &ops::StopInput,
     ) -> Result<Decided, Fail> {
-        let root = run_root(tx.sessions(), ctx, &input.root_id)?;
+        let root = controlled_root_tx(tx, ctx, &input.root_id)?;
         let control = ensure_control(tx, &root.id)?;
         control_conflict(&control, input.expected_control_revision.get())?;
         // A stop still in progress answers itself, but only while the root still carries its
@@ -1530,7 +1937,25 @@ impl ControlService {
                 && !control.reactivate
                 && paused_by_hold;
             let live = tx.runs().live_activation(&root.id)?;
-            let nothing_live = live.is_none() && !self.root_has_work(tx, &root.id)?;
+            let mut nothing_live = live.is_none() && !Self::root_has_work(tx, &root.id)?;
+            // A linked card counts only with what the stop covered: once it moved past that
+            // (a newer generation, or a Continue since), its newer work is not this stop's.
+            for card in stop_linked_roots(tx, op)? {
+                let live = tx.runs().live_activation(&card.root)?;
+                nothing_live &= if card.superseded(&control_of(tx.runs(), &card.root)?) {
+                    !live.is_some_and(|a| a.generation <= card.generation)
+                } else {
+                    live.is_none() && !Self::root_has_work(tx, &card.root)?
+                };
+            }
+            // Terminal coverage describes an earlier decision. A new Stop must also inspect
+            // the cards linked now, including work linked after that decision completed.
+            if is_terminal(rec.state) {
+                for card in linked_roots(tx, &root)? {
+                    nothing_live &= tx.runs().live_activation(&card.id)?.is_none()
+                        && !Self::root_has_work(tx, &card.id)?;
+                }
+            }
             if intent && (!is_terminal(rec.state) || nothing_live) {
                 return Ok(Decided {
                     decision: DomainDecision::NoChange {
@@ -1578,11 +2003,7 @@ impl ControlService {
 
     /// Whether anything of the root may still be running: an unsettled root-scoped delivery or
     /// an unsettled owned process.
-    fn root_has_work(
-        &self,
-        tx: &mut dyn WriteTransaction,
-        root: &RootId,
-    ) -> Result<bool, StorageError> {
+    fn root_has_work(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
         if !tx.runs().root_deliveries(root, None, 1)?.is_empty() {
             return Ok(true);
         }
@@ -1625,7 +2046,22 @@ impl ControlService {
         {
             let op = op.clone();
             self.pause_root(tx, actor, root, control, cause, reason)?;
-            let cancelled = self.cancel_root_deliveries(tx, &root.id)?;
+            let mut cancelled = self.cancel_root_deliveries(tx, &root.id)?;
+            // A linked card that moved past what the stop covered keeps its newer work.
+            for card in stop_linked_roots(tx, &op)? {
+                if !card.superseded(&control_of(tx.runs(), &card.root)?) {
+                    cancelled.extend(self.cancel_root_deliveries(tx, &card.root)?);
+                }
+            }
+            // The reapplied stop reaches every card linked now: one linked since the stop was
+            // decided, or one it covered at an older generation that is linked again, is covered
+            // at its current generation (its trees are stopped and waited for as well).
+            let mut extended = Vec::new();
+            for card in linked_roots(tx, root)? {
+                if self.extend_stop(tx, actor, root, &op, &card, cause)? {
+                    extended.push(card.id.0.as_str().to_owned());
+                }
+            }
             let after = control_of(tx.runs(), &root.id)?;
             record(
                 tx,
@@ -1640,13 +2076,28 @@ impl ControlService {
                     "cause": cause.as_str(),
                     "stopEpoch": after.stop_epoch,
                     "cancelledDeliveries": cancelled,
+                    "extendedRoots": extended,
                 }),
             )?;
             return Ok((op, false));
         }
         let (mut after, hold) = self.pause_root(tx, actor, root, control, cause, reason)?;
-        let cancelled = self.cancel_root_deliveries(tx, &root.id)?;
+        let mut cancelled = self.cancel_root_deliveries(tx, &root.id)?;
         let live = tx.runs().live_activation(&root.id)?;
+        // The linked cards' retained work is stopped with the feature: their deliveries are
+        // cancelled, their trees stopped by the stop's execution, and the stop settles once
+        // they quiesced.
+        let linked = linked_roots(tx, root)?;
+        let mut linked_work = false;
+        // Each card is covered at its generation now: a later activation of it (once it is
+        // unlinked and continued) is never stopped, waited for or held by this stop.
+        let mut covered = Vec::new();
+        for card in &linked {
+            cancelled.extend(self.cancel_root_deliveries(tx, &card.id)?);
+            linked_work |= tx.runs().live_activation(&card.id)?.is_some()
+                || Self::root_has_work(tx, &card.id)?;
+            covered.push(LinkedStop::of(&control_of(tx.runs(), &card.id)?).value());
+        }
         let op = OperationId(tx.new_id(IdKind::Operation));
         tx.operations().record_intent(NewOperation {
             id: op.clone(),
@@ -1669,12 +2120,13 @@ impl ControlService {
                 "cause": cause.as_str(),
                 "holdId": hold.id.as_str(),
                 "executionId": live.as_ref().map(|a| a.id.as_str()),
+                "linkedRoots": covered,
             }),
         })?;
         let before = after.clone();
         after.stop_operation_id = Some(op.clone());
         save_control(tx, &before, &mut after)?;
-        let nothing_live = live.is_none() && !self.root_has_work(tx, &root.id)?;
+        let nothing_live = live.is_none() && !linked_work && !Self::root_has_work(tx, &root.id)?;
         if nothing_live {
             recovery::complete_stop_operation(tx, &op, &[], "nothing of the root was running")?;
         }
@@ -1695,6 +2147,99 @@ impl ControlService {
             }),
         )?;
         Ok((op, nothing_live))
+    }
+
+    /// Extends the pending stop `op` of `feature` to the linked card `card` unless it already
+    /// covers the card's current generation: the coverage is recorded durably at the card's
+    /// generation now (the same fence as the cards the stop's intent names), its activation is
+    /// asked to stop and its root-scoped deliveries are cancelled. The stop's execution then
+    /// signals the card's launches of that generation and stops its trees, and the stop settles
+    /// only once the card quiesced; boot recovery reads the same coverage. A card that moves
+    /// past it later (unlinked and continued) is superseded as for the intent's cards. Returns
+    /// whether the coverage was extended.
+    fn extend_stop(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        actor: &ActorId,
+        feature: &WorkRoot,
+        op: &OperationId,
+        card: &WorkRoot,
+        cause: StopCause,
+    ) -> Result<bool, StorageError> {
+        let control = control_of(tx.runs(), &card.id)?;
+        if stop_linked_roots(tx, op)?
+            .iter()
+            .any(|c| c.root == card.id && !c.superseded(&control))
+        {
+            return Ok(false);
+        }
+        let covered = LinkedStop::of(&control);
+        tx.runs().cover_stop(&StoredStopCoverage {
+            operation_id: op.clone(),
+            root_id: covered.root.clone(),
+            generation: covered.generation,
+            reactivate: covered.reactivate,
+        })?;
+        let activation = self.request_stop(tx, actor, card, cause)?;
+        let cancelled = self.cancel_root_deliveries(tx, &card.id)?;
+        let revision = control_of(tx.runs(), &feature.id)?.revision;
+        record(
+            tx,
+            actor,
+            feature,
+            Some(op),
+            CONTROL_AGGREGATE,
+            feature.id.0.as_str(),
+            revision,
+            "RootStopExtended",
+            json!({
+                "linkedRoot": covered.value(),
+                "activation": activation.as_ref().map(|a| json!({
+                    "executionId": a.id.as_str(),
+                    "phase": a.phase.as_str(),
+                })),
+                "cancelledDeliveries": cancelled,
+            }),
+        )?;
+        Ok(true)
+    }
+
+    /// A card was linked to `feature_id` (`tasks.set_feature`): while the feature's stop is still
+    /// pending and the feature still carries it, the stop is extended to a card that retains
+    /// controls or unsettled work, including work whose controls are still implicit.
+    pub(crate) fn card_linked(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        actor: &ActorId,
+        feature_id: &RootId,
+        card_id: &RootId,
+    ) -> Result<bool, StorageError> {
+        let control = control_of(tx.runs(), feature_id)?;
+        let Some(op) = control.stop_operation_id.clone() else {
+            return Ok(false);
+        };
+        let Some(rec) = tx.operations().operation(&op)? else {
+            return Ok(false);
+        };
+        if is_terminal(rec.state)
+            || recovery::stop_superseded(&control)
+            || !has_run_state(tx, card_id)?
+        {
+            return Ok(false);
+        }
+        let (Some(feature), Some(card)) = (
+            tx.sessions().work_root(feature_id)?,
+            tx.sessions().work_root(card_id)?,
+        ) else {
+            return Ok(false);
+        };
+        let cause = rec
+            .payload
+            .get("cause")
+            .and_then(Value::as_str)
+            .and_then(StopCause::parse)
+            .unwrap_or(StopCause::Stop);
+        self.extend_stop(tx, actor, &feature, &op, &card, cause)
     }
 
     /// Cancels the root's unsettled root-scoped deliveries: a claimed one gets the durable
@@ -1745,7 +2290,7 @@ impl ControlService {
         ctx: &InvocationContext,
         root_id: &RootId,
     ) -> Result<OperationResult, Fail> {
-        let root = run_root(snapshot.sessions(), ctx, root_id)?;
+        let root = controlled_root(snapshot.sessions(), snapshot.runs(), ctx, root_id)?;
         Ok(OperationResult::RunsInspect {
             value: root_snapshot(snapshot.runs(), &root.id)?,
         })
@@ -1766,7 +2311,7 @@ impl ControlService {
                 None => return Err(not_found("assignment", &a.0).into()),
             },
         };
-        let root = match run_root(snapshot.sessions(), ctx, &root_id) {
+        let root = match controlled_root(snapshot.sessions(), snapshot.runs(), ctx, &root_id) {
             Ok(r) => r,
             // An assignment of an invisible root does not disclose the root.
             Err(_) if matches!(target, EligibilityTarget::Assignment(_)) => {

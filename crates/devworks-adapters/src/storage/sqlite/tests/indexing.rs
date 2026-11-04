@@ -1,10 +1,10 @@
-//! Repository indexing records on the real SQLite store (DW-023): migration 20, and the
+//! Repository indexing records on the real SQLite store (DW-023): migration 19, and the
 //! repository's invariants (compare-and-set revisions, one active run per target, staging-only
 //! payload, idempotent batches, immutable sealed generations, the published pointer's
 //! compare-and-set, bounded reclamation). The end-to-end service tests with real Git
 //! repositories live in `tests/indexing.rs`.
 use super::{Harness, T0, through};
-use crate::storage::sqlite::{MIGRATION_0020_SHA256, MIGRATIONS, SqliteStore};
+use crate::storage::sqlite::{MIGRATION_0019_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id};
 use serde_json::json;
@@ -101,17 +101,17 @@ fn node(key: &str, n: &str) -> StoredNode {
 }
 
 #[test]
-fn migration_20_is_additive_and_keeps_floors_at_or_above_14() {
+fn migration_19_is_additive_and_keeps_floors_at_or_above_14() {
     let m = MIGRATIONS
         .iter()
-        .find(|m| m.version == 20)
-        .expect("migration 20");
+        .find(|m| m.version == 19)
+        .expect("migration 19");
     assert_eq!(
         m.checksum(),
-        MIGRATION_0020_SHA256,
+        MIGRATION_0019_SHA256,
         "an applied migration was edited"
     );
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 20));
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 19));
     assert!(m.minimum_writer >= 14);
     assert!(!m.rebuilds_tables);
     assert!(
@@ -122,7 +122,7 @@ fn migration_20_is_additive_and_keeps_floors_at_or_above_14() {
     );
     let h = Harness::new();
     let old = SqliteStore::open_with(h.config(), &through(14)).unwrap();
-    // Graph rows and a registration written before migration 20 (positional migration 1 rows).
+    // Graph rows and a registration written before migration 19 (positional migration 1 rows).
     old.with_writer_connection(|c| {
         super::super::conn::db(c.execute_batch(
             "INSERT INTO repositories VALUES('repo-old','/src/old',1);

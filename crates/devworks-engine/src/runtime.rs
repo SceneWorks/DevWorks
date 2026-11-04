@@ -7,6 +7,7 @@
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
 use crate::indexing::{IndexSupervisor, IndexingConfig};
+use crate::jobs::Scheduler;
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use crate::runs::{ActivationLauncher, RunGate, RunSupervisor};
@@ -25,15 +26,20 @@ use devworks_core::services::artifacts::lifecycle::{
 };
 use devworks_core::services::artifacts::replies::ReceiptReplies;
 use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
+use devworks_core::services::jobs::runner::{
+    InferenceJobs, JobLifecycle, NativeJobDispatch, NoInferencePipeline,
+};
+use devworks_core::services::jobs::{JobConfig, JobService, NativeCatalog};
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
 use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
 use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::resources::{MachineResource, ResourceService, desktop};
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks, NoLifecycleHooks};
+use devworks_core::services::work::WorkService;
 use devworks_core::settings::view::Health;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
@@ -68,12 +74,16 @@ pub struct IndexComposition {
 
 /// Run root control as composed: the one control service (its plan/readiness port inside), the
 /// coordinator launcher (none until the agent supervisor exists: accepted activations then stay
-/// pending and are held at the next boot) and the schedules/keep-working lifecycle hooks.
+/// pending and are held at the next boot), further lifecycle hooks (keep-working, a later item;
+/// [`boot`] always composes the schedules' own hooks first) and the scheduled-inference dispatch
+/// port (none until the coordinator turn pipeline exists: a scheduled inference run then fails
+/// before dispatch with a visible reason).
 #[derive(Clone)]
 pub struct RunComposition {
     pub service: Arc<ControlService>,
     pub launcher: Option<Arc<dyn ActivationLauncher>>,
     pub hooks: Arc<dyn LifecycleHooks>,
+    pub inference: Arc<dyn InferenceJobs>,
 }
 impl RunComposition {
     pub fn new(service: Arc<ControlService>) -> Self {
@@ -81,7 +91,25 @@ impl RunComposition {
             service,
             launcher: None,
             hooks: Arc::new(NoLifecycleHooks),
+            inference: Arc::new(NoInferencePipeline),
         }
+    }
+}
+
+/// Lifecycle hooks run in order (schedules, then the caller's).
+struct ChainedHooks(Vec<Arc<dyn LifecycleHooks>>);
+impl LifecycleHooks for ChainedHooks {
+    fn quiesce(
+        &self,
+        tx: &mut dyn devworks_core::ports::storage::WriteTransaction,
+    ) -> Result<(), StorageError> {
+        self.0.iter().try_for_each(|h| h.quiesce(tx))
+    }
+    fn recover(
+        &self,
+        tx: &mut dyn devworks_core::ports::storage::WriteTransaction,
+    ) -> Result<(), StorageError> {
+        self.0.iter().try_for_each(|h| h.recover(tx))
     }
 }
 
@@ -146,6 +174,10 @@ pub struct RuntimeConfig {
     /// runs at boot regardless. Hourly by default: retention is counted in days, and a full
     /// integrity check reads the whole store.
     pub diagnostics_interval: Duration,
+    /// Scheduler policy (due grace, claim batch).
+    pub jobs: JobConfig,
+    /// Time between scheduler ticks (commands that change jobs request one at once).
+    pub scheduler_interval: Duration,
 }
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
@@ -158,6 +190,8 @@ impl RuntimeConfig {
             shutdown_grace: Duration::from_secs(5),
             shutdown_bound: Duration::from_secs(30),
             diagnostics_interval: Duration::from_secs(60 * 60),
+            jobs: JobConfig::default(),
+            scheduler_interval: Duration::from_secs(5),
         }
     }
 }
@@ -240,6 +274,11 @@ pub struct Runtime {
     /// work; shutdown takes it exclusively to close it, which waits for (drains) every command
     /// already admitted. A command never commits after the run-control quiescence snapshot.
     admission: Arc<std::sync::RwLock<bool>>,
+    /// The command path (admission fence, gateway, post-commit wakeups) shared with the
+    /// scheduler's native runs.
+    admitter: Arc<Admitter>,
+    jobs: Arc<JobService>,
+    scheduler: Arc<Scheduler>,
     keep_awake: Arc<KeepAwake>,
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
@@ -253,12 +292,12 @@ pub struct Runtime {
     /// The diagnostics monitor task, signalled first at shutdown and joined within the bound
     /// after the run-control transition (see [`Runtime::shutdown`]).
     monitoring: Mutex<Option<JoinHandle<()>>>,
-    /// The Tokio runtime [`boot`] was awaited on: post-commit work of a synchronous command
-    /// (the immediate stop of an archived project) runs there.
-    handle: tokio::runtime::Handle,
     /// Index supervision (none when indexing is not composed).
     indexing: Option<Arc<IndexSupervisor>>,
     indexing_task: Mutex<Option<JoinHandle<()>>>,
+    /// The scheduler loop, awaited only within the shutdown bound (a cancellation it is
+    /// executing may be stopping a tree).
+    scheduling: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// Boots the runtime (see the crate documentation, "Boot sequence"):
@@ -302,14 +341,17 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing,
         config,
     } = composition;
+    let work = Arc::new(
+        WorkService::new(ids.clone(), runs.service.clone()).with_staged_plans(artifacts.clone()),
+    );
     let use_cases = use_cases
         .with_artifacts(artifacts.clone())
         .with_resources(resources.clone())
         .with_runs(runs.service.clone())
-        .with_projects(Arc::new(ProjectService::new(
-            ids.clone(),
-            runs.service.clone(),
-        )))
+        .with_projects(Arc::new(
+            ProjectService::new(ids.clone(), runs.service.clone()).with_work(work.clone()),
+        ))
+        .with_work(work)
         .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
         .with_diagnostics(diagnostics.clone());
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
@@ -392,6 +434,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         )),
         None => use_cases,
     };
+    // Native jobs may run only the maintenance commands this composition can execute.
+    let jobs = Arc::new(JobService::new(
+        NativeCatalog::qualified(&use_cases),
+        config.jobs,
+    ));
+    let use_cases = use_cases.with_jobs(jobs.clone());
+    let hooks: Arc<dyn LifecycleHooks> = Arc::new(ChainedHooks(vec![
+        Arc::new(JobLifecycle(jobs.clone())),
+        runs.hooks.clone(),
+    ]));
     let booted_at_ms = clock.now_ms().get();
     let housekeeper = Arc::new(Housekeeper::new(
         store.clone(),
@@ -408,9 +460,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         store.clone(),
         clock,
         runs.service.clone(),
-        supervisor,
+        supervisor.clone(),
         runs.launcher.clone(),
-        runs.hooks.clone(),
+        hooks,
         run_owner,
     );
     // A root stop never outlasts the application's one shutdown bound.
@@ -485,6 +537,35 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let indexing_task = index_supervisor
         .clone()
         .map(|ix| tokio::spawn(async move { ix.run().await }));
+    let admission = Arc::new(std::sync::RwLock::new(false));
+    let admitter = Arc::new(Admitter {
+        store: store.clone(),
+        ids: ids.clone(),
+        authority: authority.clone(),
+        use_cases: use_cases.clone(),
+        admission: admission.clone(),
+        dispatcher: dispatcher.clone(),
+        runs: run_supervisor.clone(),
+        collector: collector.clone(),
+        diagnostics: diagnostics.clone(),
+        keep_awake: keep_awake.clone(),
+        scheduler: OnceLock::new(),
+        indexing: index_supervisor.clone(),
+        handle: tokio::runtime::Handle::current(),
+    });
+    let mut scheduler = Scheduler::new(
+        store.clone(),
+        jobs.clone(),
+        admitter.clone(),
+        runs.inference.clone(),
+        supervisor,
+    );
+    if let Some(s) = Arc::get_mut(&mut scheduler) {
+        s.stop_grace = config.shutdown_grace.min(config.shutdown_bound);
+        s.stop_bound = config.shutdown_bound;
+    }
+    let _ = admitter.scheduler.set(Arc::downgrade(&scheduler));
+    let scheduling = tokio::spawn(scheduler.clone().run(config.scheduler_interval));
     Ok(Runtime {
         store,
         ids,
@@ -497,7 +578,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         housekeeper,
         runs: run_supervisor,
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
-        admission: Arc::new(std::sync::RwLock::new(false)),
+        admission,
+        admitter,
+        jobs,
+        scheduler,
         keep_awake,
         diagnostics,
         monitor,
@@ -505,9 +589,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         shutdown_bound: config.shutdown_bound,
         report,
         tasks: Mutex::new(vec![delivery, collection, housekeeping]),
+        scheduling: Mutex::new(Some(scheduling)),
         supervision: Mutex::new(Some(supervision)),
         monitoring: Mutex::new(Some(monitoring)),
-        handle: tokio::runtime::Handle::current(),
         indexing: index_supervisor,
         indexing_task: Mutex::new(indexing_task),
     })
@@ -699,81 +783,16 @@ impl Runtime {
         raw: &[u8],
         options: WriteOptions,
     ) -> CommandOutcome {
-        // Held until the command is decided and committed (or refused): shutdown's closing
-        // transition waits for it, and a command after it is refused before admission.
-        let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-        if *open {
-            return closing_reply(
-                raw,
-                self.ids.next_id(devworks_core::ports::IdKind::Correlation),
-            );
-        }
-        let outcome = self
-            .use_cases
-            .command_with(&self.gateway(), ctx, operation, raw, options);
-        drop(open);
-        let (committed, released) = match &outcome {
-            Ok(CommandReply::Recorded { receipt, .. }) => (
-                true,
-                matches!(receipt.decision, DomainDecision::Applied { .. }),
-            ),
-            Ok(CommandReply::CommandStatusUnknown { .. }) => (true, true),
-            _ => (false, false),
-        };
-        if committed {
-            self.dispatcher.wakeup().wake();
-            if operation.starts_with("runs.") {
-                // A stop to execute, a stop to signal or a new activation to claim.
-                self.runs.notify();
-            }
-        }
-        if released && operation == RELEASES_BLOBS {
-            self.collector.trigger.notify_one();
-        }
-        if committed && operation == RECORDS_DIAGNOSTIC {
-            self.diagnostics.committed();
-        }
-        if committed && operation == ARCHIVES_PROJECT {
-            // A recorded archival (new or replayed) or an unknown outcome: while the project is
-            // still closed to work, its trees are killed at once and its root stops executed.
-            // A crash before this runs leaves the stops journaled: the next boot reaps the
-            // earlier boot's trees and run supervision executes them.
-            if let Some(project) = archived_project(raw) {
-                let runs = self.runs.clone();
-                let wakeup = self.dispatcher.wakeup();
-                self.handle.spawn(async move {
-                    let _ = runs.stop_archived_project(&project).await;
-                    wakeup.wake();
-                });
-            }
-        }
-        if committed
-            && let Some(ix) = &self.indexing
-            && (operation.starts_with("indexing.") || operation == "repositories.remove_index")
-        {
-            if operation == CANCELS_INDEX_RUN
-                && let Some(run) = cancelled_run(raw)
-            {
-                ix.cancelled(&run);
-            }
-            if operation == "indexing.configure_sources" {
-                ix.request_discovery();
-            }
-            ix.notify();
-        }
-        if released
-            && operation == SAVES_SETTINGS
-            && let Some(ix) = &self.indexing
-        {
-            // A section's base directory may have changed: rescan it.
-            ix.request_discovery();
-        }
-        if released && operation == SAVES_SETTINGS {
-            // A read failure leaves the previous request in place; the next save or explicit
-            // refresh applies the setting again.
-            let _ = self.refresh_keep_awake();
-        }
-        outcome
+        self.admitter.command_with(ctx, operation, raw, options)
+    }
+
+    /// The jobs service the `jobs.*` use cases, the scheduler and the lifecycle hooks share.
+    pub fn jobs(&self) -> &Arc<JobService> {
+        &self.jobs
+    }
+    /// The schedule runner (ticks are paced by [`RuntimeConfig::scheduler_interval`]).
+    pub fn scheduler(&self) -> &Arc<Scheduler> {
+        &self.scheduler
     }
 
     /// Stops admission of new deliveries, collection, housekeeping and the diagnostics monitor,
@@ -786,6 +805,9 @@ impl Runtime {
     pub async fn shutdown(&self) -> ShutdownReport {
         // One bound for the whole shutdown (AD20): every later step gets what is left of it.
         let deadline = tokio::time::Instant::now() + self.shutdown_bound;
+        // Schedule admission freezes first: no occurrence is claimed and no run started from
+        // here on (runs already dispatching finish or are reconciled at the next boot).
+        self.scheduler.stop();
         let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
         // The diagnostics monitor is only *signalled* here, and joined after the run-control
         // transition below: a pass in progress (a full integrity check of a large store, say)
@@ -809,7 +831,7 @@ impl Runtime {
         self.enter(ShutdownStage::StoppingWork);
         self.stop();
         // Every boot-started task (delivery, collection, housekeeping, the monitor pass in
-        // progress, run supervision) and the deliveries in flight are awaited only within what
+        // progress, run supervision, the schedule loop), the deliveries and the scheduled runs in flight are awaited only within what
         // is left of the one bound (CONTROL-09); past it each is abandoned, and the next boot
         // recovers what it left: a unit of work it already admitted commits or rolls back
         // alone, a claim's lease expires into recovery, an interrupted operation is classified.
@@ -817,7 +839,7 @@ impl Runtime {
         // within its own bound, and the owned-tree stop below covers its trees.
         let mut joining: Vec<JoinHandle<()>> =
             std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
-        for slot in [&self.monitoring, &self.supervision] {
+        for slot in [&self.monitoring, &self.supervision, &self.scheduling] {
             joining.extend(slot.lock().unwrap_or_else(|p| p.into_inner()).take());
         }
         for mut task in joining {
@@ -844,6 +866,7 @@ impl Runtime {
                 task.abort();
             }
         }
+        self.scheduler.drain(deadline).await;
         let bound = left();
         let stopped = self
             .housekeeper
@@ -860,6 +883,7 @@ impl Runtime {
         if let Some(ix) = &self.indexing {
             ix.worker().stop_all();
         }
+        self.scheduler.stop();
         self.dispatcher.stop();
         self.collector.stop();
         self.housekeeper.stop();
@@ -957,5 +981,138 @@ impl Drop for Runtime {
         // Launched coordinators are signalled and aborted: nothing renews or writes after drop.
         self.runs.abort_launches();
         self.keep_awake.apply(false);
+    }
+}
+
+/// The one command path: the admission fence shutdown closes, the gateway over the registered use
+/// cases, and the post-commit wakeups (reply delivery, run supervision, collection, the live log,
+/// keep-awake, the scheduler). UI, agent tools and the scheduler's native runs all go through it.
+struct Admitter {
+    store: Arc<dyn ApplicationStore>,
+    ids: Arc<dyn IdSource>,
+    authority: Arc<dyn AuthorityPort>,
+    use_cases: UseCases,
+    admission: Arc<std::sync::RwLock<bool>>,
+    dispatcher: Dispatcher,
+    runs: Arc<RunSupervisor>,
+    collector: Arc<Collector>,
+    diagnostics: Arc<DiagnosticService>,
+    keep_awake: Arc<KeepAwake>,
+    scheduler: OnceLock<Weak<Scheduler>>,
+    indexing: Option<Arc<IndexSupervisor>>,
+    /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
+    handle: tokio::runtime::Handle,
+}
+impl Admitter {
+    fn gateway(&self) -> Gateway<'_> {
+        Gateway {
+            authority: &*self.authority,
+            store: &*self.store,
+            ids: &*self.ids,
+        }
+    }
+
+    /// Admits a command. A command that may have committed (`Recorded`, or a lost
+    /// acknowledgment) wakes delivery for the reply intent its receipt committed, an applied
+    /// `artifacts.delete` starts a collection pass for the blobs it released, an applied
+    /// `settings.save_revision` re-applies keep-awake and a `jobs.*` command wakes the scheduler.
+    fn command_with(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> CommandOutcome {
+        // Held until the command is decided and committed (or refused): shutdown's closing
+        // transition waits for it, and a command after it is refused before admission.
+        let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+        if *open {
+            return closing_reply(
+                raw,
+                self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+            );
+        }
+        let outcome = self
+            .use_cases
+            .command_with(&self.gateway(), ctx, operation, raw, options);
+        drop(open);
+        let (committed, released) = match &outcome {
+            Ok(CommandReply::Recorded { receipt, .. }) => (
+                true,
+                matches!(receipt.decision, DomainDecision::Applied { .. }),
+            ),
+            Ok(CommandReply::CommandStatusUnknown { .. }) => (true, true),
+            _ => (false, false),
+        };
+        if committed {
+            self.dispatcher.wakeup().wake();
+            if operation.starts_with("runs.") {
+                // A stop to execute, a stop to signal or a new activation to claim.
+                self.runs.notify();
+            }
+            if (operation.starts_with("jobs.") || operation == ARCHIVES_PROJECT)
+                && let Some(s) = self.scheduler.get().and_then(Weak::upgrade)
+            {
+                // A run to start, a cancellation to execute or a changed next occurrence.
+                s.notify();
+            }
+        }
+        if released && operation == RELEASES_BLOBS {
+            self.collector.trigger.notify_one();
+        }
+        if committed && operation == RECORDS_DIAGNOSTIC {
+            self.diagnostics.committed();
+        }
+        if committed && operation == ARCHIVES_PROJECT {
+            // A recorded archival (new or replayed) or an unknown outcome: while the project is
+            // still closed to work, its trees are killed at once and its root stops executed.
+            // A crash before this runs leaves the stops journaled: the next boot reaps the
+            // earlier boot's trees and run supervision executes them.
+            if let Some(project) = archived_project(raw) {
+                let runs = self.runs.clone();
+                let wakeup = self.dispatcher.wakeup();
+                self.handle.spawn(async move {
+                    let _ = runs.stop_archived_project(&project).await;
+                    wakeup.wake();
+                });
+            }
+        }
+        if committed
+            && let Some(ix) = &self.indexing
+            && (operation.starts_with("indexing.") || operation == "repositories.remove_index")
+        {
+            if operation == CANCELS_INDEX_RUN
+                && let Some(run) = cancelled_run(raw)
+            {
+                ix.cancelled(&run);
+            }
+            if operation == "indexing.configure_sources" {
+                ix.request_discovery();
+            }
+            ix.notify();
+        }
+        if released
+            && operation == SAVES_SETTINGS
+            && let Some(ix) = &self.indexing
+        {
+            // A section's base directory may have changed: rescan it.
+            ix.request_discovery();
+        }
+        if released && operation == SAVES_SETTINGS {
+            // A read failure leaves the previous request in place; the next save or explicit
+            // refresh applies the setting again.
+            let ka = &self.keep_awake;
+            let _ = devworks_core::ports::storage::read_snapshot(
+                &*self.store,
+                &Default::default(),
+                |s| ka.refresh(s.configuration()),
+            );
+        }
+        outcome
+    }
+}
+impl NativeJobDispatch for Admitter {
+    fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
+        self.command_with(ctx, operation, raw, WriteOptions::default())
     }
 }

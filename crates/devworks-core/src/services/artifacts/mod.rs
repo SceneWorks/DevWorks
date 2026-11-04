@@ -453,6 +453,47 @@ pub(crate) fn visible_in(
     })
 }
 
+/// Shares the artifact of `reference` with `project` for a workspace-authorized caller that
+/// sees it at workspace level and names it in that project's work (a project's initial plan
+/// names content written before the project existed: its agents must read it there). A live,
+/// explicitly retained artifact only; the share is recorded like `ArtifactShared` of the share
+/// path. Returns whether it was shared (nothing changes otherwise).
+pub(crate) fn share_named_in(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    reference: &ArtifactRef,
+    project: &ProjectId,
+) -> Result<bool, StorageError> {
+    let viewer = Viewer::resolve(tx.authority(), ctx)?;
+    if viewer.authorized != Some(AuthorizedScope::Workspace) {
+        return Ok(false);
+    }
+    let Some(mut artifact) = tx.artifacts().artifact(&reference.artifact_id)? else {
+        return Ok(false);
+    };
+    if artifact.state != ArtifactState::Live
+        || artifact.retention != ArtifactRetention::Explicit
+        || artifact.scope.project() == Some(project)
+        || !visible_in(tx.artifacts(), &viewer, &artifact, None)?
+        || !tx.artifacts().add_share(&artifact.id, project)?
+    {
+        return Ok(false);
+    }
+    artifact.scope_revision += 1;
+    artifact.reference_revision += 1;
+    tx.artifacts().update_artifact(&artifact)?;
+    event(
+        tx,
+        ctx,
+        &artifact,
+        None,
+        None,
+        "ArtifactShared",
+        json!({"projectId": project.0.as_str(), "scopeRevision": artifact.scope_revision}),
+    )?;
+    Ok(true)
+}
+
 /// A request naming `project` must match the invocation's project, when it has one.
 fn require_project(ctx: &InvocationContext, project: &ProjectId) -> Result<(), Refusal> {
     match ctx.project_id() {

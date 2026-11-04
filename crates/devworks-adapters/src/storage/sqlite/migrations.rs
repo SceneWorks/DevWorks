@@ -202,10 +202,78 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0014_projects.sql"),
         rebuilds_tables: false,
     },
+    // Additive: provider connections and SystemOne decision models (two tables and their
+    // indexes), one nullable column on router_models and a correction of still-unedited seed
+    // rows; independent of every table of migration 14. The writer floor stays at 14 (the
+    // highest so far): applying a migration overwrites the store's floors, so a lower value
+    // would re-admit the writers migration 14 refuses (they would dispatch the work of a deleted
+    // project). It need not rise: no earlier build writes the new tables, and the only earlier
+    // writer of router_models names its columns and leaves connection_id untouched, so a binding
+    // it does not know is kept, never cleared; a binding that no longer matches the model's
+    // profile only makes that model ineligible. The reader floor stays at 8: earlier readers
+    // select explicit columns, so the added column and tables leave every query they make
+    // unchanged.
+    Migration {
+        version: 15,
+        minimum_reader: 8,
+        minimum_writer: 14,
+        sql: include_str!("migrations/0015_router_connections.sql"),
+        rebuilds_tables: false,
+    },
+    // Additive: the work detail, queue revision, plan-approval request, readiness and stop
+    // coverage side tables and five indexes; the migration 1 work tables keep their shape. The
+    // writer floor rises to 16: a build without this migration evaluates dispatch eligibility
+    // without the work fences written here (unverified or open prerequisites, a card's own
+    // unlink pause under its new feature, a card moved to another feature, the parent feature's
+    // controls over a linked card), so as a writer it would dispatch work those records hold,
+    // and it would settle a feature's stop without the linked cards it came to cover. The reader
+    // floor stays at 8: no earlier build reads the new tables, and the indexes leave every query
+    // an earlier reader makes unchanged. Both are at least every earlier floor.
+    Migration {
+        version: 16,
+        minimum_reader: 8,
+        minimum_writer: 16,
+        sql: include_str!("migrations/0016_work.sql"),
+        rebuilds_tables: false,
+    },
+    // Additive: columns (all defaulted or nullable) on `schedules` and `job_runs`, which no
+    // earlier build ever wrote (migration 1 declared them for this item), their indexes, and four
+    // new tables (run links, discovery checkpoints, action identities, per-run usage);
+    // independent of every table of migrations 14-16. The writer floor is 16, the highest so far
+    // (migration 16 raised it): applying a migration overwrites the store's floors, so a lower
+    // value would re-admit the writers migrations 14 and 16 refuse (they would dispatch a
+    // deleted project's work, or work the migration 16 fences hold). It need not rise to 17: no
+    // earlier build reads or writes any of these records, so it cannot break the one-active-run
+    // index, the title uniqueness or the occurrence identities, and every record it does write
+    // is unchanged here; a project an earlier writer archives still fences its schedules, since
+    // every claim, dispatch and resumption checks the project's lifecycle and archive epoch
+    // itself. The reader floor stays at 8: no earlier build reads these tables, and every query
+    // an earlier reader makes returns the same results.
+    Migration {
+        version: 17,
+        minimum_reader: 8,
+        minimum_writer: 16,
+        sql: include_str!("migrations/0017_jobs.sql"),
+        rebuilds_tables: false,
+    },
+    // Additive: the unified Knowledge tables, their indexes and two FTS5 projections, referencing
+    // only actors, projects and sessions (migration 1/7 tables, unchanged).
+    // The writer floor stays at 16 (the highest so far): applying a migration overwrites the
+    // store's floors, so a lower value would re-admit the writers migrations 14 and 16 refuse. It
+    // need not rise: no earlier build writes these tables, so none can break their
+    // compare-and-set revisions, scope revisions or lexical rows, and every record an earlier
+    // writer writes is unchanged here. The reader floor stays at 8: no earlier build reads these
+    // tables, and every query an earlier reader makes returns the same results.
+    Migration {
+        version: 18,
+        minimum_reader: 8,
+        minimum_writer: 16,
+        sql: include_str!("migrations/0018_knowledge.sql"),
+        rebuilds_tables: false,
+    },
     // Additive (DW-023): index source configuration, observed source identity, worktrees, index
     // runs and overlays (five tables), defaulted payload columns on the migration 1 unit and edge
-    // tables, and six indexes. Versions 15-19 are reserved for other open items; gaps are
-    // allowed and the integrator renumbers. The writer floor rises to 20 (at least migration 14's
+    // tables, and six indexes. The writer floor rises to 19 (above every earlier
     // floor): an earlier writer's `repositories.remove_index` removes only the migration 14
     // registry rows, so it would leave this build's published pointer, views and graph payload
     // describing an index the registry no longer lists (a removed index that still reads as
@@ -213,19 +281,33 @@ pub const MIGRATIONS: &[Migration] = &[
     // and every query an earlier reader makes returns the same rows (the added columns are
     // defaulted). Both are at least every earlier floor.
     Migration {
-        version: 20,
+        version: 19,
         minimum_reader: 8,
-        minimum_writer: 20,
-        sql: include_str!("migrations/0020_indexing.sql"),
+        minimum_writer: 19,
+        sql: include_str!("migrations/0019_indexing.sql"),
         rebuilds_tables: false,
     },
 ];
-/// Recorded checksum of migration 20; a test fails if the shipped text changes.
-pub const MIGRATION_0020_SHA256: &str =
+/// Recorded checksum of migration 17; a test fails if the shipped text changes.
+pub const MIGRATION_0017_SHA256: &str =
+    "c4c2ed1f2231f0cc56c9b55593ba481a39fb0b688fcef61579eb361972274fae";
+/// Recorded checksum of migration 16; a test fails if the shipped text changes.
+pub const MIGRATION_0016_SHA256: &str =
+    "4868dd86ca4af8c5d4e77aa54061dcd0b1e17aac0bf5f5506fdbe231305f847c";
+
+/// Recorded checksum of migration 18; a test fails if the shipped text changes.
+pub const MIGRATION_0018_SHA256: &str =
+    "0461f125bd4b1f5889d535749f33214d379cf7965dd5fb701d13e09648853127";
+
+/// Recorded checksum of migration 19; a test fails if the shipped text changes.
+pub const MIGRATION_0019_SHA256: &str =
     "ed77284397dee952eb7feccf17843669545a61f0c0f35797b0fc350f4a32121f";
 /// Recorded checksum of migration 14; a test fails if the shipped text changes.
 pub const MIGRATION_0014_SHA256: &str =
     "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";
+/// Recorded checksum of migration 15; a test fails if the shipped text changes.
+pub const MIGRATION_0015_SHA256: &str =
+    "950ca955706f93e49bd4abafbaedbeac0f60342bfd1e5001fde47b5202985243";
 /// Recorded checksum of migration 13; a test fails if the shipped text changes.
 pub const MIGRATION_0013_SHA256: &str =
     "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";

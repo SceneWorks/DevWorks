@@ -5,9 +5,10 @@ use crate::backend::Backend;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
 use devworks_core::protocol::records::{
-    AccessMode, ArtifactRecord, DiagnosticEntry, EffortName, MutationSummary, ProjectRecord,
-    RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability, RouteChoice, RouteIntent,
-    RouteModel, SessionRecord, SettingEntry, ValidationReport, WebDocument, WebResult,
+    AccessMode, ArtifactRecord, ConnectionRecord, DiagnosticEntry, EffortName, JobInspection,
+    JobRecord, JobRun, MutationSummary, ProjectRecord, RepositoryRecord, RepositoryText,
+    ResourceRecord, RouteAvailability, RouteChoice, RouteIntent, RouteModel, SessionRecord,
+    SettingEntry, ValidationReport, WebDocument, WebResult,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, DomainFault};
@@ -92,7 +93,7 @@ pub fn command_result(outcome: CommandOutcome) -> Result<OperationResult, Failur
     }
 }
 
-fn unexpected(op: &str, r: &OperationResult) -> Failure {
+pub(crate) fn unexpected(op: &str, r: &OperationResult) -> Failure {
     Failure::Other(format!("{op} returned {}", r.operation()))
 }
 
@@ -103,7 +104,7 @@ pub fn query_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> V
         .into_bytes()
 }
 /// A frame negotiating schema `revision` (the envelope member `schemaRevision`).
-fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
+pub(crate) fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
     let mut v: Value = serde_json::from_slice(&frame).expect("frames are JSON");
     v["schemaRevision"] = json!(revision);
     v.to_string().into_bytes()
@@ -302,6 +303,24 @@ pub fn save_workspace_artifact(
     .to_string()
     .into_bytes()
 }
+/// An `artifacts.save` frame storing an upload into `project` (ticket from
+/// `mint_project_upload`).
+pub fn save_project_artifact(
+    backend: &dyn Backend,
+    project: &str,
+    ticket: &str,
+    title: &str,
+    media_type: &str,
+    digest: &str,
+    bytes: u64,
+) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
+        "command": {"kind": "Save", "projectId": project, "title": title,
+            "mediaType": media_type, "source": {"kind": "Upload", "ticketId": ticket},
+            "expectedDigest": digest, "expectedBytes": bytes.to_string()}})
+    .to_string()
+    .into_bytes()
+}
 pub fn saved_artifact(outcome: CommandOutcome) -> Result<ArtifactRecord, Failure> {
     match command_result(outcome)? {
         OperationResult::ArtifactsSave { value } => Ok(value),
@@ -344,6 +363,14 @@ pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
     json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
         "schemaRevision": WORKSPACE_ARTIFACT_REVISION,
         "query": {"kind": "List", "workspace": true}, "limit": PAGE_LIMIT})
+    .to_string()
+    .into_bytes()
+}
+/// `artifacts.list` of one project's artifacts.
+pub fn project_artifacts(backend: &dyn Backend, project: &str) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
+        "schemaRevision": WORKSPACE_ARTIFACT_REVISION,
+        "query": {"kind": "List", "projectId": project}, "limit": PAGE_LIMIT})
     .to_string()
     .into_bytes()
 }
@@ -859,5 +886,250 @@ pub fn discover_result(outcome: QueryOutcome) -> Result<(Vec<RepositoryRecord>, 
     match query_result(outcome)? {
         (OperationResult::IndexingDiscover { value }, _) => Ok((value.items.0, value.has_more)),
         (other, _) => Err(unexpected("indexing.discover", &other)),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scheduled jobs (JOB-01/02)
+
+/// Jobs records carry their scope, next and last run, status, hold and authorization (and runs
+/// their status, times and reason) from schema revision 2.
+pub const JOBS_REVISION: u64 = 2;
+/// Runs one history page of the Scheduled jobs screen shows.
+pub const RUN_HISTORY_PAGE: u16 = 25;
+
+fn job_scope(project: Option<&str>) -> Value {
+    match project {
+        Some(p) => json!({"kind": "Project", "projectId": p}),
+        None => json!({"kind": "Workspace"}),
+    }
+}
+/// The jobs of one scope (app-level for `None`), at the jobs revision.
+pub fn jobs_list(backend: &dyn Backend, project: Option<&str>) -> Vec<u8> {
+    jobs_list_after(backend, project, None)
+}
+/// The page of a scope's jobs after `cursor` (the first page without one).
+pub fn jobs_list_after(
+    backend: &dyn Backend,
+    project: Option<&str>,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    let mut page = json!({"limit": PAGE_LIMIT});
+    if let Some(c) = cursor {
+        page["cursor"] = json!(c);
+    }
+    at_revision(
+        query_frame(
+            backend,
+            "jobs.list",
+            json!({"scope": job_scope(project), "page": page}),
+        ),
+        JOBS_REVISION,
+    )
+}
+/// A page of jobs with the cursor of the next one.
+pub fn jobs_page(outcome: QueryOutcome) -> Result<(Vec<JobRecord>, Option<String>), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::JobsList { value }, _) => {
+            Ok((value.items.0, value.next_cursor.map(|c| c.0)))
+        }
+        (other, _) => Err(unexpected("jobs.list", &other)),
+    }
+}
+pub fn jobs(outcome: QueryOutcome) -> Result<(Vec<JobRecord>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::JobsList { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("jobs.list", &other)),
+    }
+}
+/// A job with its latest run and a page of its run history (after `cursor`).
+pub fn jobs_inspect(backend: &dyn Backend, job: &str, cursor: Option<&str>) -> Vec<u8> {
+    let mut history = json!({"limit": RUN_HISTORY_PAGE});
+    if let Some(c) = cursor {
+        history["cursor"] = json!(c);
+    }
+    at_revision(
+        query_frame(
+            backend,
+            "jobs.inspect",
+            json!({"jobId": job, "history": history}),
+        ),
+        JOBS_REVISION,
+    )
+}
+/// `jobs.inspect` of one named run of `job` (no history page).
+pub fn jobs_inspect_run(backend: &dyn Backend, job: &str, run: &str) -> Vec<u8> {
+    at_revision(
+        query_frame(backend, "jobs.inspect", json!({"jobId": job, "runId": run})),
+        JOBS_REVISION,
+    )
+}
+pub fn job_inspection(outcome: QueryOutcome) -> Result<JobInspection, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::JobsInspect { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("jobs.inspect", &other)),
+    }
+}
+/// `jobs.create` of a new job.
+pub fn job_create(
+    backend: &dyn Backend,
+    project: Option<&str>,
+    title: &str,
+    schedule: &Value,
+    definition: &Value,
+    enabled: bool,
+) -> Vec<u8> {
+    at_revision(
+        command_frame(
+            backend,
+            "jobs.create",
+            json!({"scope": job_scope(project), "title": title, "schedule": schedule,
+                "definition": definition, "enabled": enabled}),
+        ),
+        JOBS_REVISION,
+    )
+}
+/// `jobs.edit` at the record's revision (a concurrent change is a revision conflict).
+pub fn job_edit(
+    backend: &dyn Backend,
+    job: &JobRecord,
+    title: &str,
+    schedule: &Value,
+    definition: &Value,
+) -> Vec<u8> {
+    at_revision(
+        command_frame(
+            backend,
+            "jobs.edit",
+            json!({"jobId": job.id, "expectedRevision": job.revision, "title": title,
+                "schedule": schedule, "definition": definition}),
+        ),
+        JOBS_REVISION,
+    )
+}
+/// `jobs.enable`, `.disable`, `.delete` or `.run_now` of a job at its record's revision.
+pub fn job_command(backend: &dyn Backend, operation: &str, job: &JobRecord) -> Vec<u8> {
+    at_revision(
+        command_frame(
+            backend,
+            operation,
+            json!({"jobId": job.id, "expectedRevision": job.revision}),
+        ),
+        JOBS_REVISION,
+    )
+}
+/// `jobs.cancel` of one run at the run's revision.
+pub fn job_cancel(backend: &dyn Backend, run: &JobRun) -> Vec<u8> {
+    at_revision(
+        command_frame(
+            backend,
+            "jobs.cancel",
+            json!({"jobId": run.job_id, "runId": run.id, "expectedRevision": run.revision}),
+        ),
+        JOBS_REVISION,
+    )
+}
+/// What a jobs command did, or that a cancellation was accepted (it settles asynchronously).
+pub enum JobChange {
+    Job(JobRecord),
+    Run(JobRun),
+    /// A dispatched run was asked to stop; its outcome is recorded when known.
+    CancelAccepted,
+}
+pub fn job_changed(outcome: CommandOutcome) -> Result<JobChange, Failure> {
+    if let Ok(CommandReply::Recorded { receipt, .. }) = &outcome
+        && let DomainDecision::Accepted { .. } = receipt.decision
+    {
+        return Ok(JobChange::CancelAccepted);
+    }
+    match command_result(outcome)? {
+        OperationResult::JobsCreate { value }
+        | OperationResult::JobsEdit { value }
+        | OperationResult::JobsEnable { value }
+        | OperationResult::JobsDisable { value }
+        | OperationResult::JobsDelete { value } => Ok(JobChange::Job(value)),
+        OperationResult::JobsRunNow { value } | OperationResult::JobsCancel { value } => {
+            Ok(JobChange::Run(value))
+        }
+        other => Err(unexpected("jobs", &other)),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Provider connections (DW-18)
+
+/// `router.connections`, `router.catalog` and `router.configure` revision 2: connection
+/// lifecycle, health, discovery and sign-in challenges; model context windows and bindings.
+pub const ROUTER_CONNECTIONS_REVISION: u64 = 2;
+
+pub fn router_connections(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    let mut page = json!({"limit": PAGE_LIMIT});
+    if let Some(c) = cursor {
+        page["cursor"] = json!(c);
+    }
+    at_revision(
+        query_frame(backend, "router.connections", json!({"page": page})),
+        ROUTER_CONNECTIONS_REVISION,
+    )
+}
+/// A page of connections and the cursor of the next one.
+pub fn connection_records(
+    outcome: QueryOutcome,
+) -> Result<(Vec<ConnectionRecord>, Option<String>), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RouterConnections { value }, _) => {
+            let next = value.next_cursor.map(|c| c.0).filter(|_| value.has_more);
+            if value.has_more && next.is_none() {
+                return Err(Failure::Other(
+                    "router.connections reported more pages without a cursor".into(),
+                ));
+            }
+            Ok((value.items.0, next))
+        }
+        (other, _) => Err(unexpected("router.connections", &other)),
+    }
+}
+/// The whole catalog, disabled models included, at revision 2 (context windows, bindings).
+pub fn router_catalog_all(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    let mut page = json!({"limit": PAGE_LIMIT});
+    if let Some(c) = cursor {
+        page["cursor"] = json!(c);
+    }
+    at_revision(
+        query_frame(
+            backend,
+            "router.catalog",
+            json!({"page": page, "includeDisabled": true}),
+        ),
+        ROUTER_CONNECTIONS_REVISION,
+    )
+}
+pub fn router_configure(backend: &dyn Backend, action: Value) -> Vec<u8> {
+    at_revision(
+        command_frame(backend, "router.configure", json!({"action": action})),
+        ROUTER_CONNECTIONS_REVISION,
+    )
+}
+/// Whether `router.configure` changed something (`Applied`) or found it as asked (`NoChange`).
+pub fn configured(outcome: CommandOutcome) -> Result<bool, Failure> {
+    match outcome.map_err(gateway)? {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::RouterConfigure { value },
+            }
+            | DomainDecision::NoChange {
+                result: OperationResult::RouterConfigure { value },
+            } => Ok(value.changed),
+            DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
+            other => Err(Failure::Other(format!(
+                "router.configure returned {}",
+                match other {
+                    DomainDecision::Accepted { .. } => "an accepted operation",
+                    _ => "an unexpected result",
+                }
+            ))),
+        },
+        CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
     }
 }

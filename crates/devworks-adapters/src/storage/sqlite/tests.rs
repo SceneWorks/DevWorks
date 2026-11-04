@@ -107,8 +107,11 @@ impl StoreHarness for Harness {
 
 mod artifacts;
 mod authority;
+mod connections;
 mod diagnostics;
 mod indexing;
+mod jobs;
+mod knowledge;
 mod projects;
 mod replies;
 mod resources;
@@ -117,6 +120,7 @@ mod runs;
 mod sessions;
 mod settings;
 mod web;
+mod work;
 
 mod contract {
     devworks_core::store_contract_tests!(super::Harness::new());

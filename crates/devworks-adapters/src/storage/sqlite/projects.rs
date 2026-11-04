@@ -448,7 +448,11 @@ macro_rules! project_reads {
                 repository: &Id,
             ) -> Result<i64, StorageError> {
                 db(self.conn.query_row(
-                    "SELECT count(*) FROM work_repositories wr JOIN work_items w ON w.id=wr.work_id WHERE w.project_id=?1 AND wr.repository_id=?2",
+                    "SELECT count(*) FROM work_items w WHERE w.project_id=?1 AND (
+                       EXISTS(SELECT 1 FROM work_repositories wr WHERE wr.work_id=w.id AND wr.repository_id=?2)
+                       OR EXISTS(SELECT 1 FROM json_each(w.brief_json,'$.touches') t WHERE json_extract(t.value,'$.repositoryId')=?2)
+                       OR EXISTS(SELECT 1 FROM feature_plans fp, json_each(fp.pending_plan_json,'$.draft.repositoryIds') r
+                                 WHERE fp.feature_id=w.id AND fp.pending_plan_json IS NOT NULL AND r.value=?2))",
                     params![project.0.as_str(), repository.as_str()],
                     |r| r.get(0),
                 ))

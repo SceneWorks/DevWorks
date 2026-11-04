@@ -325,6 +325,98 @@ fn the_runtime_discovers_indexes_and_publishes_through_its_supervisor() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+#[test]
+fn a_native_reindex_job_uses_the_registered_service_and_wakes_index_supervision() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    let src = sources();
+    let repo = src.join("scheduled");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("lib.rs"), "pub fn scheduled() {}\n").unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "one"]);
+    let mut composed = composition(&h, store.clone(), "git");
+    // The command wakeup drives publication; polling is only a failure fallback an hour away.
+    composed.indexing.as_mut().unwrap().config.tick = Duration::from_secs(3600);
+    let runtime_ = rt.block_on(boot(composed)).unwrap();
+    let capability = runtime_
+        .jobs()
+        .catalog()
+        .capabilities()
+        .into_iter()
+        .find(|c| c.operation == "indexing.reindex")
+        .expect("indexing is registered before the maintenance catalog is qualified");
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let found = discovered(&runtime_, &ctx);
+    assert_eq!(found.len(), 1);
+    let command = |op: &str, key: &str, mut body: Value| {
+        body["kind"] = json!(op);
+        let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "schemaRevision": 2,
+            "requestKey": key, "body": body});
+        match runtime_
+            .command(&ctx, op, frame.to_string().as_bytes())
+            .unwrap()
+        {
+            CommandReply::Recorded { receipt, .. } => match receipt.decision {
+                DomainDecision::Applied { result } => result,
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+    };
+    let OperationResult::JobsCreate { value: job } = command(
+        "jobs.create",
+        "create-job",
+        json!({
+            "scope": {"kind": "Workspace"}, "title": "Reindex", "enabled": true,
+            "schedule": {"kind": "Interval", "seconds": "60"},
+            "definition": {"kind": "Native", "capabilityId": capability.capability_id,
+                "arguments": {"schema": capability.schema, "value": {
+                    "scope": {"kind": "Workspace"}, "repositoryIds": found,
+                    "expectedSourceRevision": "1", "views": {"kind": "Published", "repositoryIds": found}
+                }}}
+        }),
+    ) else {
+        panic!("job creation result")
+    };
+    let OperationResult::JobsRunNow { value: run } = command(
+        "jobs.run_now",
+        "run-job",
+        json!({"jobId": job.id, "expectedRevision": job.revision}),
+    ) else {
+        panic!("job run result")
+    };
+    rt.block_on(within(
+        "the native job dispatches and indexing publishes",
+        async {
+            loop {
+                let stored = read(&*store, |s| s.jobs().job_run(&run.id)).unwrap();
+                assert!(
+                    !matches!(stored.status.as_str(), "Failed" | "OutcomeUnknown"),
+                    "{stored:?}"
+                );
+                let OperationResult::IndexingStatus { value } = query(
+                    &runtime_,
+                    &ctx,
+                    "indexing.status",
+                    json!({"repositoryId": found[0]}),
+                ) else {
+                    panic!("index status")
+                };
+                if stored.status == "Succeeded" && !value.current_view_ids.0.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        },
+    ));
+    rt.block_on(runtime_.shutdown());
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Uses a POSIX shell fake Git; Windows process-tree supervision is covered by the process
 /// tests.
 #[cfg(unix)]

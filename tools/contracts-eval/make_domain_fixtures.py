@@ -482,6 +482,165 @@ case('r2-result-indexing.status-plain','operation-result.r2',{'kind':'indexing.s
 case('reject-r1-result-indexing-status-freshness','operation-result',{'kind':'indexing.status','value':status_r2},False,False)
 case('reject-r2-result-overlay-unknown-state','operation-result.r2',{'kind':'indexing.status','value':{**status_r2,'overlays':[{**overlay,'state':'Warm'}]}},False,False)
 case('reject-r2-result-language-unknown-mode','operation-result.r2',{'kind':'indexing.status','value':{**status_r2,'languages':[{**language,'mode':'Semantic'}]}},False,False)
+# Schema revision 2 (unified Knowledge, DW-30): entry kinds, lifecycle, provenance, verification
+# and lesson state on claims; lesson drafts, origin and source revisions on writes; filters,
+# previews, challenge resolution and promote actions on inputs.
+for name in ['knowledge.search','knowledge.read','knowledge.diagnostics','knowledge.subgraph','knowledge.entity_bundle','knowledge.entity_graph','knowledge.claim_bundle','knowledge.expand_frontier','knowledge.query','knowledge.tagged_lessons']:
+ case('r2-input-'+name,'domain-request.r2',domain(name))
+for name in ['knowledge.record','knowledge.revise','knowledge.verify','knowledge.challenge','knowledge.promote']:
+ case('r2-input-'+name,'domain-request.r2',command_at(name))
+case('r2-input-knowledge.search-filters','domain-request.r2',domain('knowledge.search',states=['Active','Retracted'],entryKinds=['Gotcha'],source='session-a',stale=True))
+case('r2-input-knowledge.tagged_lessons-views','domain-request.r2',domain('knowledge.tagged_lessons',ruleStates=['Effective'],activity='reviewing',view='Undelivered'))
+case('r2-input-knowledge.diagnostics-preview','domain-request.r2',domain('knowledge.diagnostics',sourceId='source-a'))
+case('r2-input-knowledge.diagnostics-import','domain-request.r2',domain('knowledge.diagnostics',importSource=ART,importSchema=BASE['SchemaRef']))
+lesson_draft={'source':'RelayedReview','sourceRef':'review-1','quotedWords':'Always run fmt','applicability':{'activities':['implementing'],'paths':['src/lib.rs'],'tools':[],'repositoryIds':[]}}
+r2_claim={**sample('ClaimDraft'),'kind':'Lesson','entryKind':'Lesson','origin':'User','originRef':'message-a','lesson':lesson_draft,'sourceRevision':'commit-a'}
+case('r2-input-knowledge.record-lesson','domain-request.r2',command_at('knowledge.record',batch={'entities':[],'claims':[r2_claim],'evidence':[{**sample('SourceEvidence'),'sourceRevision':'commit-a'}]}))
+case('r2-input-knowledge.verify-revision','domain-request.r2',command_at('knowledge.verify',sourceRevision='commit-b'))
+case('r2-input-knowledge.challenge-resolve','domain-request.r2',command_at('knowledge.challenge',resolveChallengeId='challenge-a',outcome='Retire'))
+case('r2-input-knowledge.promote-address','domain-request.r2',command_at('knowledge.promote',action='Address',address={'kind':'Test','name':'fmt_check','reference':'ci.yml'}))
+case('reject-r1-knowledge.search-states','domain-request',domain('knowledge.search',None,states=['Active']),False,False)
+case('reject-r1-knowledge.record-lesson','domain-request',command_at('knowledge.record',None,batch={'entities':[],'claims':[r2_claim],'evidence':[]}),False,False)
+case('reject-r2-knowledge.search-unknown-state','domain-request.r2',domain('knowledge.search',states=['Archived']),False,False)
+case('reject-r2-knowledge.promote-unknown-action','domain-request.r2',command_at('knowledge.promote',action='Approve'),False,False)
+case('reject-r2-knowledge.lesson-unknown-source','domain-request.r2',command_at('knowledge.record',batch={'entities':[],'claims':[{**r2_claim,'lesson':{**lesson_draft,'source':'Human'}}],'evidence':[]}),False,False)
+case('reject-r2-knowledge.lesson-absolute-path','domain-request.r2',command_at('knowledge.record',batch={'entities':[],'claims':[{**r2_claim,'lesson':{**lesson_draft,'applicability':{**lesson_draft['applicability'],'paths':['/etc/passwd']}}}],'evidence':[]}),False,False)
+lesson_record={'ruleState':'Effective','effect':'UserInstruction','effectiveAtMs':'5','source':'RelayedReview','sourceRef':'review-1','quotedWords':'Always run fmt','applicability':lesson_draft['applicability'],'recurrence':'1','recurrenceThreshold':'3','challenges':[{'id':'challenge-a','state':'Open','reason':'Breaks CI','evidenceIds':[],'authorId':'actor-a','openedAtMs':'6'}],'addressedBy':[{'kind':'Test','name':'fmt_check'}],'deliveredSessions':'2','lastDeliveredAtMs':'7'}
+claim_r2={**sample('KnowledgeClaim'),'kind':'Lesson','entryKind':'Lesson','lifecycle':'Active','origin':'User','autonomous':False,'authorId':'actor-a','createdAtMs':'1','updatedAtMs':'2','stale':False,'lesson':lesson_record}
+case('r2-result-knowledge.search','operation-result.r2',{'kind':'knowledge.search','value':{'items':[claim_r2],'hasMore':False}})
+case('r2-result-knowledge.tagged_lessons','operation-result.r2',{'kind':'knowledge.tagged_lessons','value':{'items':[claim_r2],'hasMore':False}})
+bundle_r2={**sample('KnowledgeBundle'),'claims':[claim_r2],'relations':[{'id':'relation-a','subjectId':'claim-a','predicate':'contradicts','objectId':'claim-b','evidenceIds':[],'authorId':'actor-a','createdAtMs':'3'}],'revisions':[{'revision':'1','change':'Recorded','authorId':'actor-a','atMs':'1','lifecycle':'Active','writeId':'write-a','value':'A retained fact'}],'scopeRevision':'4'}
+case('r2-result-knowledge.read','operation-result.r2',{'kind':'knowledge.read','value':bundle_r2})
+for name in ['knowledge.record','knowledge.revise','knowledge.verify','knowledge.challenge','knowledge.promote','knowledge.diagnostics']:
+ case('r2-result-'+name,'operation-result.r2',result(name,OPS[name]['result']))
+for name in ['knowledge.subgraph','knowledge.entity_bundle','knowledge.entity_graph','knowledge.claim_bundle','knowledge.expand_frontier','knowledge.query']:
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':bundle_r2})
+case('reject-r1-result-knowledge.claim-lesson','operation-result',{'kind':'knowledge.search','value':{'items':[claim_r2],'hasMore':False}},False,False)
+case('reject-r2-result-knowledge.unknown-rule-state','operation-result.r2',{'kind':'knowledge.search','value':{'items':[{**claim_r2,'lesson':{**lesson_record,'ruleState':'Approved'}}],'hasMore':False}},False,False)
+# Schema revision 2 (DW-30 review): a receipt of a bulk write carries its totals and a cursor
+# that write_status continues, so a write past 128 IDs is named completely.
+receipt_r2={**sample('KnowledgeWriteReceipt'),'entityCount':'300','claimCount':'10000','nextCursor':'cursor-a'}
+for name in ['knowledge.relate','knowledge.tag','knowledge.retract','knowledge.scope','knowledge.import_user_data','dreaming.revert']:
+ case('r2-input-'+name,'domain-request.r2',command_at(name))
+case('r2-input-knowledge.write_status','domain-request.r2',domain('knowledge.write_status'))
+case('r2-input-knowledge.write_status-cursor','domain-request.r2',domain('knowledge.write_status',cursor='cursor-a'))
+case('reject-r1-knowledge.write_status-cursor','domain-request',domain('knowledge.write_status',None,cursor='cursor-a'),False,False)
+for name in ['knowledge.record','knowledge.revise','knowledge.relate','knowledge.tag','knowledge.verify','knowledge.retract','knowledge.scope','knowledge.write_status','knowledge.import_user_data','knowledge.promote','knowledge.challenge','dreaming.revert']:
+ case('r2-result-'+name+'-totals','operation-result.r2',{'kind':name,'value':receipt_r2})
+case('reject-r1-result-knowledge.receipt-totals','operation-result',{'kind':'knowledge.record','value':receipt_r2},False,False)
+case('reject-r2-result-knowledge.receipt-negative-total','operation-result.r2',{'kind':'knowledge.record','value':{**receipt_r2,'claimCount':'-1'}},False,False)
+# Schema revision 2 (feature readiness, AGENT-12/18-20): every operation returning a work record
+# negotiates revision 2, whose WorkRecord carries the feature's readiness assessment; features.edit
+# records an assessment of the active or pending plan, or closes one finding.
+WORK_R2=['features.list','features.get','features.create','features.edit_plan','features.dependencies','features.edit','issues.list','issues.get','issues.create','issues.edit','tasks.list','tasks.get','tasks.create','tasks.edit','tasks.move','tasks.assign','tasks.dependency_links','tasks.acceptance_evidence','tasks.sync_plan','tasks.set_feature']
+for name in WORK_R2:
+ case('r2-input-'+name,'domain-request.r2',domain(name) if OPS[name]['mode']=='Query' else command_at(name))
+finding={'id':'F1','disposition':'NeedsUserDecision','blocking':True,'prerequisite':False,'state':'Open','requirementIds':['E1'],'scopeKey':'E1','affectedWorkIds':['task-a'],'summary':'processor unknown','missing':'which payment processor','consequence':'refunds cannot be verified','attempts':['read the repository conventions'],'insufficiency':'a product choice','closureCondition':'the processor is named','evidence':[],'question':'Stripe or Adyen?','recommendation':'Stripe','closureEvidence':[]}
+assess={'kind':'Assess','planRevision':'2','planDigest':'b'*64,'summary':'assessed','findings':[finding]}
+edit=command_at('features.edit')
+edit['body']['changes']={'readiness':assess}
+case('r2-input-features.edit-assess','domain-request.r2',edit)
+close=command_at('features.edit')
+close['body']['changes']={'readiness':{'kind':'CloseFinding','expectedAssessmentRevision':'1','findingId':'F1','note':'the user chose Stripe','evidence':[ART]}}
+case('r2-input-features.edit-close-finding','domain-request.r2',close)
+evidence_edit=command_at('features.edit')
+evidence_edit['body']['changes']={'acceptanceEvidence':[{'id':'A1','text':'works','evidenceIds':['link-a'],'state':'Met'}]}
+case('r2-input-features.edit-acceptance-evidence','domain-request.r2',evidence_edit)
+r1evidence=command_at('features.edit',None)
+r1evidence['body']['changes']={'acceptanceEvidence':[{'id':'A1','text':'works','evidenceIds':[],'state':'Met'}]}
+case('reject-r1-features.edit-acceptance-evidence','domain-request',r1evidence,False,False)
+r1edit=command_at('features.edit',None)
+r1edit['body']['changes']={'readiness':assess}
+case('reject-r1-features.edit-readiness','domain-request',r1edit,False,False)
+for op,ids in (('tasks.prioritize','orderedTaskIds'),('features.prioritize','orderedWorkIds'),('issues.prioritize','orderedWorkIds')):
+ placed=command_at(op)
+ placed['body'].pop(ids,None)
+ placed['body']['placement']={'workId':'work-b','anchorId':'work-a','side':'Before'}
+ case('r2-input-'+op+'-placement','domain-request.r2',placed)
+ both=command_at(op)
+ both['body'][ids]=['work-a']
+ both['body']['placement']={'workId':'work-b','anchorId':'work-a','side':'After'}
+ case('reject-r2-'+op+'-ordered-and-placement','domain-request.r2',both,False,False)
+ r1placed=command_at(op,None)
+ r1placed['body'].pop(ids,None)
+ r1placed['body']['placement']={'workId':'work-b','anchorId':'work-a','side':'Before'}
+ case('reject-r1-'+op+'-placement','domain-request',r1placed,False,False)
+ case('r2-result-'+op,'operation-result.r2',{'kind':op,'value':{'id':'project-a','revision':'2','changed':True}})
+bad=copy.deepcopy(edit);bad['body']['changes']['readiness']['findings'][0]['disposition']='Maybe'
+case('reject-r2-readiness-unknown-disposition','domain-request.r2',bad,False,False)
+readiness={'id':'assessment-a','revision':'1','planRevision':'2','planDigest':'b'*64,'reviewedPending':False,'freshness':'Stale','staleScopeKeys':['E1'],'ready':False,'summary':'assessed','findings':[finding],'assessedBy':'actor-a','assessedAtMs':'1793570000000'}
+feature_r2={**copy.deepcopy(POS['result-features.get']['value']),'readiness':readiness,'queueRevision':'3','workflowRevision':'1','acceptanceTests':[]}
+case('r2-result-features.get','operation-result.r2',{'kind':'features.get','value':feature_r2})
+case('r2-result-features.get-unassessed','operation-result.r2',{'kind':'features.get','value':copy.deepcopy(POS['result-features.get']['value'])})
+case('r2-result-features.list','operation-result.r2',{'kind':'features.list','value':{'items':[feature_r2],'hasMore':False}})
+def work_r2(v):
+ v=copy.deepcopy(v)
+ if 'items' in v:
+  v['items']=[{**x,'queueRevision':'3','workflowRevision':'1'} for x in v['items']]
+  return v
+ return {**v,'queueRevision':'3','workflowRevision':'1'}
+for name in WORK_R2:
+ if name in ('features.get','features.list'):continue
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':work_r2(POS['result-'+name]['value'])})
+case('reject-r1-result-readiness','operation-result',{'kind':'features.get','value':feature_r2},False,False)
+case('reject-r2-result-readiness-freshness','operation-result.r2',{'kind':'features.get','value':{**feature_r2,'readiness':{**readiness,'freshness':'Fresh'}}},False,False)
+# Schema revision 2 (provider connections, DW-18): the connection's endpoint, lifecycle, health,
+# discovery and sign-in challenge; a catalog model's context window and serving connection.
+conn_r2={**sample('ConnectionRecord'),'endpoint':'https://api.example.invalid','lifecycle':'Authorizing','stateReason':'Waiting for the device code','credentialRevision':'2','healthy':True,'checkedAtMs':'10','discoveredAtMs':'9','discoveredModelCount':'1','discoveredModelIds':['gpt-6-luna'],'accessExpiresAtMs':'99','signIn':{'flowId':'flow-a','method':'DeviceCode','userCode':'ABCD-EFGH','verificationUrl':'https://auth.example.invalid/codex/device','expiresAtMs':'100'}}
+case('r2-result-router.connections','operation-result.r2',{'kind':'router.connections','value':{'items':[conn_r2],'hasMore':False}})
+case('r2-result-router.connections-plain','operation-result.r2',{'kind':'router.connections','value':{'items':[sample('ConnectionRecord')],'hasMore':False}})
+case('reject-r1-result-connections-lifecycle','operation-result',{'kind':'router.connections','value':{'items':[conn_r2],'hasMore':False}},False,False)
+case('reject-r2-result-connections-unknown-lifecycle','operation-result.r2',{'kind':'router.connections','value':{'items':[{**conn_r2,'lifecycle':'Pending'}],'hasMore':False}},False,False)
+case('reject-r2-result-connections-sign-in-method','operation-result.r2',{'kind':'router.connections','value':{'items':[{**conn_r2,'signIn':{**conn_r2['signIn'],'method':'Password'}}],'hasMore':False}},False,False)
+model_r2={**sample('RouteModel'),'contextTokens':'1000000','connectionId':'conn-a'}
+case('r2-result-router.catalog','operation-result.r2',{'kind':'router.catalog','value':{'items':[model_r2],'hasMore':False}})
+case('reject-r1-result-catalog-context','operation-result',{'kind':'router.catalog','value':{'items':[model_r2],'hasMore':False}},False,False)
+case('reject-r2-result-catalog-zero-context','operation-result.r2',{'kind':'router.catalog','value':{'items':[{**model_r2,'contextTokens':'0'}],'hasMore':False}},False,False)
+case('r2-input-router.configure','domain-request.r2',command_at('router.configure',action={'kind':'Model','model':model_r2}))
+case('r2-input-router.configure-plain','domain-request.r2',command_at('router.configure'))
+case('reject-r1-configure-model-context','domain-request',command_at('router.configure',None,action={'kind':'Model','model':model_r2}),False,False)
+case('r2-input-router.connections','domain-request.r2',domain('router.connections'))
+case('r2-input-router.catalog','domain-request.r2',domain('router.catalog'))
+case('r2-result-router.configure','operation-result.r2',{'kind':'router.configure','value':sample('MutationSummary')})
+# Revision 2 (DW-18): connection enable/disable and OpenRouter constraints.
+or_constraints={'allowedModels':['anthropic/*'],'excludedModels':['openai/gpt-4o'],'costTier':'low','provider':{'order':['anthropic'],'allowFallbacks':False,'requireParameters':True,'dataCollection':'deny','zdr':True,'enforceDistillableText':True,'only':['anthropic'],'ignore':['deepinfra'],'quantizations':['fp8','bf16'],'sort':{'by':'price','partition':'none'},'preferredMinThroughput':{'p50':50.0},'preferredMaxLatency':{'p90':2.5},'maxPrice':{'prompt':'3','completion':'15','request':'0.01','image':'0.002'}}}
+or_connection={'kind':'Connection','connectionId':'or','name':'OpenRouter','profile':'OpenRouterChat','endpoint':'https://openrouter.ai/api/v1','enabled':False,'openRouter':or_constraints}
+case('r2-input-router.configure-connection-constraints','domain-request.r2',command_at('router.configure',action=or_connection))
+case('reject-r1-configure-connection-enabled','domain-request',command_at('router.configure',None,action=or_connection),False,False)
+case('reject-r2-configure-unknown-data-collection','domain-request.r2',command_at('router.configure',action={**or_connection,'openRouter':{**or_constraints,'provider':{'dataCollection':'maybe'}}}),False,False)
+case('reject-r2-configure-negative-max-price','domain-request.r2',command_at('router.configure',action={**or_connection,'openRouter':{**or_constraints,'provider':{'maxPrice':{'prompt':'-1'}}}}),False,False)
+case('reject-r2-configure-null-enabled','domain-request.r2',command_at('router.configure',action={**or_connection,'enabled':None}),False,False)
+case('r2-result-router.connections-constraints','operation-result.r2',{'kind':'router.connections','value':{'items':[{**conn_r2,'enabled':False,'openRouter':or_constraints}],'hasMore':False}})
+case('reject-r1-result-connections-enabled','operation-result',{'kind':'router.connections','value':{'items':[{**sample('ConnectionRecord'),'enabled':True}],'hasMore':False}},False,False)
+# Schema revision 2 (jobs): scope, next/last run, status, hold and authorization on records;
+# status, trigger, occurrence instant, times, reason, preserved hold, cancellation, resumptions,
+# session, linked roots and the overlapped run on runs; paged run history and run usage on
+# inspection.
+for name in ['jobs.list']:
+ case('r2-input-'+name,'domain-request.r2',domain(name))
+for name in ['jobs.create','jobs.edit','jobs.enable','jobs.disable','jobs.delete','jobs.run_now','jobs.cancel']:
+ case('r2-input-'+name,'domain-request.r2',command_at(name))
+case('r2-input-jobs.inspect','domain-request.r2',domain('jobs.inspect',runId='run-a',history={'limit':20,'cursor':'cursor-a'},usage={'limit':50}))
+case('r2-input-jobs.inspect-plain','domain-request.r2',domain('jobs.inspect'))
+case('reject-r1-inspect-history','domain-request',domain('jobs.inspect',None,history={'limit':20}),False,False)
+case('reject-r2-inspect-null-history','domain-request.r2',domain('jobs.inspect',history=None),False,False)
+case('reject-r2-inspect-history-over-limit','domain-request.r2',domain('jobs.inspect',history={'limit':501}),False,False)
+calendar={'kind':'Calendar','expression':'30 2 * * *','timezone':'America/New_York'}
+job_r2={**sample('JobRecord'),'schedule':calendar,'enabled':True,'scope':{'kind':'Project','projectId':'project-a'},'nextRunAtMs':'1793570000000','lastRunStartedAtMs':'1793560000000','lastRunFinishedAtMs':'1793560060000','lastRunStatus':'Succeeded','activeRunId':'run-b','hold':'ReactivationRequired','authorized':True,'createdAtMs':'1','updatedAtMs':'2'}
+run_r2={**sample('JobRun'),'status':'Skipped','trigger':'Scheduled','occurrenceAtMs':'1793570000000','finishedAtMs':'1793570000000','reason':'The previous run is still active','skippedForRunId':'run-b','resumptions':'0','cancelRequested':False,'linkedRootIds':['root-a'],'sessionId':'session-a','hold':'ApprovalWait'}
+for name in ['jobs.create','jobs.edit','jobs.enable','jobs.disable','jobs.delete']:
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':job_r2})
+case('r2-result-jobs.delete-tombstone','operation-result.r2',{'kind':'jobs.delete','value':{**job_r2,'enabled':False,'deletedAtMs':'3'}})
+for name in ['jobs.run_now','jobs.cancel']:
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':run_r2})
+case('r2-result-jobs.list','operation-result.r2',{'kind':'jobs.list','value':{'items':[job_r2,sample('JobRecord')],'hasMore':False}})
+case('r2-result-jobs.inspect','operation-result.r2',{'kind':'jobs.inspect','value':{'job':job_r2,'run':run_r2,'runs':[run_r2,sample('JobRun')],'runsNextCursor':'cursor-a'}})
+case('reject-r1-result-job-next-run','operation-result',{'kind':'jobs.enable','value':job_r2},False,False)
+case('reject-r1-result-run-status','operation-result',{'kind':'jobs.run_now','value':run_r2},False,False)
+case('reject-r1-result-inspection-runs','operation-result',{'kind':'jobs.inspect','value':{'job':sample('JobRecord'),'runs':[]}},False,False)
+case('reject-r2-result-run-unknown-status','operation-result.r2',{'kind':'jobs.run_now','value':{**run_r2,'status':'Missed'}},False,False)
+case('reject-r2-result-job-unknown-hold','operation-result.r2',{'kind':'jobs.enable','value':{**job_r2,'hold':'Paused'}},False,False)
+case('reject-r2-result-run-unknown-trigger','operation-result.r2',{'kind':'jobs.cancel','value':{**run_r2,'trigger':'Catchup'}},False,False)
 # Schema revision 2 (web tools): untrusted results with their provider, and a fetched document's
 # trust, final 2xx status, 3xx redirect chain and the digest/length of the bytes received.
 case('r2-input-web.search','domain-request.r2',domain('web.search'))

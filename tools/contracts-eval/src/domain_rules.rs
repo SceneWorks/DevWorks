@@ -207,6 +207,21 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             "a run filter names each state and kind once",
         )?
     }
+    if matches!(
+        op,
+        "tasks.prioritize" | "features.prioritize" | "issues.prioritize"
+    ) {
+        // Exactly one order: the ordered IDs, or (revision 2) one placement.
+        let ids = if op == "tasks.prioritize" {
+            "orderedTaskIds"
+        } else {
+            "orderedWorkIds"
+        };
+        require(
+            present(v, ids) != present(v, "placement"),
+            "a prioritization names exactly one of ordered IDs and a placement",
+        )?
+    }
     if op.ends_with(".configure") || op.ends_with(".draft") {
         let key = if present(v, "serverId") {
             Some("serverId")

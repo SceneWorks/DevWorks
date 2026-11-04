@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 5;
+pub const CATALOG_REVISION: i64 = 6;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -677,6 +677,16 @@ fn build() -> Vec<SettingDescriptor> {
             WORKSPACE,
             ValueKind::Bool,
             true,
+            NextAdmission
+        ),
+        setting!(
+            "knowledge.lessonRecurrenceThreshold",
+            "Lesson recurrence threshold",
+            "Distinct source events after which a lesson an agent or reviewer inferred takes effect as a rule, without approval. A rule from your own words takes effect at once. Engineering default.",
+            Knowledge,
+            INHERITED,
+            ValueKind::Integer { min: 2, max: 20 },
+            3,
             NextAdmission
         ),
         setting!(

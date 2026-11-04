@@ -239,7 +239,9 @@ impl Check for ConfigureInput {
     }
 }
 impl Revisioned for ConfigureInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.action.retain_revision(revision);
+    }
 }
 
 /// `router.decision_models` Query input.
