@@ -293,6 +293,21 @@ pub fn authorizes(ctx: &InvocationContext) -> bool {
 pub fn project_closed(lifecycle: Option<&str>) -> bool {
     lifecycle.is_none_or(crate::services::runs::closed_to_work)
 }
+/// The project a job's runs act on: its scope's project, or the project an app-level inference
+/// task targets (`None`: the workspace). Its lifecycle and archive epoch fence the job and its
+/// runs; the listing scope alone does not name it.
+pub(crate) fn target_project(scope: Option<&ProjectId>, definition: &str) -> Option<ProjectId> {
+    scope
+        .cloned()
+        .or_else(|| match parse::<JobDefinition>(definition) {
+            Ok(JobDefinition::Inference { project_id, .. }) => project_id,
+            _ => None,
+        })
+}
+/// The project a job's runs act on ([`target_project`]).
+pub(crate) fn job_target(job: &StoredJob) -> Option<ProjectId> {
+    target_project(job.project_id.as_ref(), &job.definition)
+}
 /// A project's archive epoch (advanced by every archival); 0 for an app-level scope.
 pub(crate) fn project_epoch(
     tx: &mut dyn WriteTransaction,
@@ -779,7 +794,10 @@ impl JobService {
             authorized_by: human.then(|| ctx.principal().clone()),
             hold: None,
             activated_epoch: tx.store().restore_epoch,
-            project_epoch: project_epoch(tx, project.as_ref())?,
+            project_epoch: project_epoch(
+                tx,
+                target_project(project.as_ref(), &canonical(&i.definition)).as_ref(),
+            )?,
             anchor_at_ms: now,
             next_at_ms: if i.enabled { first } else { None },
             interrupted_run_id: None,
@@ -861,6 +879,11 @@ impl JobService {
         after.schedule = schedule;
         after.timezone = zone;
         after.definition = definition;
+        let target = job_target(&after);
+        if target != job_target(&before) {
+            // Another target project: its own archive epoch is the one the edit authorizes.
+            after.project_epoch = project_epoch(tx, target.as_ref())?;
+        }
         after.authorized = human;
         after.authorized_by = human.then(|| ctx.principal().clone());
         after.anchor_at_ms = now;
@@ -920,7 +943,8 @@ impl JobService {
                 Some(&before.id),
             ));
         }
-        if let Some(p) = &before.project_id
+        let target = job_target(&before);
+        if let Some(p) = &target
             && project_closed(tx.runs().project_lifecycle(p)?.as_deref())
         {
             return Err(refuse(
@@ -934,7 +958,7 @@ impl JobService {
             && before.authorized
             && before.hold.is_none()
             && before.activated_epoch == epoch
-            && before.project_epoch == project_epoch(tx, before.project_id.as_ref())?
+            && before.project_epoch == project_epoch(tx, target.as_ref())?
         {
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::JobsEnable {
@@ -952,7 +976,7 @@ impl JobService {
         after.authorized_by = Some(ctx.principal().clone());
         after.hold = None;
         after.activated_epoch = epoch;
-        after.project_epoch = project_epoch(tx, before.project_id.as_ref())?;
+        after.project_epoch = project_epoch(tx, target.as_ref())?;
         after.anchor_at_ms = now;
         after.next_at_ms = first;
         after.updated_at_ms = now;
@@ -1085,7 +1109,7 @@ impl JobService {
                 job.revision,
             ));
         }
-        if let Some(p) = &job.project_id
+        if let Some(p) = &job_target(&job)
             && project_closed(tx.runs().project_lifecycle(p)?.as_deref())
         {
             return Err(refuse(

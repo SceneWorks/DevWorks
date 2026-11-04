@@ -9,7 +9,7 @@ mod common;
 use common::*;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::{ArtifactRecord, JobRecord};
-use devworks_core::protocol::{ActorId, Id};
+use devworks_core::protocol::{ActorId, Counter, Id};
 use devworks_desktop::backend::Backend;
 use devworks_desktop::ops;
 use devworks_desktop::shell::jobs::{JobForm, form_values, status_line};
@@ -386,4 +386,170 @@ fn the_active_run_stays_shown_when_a_skipped_occurrence_is_the_latest_run() {
     .unwrap()
     .unwrap();
     assert_eq!(after.status, "Cancelled", "Cancel reached the active run");
+}
+
+/// Seeds runs of `job` occurring at `at` (the first held active, every later one skipped for it).
+fn seed_runs(engine: &devworks_desktop::host::Engine, job: &Id, at: Vec<i64>) {
+    let job = job.clone();
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        move |tx| {
+            use devworks_core::services::jobs::runner::{Occurrence, queue_run};
+            let stored = tx.jobs().job(&job)?.expect("job");
+            let host = tx.store().host_actor.clone();
+            for at_ms in at {
+                let run = queue_run(tx, &host, &stored, Occurrence::Manual { at_ms }, true)?;
+                if run.status == "Queued" {
+                    tx.jobs().update_run(
+                        &StoredJobRun {
+                            hold: Some("ApprovalWait".into()),
+                            ..run.clone()
+                        },
+                        run.revision,
+                    )?;
+                }
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+/// Refreshing the first history page after older pages were loaded leaves no gap: the run that
+/// moved past the refreshed first page is still listed, before the older ones.
+#[test]
+fn a_refreshed_first_history_page_keeps_the_run_at_its_boundary() {
+    let root = Root::new("jobs-history-boundary");
+    let engine = start(&root);
+    seed_prompt(&engine);
+    let backend = engine.backend();
+    let Ok(ops::JobChange::Job(job)) = ops::job_changed(backend.command(
+        "jobs.create",
+        &ops::job_create(
+            &*backend,
+            None,
+            "Issue triage",
+            &json!({"kind": "Manual"}),
+            &inference(),
+            true,
+        ),
+    )) else {
+        panic!("created")
+    };
+    let minute = |n: i64| 1_800_000_000_000 + n * 3_600_000;
+    let page = i64::from(ops::RUN_HISTORY_PAGE);
+    // One more run than a page: the oldest is on the older page.
+    seed_runs(&engine, &job.id, (1..=page + 1).map(minute).collect());
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 6000.0);
+    settle(&mut h);
+    click_nav(&mut h, "Scheduled jobs");
+    h.query_all_by_label_contains("Issue triage")
+        .next()
+        .expect("the job row")
+        .click();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Runs");
+    settle(&mut h);
+    let shown = |h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, n: i64| {
+        has_text(
+            h,
+            &devworks_desktop::shell::jobs::local_time(Some(&Counter::new(minute(n)).unwrap())),
+        )
+    };
+    assert!(shown(&h, 2), "the first page ends at run 2");
+    click(&mut h, Role::Button, "Older runs");
+    settle(&mut h);
+    assert!(shown(&h, 1) && shown(&h, 2));
+    // A new run moves run 2 off the first page; the refreshed page must not drop it.
+    seed_runs(&engine, &job.id, vec![minute(page + 2)]);
+    click(&mut h, Role::Button, "Refresh");
+    settle(&mut h);
+    assert!(shown(&h, page + 2), "the refreshed first page");
+    assert!(shown(&h, 2), "the run at the page boundary is still listed");
+    assert!(shown(&h, 1));
+}
+
+/// A project job's prompt picker offers the project's own prompts besides the workspace's.
+#[test]
+fn a_project_jobs_prompt_picker_offers_the_projects_prompts() {
+    let root = Root::new("jobs-project-prompts");
+    let engine = start(&root);
+    seed_prompt(&engine);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Payments", "work", &[]),
+    ))
+    .expect("project");
+    let pid = project.id.clone();
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        move |tx| {
+            let digest = "b".repeat(64);
+            tx.artifacts()
+                .put_blob(&digest, 12, "gen-2", "blobs/bb/prompt")?;
+            tx.artifacts().insert_artifact(&StoredArtifact {
+                id: id("prompt-p"),
+                origin_project_id: Some(pid.clone()),
+                origin_work_id: None,
+                title: "Payments triage".into(),
+                revision: 1,
+                scope: ArtifactScope::Project(pid.clone()),
+                owner: None,
+                retention: ArtifactRetention::Explicit,
+                scope_revision: 1,
+                reference_revision: 1,
+                current_version_id: None,
+                state: ArtifactState::Live,
+                created_at_ms: 1,
+                provenance: json!({}),
+            })?;
+            tx.artifacts().insert_version(&StoredVersion {
+                id: id("prompt-p-v1"),
+                artifact_id: id("prompt-p"),
+                version_no: 1,
+                blob_digest: digest,
+                byte_count: 12,
+                blob_generation: "gen-2".into(),
+                media_type: "text/markdown".into(),
+                created_at_ms: 1,
+                deleted_at_ms: None,
+                source: json!({}),
+            })?;
+            // Listed once it has a current version.
+            let mut a = tx.artifacts().artifact(&id("prompt-p"))?.expect("artifact");
+            a.current_version_id = Some(id("prompt-p-v1"));
+            tx.artifacts().update_artifact(&a)
+        },
+    )
+    .unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Scheduled jobs");
+    choose(&mut h, "Scope", "Payments");
+    click(&mut h, Role::Button, "New job");
+    settle(&mut h);
+    h.get_by_role_and_label(Role::ComboBox, "Saved prompt")
+        .click();
+    h.step();
+    h.step();
+    assert!(has_text(&h, "Payments triage"), "the project's prompt");
+}
+
+/// Opens the selector `combo` and picks `option`.
+fn choose(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    combo: &str,
+    option: &str,
+) {
+    h.get_by_role_and_label(Role::ComboBox, combo).click();
+    h.step();
+    h.step();
+    h.query_all_by_label(option)
+        .find(|n| n.accesskit_node().role() != Role::ComboBox)
+        .unwrap_or_else(|| panic!("option {option} in {combo}"))
+        .click_accesskit();
+    settle(h);
 }

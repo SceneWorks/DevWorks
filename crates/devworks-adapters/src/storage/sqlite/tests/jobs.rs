@@ -2017,3 +2017,208 @@ fn a_start_whose_executor_is_gone_is_reclaimed_from_what_is_known_of_its_effect(
     // Nothing is reclaimed twice, and a settled run is not a start.
     assert!(reclaim(&c).is_none());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Codex round 3
+
+/// An app-level inference task that targets project P (its definition's `projectId`).
+fn targeting(fx: &Fx, p: &ProjectId, title: &str, schedule: Value) -> String {
+    let mut def = seed_prompt_once(fx);
+    def["projectId"] = json!(p.0.as_str());
+    s(
+        &fx.job(
+            &fx.user(),
+            json!({"scope": {"kind": "Workspace"}, "title": title, "schedule": schedule,
+            "definition": def, "enabled": true}),
+        ),
+        "id",
+    )
+}
+/// The workspace prompt, seeded on first use.
+fn seed_prompt_once(fx: &Fx) -> Value {
+    let exists = fx
+        .read(|s| s.artifacts().artifact(&id("prompt-1")))
+        .is_some();
+    if exists {
+        json!({"kind": "Inference", "prompt": {"artifactId": "prompt-1", "versionId": "prompt-v1",
+            "sha256": "a".repeat(64), "byteLength": "12", "mediaType": "text/markdown"},
+            "route": {"kind": "Tier", "tier": "High"}, "effort": "Default"})
+    } else {
+        seed_prompt(fx, None)
+    }
+}
+
+/// The archive and restore hooks cover an app-level task that targets the project, not only the
+/// jobs scoped to it: archiving holds it and stops its runs at once, and restore keeps it held
+/// until a person enables it.
+#[test]
+fn archiving_a_project_stops_app_level_tasks_that_target_it() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let p = fx.project("P");
+    let jid = targeting(&fx, &p.id, "Scan P", every(3600));
+    // An app-level task with no target yet, retargeted to P after the restore below.
+    let later = s(
+        &fx.job(
+            &user,
+            body("Scan later", every(3600), seed_prompt_once(&fx), true),
+        ),
+        "id",
+    );
+    let queued = s(&value_of(&applied(run_now(&fx, &user, &jid))), "id");
+    assert!(
+        fx.run(&queued).project_id.is_none(),
+        "listed in the workspace"
+    );
+    fx.lifecycle("projects.archive", &p.id);
+    assert_eq!(fx.stored(&jid).hold.as_deref(), Some("ProjectClosed"));
+    assert_eq!(fx.run(&queued).status, "Cancelled");
+    assert_eq!(
+        kind(&refused(run_now(&fx, &user, &jid))),
+        (DomainErrorCode::Conflict, "project_closed".into())
+    );
+    fx.archive_stop_ran(&p.id);
+    fx.lifecycle("projects.restore", &p.id);
+    assert_eq!(
+        fx.stored(&jid).hold.as_deref(),
+        Some("ReactivationRequired")
+    );
+    // Retargeting a task to P authorizes it under P's current archive epoch.
+    let mut def = seed_prompt_once(&fx);
+    def["projectId"] = json!(p.id.0.as_str());
+    let rev = fx.stored(&later).revision.to_string();
+    applied(fx.command(
+        &user,
+        "jobs.edit",
+        json!({"jobId": later, "expectedRevision": rev, "title": "Scan later",
+            "schedule": every(3600), "definition": def}),
+    ));
+    fx.set_now(T0 + 5 * 3_600_000);
+    assert!(
+        fx.claim().iter().all(|r| r.job_id.as_str() != jid),
+        "held until a person enables it"
+    );
+    // Enabled again, and created after the restore: both run under P's current epoch.
+    let rev = fx.stored(&jid).revision.to_string();
+    applied(fx.command(
+        &user,
+        "jobs.enable",
+        json!({"jobId": jid, "expectedRevision": rev}),
+    ));
+    let fresh = targeting(&fx, &p.id, "Scan P again", every(3600));
+    // A claim holds a job whose target was archived since its activation; these stay live.
+    fx.set_now(T0 + 9 * 3_600_000);
+    fx.claim();
+    for j in [&jid, &later, &fresh] {
+        let job = fx.stored(j);
+        assert!(
+            job.hold.is_none() && job.next_at_ms.is_some(),
+            "{j}: {:?}",
+            job.hold
+        );
+    }
+}
+
+/// The epoch fence follows the targeted project too, without the hooks: after an archival of P
+/// since a task targeting P was activated (and its run authorized), the run never dispatches and
+/// the schedule is held at its next claim.
+#[test]
+fn an_archival_of_the_targeted_project_fences_an_app_level_task() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let p = fx.project("P");
+    let jid = targeting(&fx, &p.id, "Scan P", every(3600));
+    let pipeline = Arc::new(Pipeline {
+        available: true,
+        ..Pipeline::default()
+    });
+    let rid = s(&value_of(&applied(run_now(&fx, &user, &jid))), "id");
+    let pl: Arc<dyn InferenceJobs> = pipeline.clone();
+    let (svc, r) = (fx.jobs.clone(), id(&rid));
+    let begun = fx.write(move |tx| svc.begin(tx, &r, &*pl)).unwrap();
+    // Its agent acts in P, not across the workspace.
+    // Work it links is P's, never another project's.
+    let q = fx.project("Q");
+    let sql = format!(
+        "INSERT INTO work_items VALUES('feature-q','{}','feature',NULL,NULL,NULL,'F',1,0,1,1,1,'{{}}');",
+        q.id.0.as_str()
+    );
+    fx.store
+        .with_writer_connection(move |c| super::super::conn::db(c.execute_batch(&sql)))
+        .unwrap();
+    let (r, root) = (id(&rid), RootId(id("feature-q")));
+    let linked = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+        discovery::link_root(tx, &r, &root)
+    });
+    assert!(
+        matches!(linked, Err(StorageError::ScopeDenied)),
+        "{linked:?}"
+    );
+    let agent = begun.run.agent_actor.clone().unwrap();
+    let binding = fx.read(move |s| s.authority().principal(&agent)).unwrap();
+    assert_eq!(binding.project_id.as_ref(), Some(&p.id));
+    let pid = p.id.clone();
+    fx.write(move |tx| {
+        let mut proj = tx.projects().project(&pid)?.unwrap();
+        let rev = proj.revision;
+        proj.archive_epoch += 1;
+        proj.revision += 1;
+        tx.projects().update_project(&proj, rev)
+    });
+    let (svc, b) = (fx.jobs.clone(), begun.clone());
+    assert!(!fx.write(move |tx| svc.dispatching(tx, &b)));
+    assert_eq!(fx.run(&rid).status, "Cancelled");
+    assert!(
+        pipeline.started.lock().unwrap().is_empty(),
+        "nothing was handed over"
+    );
+    fx.set_now(T0 + 3_600_000 + 1_000);
+    assert!(fx.claim().is_empty());
+    assert_eq!(
+        fx.stored(&jid).hold.as_deref(),
+        Some("ReactivationRequired")
+    );
+}
+
+/// A pipeline that takes a run without naming a session yet (`Ok(None)`) owns it: supervision
+/// never reclaims it as lost, so it keeps its active-run slot and no later occurrence overlaps.
+#[test]
+fn a_handoff_accepted_without_a_session_is_not_reclaimed() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let def = seed_prompt(&fx, None);
+    let jid = s(
+        &fx.job(
+            &user,
+            json!({"scope": {"kind": "Workspace"}, "title": "Scan", "schedule": {"kind": "Manual"},
+            "definition": def, "enabled": true}),
+        ),
+        "id",
+    );
+    let pipeline: Arc<dyn InferenceJobs> = Arc::new(Sessionless);
+    let rid = s(&value_of(&applied(run_now(&fx, &user, &jid))), "id");
+    let running = fx.execute(&rid, &pipeline).unwrap();
+    assert_eq!(running.status, "Running");
+    assert!(running.session_id.is_none());
+    let svc = fx.jobs.clone();
+    assert!(fx.write(move |tx| svc.unsettled_starts(tx)).is_empty());
+    let (svc, r) = (fx.jobs.clone(), id(&rid));
+    assert!(fx.write(move |tx| svc.reclaim(tx, &r)).is_none());
+    assert_eq!(fx.run(&rid).status, "Running");
+    // Its slot is still held: the next occurrence is skipped, never run alongside it.
+    let next = value_of(&applied(run_now(&fx, &user, &jid)));
+    assert_eq!(s(&next, "status"), "Skipped");
+}
+/// Takes every run without a session.
+struct Sessionless;
+impl InferenceJobs for Sessionless {
+    fn availability(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn start(&self, _: &InferenceStart) -> Result<Option<Id>, InferenceRefusal> {
+        Ok(None)
+    }
+    fn cancel(&self, _: &Id) -> Result<bool, String> {
+        Ok(true)
+    }
+}

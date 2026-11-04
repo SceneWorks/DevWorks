@@ -347,6 +347,14 @@ pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
     .to_string()
     .into_bytes()
 }
+/// `artifacts.list` of one project's artifacts.
+pub fn project_artifacts(backend: &dyn Backend, project: &str) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
+        "schemaRevision": WORKSPACE_ARTIFACT_REVISION,
+        "query": {"kind": "List", "projectId": project}, "limit": PAGE_LIMIT})
+    .to_string()
+    .into_bytes()
+}
 pub fn artifacts(outcome: QueryOutcome) -> Result<(Vec<ArtifactRecord>, bool), Failure> {
     match query_result(outcome)? {
         (OperationResult::ArtifactsList { value }, _) => Ok((value.items.0, value.has_more)),

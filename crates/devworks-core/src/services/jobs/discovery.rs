@@ -200,7 +200,11 @@ pub fn link_root(
             kind: "root",
             id: root.0.as_str().to_owned(),
         })?;
-    if r.project_id.as_ref().is_some_and(|p| p != &work.project_id) {
+    // Work of the project the run acts on (its job's project, or the one an app-level task
+    // targets), never of another.
+    if super::target_project(r.project_id.as_ref(), &r.definition)
+        .is_some_and(|p| p != work.project_id)
+    {
         return Err(StorageError::ScopeDenied);
     }
     tx.jobs().link_root(run, root)?;

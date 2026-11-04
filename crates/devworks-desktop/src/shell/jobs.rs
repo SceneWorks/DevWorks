@@ -267,6 +267,21 @@ pub fn form_values(
     Ok((schedule, definition))
 }
 
+/// Reconciles loaded older history pages with a refreshed first page (newest first): runs of the
+/// previous first page that the refreshed one no longer holds moved past its end, so they lead
+/// the older pages (which continue after the previous first page); a run now on the first page
+/// is not repeated among them.
+pub fn reconcile_history(before: &[JobRun], now: &[JobRun], older: &mut Vec<JobRun>) {
+    let on_page = |r: &JobRun| now.iter().any(|n| n.id == r.id);
+    let mut merged: Vec<JobRun> = before.iter().filter(|r| !on_page(r)).cloned().collect();
+    merged.extend(
+        older
+            .drain(..)
+            .filter(|r| !on_page(r) && !before.iter().any(|b| b.id == r.id)),
+    );
+    *older = merged;
+}
+
 /// The schedule in words.
 pub fn describe_schedule(s: &Schedule) -> String {
     match s {
@@ -340,6 +355,9 @@ pub struct JobsUi {
     pub confirm_delete: Option<JobRecord>,
     pub notice: Option<(Tone, String)>,
     pub capabilities: Vec<NativeCapability>,
+    /// Prompt candidates of a project (its artifacts), by project ID: a job of a project, or an
+    /// app-level task targeting one, may run a prompt of that project.
+    pub project_prompts: std::collections::BTreeMap<String, Vec<ArtifactRecord>>,
     /// A one-line run status of each project's jobs, for the project's own views.
     pub project_status: std::collections::BTreeMap<String, String>,
 }
@@ -485,6 +503,7 @@ impl Shell {
                         .unwrap_or_default();
                     self.jobs.form = Some(JobForm::default());
                     self.jobs.form_error = None;
+                    self.jobs.project_prompts.clear();
                     if !self.artifacts.loaded {
                         self.load_artifacts();
                     }
@@ -496,12 +515,14 @@ impl Shell {
                         .unwrap_or_default();
                     self.jobs.form = Some(JobForm::edit(&job));
                     self.jobs.form_error = None;
+                    self.jobs.project_prompts.clear();
                     if !self.artifacts.loaded {
                         self.load_artifacts();
                     }
                 }
                 JobAction::Save(form) => {
-                    let values = form_values(&form, &self.jobs.capabilities, &self.artifacts.items);
+                    let values =
+                        form_values(&form, &self.jobs.capabilities, &self.prompt_candidates());
                     let (schedule, definition) = match values {
                         Ok(v) => v,
                         Err(e) => {
@@ -623,6 +644,18 @@ impl Shell {
                                 );
                             }
                         }
+                        // Older pages already loaded continue after the previous first page:
+                        // runs that moved off the refreshed first page join them, so none falls
+                        // into a gap at the boundary.
+                        if self.jobs.older_cursor.is_some()
+                            && let Some(before) = &self.jobs.inspection
+                        {
+                            reconcile_history(
+                                before.runs.as_ref().map_or(&[][..], |r| &r.0[..]),
+                                i.runs.as_ref().map_or(&[][..], |r| &r.0[..]),
+                                &mut self.jobs.older,
+                            );
+                        }
                         self.jobs.inspection = Some(i);
                         self.jobs.inspection_error = None;
                     }
@@ -633,6 +666,14 @@ impl Shell {
                     }
                     Err(e) => self.jobs.inspection_error = Some(e.describe()),
                 }
+            }
+            (Slot::JobPrompts(p), Reply::Query(q)) => {
+                // A failed listing offers none of the project's prompts (and is not retried
+                // until the form reopens).
+                let items = ops::artifacts(q)
+                    .map(|(items, _)| items)
+                    .unwrap_or_default();
+                self.jobs.project_prompts.insert(p, items);
             }
             (Slot::JobActiveRun(j), Reply::Query(q)) => {
                 if self.jobs.selected.as_deref() != Some(j.as_str()) {
@@ -722,6 +763,68 @@ impl Shell {
         None
     }
 
+    /// The project whose prompts the open form may run: the job's project, or the project an
+    /// app-level task targets (once it names a listed project, or the one the job already
+    /// targets).
+    fn prompt_project(&self, projects: &[(String, String)]) -> Option<String> {
+        let form = self.jobs.form.as_ref()?;
+        let scope = match &form.editing {
+            Some(job) => match &job.scope {
+                Some(devworks_core::protocol::data::DataScope::Project { project_id }) => {
+                    Some(project_id.0.as_str().to_owned())
+                }
+                _ => None,
+            },
+            None => self.jobs.scope.clone(),
+        };
+        scope.or_else(|| {
+            let target = form.target_project.trim();
+            let saved = form.editing.as_ref().and_then(|j| match &j.definition {
+                JobDefinition::Inference { project_id, .. } => {
+                    project_id.as_ref().map(|p| p.0.as_str().to_owned())
+                }
+                JobDefinition::Native { .. } => None,
+            });
+            (form.definition_kind == 1
+                && !target.is_empty()
+                && (projects.iter().any(|(id, _)| id == target)
+                    || saved.as_deref() == Some(target)))
+            .then(|| target.to_owned())
+        })
+    }
+    /// Loads the prompt candidates of the open form's project, once per form.
+    fn load_prompt_candidates(&mut self, projects: &[(String, String)]) {
+        let Some(p) = self.prompt_project(projects) else {
+            return;
+        };
+        let slot = Slot::JobPrompts(p.clone());
+        if self.jobs.project_prompts.contains_key(&p) || self.pending(&slot) {
+            return;
+        }
+        self.query(
+            slot,
+            "Loading the project's prompts",
+            "artifacts.list",
+            move |b| ops::project_artifacts(b, &p),
+        );
+    }
+    /// What the open form offers as its prompt: the workspace's artifacts and those of its
+    /// project ([`Self::prompt_project`]).
+    fn prompt_candidates(&self) -> Vec<ArtifactRecord> {
+        let mut out = self.artifacts.items.clone();
+        for items in self.jobs.project_prompts.values() {
+            for a in items {
+                if !out
+                    .iter()
+                    .any(|o| o.artifact.artifact_id == a.artifact.artifact_id)
+                {
+                    out.push(a.clone());
+                }
+            }
+        }
+        out
+    }
+
     pub(super) fn jobs_screen(&mut self, ui: &mut Ui) {
         let screen = Route::Jobs.screen();
         let online = self.online();
@@ -741,7 +844,8 @@ impl Shell {
             .as_ref()
             .is_some_and(|j| self.waiting(&Slot::JobCommand(j.clone())))
             || self.waiting(&Slot::JobCreate);
-        let artifacts = self.artifacts.items.clone();
+        self.load_prompt_candidates(&projects);
+        let artifacts = self.prompt_candidates();
         let jobs = &mut self.jobs;
         let mut new_tab = tab;
         {

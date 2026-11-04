@@ -228,9 +228,10 @@ impl Scheduler {
                 .unwrap_or_else(|_| Err("the pipeline cancel task failed".into()));
             match stopped {
                 Ok(true) => {}
-                Ok(false) => {
-                    verdict = StopVerdict::Uncertain("the agent has not stopped yet".into())
-                }
+                // Still stopping: the cancellation stays requested and is asked again next
+                // tick. Settling it now would read a stop in progress as lost and free the
+                // job's active-run slot while its agent still runs.
+                Ok(false) => return Ok(None),
                 Err(why) => verdict = StopVerdict::Uncertain(why),
             }
         }

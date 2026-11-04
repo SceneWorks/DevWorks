@@ -868,3 +868,66 @@ fn a_tick_while_runs_are_drained_never_reclaims_a_run_its_task_still_executes() 
     );
     rt.block_on(app.runtime.shutdown());
 }
+
+/// A pipeline that takes runs with a session and stops a run only when asked a second time.
+#[derive(Default)]
+struct SlowToStop {
+    asked: AtomicUsize,
+}
+impl devworks_core::services::jobs::runner::InferenceJobs for SlowToStop {
+    fn availability(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn start(
+        &self,
+        run: &devworks_core::services::jobs::runner::InferenceStart,
+    ) -> Result<Option<Id>, devworks_core::services::jobs::runner::InferenceRefusal> {
+        Ok(Some(id(&format!("session-{}", run.run_id.as_str()))))
+    }
+    fn cancel(&self, _: &Id) -> Result<bool, String> {
+        Ok(self.asked.fetch_add(1, Ordering::SeqCst) > 0)
+    }
+}
+
+/// A cancellation whose agent is still stopping stays requested: the run keeps its active slot
+/// (never settled as lost) until the pipeline verifies the stop, then it is cancelled.
+#[test]
+fn a_cancellation_still_stopping_is_asked_again_never_settled_as_lost() {
+    let h = Harness::new();
+    drop(h.open());
+    seed(&h);
+    let rt = runtime();
+    let pipeline = Arc::new(SlowToStop::default());
+    let app = boot_over(&rt, &h, false, h.open(), pipeline.clone());
+    seed_prompt(&app.store);
+    let job = value(app.command(
+        "jobs.create",
+        json!({"scope": {"kind": "Workspace"}, "title": "Scan", "schedule": {"kind": "Manual"},
+        "definition": prompt_definition(), "enabled": true}),
+    ));
+    let jid = id(job["id"].as_str().unwrap());
+    let run = value(app.command(
+        "jobs.run_now",
+        json!({"jobId": jid.as_str(), "expectedRevision": "1"}),
+    ));
+    let rid = id(run["id"].as_str().unwrap());
+    app.tick(&rt);
+    let running = app.run(&rid);
+    assert!(running.status == "Running" && running.session_id.is_some());
+    let reply = app.command(
+        "jobs.cancel",
+        json!({"jobId": jid.as_str(), "runId": rid.as_str(), "expectedRevision": running.revision.to_string()}),
+    );
+    assert!(matches!(reply, CommandReply::Recorded { .. }), "{reply:?}");
+    app.tick(&rt);
+    let stopping = app.run(&rid);
+    assert_eq!(
+        (stopping.status.as_str(), stopping.cancel_requested),
+        ("Running", true),
+        "still stopping: not settled"
+    );
+    app.tick(&rt);
+    assert_eq!(app.run(&rid).status, "Cancelled");
+    assert!(pipeline.asked.load(Ordering::SeqCst) >= 2);
+    rt.block_on(app.runtime.shutdown());
+}

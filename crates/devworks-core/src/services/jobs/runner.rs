@@ -55,8 +55,8 @@
 //! dispatches the run, so no stale run of an archived epoch can act after a restore. A restored backup (a later store restore epoch)
 //! holds every job activated under an earlier epoch at boot and at claim (STORE-13).
 use super::{
-    JOB_AGGREGATE, JobService, RUN_AGGREGATE, counter, event, parse, project_closed, run_operation,
-    stored_plan, undispatched,
+    JOB_AGGREGATE, JobService, RUN_AGGREGATE, counter, event, job_target, parse, project_closed,
+    run_operation, stored_plan, target_project, undispatched,
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::GatewayFailure;
@@ -115,7 +115,7 @@ pub fn queue_run(
     let (restore_epoch, project_epoch) = if by_person {
         (
             tx.store().restore_epoch,
-            super::project_epoch(tx, job.project_id.as_ref())?,
+            super::project_epoch(tx, job_target(job).as_ref())?,
         )
     } else {
         (job.activated_epoch, job.project_epoch)
@@ -402,7 +402,7 @@ pub(super) fn fence_of(
             "the store was restored from a backup; enable the schedule to reactivate it",
         )));
     }
-    if let Some(p) = &job.project_id {
+    if let Some(p) = &job_target(job) {
         if project_closed(tx.runs().project_lifecycle(p)?.as_deref()) {
             return Ok(Some((
                 "ProjectClosed",
@@ -433,7 +433,7 @@ fn run_project_current(
     tx: &mut dyn WriteTransaction,
     run: &StoredJobRun,
 ) -> Result<bool, StorageError> {
-    let Some(p) = &run.project_id else {
+    let Some(p) = &target_project(run.project_id.as_ref(), &run.definition) else {
         return Ok(true);
     };
     Ok(!project_closed(tx.runs().project_lifecycle(p)?.as_deref())
@@ -539,10 +539,13 @@ pub trait InferenceJobs: Send + Sync {
     /// Whether a run can be handed over now; checked before the attempt is marked dispatched, so
     /// an unavailable pipeline is a failure *before* dispatch.
     fn availability(&self) -> Result<(), String>;
-    /// Starts (or resumes) the run's agent; returns its session once it has taken the run. The
-    /// pipeline reports the outcome later through [`JobService::finish_inference`].
+    /// Starts (or resumes) the run's agent once it has taken the run: `Ok` is that acceptance,
+    /// with the session when the pipeline already has one (`Ok(None)`: taken, no session yet).
+    /// Acceptance itself is what the run records as owned, never the session. The pipeline
+    /// reports the outcome later through [`JobService::finish_inference`].
     fn start(&self, run: &InferenceStart) -> Result<Option<Id>, InferenceRefusal>;
-    /// Asks a started run to stop; `Ok(true)` when it is verified stopped.
+    /// Asks a started run to stop; `Ok(true)` when it is verified stopped, `Ok(false)` while it is
+    /// still stopping (the scheduler asks again; the run stays active until then).
     fn cancel(&self, run: &Id) -> Result<bool, String>;
 }
 
@@ -878,7 +881,7 @@ impl JobService {
                     return Ok(None);
                 }
                 let scope = run.project_id.clone().or(project_id);
-                let agent = self.bind_agent(tx, &run.job_id, run.project_id.as_ref())?;
+                let agent = self.bind_agent(tx, &run.job_id, scope.as_ref())?;
                 let info = tx.store().clone();
                 let ctx = InvocationContext::new(
                     agent.clone(),
@@ -1082,7 +1085,7 @@ impl JobService {
     }
 
     /// Started runs of this boot whose attempt is not yet handed to anything that settles it
-    /// (no accepted operation, no session), oldest first by ID. The engine reclaims those it is
+    /// (no accepted operation, no session, no handoff the pipeline took), oldest first by ID. The engine reclaims those it is
     /// not executing ([`Self::reclaim`]): their executor ended after the start committed.
     pub fn unsettled_starts(
         &self,
@@ -1097,13 +1100,17 @@ impl JobService {
                 .runs_where(&RunFilter::Active, after.as_ref(), PAGE)?;
             let more = page.len() == usize::from(PAGE);
             after = page.last().map(|r| r.id.clone());
-            out.extend(page.into_iter().filter(|r| {
-                matches!(r.status.as_str(), "Running" | "Holding")
+            for r in page {
+                if matches!(r.status.as_str(), "Running" | "Holding")
                     && r.boot_id.is_some()
                     && r.boot_id == boot
                     && r.inner_operation_id.is_none()
                     && r.session_id.is_none()
-            }));
+                    && !operation_of(tx, &r)?.is_some_and(|o| handed_off(&o))
+                {
+                    out.push(r);
+                }
+            }
             if !more {
                 return Ok(out);
             }
@@ -1139,6 +1146,9 @@ impl JobService {
         let Some(rec) = tx.operations().operation(&op)? else {
             return Ok(None);
         };
+        if handed_off(&rec) {
+            return Ok(None);
+        }
         match rec.state {
             OperationState::Preflighted if run.cancel_requested => {
                 finish(
@@ -1467,13 +1477,26 @@ impl JobService {
             return Ok(None);
         }
         Ok(Some(match started {
-            Ok(session) => tx.jobs().update_run(
-                &StoredJobRun {
-                    session_id: session.clone().or(run.session_id.clone()),
-                    ..run.clone()
-                },
-                run.revision,
-            )?,
+            Ok(session) => {
+                // The pipeline owns the run now, with or without a session to name: recorded
+                // on the attempt, so supervision never reclaims an accepted handoff.
+                if let Some(rec) = tx.operations().operation(&begun.operation)?
+                    && !handed_off(&rec)
+                {
+                    tx.operations().observe(
+                        &begun.operation,
+                        begun.fence.attempt_no,
+                        json!({"handedOff": true, "sessionId": session}),
+                    )?;
+                }
+                tx.jobs().update_run(
+                    &StoredJobRun {
+                        session_id: session.clone().or(run.session_id.clone()),
+                        ..run.clone()
+                    },
+                    run.revision,
+                )?
+            }
             Err(InferenceRefusal {
                 dispatched: false,
                 reason,
@@ -1992,33 +2015,41 @@ impl LifecycleHooks for JobLifecycle {
     }
 }
 
+/// The jobs whose runs act on `project`: those scoped to it, and the app-level inference tasks
+/// that target it.
 fn project_jobs(
     tx: &mut dyn WriteTransaction,
     project: &ProjectId,
 ) -> Result<Vec<StoredJob>, StorageError> {
     let mut out = Vec::new();
-    let mut after: Option<(String, String)> = None;
-    loop {
-        let page = tx.jobs().jobs(
-            &JobScope::Project(project.clone()),
-            None,
-            after.as_ref().map(|(t, i)| (t.as_str(), i.as_str())),
-            PAGE,
-        )?;
-        let more = page.len() == usize::from(PAGE);
-        after = page
-            .last()
-            .map(|j| (j.title.clone(), j.id.as_str().to_owned()));
-        out.extend(page);
-        if !more {
-            return Ok(out);
+    for scope in [JobScope::Project(project.clone()), JobScope::App] {
+        let mut after: Option<(String, String)> = None;
+        loop {
+            let page = tx.jobs().jobs(
+                &scope,
+                None,
+                after.as_ref().map(|(t, i)| (t.as_str(), i.as_str())),
+                PAGE,
+            )?;
+            let more = page.len() == usize::from(PAGE);
+            after = page
+                .last()
+                .map(|j| (j.title.clone(), j.id.as_str().to_owned()));
+            out.extend(
+                page.into_iter()
+                    .filter(|j| job_target(j).as_ref() == Some(project)),
+            );
+            if !more {
+                break;
+            }
         }
     }
+    Ok(out)
 }
 
 /// `projects.archive` (DW-11) calls this in the archival's unit of work (after
-/// `ControlService::stop_project`), every enabled job of `project` is held `ProjectClosed` and every
-/// active run of the project is asked to stop. Returns the runs asked to stop.
+/// `ControlService::stop_project`), every enabled job whose runs act on `project` (scoped to it,
+/// or an app-level task targeting it) is held `ProjectClosed` and its active run asked to stop. Returns the runs asked to stop.
 pub fn project_archived(
     tx: &mut dyn WriteTransaction,
     actor: &ActorId,
@@ -2059,6 +2090,16 @@ pub fn project_restored(
         }
     }
     Ok(held)
+}
+
+/// Whether the pipeline took a run under its operation's latest attempt
+/// ([`JobService::settle_inference_start`]).
+fn handed_off(rec: &OperationRecord) -> bool {
+    rec.latest_attempt().is_some_and(|a| {
+        a.observations
+            .iter()
+            .any(|o| o.get("handedOff") == Some(&json!(true)))
+    })
 }
 
 /// Whether a run may be started: queued and unheld, or holding with no owner (its session to
