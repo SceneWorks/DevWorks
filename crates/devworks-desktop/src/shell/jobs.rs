@@ -362,6 +362,32 @@ pub struct JobsUi {
     pub project_status: std::collections::BTreeMap<String, String>,
 }
 
+impl JobsUi {
+    /// Selects `job` (`None`: no job). A different selection drops everything held for the
+    /// previous one (its inspection, active run and loaded history pages with their cursor), so
+    /// nothing of one job is shown or paged as another's. Every selection change goes through
+    /// here; the caller loads the newly selected job.
+    pub fn select(&mut self, job: Option<String>) {
+        if self.selected == job {
+            return;
+        }
+        self.selected = job;
+        self.inspection = None;
+        self.inspection_error = None;
+        self.active_run = None;
+        self.older.clear();
+        self.older_cursor = None;
+    }
+    /// Lists `scope`'s jobs (`None`: the app-level ones) from their first page, with no job
+    /// selected.
+    pub fn set_scope(&mut self, scope: Option<String>) {
+        self.scope = scope;
+        self.select(None);
+        self.list = ListState::default();
+        self.list_cursor = None;
+    }
+}
+
 /// The run status of a scope's jobs in one line.
 pub fn status_line(jobs: &[JobRecord], more: bool) -> String {
     if jobs.is_empty() {
@@ -461,19 +487,11 @@ impl Shell {
                     });
                 }
                 JobAction::Scope(s) => {
-                    self.jobs.scope = s;
-                    self.jobs.selected = None;
-                    self.jobs.inspection = None;
-                    self.jobs.active_run = None;
-                    self.jobs.list = ListState::default();
-                    self.jobs.list_cursor = None;
+                    self.jobs.set_scope(s);
                     self.load_jobs();
                 }
                 JobAction::Select(id) => {
-                    self.jobs.selected = Some(id.clone());
-                    self.jobs.active_run = None;
-                    self.jobs.older.clear();
-                    self.jobs.older_cursor = None;
+                    self.jobs.select(Some(id.clone()));
                     self.load_job(&id);
                 }
                 JobAction::OlderRuns => {
@@ -660,9 +678,7 @@ impl Shell {
                         self.jobs.inspection_error = None;
                     }
                     Err(Failure::Refused(f)) if f.code == DomainErrorCode::NotFound => {
-                        self.jobs.selected = None;
-                        self.jobs.inspection = None;
-                        self.jobs.active_run = None;
+                        self.jobs.select(None);
                     }
                     Err(e) => self.jobs.inspection_error = Some(e.describe()),
                 }
@@ -728,10 +744,9 @@ impl Shell {
                         };
                         if let JobChange::Job(j) = &change {
                             if j.deleted_at_ms.is_some() {
-                                self.jobs.selected = None;
-                                self.jobs.inspection = None;
+                                self.jobs.select(None);
                             } else if created {
-                                self.jobs.selected = Some(j.id.as_str().to_owned());
+                                self.jobs.select(Some(j.id.as_str().to_owned()));
                             }
                         }
                         self.jobs.form = None;

@@ -386,10 +386,7 @@ impl Shell {
                 }
                 Action::LoadTexts(r) => self.load_texts(&r),
                 Action::OpenJobs(p) => {
-                    self.jobs.scope = Some(p);
-                    self.jobs.selected = None;
-                    self.jobs.inspection = None;
-                    self.jobs.list = ListState::default();
+                    self.jobs.set_scope(Some(p));
                     self.navigate(Route::Jobs);
                 }
                 Action::RemoveIndex(r) => {

@@ -553,3 +553,112 @@ fn choose(
         .click_accesskit();
     settle(h);
 }
+
+/// Creating a job selects it with none of the previously selected job's history: older pages
+/// loaded for job A (and their cursor) never show, or page, as the new job B's runs.
+#[test]
+fn creating_a_job_selects_it_without_the_previous_jobs_history() {
+    let root = Root::new("jobs-create-resets-history");
+    let engine = start(&root);
+    seed_prompt(&engine);
+    // Listed (so the form offers it) once it has a current version.
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        |tx| {
+            let mut a = tx.artifacts().artifact(&id("prompt-1"))?.expect("artifact");
+            a.current_version_id = Some(id("prompt-v1"));
+            tx.artifacts().update_artifact(&a)
+        },
+    )
+    .unwrap();
+    let backend = engine.backend();
+    let Ok(ops::JobChange::Job(job)) = ops::job_changed(backend.command(
+        "jobs.create",
+        &ops::job_create(
+            &*backend,
+            None,
+            "Issue triage",
+            &json!({"kind": "Manual"}),
+            &inference(),
+            true,
+        ),
+    )) else {
+        panic!("created")
+    };
+    let minute = |n: i64| 1_800_000_000_000 + n * 3_600_000;
+    let page = i64::from(ops::RUN_HISTORY_PAGE);
+    seed_runs(&engine, &job.id, (1..=page + 1).map(minute).collect());
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 6000.0);
+    settle(&mut h);
+    click_nav(&mut h, "Scheduled jobs");
+    h.query_all_by_label_contains("Issue triage")
+        .next()
+        .expect("the job row")
+        .click();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Runs");
+    settle(&mut h);
+    click(&mut h, Role::Button, "Older runs");
+    settle(&mut h);
+    let shown = |h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, n: i64| {
+        has_text(
+            h,
+            &devworks_desktop::shell::jobs::local_time(Some(&Counter::new(minute(n)).unwrap())),
+        )
+    };
+    assert!(shown(&h, 1), "job A's older page is loaded");
+    assert!(!h.state().jobs.older.is_empty());
+    // Create job B from the form: it becomes the selection.
+    click(&mut h, Role::Button, "New job");
+    settle(&mut h);
+    {
+        let form = h.state_mut().jobs.form.as_mut().expect("the form");
+        form.title = "Release notes".into();
+        form.schedule_kind = 0;
+        form.prompt = Some("prompt-1".into());
+    }
+    click(&mut h, Role::Button, "Save");
+    settle(&mut h);
+    let b = jobs(&*backend)
+        .into_iter()
+        .find(|j| j.title.0 == "Release notes")
+        .unwrap_or_else(|| panic!("job B: {:?}", h.state().jobs.form_error));
+    let state = &h.state().jobs;
+    assert_eq!(state.selected.as_deref(), Some(b.id.as_str()));
+    assert!(state.older.is_empty(), "no run of A in B's history");
+    assert!(state.older_cursor.is_none(), "no cursor of A's history");
+    assert_eq!(
+        state.inspection.as_ref().map(|i| i.job.id.as_str()),
+        Some(b.id.as_str())
+    );
+    click(&mut h, Role::Button, "Runs");
+    settle(&mut h);
+    for n in 1..=page + 1 {
+        assert!(!shown(&h, n), "run {n} of A is not listed as B's");
+    }
+}
+
+/// Every selection change (Select, a created or deleted job, a scope change, opening a
+/// project's jobs) goes through one reset: a different job never keeps the previous one's
+/// paging or error, and reselecting the same job keeps its loaded pages.
+#[test]
+fn a_selection_change_drops_the_previous_jobs_paging() {
+    use devworks_desktop::shell::jobs::JobsUi;
+    let mut jobs = JobsUi {
+        selected: Some("a".into()),
+        older_cursor: Some("cursor-of-a".into()),
+        inspection_error: Some("a failed".into()),
+        list_cursor: Some("list".into()),
+        ..JobsUi::default()
+    };
+    jobs.select(Some("a".into()));
+    assert_eq!(jobs.older_cursor.as_deref(), Some("cursor-of-a"));
+    jobs.select(Some("b".into()));
+    assert_eq!(jobs.selected.as_deref(), Some("b"));
+    assert!(jobs.older_cursor.is_none() && jobs.inspection_error.is_none());
+    jobs.older_cursor = Some("cursor-of-b".into());
+    jobs.set_scope(Some("project".into()));
+    assert!(jobs.selected.is_none() && jobs.older_cursor.is_none());
+    assert!(jobs.list_cursor.is_none() && !jobs.list.loaded);
+}
