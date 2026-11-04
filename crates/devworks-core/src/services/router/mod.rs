@@ -556,7 +556,28 @@ impl InferenceRouter {
         if let Some((p, a)) = pinned {
             let connection = a.connection.clone().expect("eligible");
             if same_effort && connection == p.connection_id {
-                return Ok(Resolution::Kept(p.clone()));
+                if p.required_capabilities == need.labels {
+                    return Ok(Resolution::Kept(p.clone()));
+                }
+                // Same route, but this request needs other capabilities: the pin records the
+                // latest request's requirements (an explicit change must still meet them), with
+                // the reason it was last routed for unchanged.
+                let reason = PIN_REASONS
+                    .iter()
+                    .copied()
+                    .find(|r| *r == p.reason)
+                    .unwrap_or("Initial");
+                let pin = self.write_pin(
+                    tx,
+                    (session, actor),
+                    current.as_ref(),
+                    intent,
+                    need,
+                    a,
+                    reason,
+                    true,
+                )?;
+                return Ok(Resolution::Written(pin));
             }
             let reason = if connection != p.connection_id {
                 "ConnectionChanged"

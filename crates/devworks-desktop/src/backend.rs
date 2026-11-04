@@ -67,8 +67,10 @@ pub enum Slot {
     DeleteAttachment(String),
     ArtifactsList,
     ResourcesList,
-    /// The router catalog for the composer's selectors.
-    RouterCatalog,
+    /// A page of the router catalog for the composer's selectors (its load generation).
+    RouterCatalog(u64),
+    /// A conversation whose first route needs its session record (session ID).
+    RouteSession(String),
     /// The availability (and pin) of a conversation's selection (conversation key).
     RouteStatus(String),
     /// An explicit route/effort change of a pinned conversation (session ID).

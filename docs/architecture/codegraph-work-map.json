@@ -2996,6 +2996,98 @@
           "status": "Confirmed"
         }
       ]
+    },
+    {
+      "id": "f8c0385e-f990-49bd-9139-304b519f6fc8",
+      "key": "DW-F13",
+      "version": 3,
+      "title": "Evaluation and validated self-improvement",
+      "items": [
+        "DW-71",
+        "DW-72",
+        "DW-73",
+        "DW-74",
+        "DW-75",
+        "DW-76",
+        "DW-77",
+        "DW-78",
+        "DW-79",
+        "DW-80",
+        "DW-81",
+        "DW-82"
+      ],
+      "sourceRequirements": [
+        {
+          "id": "EVAL-01",
+          "codegraphRequirement": "E1",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EVAL-02",
+          "codegraphRequirement": "E2",
+          "status": "Proposed"
+        },
+        {
+          "id": "EVAL-03",
+          "codegraphRequirement": "E3",
+          "status": "Proposed"
+        },
+        {
+          "id": "EVAL-04",
+          "codegraphRequirement": "E4",
+          "status": "Proposed"
+        },
+        {
+          "id": "EVAL-05",
+          "codegraphRequirement": "E5",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EVAL-06",
+          "codegraphRequirement": "E6",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EVAL-07",
+          "codegraphRequirement": "E7",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EVAL-08",
+          "codegraphRequirement": "E8",
+          "status": "Proposed"
+        },
+        {
+          "id": "EVAL-09",
+          "codegraphRequirement": "E9",
+          "status": "Proposed"
+        },
+        {
+          "id": "EVAL-10",
+          "codegraphRequirement": "E10",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EVAL-11",
+          "codegraphRequirement": "E11",
+          "status": "Confirmed"
+        },
+        {
+          "id": "EVAL-12",
+          "codegraphRequirement": "E12",
+          "status": "Proposed"
+        },
+        {
+          "id": "EVAL-13",
+          "codegraphRequirement": "E13",
+          "status": "Proposed"
+        },
+        {
+          "id": "EVAL-14",
+          "codegraphRequirement": "E14",
+          "status": "Proposed"
+        }
+      ]
     }
   ],
   "nativeCurrentStatus": "ready",

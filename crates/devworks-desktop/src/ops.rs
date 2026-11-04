@@ -373,17 +373,43 @@ pub fn resources(outcome: QueryOutcome) -> Result<(Vec<ResourceRecord>, bool), F
 /// `router.availability` reports a session's pin from schema revision 2.
 pub const ROUTER_AVAILABILITY_REVISION: u64 = 2;
 
-pub fn router_catalog(backend: &dyn Backend) -> Vec<u8> {
+/// One page of the catalog, after `cursor` (the first page without one).
+pub fn router_catalog(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    let mut page = json!({"limit": PAGE_LIMIT});
+    if let Some(c) = cursor {
+        page["cursor"] = json!(c);
+    }
     query_frame(
         backend,
         "router.catalog",
-        json!({"page": {"limit": PAGE_LIMIT}, "includeDisabled": false}),
+        json!({"page": page, "includeDisabled": false}),
     )
 }
-pub fn route_models(outcome: QueryOutcome) -> Result<Vec<RouteModel>, Failure> {
+/// A catalog page and the cursor of the next one (`None` on the last page).
+pub fn route_models(outcome: QueryOutcome) -> Result<(Vec<RouteModel>, Option<String>), Failure> {
     match query_result(outcome)? {
-        (OperationResult::RouterCatalog { value }, _) => Ok(value.items.0),
+        (OperationResult::RouterCatalog { value }, _) => {
+            let next = value.next_cursor.map(|c| c.0).filter(|_| value.has_more);
+            if value.has_more && next.is_none() {
+                return Err(Failure::Other(
+                    "router.catalog reported more pages without a cursor".into(),
+                ));
+            }
+            Ok((value.items.0, next))
+        }
         (other, _) => Err(unexpected("router.catalog", &other)),
+    }
+}
+pub fn session_get(backend: &dyn Backend, session: &str) -> Vec<u8> {
+    at_revision(
+        query_frame(backend, "sessions.get", json!({"sessionId": session})),
+        SESSION_REVISION,
+    )
+}
+pub fn session_record(outcome: QueryOutcome) -> Result<SessionRecord, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::SessionsGet { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("sessions.get", &other)),
     }
 }
 pub fn router_availability(

@@ -1057,6 +1057,84 @@
         "AGENT-19",
         "AGENT-20"
       ]
+    },
+    {
+      "id": "eval_subject_scope_20261103",
+      "date": "2026-11-03",
+      "source": "User accepted every recommended option for EVAL decisions D1\u2013D9 (\"Accept all\") on 3 November 2026, after two Codex review rounds of the evaluation draft.",
+      "status": "Requirement decision recorded in EVAL-01\u2013EVAL-14; native behavior unimplemented",
+      "decision": "Eval suites cover every self-improvement subject: skills, role instructions, harness-specific overrides, conventions and lesson rules delivered to sessions, harness code builds, and model or tier routing assigned to roles (EVAL-01)."
+    },
+    {
+      "id": "eval_approval_gate_20261103",
+      "date": "2026-11-03",
+      "source": "User accepted every recommended option for EVAL decisions D1\u2013D9 (\"Accept all\") on 3 November 2026, after two Codex review rounds of the evaluation draft.",
+      "status": "Requirement decision recorded in EVAL-01\u2013EVAL-14; native behavior unimplemented",
+      "decision": "Regressed or unvalidated eval evidence blocks approval of agent-authored changes unless the user overrides with a recorded reason. Inconclusive evidence is shown without blocking. The user\u2019s own edits carry evidence without a gate. Evidence below a suite\u2019s minimum sample or coverage is unvalidated (EVAL-05)."
+    },
+    {
+      "id": "eval_rollback_requires_approval_20261103",
+      "date": "2026-11-03",
+      "source": "User accepted every recommended option for EVAL decisions D1\u2013D9 (\"Accept all\") on 3 November 2026, after two Codex review rounds of the evaluation draft.",
+      "status": "Requirement decision recorded in EVAL-01\u2013EVAL-14; native behavior unimplemented",
+      "decision": "A regression after adoption notifies the user and proposes a rollback through the subject\u2019s own mechanism; rollback never happens without user approval (EVAL-07)."
+    },
+    {
+      "id": "eval_spending_limits_20261103",
+      "date": "2026-11-03",
+      "source": "User accepted every recommended option for EVAL decisions D1\u2013D9 (\"Accept all\") on 3 November 2026, after two Codex review rounds of the evaluation draft.",
+      "status": "Requirement decision recorded in EVAL-01\u2013EVAL-14; native behavior unimplemented",
+      "decision": "On-demand and proposal-triggered eval runs support spending limits. Scheduled eval runs follow confirmed JOB-09 and report usage without a spending limit; JOB-09 is unchanged (EVAL-10)."
+    },
+    {
+      "id": "eval_agent_drafted_suites_20261103",
+      "date": "2026-11-03",
+      "source": "User accepted every recommended option for EVAL decisions D1\u2013D9 (\"Accept all\") on 3 November 2026, after two Codex review rounds of the evaluation draft.",
+      "status": "Requirement decision recorded in EVAL-01\u2013EVAL-14; native behavior unimplemented",
+      "decision": "Agents may draft suites, cases, graders, rubrics and fixtures; activation requires user approval as a separate proposal, never combined with a change to the subject they measure (EVAL-06)."
+    },
+    {
+      "id": "eval_dedicated_area_20261103",
+      "date": "2026-11-03",
+      "source": "User accepted every recommended option for EVAL decisions D1\u2013D9 (\"Accept all\") on 3 November 2026, after two Codex review rounds of the evaluation draft.",
+      "status": "Requirement decision recorded in EVAL-01\u2013EVAL-14; native behavior unimplemented",
+      "decision": "Provide a dedicated Evals area, and show each proposal\u2019s eval comparison in the approval queue (EVAL-11)."
+    },
+    {
+      "id": "eval_no_fixed_thresholds_20261103",
+      "date": "2026-11-03",
+      "source": "User accepted every recommended option for EVAL decisions D1\u2013D9 (\"Accept all\") on 3 November 2026, after two Codex review rounds of the evaluation draft.",
+      "status": "Requirement decision recorded in EVAL-01\u2013EVAL-14; native behavior unimplemented",
+      "decision": "Requirements fix no numeric comparison thresholds. Each metric declares its method, minimum effect, minimum sample and coverage; suites start with values labeled provisional, replaced by measured values and never used as acceptance thresholds (EVAL-09, EVAL-14)."
+    },
+    {
+      "id": "eval_codegraph_feature_20261103",
+      "date": "2026-11-03",
+      "source": "User accepted every recommended option for EVAL decisions D1\u2013D9 (\"Accept all\") on 3 November 2026, after two Codex review rounds of the evaluation draft.",
+      "status": "Requirement decision recorded in EVAL-01\u2013EVAL-14; native behavior unimplemented",
+      "decision": "Track evaluation as a new CodeGraph feature in project DW (DW-F13) rather than inside DW-F8.",
+      "superseded_in_part_by": "eval_skill_validation_hook_20261103"
+    },
+    {
+      "id": "eval_dreaming_consolidation_monitoring_20261103",
+      "date": "2026-11-03",
+      "source": "User accepted every recommended option for EVAL decisions D1\u2013D9 (\"Accept all\") on 3 November 2026, after two Codex review rounds of the evaluation draft.",
+      "status": "Requirement decision recorded in EVAL-01\u2013EVAL-14; native behavior unimplemented",
+      "decision": "Dreaming consolidations keep applying without approval under confirmed DREAM-05; lesson-rule changes are monitored after adoption, and a regression proposes a revert through DREAM-04 (EVAL-05, EVAL-07)."
+    },
+    {
+      "id": "eval_external_harness_scope_20261103",
+      "date": "2026-11-03",
+      "source": "User approved the DW-F13 plan with planning decisions P1(a) and P2(a) on 3 November 2026.",
+      "status": "Requirement text clarified in EVAL-02; native behavior unimplemented",
+      "decision": "External harnesses connect to DevWorks only as MCP clients (ARCH-05, MCP-10). Production grading covers DevWorks\u2019s own sessions and the attributed command records of those clients; DevWorks holds no external harness transcripts and does not import them (EVAL-02)."
+    },
+    {
+      "id": "eval_skill_validation_hook_20261103",
+      "date": "2026-11-03",
+      "source": "User approved the DW-F13 plan with planning decisions P1(a) and P2(a) on 3 November 2026.",
+      "status": "Plan decision recorded in DW-F13",
+      "decision": "The DW-F13 proposal-gate item delivers SKILL-08\u2019s validation hook and depends on DW-34; DW-34 gets no dependency on DW-F13, which would create a cycle. Corrects the earlier statement that DW-34 depends on DW-F13."
     }
   ],
   "open_next": "Execute native work from CodeGraph items after revalidation; all native items remain backlog. DW-64 tracks the current commit/push closeout.",
@@ -1125,7 +1203,7 @@
   ],
   "interview_status": "AR-01 through AR-08 design refinements are recorded and aligned with current requirements, architecture, candidate contracts and local implementation acceptance. Native services/UI, authority and production acceptance remain unimplemented/unqualified.",
   "current_request": "Publish the completed architecture/planning baseline and the approved CodeGraph related-feature organization.",
-  "updated_at": "2026-11-02",
+  "updated_at": "2026-11-03",
   "source_findings": [
     {
       "topic": "document_rag_and_oxirs",

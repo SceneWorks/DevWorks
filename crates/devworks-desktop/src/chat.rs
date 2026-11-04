@@ -891,12 +891,14 @@ fn composer(
                 // A conversation's selection may be its durable pin: it is changed only once
                 // the router said what it is pinned to (never over an unknown pin).
                 let key = chat.draft_key();
-                let known = key == NEW_DRAFT
+                // Nor while its first route, which carries the current selection, is saved.
+                let known = (key == NEW_DRAFT
                     || chat
                         .routing
                         .status
                         .get(&key)
-                        .is_some_and(|s| s.availability.is_some());
+                        .is_some_and(|s| s.availability.is_some()))
+                    && !chat.routing.selection_locked(&key);
                 selectors(
                     ui,
                     &chat.routing,
