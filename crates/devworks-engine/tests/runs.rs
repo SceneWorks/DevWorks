@@ -4472,3 +4472,201 @@ fn a_linked_cards_retained_activation_is_not_renewed_once_its_feature_holds_it()
     assert_eq!(refused.phase, ActivationPhase::Stopping);
     assert_eq!(refused.lease_until_ms, lease, "the lease is not extended");
 }
+
+#[test]
+fn a_pending_feature_stop_never_stops_a_linked_cards_work_after_it_is_unlinked_and_continued() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host.clone(), Some(launcher.clone()));
+    let mut sup = Arc::try_unwrap(sup).ok().expect("the only handle");
+    sup.stop_grace = Duration::from_millis(20);
+    sup.stop_bound = Duration::from_millis(100);
+    let sup = Arc::new(sup);
+    let rt = runtime();
+    // The feature and the issue both run (generation 1 each); the issue has a tree and is linked
+    // to the feature while its agent runs.
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let first = rt.block_on(sup.tick()).unwrap().launched;
+    let slot = |root: &str| {
+        first
+            .iter()
+            .position(|a| fx.activation(a).root_id == rid(root))
+            .unwrap()
+    };
+    let (feature, card) = (slot("root-f"), slot("root-i"));
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    let old_tree = processes.owned();
+    let c = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute(
+        "UPDATE work_items SET parent_feature_id='root-f' WHERE id='root-i'",
+        [],
+    )
+    .unwrap();
+    // The feature's stop covers the card at generation 1: its first pass signals both launches
+    // and tries to stop the card's tree, which cannot be verified stopped this time (it is held
+    // for reconciliation); the stop stays pending while both launches still run.
+    let op = match decision(&fx.stop(&fx.user, "root-f")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("stop not accepted: {other:?}"),
+    };
+    host.stubborn.store(true, Ordering::SeqCst);
+    let tick = rt.block_on(sup.tick()).unwrap();
+    host.stubborn.store(false, Ordering::SeqCst);
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::Dispatching)]
+    );
+    assert!(launcher.stop_seen(feature) && launcher.stop_seen(card));
+    assert_eq!(
+        processes.owned(),
+        old_tree,
+        "generation 1's tree is unverified"
+    );
+    assert!(
+        fx.holds("root-f")
+            .iter()
+            .any(|b| b.cause == HoldCause::Reconciliation)
+    );
+    // The card is unlinked (its unlink pause) and explicitly continued while generation 1
+    // stops; when generation 1 ends, generation 2 replaces it as standalone work.
+    c.execute(
+        "UPDATE work_items SET parent_feature_id=NULL WHERE id='root-i'",
+        [],
+    )
+    .unwrap();
+    applied(&fx.pause(&fx.user, "root-i"));
+    applied(&fx.resume(&fx.user, "root-i"));
+    launcher.release(card);
+    rt.block_on(within("generation 1 of the card ends", async {
+        while sup.launches() > 1 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    assert_eq!(fx.live("root-i").unwrap().generation, 2);
+    // The next pass runs while the feature's stop is still pending, then launches generation 2,
+    // which starts a tree of its own.
+    let launched = rt.block_on(sup.tick()).unwrap().launched;
+    assert_eq!(launched.len(), 1);
+    let second = fx.activation(&launched[0]);
+    assert_eq!(
+        (second.root_id.clone(), second.generation),
+        (rid("root-i"), 2)
+    );
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    let new_tree: Vec<Id> = processes
+        .owned()
+        .into_iter()
+        .filter(|t| !old_tree.contains(t))
+        .collect();
+    // The still-pending stop observes only what it covered: generation 2 is neither signalled
+    // nor stopped, and its tree keeps running; the tree the stop holds for reconciliation is
+    // stopped by identity.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::Dispatching)]
+    );
+    assert!(!launcher.stop_seen(2), "generation 2 was signalled");
+    assert_eq!(processes.owned(), new_tree, "only generation 2's tree runs");
+    assert_eq!(fx.activation(&second.id).phase, ActivationPhase::Running);
+    // A Stop reapplied to the feature leaves generation 2's root-scoped work alone too.
+    seed_delivery(&fx, "root-i");
+    applied(&fx.resume(&fx.user, "root-f"));
+    assert!(matches!(
+        decision(&fx.stop(&fx.user, "root-f")),
+        DomainDecision::Accepted { operation_id } if operation_id == &op
+    ));
+    let deliveries = read(&*fx.store, |s| {
+        s.runs().root_deliveries(&rid("root-i"), None, 10)
+    });
+    assert_eq!(deliveries.len(), 1, "generation 2's delivery was cancelled");
+    let entry = read(&*fx.store, |s| s.queue().entry(&deliveries[0])).unwrap();
+    assert_ne!(entry.state, QueueState::Cancelled);
+    // Once the feature's own launch ended, the stop is observed complete although generation 2
+    // still runs.
+    launcher.release(feature);
+    rt.block_on(within("the feature's launch ends", async {
+        while sup.launches() > 1 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::ObservedComplete)]
+    );
+    assert_eq!(fx.activation(&second.id).phase, ActivationPhase::Running);
+    assert_eq!(processes.owned(), new_tree);
+    assert!(
+        !fx.holds("root-f")
+            .iter()
+            .any(|b| b.cause == HoldCause::Reconciliation),
+        "the reconciled tree's hold is cleared"
+    );
+    // A repeated Stop of the feature answers the finished stop: generation 2 is not its work.
+    unchanged(&fx.stop(&fx.user, "root-f"));
+}
+
+#[test]
+fn a_pending_feature_stop_never_settles_a_newer_generation_of_an_unlinked_card() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let (sup, _processes) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
+    let rt = runtime();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let first = rt.block_on(sup.tick()).unwrap().launched;
+    let card = first
+        .iter()
+        .position(|a| fx.activation(a).root_id == rid("root-i"))
+        .unwrap();
+    let c = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute(
+        "UPDATE work_items SET parent_feature_id='root-f' WHERE id='root-i'",
+        [],
+    )
+    .unwrap();
+    // The feature's stop covers the card at generation 1 and stays pending (the feature's own
+    // launch keeps running).
+    assert!(matches!(
+        decision(&fx.stop(&fx.user, "root-f")),
+        DomainDecision::Accepted { .. }
+    ));
+    c.execute(
+        "UPDATE work_items SET parent_feature_id=NULL WHERE id='root-i'",
+        [],
+    )
+    .unwrap();
+    applied(&fx.pause(&fx.user, "root-i"));
+    applied(&fx.resume(&fx.user, "root-i"));
+    launcher.release(card);
+    rt.block_on(within("generation 1 of the card ends", async {
+        while sup.launches() > 1 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    // Generation 2 is asked to stop by its own control and has no owner yet (a stop of its own,
+    // not the feature's).
+    let second = fx.live("root-i").unwrap();
+    assert_eq!(second.generation, 2);
+    let x = second.id.clone();
+    fx.tx(move |_, tx| {
+        let a = tx.runs().activation(&x)?.unwrap();
+        let mut stopping = a.clone();
+        stopping.phase = ActivationPhase::Stopping;
+        stopping.stop_cause = Some(StopCause::Pause);
+        stopping.revision = a.revision + 1;
+        tx.runs().update_activation(&stopping, a.revision)
+    });
+    // The feature's still-pending stop settles nothing of generation 2.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::Dispatching)]
+    );
+    assert_eq!(fx.activation(&second.id).phase, ActivationPhase::Stopping);
+}

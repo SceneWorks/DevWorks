@@ -271,19 +271,59 @@ pub(crate) fn linked_roots(
         }
     }
 }
-/// The linked roots a feature's stop operation covers (recorded when it was decided).
+/// A linked card a feature's stop covers, fenced to what it covered when the stop was decided:
+/// the card's activation generation then, and whether a reactivation was already pending.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkedStop {
+    pub root: RootId,
+    pub generation: i64,
+    pub reactivate: bool,
+}
+impl LinkedStop {
+    fn of(control: &StoredRootControl) -> Self {
+        Self {
+            root: control.root_id.clone(),
+            generation: control.generation,
+            reactivate: control.reactivate,
+        }
+    }
+    fn value(&self) -> Value {
+        json!({"rootId": self.root.0.as_str(), "generation": self.generation,
+            "reactivate": self.reactivate})
+    }
+    /// Whether the card moved past what the stop covered (the linked-card form of
+    /// [`recovery::stop_superseded`]): a newer activation exists, or a Continue was accepted
+    /// since (a reactivation is pending). The stop then observes only the generation it covered
+    /// and never stops the card's work or process trees beyond those it holds for
+    /// reconciliation.
+    pub fn superseded(&self, control: &StoredRootControl) -> bool {
+        control.generation > self.generation || (control.reactivate && !self.reactivate)
+    }
+}
+
+/// The linked cards a feature's stop operation covers, each with the generation it covered
+/// (recorded when the stop was decided).
 pub fn stop_linked_roots(
     tx: &mut dyn WriteTransaction,
     op: &OperationId,
-) -> Result<Vec<RootId>, StorageError> {
-    Ok(tx
-        .operations()
-        .operation(op)?
-        .and_then(|o| o.payload.get("linkedRoots").cloned())
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|r| Id::new(r).ok().map(RootId))
+) -> Result<Vec<LinkedStop>, StorageError> {
+    let Some(list) = tx.operations().operation(op)?.and_then(|o| {
+        o.payload
+            .get("linkedRoots")
+            .and_then(Value::as_array)
+            .cloned()
+    }) else {
+        return Ok(Vec::new());
+    };
+    Ok(list
+        .iter()
+        .filter_map(|v| {
+            Some(LinkedStop {
+                root: RootId(Id::new(v.get("rootId")?.as_str()?).ok()?),
+                generation: v.get("generation")?.as_i64()?,
+                reactivate: v.get("reactivate")?.as_bool()?,
+            })
+        })
         .collect())
 }
 /// Why a linked card's retained activation may not keep running: its feature is paused or holds
@@ -1803,9 +1843,15 @@ impl ControlService {
                 && paused_by_hold;
             let live = tx.runs().live_activation(&root.id)?;
             let mut nothing_live = live.is_none() && !self.root_has_work(tx, &root.id)?;
+            // A linked card counts only with what the stop covered: once it moved past that
+            // (a newer generation, or a Continue since), its newer work is not this stop's.
             for card in stop_linked_roots(tx, op)? {
-                nothing_live &= tx.runs().live_activation(&card)?.is_none()
-                    && !self.root_has_work(tx, &card)?;
+                let live = tx.runs().live_activation(&card.root)?;
+                nothing_live &= if card.superseded(&control_of(tx.runs(), &card.root)?) {
+                    !live.is_some_and(|a| a.generation <= card.generation)
+                } else {
+                    live.is_none() && !self.root_has_work(tx, &card.root)?
+                };
             }
             if intent && (!is_terminal(rec.state) || nothing_live) {
                 return Ok(Decided {
@@ -1902,8 +1948,11 @@ impl ControlService {
             let op = op.clone();
             self.pause_root(tx, actor, root, control, cause, reason)?;
             let mut cancelled = self.cancel_root_deliveries(tx, &root.id)?;
+            // A linked card that moved past what the stop covered keeps its newer work.
             for card in stop_linked_roots(tx, &op)? {
-                cancelled.extend(self.cancel_root_deliveries(tx, &card)?);
+                if !card.superseded(&control_of(tx.runs(), &card.root)?) {
+                    cancelled.extend(self.cancel_root_deliveries(tx, &card.root)?);
+                }
             }
             let after = control_of(tx.runs(), &root.id)?;
             record(
@@ -1931,10 +1980,14 @@ impl ControlService {
         // they quiesced.
         let linked = linked_roots(tx, root)?;
         let mut linked_work = false;
+        // Each card is covered at its generation now: a later activation of it (once it is
+        // unlinked and continued) is never stopped, waited for or held by this stop.
+        let mut covered = Vec::new();
         for card in &linked {
             cancelled.extend(self.cancel_root_deliveries(tx, &card.id)?);
             linked_work |= tx.runs().live_activation(&card.id)?.is_some()
                 || self.root_has_work(tx, &card.id)?;
+            covered.push(LinkedStop::of(&control_of(tx.runs(), &card.id)?).value());
         }
         let op = OperationId(tx.new_id(IdKind::Operation));
         tx.operations().record_intent(NewOperation {
@@ -1958,7 +2011,7 @@ impl ControlService {
                 "cause": cause.as_str(),
                 "holdId": hold.id.as_str(),
                 "executionId": live.as_ref().map(|a| a.id.as_str()),
-                "linkedRoots": linked.iter().map(|c| c.id.0.as_str()).collect::<Vec<_>>(),
+                "linkedRoots": covered,
             }),
         })?;
         let before = after.clone();

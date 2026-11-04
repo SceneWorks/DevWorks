@@ -73,7 +73,9 @@ impl Assessment {
 
 /// A feature's stored readiness: the assessment of its active plan and, apart from it, the
 /// assessment of its pending replacement draft. The pending one gates nothing and never changes
-/// the active one; adopting exactly the draft it reviewed promotes it. One revision covers both.
+/// the active one; adopting exactly the draft it reviewed promotes it. Every finding open in the
+/// active one is open in the pending one too ([`carry_open`]), so adoption never clears it. One
+/// revision covers both.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Slots {
@@ -415,6 +417,35 @@ fn strengthens(stored: &ReadinessFinding, given: &ReadinessFinding) -> bool {
                 || given.affected_work_ids.0.iter().any(|w| !named.contains(w))))
 }
 
+/// Reconciles the pending generation with the active one: every finding still open in `active`
+/// stays open in `pending`, gating at least what it gates there (AGENT-20: an open finding
+/// leaves only through `CloseFinding` or a human's finding-specific risk acceptance, both of
+/// which act on every generation at once, so neither a draft's assessment nor plan approval
+/// clears it). A pending statement of the finding is kept while it is open and keeps the active
+/// gate; otherwise the active statement replaces it. Returns whether `pending` changed.
+fn carry_open(active: &Assessment, pending: &mut Assessment) -> bool {
+    let mut changed = false;
+    for o in active
+        .findings
+        .iter()
+        .filter(|f| matches!(f.state, FindingState::Open))
+    {
+        match pending.findings.iter_mut().find(|p| p.id == o.id) {
+            None => {
+                pending.findings.push(o.clone());
+                changed = true;
+            }
+            Some(p) => {
+                if !matches!(p.state, FindingState::Open) || keeps_gate(o, p).is_err() {
+                    *p = o.clone();
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
 fn evidence_keys(f: &ReadinessFinding) -> BTreeSet<String> {
     f.evidence
         .0
@@ -505,7 +536,8 @@ pub(crate) fn apply_change(
             };
             debug_assert_eq!(digest_of_draft(&draft), digest);
             // Each generation has its own assessment. A pending draft's first one starts from
-            // the active plan's: an open finding stays open in the replacement until it closes.
+            // the active plan's: an open finding stays open in the replacement until it closes
+            // (one the active plan's assessment opens later is carried into it then).
             let previous = if reviewed_pending {
                 slots.pending.clone().or_else(|| slots.active.clone())
             } else {
@@ -599,6 +631,14 @@ pub(crate) fn apply_change(
                 next.pending = Some(body.clone());
             } else {
                 next.active = Some(body.clone());
+                // A finding the active plan's assessment opens or widens also holds the pending
+                // replacement, so adopting it cannot drop the finding.
+                if let Some(p) = next.pending.as_mut()
+                    && carry_open(&body, p)
+                    && p.findings.len() > 128
+                {
+                    return Err(invalid("finding_limit", Some(&feature.id)));
+                }
             }
             tx.work().put_readiness(
                 &StoredReadiness {
@@ -839,6 +879,11 @@ pub(crate) fn record_adoption(
         }) {
             let mut promoted = pending;
             promoted.reviewed_pending = false;
+            // Approval never closes a finding (AGENT-20): one still open in the replaced
+            // plan's assessment stays open in the adopted one.
+            if let Some(old) = &slots.active {
+                carry_open(old, &mut promoted);
+            }
             slots.active = Some(promoted);
         }
         let next = StoredReadiness {

@@ -2765,6 +2765,194 @@ fn assessing_a_replacement_draft_leaves_the_active_plans_readiness_in_force_unti
     assert!(!f.readiness.unwrap().ready);
 }
 
+/// A feature with an approved, assessed plan (E1) and an assessed replacement draft, plus an
+/// `Assess` helper bound to schema revision 2 and a blocking finding of E1.
+struct Generations {
+    fx: Fx,
+    p: ProjectId,
+    f: WorkRecord,
+}
+impl Generations {
+    fn new(active_findings: Value) -> Self {
+        let fx = Fx::new();
+        let p = fx.project("Alpha", &[]);
+        let f = fx.feature(&p, "Checkout", &[]);
+        let doc = fx.artifact(&p, 1);
+        let f = fx.plan(&f, &doc, &[("E1", "pay")]);
+        let f = fx.approve(&f);
+        let f = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+        let active = f.approval.clone().unwrap();
+        let g = Self {
+            fx,
+            p,
+            f: f.clone(),
+        };
+        let f = work_of(applied(g.assess(
+            &f,
+            active.plan_revision.as_str(),
+            String::from(active.plan_digest.clone()),
+            None,
+            active_findings,
+        )));
+        let f = g.fx.plan(&f, &doc, &[("E1", "pay by card")]);
+        let pending = f.pending_plan.clone().unwrap();
+        let r = g.readiness_revision(&f);
+        let f = work_of(applied(g.assess(
+            &f,
+            pending.revision.as_str(),
+            plan_digest(&pending.draft),
+            Some(&r),
+            json!([]),
+        )));
+        Self { f, ..g }
+    }
+    fn assess(
+        &self,
+        f: &WorkRecord,
+        rev: &str,
+        digest: String,
+        expected: Option<&str>,
+        findings: Value,
+    ) -> DomainCommandReply {
+        let mut change = json!({"kind": "Assess", "planRevision": rev, "planDigest": digest,
+            "summary": "assessed", "findings": findings});
+        if let Some(e) = expected {
+            change["expectedAssessmentRevision"] = json!(e);
+        }
+        self.fx.command_at(
+            &self.fx.agent(),
+            "features.edit",
+            json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+                "changes": {"readiness": change}}),
+            Some(2),
+        )
+    }
+    fn readiness_revision(&self, f: &WorkRecord) -> String {
+        let f = self.fx.get_at("features.get", &f.id, Some(2)).unwrap();
+        f.readiness
+            .or(f.pending_readiness)
+            .unwrap()
+            .revision
+            .as_str()
+            .to_owned()
+    }
+    fn blocker(evidence: Vec<ArtifactRef>) -> Value {
+        json!({"id": "F1", "disposition": "NeedsUserDecision", "blocking": true,
+            "prerequisite": false, "state": "Open", "requirementIds": ["E1"], "scopeKey": "E1",
+            "affectedWorkIds": [], "summary": "which card network",
+            "missing": "the card networks", "consequence": "payments may fail",
+            "attempts": ["read the docs"], "insufficiency": "a product choice",
+            "closureCondition": "the networks are named", "evidence": evidence,
+            "question": "Visa only?", "recommendation": "Visa and Mastercard",
+            "closureEvidence": []})
+    }
+    fn open_f1(r: &devworks_core::protocol::records::ReadinessAssessment) -> bool {
+        r.findings.0.iter().any(|x| {
+            x.id.as_str() == "F1"
+                && matches!(
+                    x.state,
+                    devworks_core::protocol::records::FindingState::Open
+                )
+        })
+    }
+    fn e1(&self) -> devworks_core::services::runs::scope::Readiness {
+        let (runs, fid) = (self.fx.runs.clone(), RootId(self.f.id.clone()));
+        self.fx
+            .read(move |s| {
+                let w = s.sessions().work_root(&fid)?.unwrap();
+                runs.scope().plan(s.runs(), &w)
+            })
+            .unit(Some("E1"))
+            .unwrap()
+            .readiness
+            .clone()
+    }
+}
+
+#[test]
+fn a_blocker_found_on_the_active_plan_after_its_replacement_was_assessed_survives_adoption() {
+    use devworks_core::services::runs::scope::Readiness;
+    let g = Generations::new(json!([]));
+    let (fx, f) = (&g.fx, g.f.clone());
+    // The draft was assessed first (no finding). Then the active plan's re-assessment finds a
+    // blocker of E1, with new evidence.
+    let active = fx
+        .get_at("features.get", &f.id, Some(2))
+        .unwrap()
+        .approval
+        .unwrap();
+    let r = g.readiness_revision(&f);
+    let f = work_of(applied(g.assess(
+        &f,
+        active.plan_revision.as_str(),
+        String::from(active.plan_digest.clone()),
+        Some(&r),
+        json!([Generations::blocker(vec![fx.artifact(&g.p, 2)])]),
+    )));
+    let shown = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+    assert!(!shown.readiness.clone().unwrap().ready);
+    // The open finding holds the pending replacement as well...
+    let pending = shown.pending_readiness.clone().unwrap();
+    assert!(Generations::open_f1(&pending), "{:?}", pending.findings);
+    // ...so the draft's re-assessment cannot settle it by restating it resolved.
+    let draft = shown.pending_plan.clone().unwrap();
+    let mut settled = Generations::blocker(vec![]);
+    settled["state"] = json!("Resolved");
+    settled["closureNote"] = json!("the draft no longer needs it");
+    let fault = refused(g.assess(
+        &shown,
+        draft.revision.as_str(),
+        plan_digest(&draft.draft),
+        Some(pending.revision.as_str()),
+        json!([settled]),
+    ));
+    assert_eq!(kind_of(&fault), "open_finding_needs_closure");
+    // Approving the draft does not clear the blocker: the adopted plan's E1 stays blocked.
+    fx.approve(&shown);
+    let after = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+    let r = after.readiness.unwrap();
+    assert!(Generations::open_f1(&r), "{:?}", r.findings);
+    assert!(!r.ready);
+    assert!(matches!(g.e1(), Readiness::Blocked { .. }), "{:?}", g.e1());
+}
+
+#[test]
+fn adoption_keeps_an_open_active_finding_the_pending_assessment_does_not_hold() {
+    use devworks_core::services::runs::scope::Readiness;
+    let g = Generations::new(json!([Generations::blocker(vec![])]));
+    let (fx, f) = (&g.fx, g.f.clone());
+    // A pending assessment stored without the active plan's open finding (as one written before
+    // the generations were reconciled): adoption still keeps the finding open.
+    let fid = f.id.clone();
+    fx.write(move |tx| {
+        let s = tx.work().readiness(&fid)?.unwrap();
+        let mut body = s.body.clone();
+        assert_eq!(body["pending"]["findings"][0]["id"], json!("F1"));
+        body["pending"]["findings"] = json!([]);
+        tx.work().put_readiness(
+            &StoredReadiness {
+                feature_id: fid.clone(),
+                revision: s.revision + 1,
+                body,
+            },
+            Some(s.revision),
+        )
+    });
+    let shown = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+    assert!(!Generations::open_f1(
+        &shown.pending_readiness.clone().unwrap()
+    ));
+    fx.approve(&shown);
+    let r = fx
+        .get_at("features.get", &f.id, Some(2))
+        .unwrap()
+        .readiness
+        .unwrap();
+    assert!(Generations::open_f1(&r), "{:?}", r.findings);
+    assert!(!r.ready);
+    assert!(matches!(g.e1(), Readiness::Blocked { .. }), "{:?}", g.e1());
+}
+
 #[test]
 fn a_placement_moves_one_card_in_a_bucket_larger_than_an_ordered_list_can_name() {
     let fx = Fx::new();

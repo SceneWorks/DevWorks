@@ -413,37 +413,56 @@ impl RunSupervisor {
         grace: Duration,
     ) -> Result<OperationState, StorageError> {
         let (o, r) = (op.clone(), root.clone());
-        let (control, targets, linked) = store::write(&self.store, move |tx| {
+        let (control, targets, linked, moved_targets) = store::write(&self.store, move |tx| {
             dispatch_stop_operation(tx, &o)?;
             let control = devworks_core::services::runs::control_of(tx.runs(), &r)?;
             let targets = stop_reconciliation_targets(tx.runs(), &r, &o)?;
-            // A feature's stop also covers its linked cards' retained launches and trees.
+            // A feature's stop also covers its linked cards' retained launches and trees, each
+            // only at the generation it covered: a card that moved past it (unlinked and
+            // continued) keeps its newer work, but trees this stop holds for reconciliation
+            // are still stopped by identity.
             let mut linked = Vec::new();
+            let mut moved_targets = Vec::new();
             for card in devworks_core::services::runs::stop_linked_roots(tx, &o)? {
-                let generation =
-                    devworks_core::services::runs::control_of(tx.runs(), &card)?.generation;
-                linked.push((card, generation));
+                let current = devworks_core::services::runs::control_of(tx.runs(), &card.root)?;
+                let moved = card.superseded(&current);
+                if moved {
+                    for t in &targets {
+                        if tx
+                            .resources()
+                            .process(t)?
+                            .is_some_and(|p| p.root_id.as_ref() == Some(&card.root))
+                        {
+                            moved_targets.push(t.clone());
+                        }
+                    }
+                }
+                linked.push((card, moved));
             }
-            Ok((control, targets, linked))
+            Ok((control, targets, linked, moved_targets))
         })
         .await?;
         let superseded = stop_superseded(&control);
         self.signal_covered(root, control.stop_generation);
-        for (card, generation) in &linked {
-            self.signal_covered(card, *generation);
+        for (card, _) in &linked {
+            self.signal_covered(&card.root, card.generation);
         }
         let linked_scopes: Vec<StopScope> = linked
             .iter()
-            .map(|(card, _)| StopScope::Root(card.clone()))
+            .filter(|(_, moved)| !moved)
+            .map(|(card, _)| StopScope::Root(card.root.clone()))
             .collect();
         let (processes, bound) = (self.processes.clone(), self.stop_bound);
         let results = match kill {
-            // While the root still carries the stop: every owned tree of its scope.
+            // While the root still carries the stop: every owned tree of its scope and of each
+            // linked card still at the generation it covered; a card that moved on, only the
+            // trees this stop holds for reconciliation.
             Some(scope) if !superseded => tokio::task::spawn_blocking(move || {
                 let mut out = processes.stop(&scope, grace, bound);
                 for s in &linked_scopes {
                     out.extend(processes.stop(s, grace, bound));
                 }
+                out.extend(cancel_by_identity(&processes, moved_targets, grace, bound));
                 out
             })
             .await
@@ -451,21 +470,7 @@ impl RunSupervisor {
             // After a Continue: exactly the trees this stop holds for reconciliation, by
             // identity; the newer generation's trees are never touched.
             Some(_) => tokio::task::spawn_blocking(move || {
-                targets
-                    .into_iter()
-                    .map(|id| {
-                        let tree = OwnedProcess {
-                            id: id.clone(),
-                            identity: NativeIdentity {
-                                pid: 0,
-                                birth: String::new(),
-                                group: None,
-                            },
-                            lease: None,
-                        };
-                        (id, processes.cancel(&tree, grace, bound))
-                    })
-                    .collect()
+                cancel_by_identity(&processes, targets, grace, bound)
             })
             .await
             .unwrap_or_default(),
@@ -652,6 +657,29 @@ impl RunSupervisor {
         self.stopping.store(true, Ordering::SeqCst);
         self.wake.notify_one();
     }
+}
+
+/// Stops exactly the trees `ids`, by identity (never another tree of their root).
+fn cancel_by_identity(
+    processes: &ProcessSupervisor,
+    ids: Vec<Id>,
+    grace: Duration,
+    bound: Duration,
+) -> Vec<devworks_core::services::process::StopResult> {
+    ids.into_iter()
+        .map(|id| {
+            let tree = OwnedProcess {
+                id: id.clone(),
+                identity: NativeIdentity {
+                    pid: 0,
+                    birth: String::new(),
+                    group: None,
+                },
+                lease: None,
+            };
+            (id, processes.cancel(&tree, grace, bound))
+        })
+        .collect()
 }
 
 /// The trees a stop could not verify gone, with what is known of each.
