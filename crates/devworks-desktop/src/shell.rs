@@ -2016,6 +2016,40 @@ impl Shell {
                     Err(e) => self.settings.connections.catalog_error = Some(e.describe()),
                 }
             }
+            (Slot::Configure(n), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
+                let label = self
+                    .settings
+                    .connections
+                    .busy
+                    .iter()
+                    .find(|(k, _)| *k == n)
+                    .map(|(_, label)| label.clone())
+                    .unwrap_or_else(|| "Configuring provider".into());
+                // Preparation has no router effects. The client owns the exact frame before
+                // admission, including when a close has already stopped new requests.
+                if let Some(client) = &mut self.client {
+                    client.command(Slot::Configure(n), &label, "router.configure", frame);
+                }
+            }
+            (Slot::Configure(n), Reply::Command(outcome)) => {
+                let p = &mut self.settings.connections;
+                let label = p
+                    .busy
+                    .iter()
+                    .find(|(k, _)| *k == n)
+                    .map(|(_, label)| label.clone())
+                    .unwrap_or_default();
+                if !is_unknown(&outcome) {
+                    p.busy.retain(|(k, _)| *k != n);
+                }
+                p.message = Some(match ops::configured(outcome) {
+                    Ok(true) => (Tone::Good, format!("{label}: done.")),
+                    Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
+                    Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
+                });
+                self.load_connections();
+                self.invalidate_routing();
+            }
             (Slot::Configure(n), Reply::Task(t)) => {
                 let p = &mut self.settings.connections;
                 let label = p
@@ -2024,18 +2058,13 @@ impl Shell {
                     .position(|(k, _)| *k == n)
                     .map(|i| p.busy.remove(i).1)
                     .unwrap_or_default();
-                p.message = Some(match t {
-                    Ok(TaskOutput::Stored { outcome, .. }) => match ops::configured(outcome) {
-                        Ok(true) => (Tone::Good, format!("{label}: done.")),
-                        Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
-                        Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
+                p.message = Some((
+                    Tone::Bad,
+                    match t {
+                        Err(e) => format!("{label}: {e}"),
+                        Ok(_) => format!("{label}: unexpected reply."),
                     },
-                    Ok(_) => (Tone::Bad, format!("{label}: unexpected reply.")),
-                    Err(e) => (Tone::Bad, format!("{label}: {e}")),
-                });
-                // Connections and the catalog changed: reload them, and what the composer shows.
-                self.load_connections();
-                self.invalidate_routing();
+                ));
             }
             (slot, Reply::Task(Err(e))) => {
                 self.announce(format!("A request for {slot:?} failed: {e}"));
@@ -2416,10 +2445,9 @@ impl Shell {
                         if let Some((flow, pasted)) = code {
                             b.submit_sign_in_code(&flow, pasted)?;
                         }
-                        let frame = ops::router_configure(b, action);
-                        let outcome =
-                            crate::backend::resolve_command(b, "router.configure", &frame);
-                        Ok(TaskOutput::Stored { outcome, frame })
+                        Ok(TaskOutput::Prepared {
+                            frame: ops::router_configure(b, action),
+                        })
                     })
                 });
                 if submitted {
@@ -2709,6 +2737,11 @@ impl Shell {
                             .filter_map(|r| serde_json::from_value(r.clone()).ok())
                             .collect();
                     }
+                }
+                Slot::Configure(n) => {
+                    let p = &mut self.settings.connections;
+                    p.sequence = p.sequence.max(*n);
+                    p.busy.push((*n, u.label.clone()));
                 }
                 Slot::SettingsSave => {
                     self.settings.saving = true;
