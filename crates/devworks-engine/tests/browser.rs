@@ -153,6 +153,10 @@ struct FakeBrowser {
     frame_scale: Option<f64>,
     /// An element covers this node: hit-testing over it finds the cover (backend 99).
     cover: Option<i64>,
+    /// The cover has `pointer-events: none`: pointer input passes through it.
+    cover_inert: bool,
+    /// This node has `pointer-events: none`: pointer input passes through it to the page.
+    pointer_none: Option<i64>,
     /// Focusing a page node does not take (a handler moves focus away at once).
     steal_focus: bool,
     /// Reads wait (past their timeout) while set; `reads_stalled` records that one waited.
@@ -575,9 +579,12 @@ impl FakeBrowser {
                 let (x, y) = (p["x"].as_f64().unwrap(), p["y"].as_f64().unwrap());
                 let frame = self.pages[i].frame.clone();
                 let hit = self.hit(i, x, y);
+                // `ignorePointerEventsNone` (default false) counts elements pointer input skips.
+                let counts_inert = p["ignorePointerEventsNone"].as_bool().unwrap_or(false);
                 let backend = match hit {
                     Some(20) if self.frame_covered => 99,
-                    Some(b) if self.cover == Some(b) => 99,
+                    Some(b) if self.cover == Some(b) && (!self.cover_inert || counts_inert) => 99,
+                    Some(b) if self.pointer_none == Some(b) && !counts_inert => 1,
                     Some(b) => b,
                     None => 1,
                 };
@@ -619,7 +626,10 @@ impl FakeBrowser {
                 let i = page.unwrap();
                 let y = p["y"].as_f64().unwrap();
                 let s = self.pages[i].session.clone();
-                let hit = self.hit(i, p["x"].as_f64().unwrap(), y);
+                // Routed as real pointer input: an element with `pointer-events: none` is skipped.
+                let hit = self
+                    .hit(i, p["x"].as_f64().unwrap(), y)
+                    .filter(|b| self.pointer_none != Some(*b));
                 let k = self.pages[i]
                     .nodes
                     .iter()
@@ -3118,6 +3128,53 @@ fn an_older_target_list_is_never_recorded_over_a_newer_one() {
 }
 
 #[test]
+fn a_click_is_hit_tested_the_way_pointer_input_is_routed() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    let b = fx.platform.browser(&session);
+    let click =
+        || json!({"kind": "Click", "node": node(&snap, &ax, "Submit"), "button": "Primary"});
+    // A node with `pointer-events: none` would pass the click to what lies beneath: refused.
+    b.lock().unwrap().pointer_none = Some(11);
+    let mice = requests(&b, "Input.dispatchMouseEvent");
+    assert_eq!(
+        failed_kind(fx.input(&user, &session, click())),
+        "browser_node"
+    );
+    assert_eq!(requests(&b, "Input.dispatchMouseEvent"), mice);
+    // An overlay with `pointer-events: none` does not stop a click it does not take.
+    {
+        let mut br = b.lock().unwrap();
+        br.pointer_none = None;
+        br.cover = Some(11);
+        br.cover_inert = true;
+    }
+    fx.observation(fx.input(&user, &session, click()));
+    let console = match fx.result(
+        &user,
+        "browser.console",
+        json!({"sessionId": session.as_str(), "afterSequence": "0", "page": {"limit": 50}}),
+    ) {
+        OperationResult::BrowserConsole { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let text = console
+        .items
+        .0
+        .iter()
+        .map(|o| fx.json(&o.evidence).to_string())
+        .collect::<String>();
+    assert!(
+        text.contains("submitted"),
+        "the click reached the button: {text}"
+    );
+}
+
+#[test]
 fn a_browser_whose_main_process_exits_is_settled_while_its_helpers_linger() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
@@ -3636,6 +3693,9 @@ fn an_installed_browser_end_to_end_when_opted_in() {
                 let req = String::from_utf8_lossy(&buf[..n]).to_string();
                 let body = if req.starts_with("GET /next") {
                     "<!doctype html><title>Next</title><p>next page</p>".to_owned()
+                } else if req.starts_with("GET /pointer") {
+                    // One button pointer input passes through, one under an overlay it passes.
+                    "<!doctype html><title>Pointer</title><div style=\"position:absolute;left:0;top:0;width:400px;height:300px\" onclick=\"console.log('beneath clicked')\"></div><button style=\"position:absolute;left:10px;top:10px;width:100px;height:40px;pointer-events:none\" onclick=\"console.log('inert clicked')\">Inert</button><button style=\"position:absolute;left:10px;top:100px;width:100px;height:40px\" onclick=\"console.log('under clicked')\">Under</button><div style=\"position:absolute;left:0;top:90px;width:200px;height:60px;pointer-events:none\"></div>".to_owned()
                 } else if req.starts_with("GET /inner") {
                     "<!doctype html><title>Inner</title><button onclick=\"console.log('inside clicked')\">Inside</button>".to_owned()
                 } else if req.starts_with("GET /partner") {
@@ -3855,6 +3915,43 @@ fn an_installed_browser_end_to_end_when_opted_in() {
         .collect::<String>();
     assert!(text.contains("inside clicked"), "{text}");
     eprintln!("out-of-process frame {} clicked", frame["frameId"]);
+    // Pointer routing: a `pointer-events: none` button is refused (the click would land beneath
+    // it); a button under a `pointer-events: none` overlay is clicked.
+    let pointer = fx.snapshot(fx.navigate(
+        &user,
+        &session,
+        Some(&target),
+        &format!("http://127.0.0.1:{port}/pointer"),
+    ));
+    let pax = fx.json(&pointer.accessibility);
+    let click = |name: &str| json!({"kind": "Click", "node": node(&pointer, &pax, name), "button": "Primary"});
+    match fx.input(&user, &session, click("Inert")) {
+        OperationCompletion::Failed { fault, .. } => {
+            assert_eq!(fault.target_kind.unwrap().0, "browser_node")
+        }
+        other => panic!("a pointer-events: none button was clicked: {other:?}"),
+    }
+    fx.observation(fx.input(&user, &session, click("Under")));
+    let console = match fx.result(
+        &user,
+        "browser.console",
+        json!({"sessionId": session.as_str(), "afterSequence": "0", "page": {"limit": 50}}),
+    ) {
+        OperationResult::BrowserConsole { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let text = console
+        .items
+        .0
+        .iter()
+        .map(|o| fx.json(&o.evidence).to_string())
+        .collect::<String>();
+    assert!(text.contains("under clicked"), "{text}");
+    assert!(
+        !text.contains("inert clicked") && !text.contains("beneath clicked"),
+        "{text}"
+    );
+    eprintln!("pointer routing: inert refused, overlay passed");
     // A real navigation invalidates the previous document's nodes.
     let snap = fx.snapshot(fx.navigate(
         &user,

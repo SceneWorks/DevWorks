@@ -1531,6 +1531,8 @@ impl Live {
                 let (x, y) = self
                     .place_click(i, &n, node, bounds)
                     .map_err(post_dispatch)?;
+                // Hit-testing takes whole CSS pixels: the click is sent at the very point tested.
+                let (x, y) = (x.floor(), y.floor());
                 // The point must reach the node: through every frame owner on the way, and at
                 // the end the node itself or one of its descendants. Whatever covers it (a modal,
                 // a sticky header, an element of an embedding document) gets nothing.
@@ -1873,6 +1875,8 @@ impl Live {
             (cx - qw, cy + qh),
             (cx + qw, cy + qh),
         ] {
+            // The wheel event is sent at the whole-pixel point hit-testing checked.
+            let (px, py) = (px.floor(), py.floor());
             let in_frame = |hit: &Value| {
                 hit.get("frameId").and_then(Value::as_str) == Some(frame.cdp.as_str())
             };
@@ -1954,11 +1958,13 @@ impl Live {
             let Some((lx, ly)) = map.invert(x, y) else {
                 return Ok(false);
             };
+            // Hit-tested as pointer input is routed: an element with `pointer-events: none`
+            // (its own or inherited) is passed through, never counted as the one hit.
             let hit = self
                 .call(
                     Some(session),
                     "DOM.getNodeForLocation",
-                    json!({"x": lx.floor(), "y": ly.floor(), "includeUserAgentShadowDOM": false, "ignorePointerEventsNone": true}),
+                    json!({"x": lx.floor(), "y": ly.floor(), "includeUserAgentShadowDOM": false, "ignorePointerEventsNone": false}),
                     bounds.call,
                 )
                 .map_err(ActionError::Before)?;
