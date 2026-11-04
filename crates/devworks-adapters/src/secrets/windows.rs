@@ -6,15 +6,14 @@
 //! OAuth token pair can need, so a value is split over several credentials ([`super::chunked`]:
 //! parts left by an interrupted write or delete are listed under their handle and removed by
 //! its delete). `ERROR_NOT_FOUND` is an absent item; `ERROR_NO_SUCH_LOGON_SESSION` (no
-//! profile, a service session) is reported as unavailable.
+//! profile, a service session) and an unreachable Credential Manager service are reported as
+//! unavailable ([`super::faults::credential_manager`]).
 use super::SERVICE;
 use super::chunked::{self, Entries};
 use devworks_core::ports::secrets::{Secret, SecretError, SecretKey, SecretStore};
 use devworks_core::protocol::Id;
 use std::ptr;
-use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, ERROR_NO_SUCH_LOGON_SESSION, ERROR_NOT_FOUND, FILETIME, GetLastError,
-};
+use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, FILETIME, GetLastError};
 use windows_sys::Win32::Security::Credentials::{
     CRED_MAX_CREDENTIAL_BLOB_SIZE, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW,
     CredDeleteW, CredEnumerateW, CredFree, CredReadW, CredWriteW,
@@ -35,13 +34,7 @@ fn last_error() -> u32 {
     unsafe { GetLastError() }
 }
 fn error(code: u32) -> SecretError {
-    match code {
-        ERROR_NO_SUCH_LOGON_SESSION => {
-            SecretError::Unavailable("no user logon session holds a credential store".into())
-        }
-        ERROR_ACCESS_DENIED => SecretError::Denied,
-        c => SecretError::Failed(format!("Win32 error {c}")),
-    }
+    super::faults::credential_manager(code)
 }
 
 fn write(name: &str, blob: &[u8]) -> Result<(), SecretError> {

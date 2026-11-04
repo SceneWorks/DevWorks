@@ -1,8 +1,9 @@
 //! The macOS Keychain: one generic-password item per handle (service `DevWorks`, account
 //! `<namespace>/<handle>`) through the SecItem API. The item's access control list is the
 //! default for the creating application, so another application reading it prompts the user.
-//! `errSecInteractionNotAllowed` (a locked keychain while interaction is impossible) and a
-//! missing keychain are reported as unavailable, a denied or cancelled prompt as denied.
+//! A locked keychain that cannot prompt (`errSecInteractionNotAllowed`), a cancelled unlock
+//! prompt and a missing, read-only or unusable keychain are reported as unavailable, a failed
+//! authentication as denied ([`super::faults::keychain`]).
 use super::{SERVICE, handle_of};
 use core_foundation::base::{CFType, CFTypeRef, OSStatus, TCFType};
 use core_foundation::boolean::CFBoolean;
@@ -32,13 +33,8 @@ unsafe extern "C" {
 }
 
 const ERR_SEC_SUCCESS: OSStatus = 0;
-const ERR_SEC_USER_CANCELED: OSStatus = -128;
-const ERR_SEC_NOT_AVAILABLE: OSStatus = -25291;
-const ERR_SEC_AUTH_FAILED: OSStatus = -25293;
-const ERR_SEC_NO_SUCH_KEYCHAIN: OSStatus = -25294;
 const ERR_SEC_DUPLICATE_ITEM: OSStatus = -25299;
 const ERR_SEC_ITEM_NOT_FOUND: OSStatus = -25300;
-const ERR_SEC_INTERACTION_NOT_ALLOWED: OSStatus = -25308;
 
 pub struct Keychain;
 
@@ -51,16 +47,7 @@ fn cfstr(s: &str) -> CFType {
     CFString::new(s).as_CFType()
 }
 fn error(status: OSStatus) -> SecretError {
-    match status {
-        ERR_SEC_INTERACTION_NOT_ALLOWED => {
-            SecretError::Unavailable("the keychain is locked".into())
-        }
-        ERR_SEC_NO_SUCH_KEYCHAIN | ERR_SEC_NOT_AVAILABLE => {
-            SecretError::Unavailable("no keychain is available".into())
-        }
-        ERR_SEC_AUTH_FAILED | ERR_SEC_USER_CANCELED => SecretError::Denied,
-        s => SecretError::Failed(format!("OSStatus {s}")),
-    }
+    super::faults::keychain(status)
 }
 /// The query naming one item (or, with `account` `None`, every DevWorks item).
 fn query(account: Option<&str>, extra: &[(CFType, CFType)]) -> CFDictionary<CFType, CFType> {

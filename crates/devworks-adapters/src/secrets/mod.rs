@@ -12,6 +12,7 @@ use devworks_core::ports::secrets::SecretStore;
 
 #[cfg(any(windows, test))]
 mod chunked;
+mod faults;
 #[cfg(target_os = "macos")]
 mod keychain;
 #[cfg(all(unix, not(target_os = "macos")))]
