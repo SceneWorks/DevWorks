@@ -122,7 +122,8 @@ fn combining_diacritic(c: char) -> bool {
 
 /// The reuse key of an entity: folded type and name.
 pub fn entity_key(entity_type: &str, name: &str) -> String {
-    format!("{}|{}", fold(entity_type), fold(name))
+    let kind = fold(entity_type);
+    format!("{}:{}{}", kind.len(), kind, fold(name))
 }
 
 /// The revision-1 `KnowledgeKind` an entry kind projects onto.
@@ -230,7 +231,7 @@ mod tests {
         assert_eq!(words("\u{301} x"), ["x"]);
         assert_eq!(
             entity_key("Crate", " DevWorks  Core"),
-            "crate|devworks core"
+            "5:cratedevworks core"
         );
     }
 

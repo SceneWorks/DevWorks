@@ -21,9 +21,9 @@
   "structuredSharedRequirements": 3,
   "nativeImplementationItems": 63,
   "publicationItem": "DW-64",
-  "dependencyEdges": 250,
+  "dependencyEdges": 300,
   "nativeInitialStatus": "backlog",
-  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All356 source requirements are individually structured across related delivery features. Native implementation remains unstarted.",
+  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All370 source requirements are individually structured across related delivery features. Native implementation remains unstarted. The native status fields are the original planning snapshot; consult live CodeGraph for execution state. The EVAL item mappings were synchronized on 4 November 2026.",
   "items": [
     {
       "ref": "slice-contracts",
@@ -1040,9 +1040,202 @@
       "blockedBy": [],
       "acceptanceCriteria": 3,
       "featureKey": "DW-F1"
+    },
+    {
+      "ref": "slice-eval_recorded",
+      "key": "DW-71",
+      "id": "006befc9-a234-41e1-8316-2f4ca59ee8b6",
+      "title": "Grade recorded work end to end",
+      "type": "story",
+      "localSliceId": "DW-071",
+      "blockedBy": [],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_suites",
+      "key": "DW-72",
+      "id": "b0c099a4-7f8b-4cb0-a6b9-1647fbf1415d",
+      "title": "Manage versioned suites with separate measurement",
+      "type": "story",
+      "localSliceId": "DW-072",
+      "blockedBy": [
+        "DW-14",
+        "DW-71"
+      ],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_judges",
+      "key": "DW-73",
+      "id": "e2190ea4-3764-4175-bf87-1765eb06c012",
+      "title": "Judge rubrics with votes and calibration",
+      "type": "story",
+      "localSliceId": "DW-073",
+      "blockedBy": [
+        "DW-17",
+        "DW-19",
+        "DW-71"
+      ],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_trials",
+      "key": "DW-74",
+      "id": "91649834-278f-4017-8f78-46bd61ab71e0",
+      "title": "Run repeatable trials in throwaway workspaces",
+      "type": "story",
+      "localSliceId": "DW-074",
+      "blockedBy": [
+        "DW-15",
+        "DW-20",
+        "DW-38",
+        "DW-48",
+        "DW-71"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_comparisons",
+      "key": "DW-75",
+      "id": "d9cc467f-5876-4a9e-b91a-e227827e78dd",
+      "title": "Compare revisions honestly and label evidence",
+      "type": "story",
+      "localSliceId": "DW-075",
+      "blockedBy": [
+        "DW-71",
+        "DW-72"
+      ],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_gates",
+      "key": "DW-76",
+      "id": "f610cd02-1b83-486a-9f47-172fd132395a",
+      "title": "Gate improvement proposals on eval evidence",
+      "type": "story",
+      "localSliceId": "DW-076",
+      "blockedBy": [
+        "DW-14",
+        "DW-17",
+        "DW-32",
+        "DW-33",
+        "DW-34",
+        "DW-58",
+        "DW-74",
+        "DW-75"
+      ],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_triggers",
+      "key": "DW-77",
+      "id": "cc602f05-f38e-49c8-a554-8284f4609f89",
+      "title": "Run suites on demand, on proposal and on schedule within budget",
+      "type": "story",
+      "localSliceId": "DW-077",
+      "blockedBy": [
+        "DW-21",
+        "DW-50",
+        "DW-76"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_adoption",
+      "key": "DW-78",
+      "id": "4d285e23-7e2d-4095-a7d1-c9db567ce325",
+      "title": "Act on results after adoption",
+      "type": "story",
+      "localSliceId": "DW-078",
+      "blockedBy": [
+        "DW-14",
+        "DW-30",
+        "DW-32",
+        "DW-33",
+        "DW-34",
+        "DW-58",
+        "DW-75"
+      ],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_ui",
+      "key": "DW-79",
+      "id": "c4d4adf9-6bb2-4a2b-90dd-4550e2f6bc20",
+      "title": "Show evals in the app and to agents",
+      "type": "story",
+      "localSliceId": "DW-079",
+      "blockedBy": [
+        "DW-14",
+        "DW-20",
+        "DW-52",
+        "DW-75",
+        "DW-76"
+      ],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_package_suites",
+      "key": "DW-80",
+      "id": "6adc9a0c-591c-4a65-b779-d71032ebca8e",
+      "title": "Accept suites contributed by packages",
+      "type": "story",
+      "localSliceId": "DW-080",
+      "blockedBy": [
+        "DW-44",
+        "DW-72"
+      ],
+      "acceptanceCriteria": 1,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_mcp_records",
+      "key": "DW-81",
+      "id": "dc47715d-b710-45c8-965f-c6c7ba569da0",
+      "title": "Grade external MCP client activity",
+      "type": "story",
+      "localSliceId": "DW-081",
+      "blockedBy": [
+        "DW-63",
+        "DW-71"
+      ],
+      "acceptanceCriteria": 1,
+      "featureKey": "DW-F13"
+    },
+    {
+      "ref": "slice-eval_acceptance",
+      "key": "DW-82",
+      "id": "de80e63b-b5d1-4ac7-a7e7-fe51af8387e6",
+      "title": "Integrate and accept DW-F13",
+      "type": "task",
+      "localSliceId": "DW-082",
+      "blockedBy": [
+        "DW-71",
+        "DW-72",
+        "DW-73",
+        "DW-74",
+        "DW-75",
+        "DW-76",
+        "DW-77",
+        "DW-78",
+        "DW-79",
+        "DW-80",
+        "DW-81"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F13"
     }
   ],
-  "structuredSourceRequirements": 356,
+  "structuredSourceRequirements": 370,
   "deliveryFeatures": [
     {
       "id": "11568b6e-16b6-48b5-b0c1-3f0c3b0cdf10",
@@ -3127,5 +3320,27 @@
       "DW-16"
     ],
     "nativeAcceptance": "Not performed; native statuses and dependencies retained"
-  }
+  },
+  "evaluationImplementationItems": 12,
+  "evaluationPlanSynchronization": {
+    "date": "2026-11-04",
+    "source": "CodeGraph DW-F13 approved plan",
+    "items": [
+      "DW-71",
+      "DW-72",
+      "DW-73",
+      "DW-74",
+      "DW-75",
+      "DW-76",
+      "DW-77",
+      "DW-78",
+      "DW-79",
+      "DW-80",
+      "DW-81",
+      "DW-82"
+    ],
+    "scope": "Existing EVAL plan metadata only; runtime and operation contracts remain in their tracked items. Baseline and EVAL terminal acceptance dependencies remain distinct."
+  },
+  "nativeBaselineDependencyEdges": 250,
+  "evaluationDependencyEdges": 50
 }

@@ -2561,7 +2561,12 @@ fn challenge(
             }
             w.k().put_knowledge_challenge(&resolved)?;
             if o == "Retire" {
-                retire(&mut w, &c, &i.reason.0)?;
+                if c.lesson.as_ref().is_some_and(|l| l.rule_state == "Retired") {
+                    // The rule did not change, but this distinct challenge resolution did.
+                    w.put_claim(c.clone(), Some(c.revision), "ChallengeRetired")?;
+                } else {
+                    retire(&mut w, &c, &i.reason.0)?;
+                }
             } else {
                 w.put_claim(c.clone(), Some(c.revision), "ChallengeUpheld")?;
             }
@@ -2609,6 +2614,7 @@ fn retained(snapshot: &Value) -> Value {
             m.insert("tags".into(), json!([]));
         }
         m.remove("originRef");
+        m.insert("challenges".into(), json!([]));
         if let Some(l) = m.get_mut("lesson").and_then(Value::as_object_mut) {
             l.remove("quotedWords");
             l.remove("sourceRef");
@@ -3033,7 +3039,8 @@ fn delete_by_source(
     require_user(ctx, "deletion")?;
     no_proposal(&i.proposal_id)?;
     let (scoped, _) = scope_for(tx, ctx, &i.scope, true)?;
-    let source = i.source_id.as_str();
+    let source = super::cleanup_source(i.source_id.as_ref(), i.source_label.as_ref())?
+        .ok_or_else(|| invalid("source"))?;
     let current = tx
         .knowledge()
         .knowledge_scope_revision(&scoped.exact)?
@@ -3042,7 +3049,8 @@ fn delete_by_source(
         return Err(Failure::Storage(StorageError::conflict(
             RevisionDimension::Scope,
             SCOPE,
-            Id::new(scoped.exact.key().replace(':', "-")).unwrap_or_else(|_| i.source_id.clone()),
+            Id::new(scoped.exact.key().replace(':', "-"))
+                .unwrap_or_else(|_| Id::new("knowledge-scope").unwrap()),
             i.expected_scope_revision.clone(),
             rev(current),
         )));
@@ -3066,7 +3074,7 @@ fn delete_by_source(
         _ => deletion_plan(tx.knowledge(), &scoped.exact, source, current)?,
     };
     if plan.digest != i.preview_digest.as_str() {
-        return Err(conflict(PREVIEW, &i.source_id));
+        return Err(refuse(DomainErrorCode::Conflict, PREVIEW, None));
     }
     let mut w = Writer::new(tx, ctx, "knowledge.delete_by_source")?;
     let first = deletion_batch(&mut w, &scoped.exact, source, None)?;

@@ -744,7 +744,7 @@
   {
     "id": "input-knowledge.delete_by_source-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"sourceId\":\"id-a\",\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceId\":\"id-a\"}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -8270,6 +8270,230 @@
     "id": "r2-result-indexing.runs",
     "entry": "operation-result.r2",
     "raw": "{\"kind\":\"indexing.runs\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"repositoryIds\":[],\"stage\":\"fixture\",\"state\":\"ObservedComplete\",\"completedUnits\":\"0\",\"outputViews\":[],\"diagnostics\":[]}],\"hasMore\":true,\"nextCursor\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-knowledge.search",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.search\",\"scope\":{\"kind\":\"Workspace\"},\"text\":\"fixture\",\"tags\":[],\"kinds\":[],\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-knowledge.read",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.read\",\"scope\":{\"kind\":\"Workspace\"},\"claimId\":\"id-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-knowledge.subgraph",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.subgraph\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-knowledge.entity_bundle",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.entity_bundle\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[\"entity-a\"],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-knowledge.entity_graph",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.entity_graph\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[\"entity-a\"],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-knowledge.claim_bundle",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.claim_bundle\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[],\"claimIds\":[\"claim-a\"],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-knowledge.expand_frontier",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.expand_frontier\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[\"entity-a\"],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-knowledge.query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.query\",\"scope\":{\"kind\":\"Workspace\"},\"query\":{\"entityIds\":[],\"claimIds\":[],\"predicates\":[],\"tags\":[],\"states\":[],\"maxDepth\":2,\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"evidenceLimit\":20,\"neighborLimit\":20,\"includeSuperseded\":false,\"includeConflicts\":false,\"includeSupersessionChain\":false,\"includeEvidence\":false}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-knowledge.tagged_lessons",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.tagged_lessons\",\"scope\":{\"kind\":\"Workspace\"},\"tags\":[\"fixture\"],\"page\":{\"limit\":20}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-preview-source-13-1191",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-delete-source-13-1191",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-preview-source-15-1193",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-delete-source-15-1193",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-preview-source-256-1195",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-delete-source-256-1195",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-source-label",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test.json\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-two-source-selectors",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceId\":\"source-a\",\"sourceLabel\":\"source.json\"},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r3-result-nonlesson-challenge",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Fact\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"challenges\":[{\"id\":\"id-a\",\"state\":\"Open\",\"reason\":\"A disputed fact\",\"evidenceIds\":[\"evidence-a\"],\"authorId\":\"actor-a\",\"openedAtMs\":\"0\"}]}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-independent-challenges",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Fact\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"challenges\":[{\"id\":\"id-a\",\"state\":\"Open\",\"reason\":\"A disputed fact\",\"evidenceIds\":[\"evidence-a\"],\"authorId\":\"actor-a\",\"openedAtMs\":\"0\"}]}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r3-result-knowledge.search",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.read",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.read\",\"value\":{\"entities\":[],\"claims\":[],\"evidence\":[],\"frontier\":[],\"truncated\":false,\"conflicts\":[],\"supersessionIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.diagnostics",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.diagnostics\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.delete_by_source",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.delete_by_source\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.subgraph",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.subgraph\",\"value\":{\"entities\":[],\"claims\":[],\"evidence\":[],\"frontier\":[],\"truncated\":false,\"conflicts\":[],\"supersessionIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.entity_bundle",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.entity_bundle\",\"value\":{\"entities\":[],\"claims\":[],\"evidence\":[],\"frontier\":[],\"truncated\":false,\"conflicts\":[],\"supersessionIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.entity_graph",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.entity_graph\",\"value\":{\"entities\":[],\"claims\":[],\"evidence\":[],\"frontier\":[],\"truncated\":false,\"conflicts\":[],\"supersessionIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.claim_bundle",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.claim_bundle\",\"value\":{\"entities\":[],\"claims\":[],\"evidence\":[],\"frontier\":[],\"truncated\":false,\"conflicts\":[],\"supersessionIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.expand_frontier",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.expand_frontier\",\"value\":{\"entities\":[],\"claims\":[],\"evidence\":[],\"frontier\":[],\"truncated\":false,\"conflicts\":[],\"supersessionIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.query",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.query\",\"value\":{\"entities\":[],\"claims\":[],\"evidence\":[],\"frontier\":[],\"truncated\":false,\"conflicts\":[],\"supersessionIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-knowledge.tagged_lessons",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"knowledge.tagged_lessons\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-artifacts.save",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"artifacts.save\",\"value\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"name\":\"fixture\",\"createdAtMs\":\"0\",\"scope\":{\"kind\":\"Workspace\"},\"referenceCount\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-artifacts.list",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"artifacts.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
     "typedValid": true,
     "schemaValid": true
   }
