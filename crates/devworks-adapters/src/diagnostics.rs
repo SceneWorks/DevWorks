@@ -13,13 +13,27 @@ use devworks_core::ports::diagnostics::{ExportRefused, ExportStaging};
 use devworks_core::protocol::data::ArtifactSource;
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 /// Lifetime of an export's upload ticket.
 pub const EXPORT_TICKET_MS: i64 = 10 * 60 * 1000;
+
+/// Removes a released export. Windows briefly refuses to delete a file another process (a
+/// scanner or indexer) still has open, so a refusal is retried for a moment; a file that is
+/// still there is left to the sweep.
+fn remove_staged(path: &Path) {
+    for attempt in 1..=10 {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound && attempt < 10 => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            _ => return,
+        }
+    }
+}
 
 /// Stages diagnostic exports as upload tickets (see the module documentation).
 pub struct DiagnosticExports {
@@ -52,7 +66,7 @@ impl ExportStaging for DiagnosticExports {
             return;
         };
         if let Some(path) = self.staged().remove(ticket_id.as_str()) {
-            let _ = std::fs::remove_file(path);
+            remove_staged(&path);
         }
     }
 
