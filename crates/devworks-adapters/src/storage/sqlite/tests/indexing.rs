@@ -117,7 +117,7 @@ fn migration_19_is_additive_and_keeps_floors_at_or_above_14() {
     assert!(
         MIGRATIONS
             .iter()
-            .filter(|e| e.version < 20)
+            .filter(|e| e.version < m.version)
             .all(|e| e.minimum_reader <= m.minimum_reader && e.minimum_writer <= m.minimum_writer)
     );
     let h = Harness::new();
@@ -133,7 +133,7 @@ fn migration_19_is_additive_and_keeps_floors_at_or_above_14() {
     })
     .unwrap();
     drop(old);
-    let s = SqliteStore::open_with(h.config(), &through(20)).unwrap();
+    let s = SqliteStore::open_with(h.config(), &through(19)).unwrap();
     let report = s.compatibility().unwrap();
     assert_eq!(
         (
@@ -141,7 +141,7 @@ fn migration_19_is_additive_and_keeps_floors_at_or_above_14() {
             report.minimum_reader,
             report.minimum_writer
         ),
-        (20, 8, 20)
+        (19, 8, 19)
     );
     let s: Arc<dyn ApplicationStore> = Arc::new(s);
     let (u, e) = read_snapshot(&*s, &ReadOptions::default(), |snap| {
