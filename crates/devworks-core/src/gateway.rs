@@ -72,8 +72,20 @@ pub struct AdmittedQuery {
     input: OperationInput,
     fingerprint: Fingerprint,
     revision: SchemaRevision,
+    prepared: Option<Prepared>,
+    authorization: Authorization,
 }
 impl AdmittedQuery {
+    /// What the use case's [`QueryHandler::prepare`] established for this query, if anything.
+    pub fn prepared<T: std::any::Any>(&self) -> Option<&T> {
+        self.prepared.as_ref().and_then(Prepared::get)
+    }
+    /// What current authority established for this query (its fences and grants). A use case
+    /// that writes during preparation re-checks it inside that write
+    /// ([`crate::authority::authorization_holds_in`]), as a command's unit of work does.
+    pub fn authorization(&self) -> &Authorization {
+        &self.authorization
+    }
     pub fn descriptor(&self) -> &'static OperationDescriptor {
         self.descriptor
     }
@@ -211,6 +223,19 @@ impl Gateway<'_> {
         raw: &[u8],
         handler: &dyn QueryHandler,
     ) -> QueryOutcome {
+        self.query_with(ctx, operation, raw, handler, ReadOptions::default())
+    }
+
+    /// [`Gateway::query`] with the caller's cancellation and deadline, which bound the use
+    /// case's preparation ([`QueryHandler::prepare`]) and the read.
+    pub fn query_with(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        handler: &dyn QueryHandler,
+        options: ReadOptions,
+    ) -> QueryOutcome {
         let decoded = match admission::decode(
             Selection {
                 operation,
@@ -256,15 +281,36 @@ impl Gateway<'_> {
                 return Ok(reply);
             }
         };
-        let admitted = AdmittedQuery {
+        let mut admitted = AdmittedQuery {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
             query_id,
             input: decoded.input,
             fingerprint: decoded.fingerprint,
             revision: decoded.revision,
+            prepared: None,
+            authorization: authorization.clone(),
         };
-        let answered = read_snapshot(self.store, &ReadOptions::default(), |snapshot| {
+        // Preparation runs only for an admitted, currently authorized query, before (never
+        // inside) its read snapshot, so slow external reads hold no snapshot or lock.
+        let env = Preparation::new(
+            self.store,
+            options.cancellation.as_ref(),
+            options.deadline_ms,
+        );
+        match handler.prepare(ctx, &admitted, &env) {
+            Ok(prepared) => admitted.prepared = prepared,
+            Err(fault) => {
+                let reply = DomainQueryReply::Rejected {
+                    protocol: Protocol::Draft1,
+                    query_id: admitted.query_id,
+                    fault,
+                };
+                reply.validate().map_err(GatewayFailure::HandlerContract)?;
+                return Ok(reply);
+            }
+        }
+        let answered = read_snapshot(self.store, &options, |snapshot| {
             let stamp = snapshot.stamp().clone();
             if &stamp.store_id != ctx.store_id() || stamp.restore_epoch != ctx.restore_epoch().get()
             {
