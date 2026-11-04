@@ -9,8 +9,9 @@
 //! `5/15` from 5 to the field maximum), `JAN`–`DEC` and `SUN`–`SAT` (case-insensitive, `0` and
 //! `7` are Sunday), `L`, `L-n`, `nW`, `LW`, `L-nW` in day-of-month, `nL` and `n#k` in
 //! day-of-week, and the macros `@every_minute`, `@hourly`, `@daily`, `@midnight`, `@weekly`,
-//! `@monthly`, `@yearly` and `@annually`. When both day fields are restricted a day must match
-//! both (Cronos uses AND, unlike Vixie cron's OR).
+//! `@monthly`, `@yearly` and `@annually`. Cronos also accepts `@every_second` before applying
+//! its five-field format; that macro retains second resolution. When both day fields are
+//! restricted a day must match both (Cronos uses AND, unlike Vixie cron's OR).
 //!
 //! # Daylight saving time (Cronos semantics)
 //!
@@ -37,8 +38,7 @@ const SHIFT_BOUND_MS: i64 = 3 * 3_600_000;
 /// A valid leap-day/weekday combination can be forty years away across a non-leap century;
 /// searching a full cycle distinguishes it from impossible dates such as February 30.
 const HORIZON_DAYS: i64 = 146_097 + 2;
-/// The shortest fixed interval a schedule may use (a resource bound: a schedule cannot hammer
-/// the store or a provider).
+/// The minimum for the FixedInterval variant; calendar macros retain their source cadence.
 pub const MIN_INTERVAL_SECONDS: i64 = 60;
 /// Missed occurrences counted one by one before the count is reported as a lower bound.
 pub const MISSED_COUNT_CAP: u64 = 10_000;
@@ -53,6 +53,8 @@ pub struct CronExpression {
     dow: WeekSpec,
     /// Interval-based for DST folds (see the module documentation).
     interval: bool,
+    /// Cronos resolves this macro before applying its standard five-field format.
+    every_second: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,7 +87,7 @@ const MONTHS: [&str; 12] = [
 const WEEKDAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
 fn number(s: &str, what: &str) -> Result<u32, String> {
-    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) || s.len() > 4 {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) || s.len() > 2 {
         return Err(format!("{what}: '{s}' is not a number"));
     }
     s.parse()
@@ -125,6 +127,9 @@ fn field(
     if text.is_empty() {
         return Err(format!("{what} is empty"));
     }
+    if text.contains(',') && text.contains(['*', '?']) {
+        return Err(format!("{what}: a wildcard cannot be part of a list"));
+    }
     for part in text.split(',') {
         if part.is_empty() {
             return Err(format!("{what}: empty list member"));
@@ -150,19 +155,23 @@ fn field(
             let a = value(range, min, max, names, name_base, what)?;
             (a, if step.is_some() { max } else { a })
         };
-        // A reversed range wraps from the maximum back to the minimum.
-        let span = if start <= end {
-            end - start
-        } else {
-            (max - start) + 1 + (end - min)
-        };
         let step = step.unwrap_or(1);
-        let mut k = 0;
-        while k <= span {
-            let v = start + k;
-            let v = if v > max { v - (max - min + 1) } else { v };
-            bits |= 1u64 << v;
-            k += step;
+        let mut add_range = |low: u32, high: u32| {
+            for value in (low..=high).step_by(step as usize) {
+                bits |= 1u64 << value;
+            }
+        };
+        if start <= end {
+            add_range(start, end);
+        } else {
+            // The weekday domain is 0..=7, with two Sunday aliases. Cronos omits the
+            // latter when wrapping, and preserves signed remainder even for a start of 7.
+            let high = max - u32::from(min == 0 && max == 7);
+            add_range(start, high);
+            let low = i64::from(min) + i64::from(step)
+                - (i64::from(high) - i64::from(start)) % i64::from(step)
+                - 1;
+            add_range(low as u32, end);
         }
     }
     Ok(bits)
@@ -231,8 +240,9 @@ impl CronExpression {
     /// Parses a standard five-field expression or macro.
     pub fn parse(expression: &str) -> Result<Self, String> {
         let trimmed = expression.trim();
+        let every_second = trimmed.eq_ignore_ascii_case("@every_second");
         let expanded = match trimmed.to_ascii_lowercase().as_str() {
-            "@every_minute" => "* * * * *".to_owned(),
+            "@every_second" | "@every_minute" => "* * * * *".to_owned(),
             "@hourly" => "0 * * * *".to_owned(),
             "@daily" | "@midnight" => "0 0 * * *".to_owned(),
             "@weekly" => "0 0 * * 0".to_owned(),
@@ -243,7 +253,10 @@ impl CronExpression {
             }
             _ => trimmed.to_owned(),
         };
-        let fields: Vec<&str> = expanded.split_whitespace().collect();
+        let fields: Vec<&str> = expanded
+            .split([' ', '\t'])
+            .filter(|f| !f.is_empty())
+            .collect();
         if fields.len() != 5 {
             return Err(format!(
                 "a schedule needs five fields (minute hour day-of-month month day-of-week), found {}",
@@ -258,6 +271,7 @@ impl CronExpression {
             months: field(fields[3], 1, 12, &MONTHS, 1, "month")? as u16,
             dow: week_spec(fields[4])?,
             interval,
+            every_second,
         })
     }
 
@@ -333,6 +347,13 @@ impl CronExpression {
     /// The first occurrence strictly after `after_ms` (UTC) in `tz`, or `None` when the
     /// expression produces none within the search horizon.
     pub fn next_after(&self, tz: &TimeZone, after_ms: i64) -> Option<i64> {
+        if self.every_second {
+            let next = after_ms
+                .div_euclid(1000)
+                .checked_add(1)?
+                .checked_mul(1000)?;
+            return Some(next);
+        }
         // Local wall times as if UTC: an instant `t` reads `t + offset(t)`. Any instant after
         // `after_ms` reads after `after_ms + offset(after) - SHIFT_BOUND`.
         let offset = Timestamp::from_millisecond(after_ms)
@@ -671,6 +692,58 @@ mod tests {
     }
 
     #[test]
+    fn cronos_wrapped_weekday_steps_follow_the_reference() {
+        for (expression, expected) in [
+            (
+                "0 0 * * FRI-MON/2",
+                [
+                    "2026-11-06 00:00+00:00",
+                    "2026-11-08 00:00+00:00",
+                    "2026-11-13 00:00+00:00",
+                    "2026-11-15 00:00+00:00",
+                ],
+            ),
+            (
+                "0 0 * * 6-1/2",
+                [
+                    "2026-11-07 00:00+00:00",
+                    "2026-11-09 00:00+00:00",
+                    "2026-11-14 00:00+00:00",
+                    "2026-11-16 00:00+00:00",
+                ],
+            ),
+            (
+                "0 0 * * 7-2/2",
+                [
+                    "2026-11-10 00:00+00:00",
+                    "2026-11-17 00:00+00:00",
+                    "2026-11-24 00:00+00:00",
+                    "2026-12-01 00:00+00:00",
+                ],
+            ),
+        ] {
+            assert_eq!(
+                after(expression, &TimeZone::UTC, "2026-11-04T12:06:00Z", 4),
+                expected,
+                "{expression}"
+            );
+        }
+    }
+
+    #[test]
+    fn cronos_standard_macro_retains_second_resolution() {
+        let cron = CronExpression::parse("@every_second").unwrap();
+        assert!(cron.is_interval());
+        let from = ms("2026-11-04T12:06:00.123Z");
+        let next = ms("2026-11-04T12:06:01Z");
+        for zone in [TimeZone::UTC, ny(), zone("Australia/Lord_Howe").unwrap()] {
+            assert_eq!(cron.next_after(&zone, from), Some(next));
+            assert_eq!(cron.next_after(&zone, next), Some(next + 1000));
+        }
+        assert_eq!(cron.next_after(&TimeZone::UTC, i64::MAX), None);
+    }
+
+    #[test]
     fn invalid_expressions_and_impossible_dates_are_refused() {
         for bad in [
             "",
@@ -680,8 +753,14 @@ mod tests {
             "* 24 * * *",
             "*/0 * * * *",
             "1-x * * * *",
-            "@every_second",
             "@reboot",
+            "000 0 * * *",
+            "*/001 * * * *",
+            "0 0 L-001 * *",
+            "*,1 0 * * *",
+            "1,* 0 * * *",
+            "0\n0 * * *",
+            "0\u{00a0}0 * * *",
             "* * 32 * *",
             "* * * 13 *",
             "* * * * 8",

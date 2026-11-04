@@ -835,6 +835,32 @@ fn a_calendar_job_keeps_a_valid_occurrence_across_a_forty_year_gap() {
 // Native runs through the gateway
 
 #[test]
+fn a_second_resolution_calendar_macro_is_created_claimed_and_advanced() {
+    let fx = Fx::new();
+    fx.set_now(ms("2026-11-04T12:06:00.123Z"));
+    let job = fx.job(
+        &fx.user(),
+        body(
+            "Each second",
+            calendar("@every_second", "UTC"),
+            native(),
+            true,
+        ),
+    );
+    let next = ms("2026-11-04T12:06:01Z");
+    assert_eq!(s(&job, "nextRunAtMs"), next.to_string());
+    fx.set_now(next + 1);
+    let runs = fx.claim();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].occurrence_at_ms, next);
+    assert_eq!(
+        fx.execute(runs[0].id.as_str(), &none()).unwrap().status,
+        "Succeeded"
+    );
+    assert_eq!(fx.stored(&s(&job, "id")).next_at_ms, Some(next + 1000));
+}
+
+#[test]
 fn native_runs_dispatch_once_through_the_gateway_and_report_their_outcome() {
     let fx = Fx::new();
     let user = fx.user();
