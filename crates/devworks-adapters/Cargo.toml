@@ -26,6 +26,14 @@ webpki-roots = "=1.0.11"
 # The provider endpoint and query string are built with the same WHATWG URL type core decides on.
 url = "=2.5.8"
 tokio = { version = "=1.54.1", default-features = false, features = ["sync"] }
+# Outbound HTTP for provider sign-in, model discovery and connection tests (the core
+# `HttpTransport` port; DW-18). ureq is a small blocking client; 3.4.2 is the newest release more
+# than two weeks old. Only rustls with the ring provider and the bundled Mozilla roots
+# (webpki-roots) are enabled: no gzip, cookies, proxies or native TLS. Redirects are never followed.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
+# The OS random generator for PKCE verifiers and sign-in state (core `Entropy`). Already in the
+# lockfile through the UI stack.
+getrandom = "=0.3.4"
 
 [dev-dependencies]
 # A throwaway certificate authority for the local TLS server the transport tests connect to.
@@ -37,6 +45,17 @@ devworks-core = { path = "../devworks-core", features = ["contract-suite"] }
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.191"
 
+# The macOS Keychain SecretStore adapter (SecItem* over CoreFoundation dictionaries; DW-18).
+# core-foundation 0.9.4 is already in the lockfile through the UI stack; the five Security
+# framework calls and their constants are declared next to their use.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "=0.9.4"
+
+# The Linux Secret Service SecretStore adapter over the session bus (DW-18). zbus 5.19.0 is pure
+# Rust and already in the lockfile through the UI stack (its blocking API, default features).
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = "=5.19.0"
+
 # Owned process trees (Job Objects, toolhelp thread resume, process times), the keep-awake
 # execution state and the data-root volume's free space (diagnostics) on Windows. windows-sys is
 # Microsoft's generated raw binding crate, so the struct layouts and signatures come from the
@@ -45,6 +64,9 @@ libc = "=0.2.191"
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
+    # Windows Credential Manager (CredWriteW/CredReadW/CredDeleteW/CredEnumerateW) for the
+    # SecretStore adapter (DW-18).
+    "Win32_Security_Credentials",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",

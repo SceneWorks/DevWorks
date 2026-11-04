@@ -10111,6 +10111,9 @@
       ],
       "type": "object"
     },
+    "Finite": {
+      "type": "number"
+    },
     "GitActionKind": {
       "enum": [
         "Create",
@@ -10968,6 +10971,14 @@
       "minItems": 1,
       "type": "array"
     },
+    "List_OpenRouterQuantization_0_128": {
+      "items": {
+        "$ref": "#/$defs/OpenRouterQuantization"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_PortMapping_0_128": {
       "items": {
         "$ref": "#/$defs/PortMapping"
@@ -11404,6 +11415,325 @@
       "enum": [
         "Sha1",
         "Sha256"
+      ],
+      "type": "string"
+    },
+    "OpenRouterConstraints": {
+      "additionalProperties": false,
+      "properties": {
+        "allowedModels": {
+          "$ref": "#/$defs/List_Text1To4096_0_128"
+        },
+        "costTier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenRouterCostTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "excludedModels": {
+          "$ref": "#/$defs/List_Text1To4096_0_128"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenRouterProviderRouting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "allowedModels",
+        "excludedModels"
+      ],
+      "type": "object"
+    },
+    "OpenRouterCostTier": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "type": "string"
+    },
+    "OpenRouterDataCollection": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "OpenRouterMaxPrice": {
+      "additionalProperties": false,
+      "properties": {
+        "completion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prompt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "OpenRouterPartition": {
+      "enum": [
+        "model",
+        "none"
+      ],
+      "type": "string"
+    },
+    "OpenRouterPercentiles": {
+      "additionalProperties": false,
+      "properties": {
+        "p50": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p75": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p90": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p99": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "OpenRouterProviderRouting": {
+      "additionalProperties": false,
+      "properties": {
+        "allowFallbacks": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "dataCollection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenRouterDataCollection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enforceDistillableText": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "ignore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_Text1To256_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxPrice": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenRouterMaxPrice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "only": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_Text1To256_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "order": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_Text1To256_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preferredMaxLatency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenRouterPercentiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preferredMinThroughput": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenRouterPercentiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quantizations": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_OpenRouterQuantization_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requireParameters": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenRouterSort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zdr": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "OpenRouterQuantization": {
+      "enum": [
+        "int4",
+        "int8",
+        "fp4",
+        "mxfp4",
+        "nvfp4",
+        "fp6",
+        "fp8",
+        "mxfp8",
+        "fp16",
+        "bf16",
+        "fp32",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "OpenRouterSort": {
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/OpenRouterSortBy"
+        },
+        "partition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenRouterPartition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "by"
+      ],
+      "type": "object"
+    },
+    "OpenRouterSortBy": {
+      "enum": [
+        "price",
+        "throughput",
+        "latency"
       ],
       "type": "string"
     },
@@ -11855,6 +12185,14 @@
     "RouteModel": {
       "additionalProperties": false,
       "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "contextTokens": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 2
+        },
         "displayName": {
           "$ref": "#/$defs/Text1To256"
         },
@@ -11925,6 +12263,10 @@
                 }
               ]
             },
+            "enabled": {
+              "type": "boolean",
+              "x-since": 2
+            },
             "endpoint": {
               "$ref": "#/$defs/Url"
             },
@@ -11944,6 +12286,10 @@
             },
             "name": {
               "$ref": "#/$defs/Text1To256"
+            },
+            "openRouter": {
+              "$ref": "#/$defs/OpenRouterConstraints",
+              "x-since": 2
             },
             "profile": {
               "$ref": "#/$defs/EndpointKind"

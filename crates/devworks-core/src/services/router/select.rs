@@ -8,7 +8,7 @@
 use crate::ports::router::{ConnectionState, ConnectionStatus};
 use crate::ports::storage::{StoredCooldown, StoredRouteModel};
 use crate::protocol::Id;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Capability label: the request carries images (ROUTE-13).
 pub const VISION: &str = "vision";
@@ -100,6 +100,8 @@ pub enum Block {
     ContextTooSmall,
     /// No connection serves the model's endpoint profile.
     NoConnection,
+    /// Its connections' model constraints (allowed/excluded lists) exclude it.
+    NotAllowed,
     /// Its connections need a sign-in (disconnected, authorizing or rejected).
     CredentialsRequired,
     /// Its connections are temporarily unavailable or refreshing.
@@ -122,6 +124,7 @@ impl Block {
             Self::ContextUnknown => "ContextUnknown",
             Self::ContextTooSmall => "ContextTooSmall",
             Self::NoConnection => "NoConnection",
+            Self::NotAllowed => "NotAllowed",
             Self::CredentialsRequired => "CredentialsRequired",
             Self::ConnectionUnavailable => "ConnectionUnavailable",
             Self::ConnectionDisabled => "ConnectionDisabled",
@@ -140,6 +143,7 @@ impl Block {
                 | Self::ToolsUnsupported
                 | Self::ContextUnknown
                 | Self::ContextTooSmall
+                | Self::NotAllowed
         )
     }
     pub fn is_credentials(&self) -> bool {
@@ -210,23 +214,55 @@ fn capability_blocks(model: &StoredRouteModel, need: &Need) -> Vec<Block> {
     blocks
 }
 
+/// Whether a discovered model list serves `upstream` (the reference's `ModelDiscovery.Lists`):
+/// OpenRouter exactly (its automatic route is always served); every other profile ignoring case,
+/// listed as-is or with only a snapshot date between the two in either direction
+/// (`claude-sonnet-4-5` and `claude-sonnet-4-5-20250929`).
+pub fn lists(profile: &str, discovered: &BTreeSet<String>, upstream: &str) -> bool {
+    if profile == OPEN_ROUTER_PROFILE {
+        return upstream == OPEN_ROUTER_AUTO_UPSTREAM || discovered.contains(upstream);
+    }
+    fn snapshot_of(dated: &str, alias: &str) -> bool {
+        dated.len() == alias.len() + 9
+            && dated.is_char_boundary(alias.len())
+            && dated[..alias.len()].eq_ignore_ascii_case(alias)
+            && dated.as_bytes()[alias.len()] == b'-'
+            && dated[alias.len() + 1..].bytes().all(|b| b.is_ascii_digit())
+    }
+    discovered.iter().any(|id| {
+        id.eq_ignore_ascii_case(upstream) || snapshot_of(id, upstream) || snapshot_of(upstream, id)
+    })
+}
+
 /// The usable connection of `model` (preferring `preferred`), or why there is none.
 fn connection_for(
     model: &StoredRouteModel,
     connections: &[ConnectionStatus],
     preferred: Option<&Id>,
 ) -> Result<Id, Block> {
+    // A model bound to one connection is served by that connection only (never by another
+    // endpoint of the same profile, which could hold another account or billing).
     let serving: Vec<&ConnectionStatus> = connections
         .iter()
         .filter(|c| c.profile == model.endpoint_profile)
+        .filter(|c| model.connection_id.as_ref().is_none_or(|b| b == &c.id))
         .collect();
     if serving.is_empty() {
         return Err(Block::NoConnection);
     }
+    // A connection's allowed/excluded model constraints are never routed around: a model they
+    // exclude everywhere is ineligible, whatever the connections' state.
+    let serving: Vec<&ConnectionStatus> = serving
+        .into_iter()
+        .filter(|c| c.permits(&model.upstream_model_id))
+        .collect();
+    if serving.is_empty() {
+        return Err(Block::NotAllowed);
+    }
     let lists = |c: &ConnectionStatus| {
         c.discovered
             .as_ref()
-            .is_none_or(|d| d.contains(&model.upstream_model_id))
+            .is_none_or(|d| lists(&model.endpoint_profile, d, &model.upstream_model_id))
     };
     let usable: Vec<&ConnectionStatus> = serving
         .iter()
@@ -367,6 +403,7 @@ mod tests {
             image_input: vision,
             tools: true,
             context_tokens: context,
+            connection_id: None,
             position: 1,
             revision: 1,
             updated_at_ms: 0,
@@ -378,6 +415,8 @@ mod tests {
             profile: "CompatibleChat".into(),
             state: ConnectionState::Connected,
             discovered: discovered.map(|d| d.iter().map(|s| (*s).to_owned()).collect()),
+            allowed: Vec::new(),
+            excluded: Vec::new(),
         }]
     }
 

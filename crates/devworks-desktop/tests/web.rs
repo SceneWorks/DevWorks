@@ -2,21 +2,29 @@
 //! runtime: the fetch runs through the same `web.fetch` use case agents call (native transport,
 //! egress policy, artifact and activity record), its provenance and trust are shown, a refused
 //! fetch and an unconfigured search are shown honestly, and the activity record lists both. A
-//! scripted resolver and a mapping transport keep every request on this machine.
+//! scripted resolver and a mapping transport keep every request on this machine. A search
+//! credential stored through the host's secret store resolves for `web.search` (DW-18).
 mod common;
 
 use common::*;
 use devworks_adapters::web::transport::NativeTransport;
-use devworks_core::ports::secrets::NoSecretStore;
-use devworks_core::ports::web::{HopRequest, HopResponse, HttpTransport, NetFault, Resolver};
+use devworks_core::ports::secrets::{Secret, SessionSecrets};
+use devworks_core::ports::web::{
+    HopRequest, HopResponse, HttpTransport, NetFault, Resolver, SearchFault, SearchHit, SearchPage,
+    SearchProvider, SearchRequest,
+};
 use devworks_core::services::web::WebPorts;
-use devworks_core::settings::catalog::Category;
+use devworks_core::settings::catalog::{
+    Category, WEB_SEARCH_CREDENTIAL_KEY, WEB_SEARCH_PROVIDER_KEY, descriptor,
+};
 use devworks_desktop::host::Engine;
+use devworks_desktop::ops;
 use eframe::egui::accesskit::Role;
 use egui_kittest::kittest::Queryable;
+use serde_json::json;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const PUBLIC: &str = "93.184.216.34";
@@ -98,12 +106,13 @@ fn agent_tools_settings_fetch_search_and_show_web_activity() {
     let root = Root::new("web-panel");
     let mut config = config(&root.0);
     let addr = server();
-    config.web = WebPorts {
+    let transport: Arc<dyn HttpTransport> = Arc::new(Mapped(NativeTransport::new(), addr));
+    config.web = Arc::new(move |secrets| WebPorts {
         resolver: Arc::new(Names),
-        transport: Arc::new(Mapped(NativeTransport::new(), addr)),
+        transport: transport.clone(),
         providers: Vec::new(),
-        secrets: Arc::new(NoSecretStore),
-    };
+        secrets,
+    });
     let engine = Engine::start(config).expect("the runtime boots");
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 1400.0);
     settle(&mut h);
@@ -151,4 +160,90 @@ fn agent_tools_settings_fetch_search_and_show_web_activity() {
     assert!(has_text(&h, "web_destination_Loopback"));
     assert!(has_text(&h, "web_search_provider"));
     h.state_mut().on_exit();
+}
+
+/// A search provider configured as `brave` that records the credential each request carried.
+#[derive(Default)]
+struct Recorded(Mutex<Vec<Option<String>>>);
+impl SearchProvider for Recorded {
+    fn id(&self) -> &'static str {
+        "brave"
+    }
+    fn requires_credential(&self) -> bool {
+        true
+    }
+    fn page_max(&self) -> u32 {
+        20
+    }
+    fn offset_max(&self) -> u32 {
+        200
+    }
+    fn search(&self, request: &SearchRequest<'_>) -> Result<SearchPage, SearchFault> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(request.credential.map(|c| c.expose().to_owned()));
+        Ok(SearchPage {
+            hits: vec![SearchHit {
+                title: "Async Rust".into(),
+                url: "https://docs.test/async".into(),
+                snippet: "About async".into(),
+            }],
+            more: false,
+        })
+    }
+}
+
+/// The production composition resolves `web.searchCredential` through the host's secret store
+/// (the provider connection service over it): the key the user's credential flow stored there
+/// reaches the configured provider, and settings hold only its reference.
+#[test]
+fn a_search_credential_stored_through_the_secret_store_resolves_for_web_search() {
+    let root = Root::new("web-search-credential");
+    let mut config = config(&root.0);
+    let secrets = Arc::new(SessionSecrets::new());
+    config.secrets = Some(secrets.clone());
+    let provider = Arc::new(Recorded::default());
+    let recorded = provider.clone();
+    let transport: Arc<dyn HttpTransport> = Arc::new(Mapped(
+        NativeTransport::new(),
+        "127.0.0.1:9".parse().unwrap(),
+    ));
+    config.web = Arc::new(move |secrets| WebPorts {
+        resolver: Arc::new(Names),
+        transport: transport.clone(),
+        providers: vec![recorded.clone() as Arc<dyn SearchProvider>],
+        secrets,
+    });
+    let engine = Engine::start(config).expect("the runtime boots");
+    let backend = engine.backend();
+    let reference = backend
+        .stage_setting_secret(Secret::new("brave-key-1"))
+        .expect("the secret store keeps the key");
+    assert_eq!(secrets.len(), 1, "the key is in the secret store");
+    let entry = |key: &str, value: serde_json::Value| {
+        let d = descriptor(key).unwrap();
+        json!({"key": d.key, "value": {"schema": d.schema_ref(), "value": value}})
+    };
+    let body = json!({"scope": {"kind": "Workspace"}, "expectedRevision": "1", "entries": [
+        entry(WEB_SEARCH_PROVIDER_KEY, json!("brave")),
+        entry(WEB_SEARCH_CREDENTIAL_KEY, json!({"secretRef": reference}))]});
+    ops::settings_saved(backend.command(
+        "settings.save_revision",
+        &ops::command_frame(&*backend, "settings.save_revision", body),
+    ))
+    .expect("the provider and the credential reference are saved");
+    let results = ops::web_results(backend.query(
+        "web.search",
+        &ops::web_search(&*backend, "rust async", "brave"),
+    ))
+    .expect("the stored credential resolves, so the search runs");
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        *provider.0.lock().unwrap(),
+        [Some("brave-key-1".to_owned())],
+        "the provider received the stored key"
+    );
+    drop(backend);
+    engine.shutdown();
 }

@@ -202,6 +202,24 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0014_projects.sql"),
         rebuilds_tables: false,
     },
+    // Additive: provider connections and SystemOne decision models (two tables and their
+    // indexes), one nullable column on router_models and a correction of still-unedited seed
+    // rows; independent of every table of migration 14. The writer floor stays at 14 (the
+    // highest so far): applying a migration overwrites the store's floors, so a lower value
+    // would re-admit the writers migration 14 refuses (they would dispatch the work of a deleted
+    // project). It need not rise: no earlier build writes the new tables, and the only earlier
+    // writer of router_models names its columns and leaves connection_id untouched, so a binding
+    // it does not know is kept, never cleared; a binding that no longer matches the model's
+    // profile only makes that model ineligible. The reader floor stays at 8: earlier readers
+    // select explicit columns, so the added column and tables leave every query they make
+    // unchanged.
+    Migration {
+        version: 15,
+        minimum_reader: 8,
+        minimum_writer: 14,
+        sql: include_str!("migrations/0015_router_connections.sql"),
+        rebuilds_tables: false,
+    },
     // Additive: the unified Knowledge tables, their indexes and two FTS5 projections, referencing
     // only actors, projects and sessions (migration 1/7 tables, unchanged). Versions 14-17 are
     // reserved for open work; versions need only increase, and the number is renumbered to the
@@ -226,6 +244,9 @@ pub const MIGRATION_0018_SHA256: &str =
 /// Recorded checksum of migration 14; a test fails if the shipped text changes.
 pub const MIGRATION_0014_SHA256: &str =
     "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";
+/// Recorded checksum of migration 15; a test fails if the shipped text changes.
+pub const MIGRATION_0015_SHA256: &str =
+    "950ca955706f93e49bd4abafbaedbeac0f60342bfd1e5001fde47b5202985243";
 /// Recorded checksum of migration 13; a test fails if the shipped text changes.
 pub const MIGRATION_0013_SHA256: &str =
     "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";

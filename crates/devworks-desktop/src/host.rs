@@ -23,9 +23,10 @@ use devworks_core::authority::HostRoles;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::ports::diagnostics::StorageHealthProbe;
+use devworks_core::ports::http::HttpTransport;
 use devworks_core::ports::retrieval::NoVectorIndex;
-use devworks_core::ports::router::{ConnectionDirectory, NoConnections};
-use devworks_core::ports::secrets::NoSecretStore;
+use devworks_core::ports::router::ConnectionDirectory;
+use devworks_core::ports::secrets::{Secret, SecretResolver, SecretStore, SwitchableSecrets};
 use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions, run_write};
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
@@ -37,6 +38,7 @@ use devworks_core::services::knowledge::KnowledgeService;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::resources::ResourceService;
 use devworks_core::services::router::InferenceRouter;
+use devworks_core::services::router::connections::{ConnectionService, IntakeError};
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::sessions::SessionService;
 use devworks_core::services::web::{WebPorts, WebService};
@@ -61,6 +63,9 @@ pub const UI_INGRESS: &str = "desktop-ui";
 /// Lifetime of an upload ticket minted for an attachment (it is spent at once).
 pub const UPLOAD_TICKET_MS: i64 = 10 * 60 * 1000;
 
+/// Builds the web tools' ports over the secret resolver the host composed.
+pub type WebPortsFactory = Arc<dyn Fn(Arc<dyn SecretResolver>) -> WebPorts + Send + Sync>;
+
 /// What the composition root is configured with.
 #[derive(Clone)]
 pub struct DesktopConfig {
@@ -71,15 +76,24 @@ pub struct DesktopConfig {
     pub app_build: String,
     /// Shared bound of the owned-process stop at shutdown (AD20 default 30 s).
     pub shutdown_bound: Duration,
-    /// The provider connections the router routes through. Until provider connections and
-    /// sign-in exist (DW-18) nothing is connected ([`NoConnections`]), so every route reports
-    /// `NoConnection` truthfully.
-    pub connections: Arc<dyn ConnectionDirectory>,
-    /// The web tools' network ports: the system resolver, the rustls transport and the search
-    /// providers. Their credentials resolve through the native secret store, which arrives with
-    /// DW-18; until then [`NoSecretStore`] answers, so a search provider reports
-    /// `CredentialsRequired` instead of reading a key from anywhere else.
-    pub web: WebPorts,
+    /// Replaces the connection directory the router reads (tests script connection states).
+    /// `None` (production) routes through the provider connection service's durable rows.
+    pub connections: Option<Arc<dyn ConnectionDirectory>>,
+    /// The secret facility. `None` (production) is the OS facility (macOS Keychain, Windows
+    /// Credential Manager, Linux Secret Service), switchable to session-only memory by the user.
+    pub secrets: Option<Arc<dyn SecretStore>>,
+    /// Outbound HTTP for sign-in, discovery and connection tests. `None` (production) is
+    /// native HTTPS; tests use a fake or none, never the real network.
+    pub http: Option<Arc<dyn HttpTransport>>,
+    /// The interval of the connection service's background tick (device-code polling, flow
+    /// expiry, periodic connection checks, secret reconciliation); `None` disables it.
+    pub connection_tick: Option<Duration>,
+    /// The web tools' network ports (the system resolver, the rustls transport and the search
+    /// providers), built over the secret resolver the host composes: the provider connection
+    /// service over [`Self::secrets`], so `web.searchCredential` resolves from the same OS
+    /// secret store as the provider credentials. Production is [`native_ports`]; tests keep
+    /// every request on this machine.
+    pub web: WebPortsFactory,
 }
 impl std::fmt::Debug for DesktopConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -98,11 +112,18 @@ impl DesktopConfig {
             user_name: user_display_name(),
             app_build: concat!("devworks-desktop/", env!("CARGO_PKG_VERSION")).to_owned(),
             shutdown_bound: Duration::from_secs(30),
-            connections: Arc::new(NoConnections),
-            web: native_ports(Arc::new(NoSecretStore)),
+            connections: None,
+            secrets: None,
+            http: None,
+            connection_tick: Some(CONNECTION_TICK),
+            web: Arc::new(native_ports),
         }
     }
 }
+
+/// How often the connection service's background step runs (device codes are polled at their
+/// own interval, never faster).
+pub const CONNECTION_TICK: Duration = Duration::from_secs(1);
 
 /// Why the runtime did not start. The shell stays usable for local inspection and shows the
 /// affected screens offline with this reason (PLAT-02/03).
@@ -138,6 +159,11 @@ pub struct Host {
     waker: Arc<Mutex<Option<Waker>>>,
     /// The same authority the runtime admits with (stream handles are re-authorized by it).
     authority: Arc<StoreAuthority>,
+    /// The provider connection service: its host intake (API keys, pasted sign-in codes) is
+    /// reached only from the user's native UI; everything else goes through the gateway.
+    connections: Arc<ConnectionService>,
+    /// The OS secret facility, when the production one is used (switchable to session-only).
+    switchable: Option<Arc<SwitchableSecrets>>,
     /// The web tools, stopped first at shutdown so no fetch holds a request thread.
     web: Arc<WebService>,
 }
@@ -151,6 +177,11 @@ impl Host {
     /// The human invocation context every UI request is admitted with.
     pub fn user(&self) -> &InvocationContext {
         &self.ctx
+    }
+    /// The production [`SecretResolver`] for settings secret references (the same OS secret
+    /// store the provider connections use).
+    pub fn secret_resolver(&self) -> Arc<dyn SecretResolver> {
+        self.connections.clone()
     }
 }
 
@@ -183,6 +214,32 @@ async fn compose(
         paths: Arc::new(FsPathProbe),
         ids: id_source.clone(),
     });
+    // Provider connections (DW-18): the OS secret facility (or the configured one), native
+    // HTTPS (or the configured transport) and the OS random generator.
+    let (secrets, switchable): (Arc<dyn SecretStore>, Option<Arc<SwitchableSecrets>>) =
+        match &config.secrets {
+            Some(s) => (s.clone(), None),
+            None => {
+                let s = Arc::new(SwitchableSecrets::new(devworks_adapters::secrets::native()));
+                (s.clone(), Some(s))
+            }
+        };
+    let http: Arc<dyn HttpTransport> = config
+        .http
+        .clone()
+        .unwrap_or_else(|| Arc::new(devworks_adapters::http::NativeHttp::new()));
+    let connections = Arc::new(ConnectionService::new(
+        id_source.clone(),
+        clock.clone(),
+        store.clone(),
+        http,
+        secrets,
+        Arc::new(devworks_adapters::OsEntropy),
+    ));
+    let directory: Arc<dyn ConnectionDirectory> = config
+        .connections
+        .clone()
+        .unwrap_or_else(|| connections.clone());
     // The Home coordinator agent is bound by the Home chat item (DW-16); until it exists a
     // human's Home session is conducted by its creator, and no reply is ever fabricated.
     // Unified Knowledge. Retrieval is lexical until an embedding route exists (vector search is
@@ -202,13 +259,14 @@ async fn compose(
             store.clone(),
         )))
         .with_history(Arc::new(HistoryService::new(id_source.clone())))
-        // The router resolves tiers, named models, effort and availability; provider
-        // connections plug in through `config.connections` (none until DW-18).
+        // The router resolves tiers, named models, effort and availability over the provider
+        // connections' durable rows (the same unit of work as each route).
         .with_router(Arc::new(InferenceRouter::new(
             id_source.clone(),
             clock.clone(),
-            config.connections.clone(),
+            directory,
         )))
+        .with_connections(connections.clone())
         .with_knowledge(knowledge.clone());
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),
@@ -226,14 +284,16 @@ async fn compose(
         sources.clone(),
     )));
     // The shared web tools: fetched pages become artifacts through the one artifact service and
-    // every search and fetch is recorded through the one diagnostics service.
+    // every search and fetch is recorded through the one diagnostics service. The search
+    // credential resolves through the provider connection service, i.e. the same OS secret
+    // store (one secret-store abstraction).
     let web = Arc::new(WebService::new(
         store.clone(),
         artifacts.clone(),
         diagnostics.clone(),
         clock.clone(),
         id_source.clone(),
-        config.web.clone(),
+        (config.web)(connections.clone()),
     ));
     let use_cases = use_cases.with_web(web.clone());
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
@@ -294,6 +354,8 @@ async fn compose(
         ids,
         waker: Arc::new(Mutex::new(None)),
         authority,
+        connections,
+        switchable,
         web,
     })
 }
@@ -319,6 +381,29 @@ pub struct Engine {
     done: mpsc::Receiver<ShutdownSummary>,
     finished: Option<ShutdownSummary>,
     thread: Option<JoinHandle<()>>,
+    /// Stops the connection ticker (dropping it is enough).
+    ticker: Option<mpsc::Sender<()>>,
+}
+
+/// Runs [`ConnectionService::tick`] every `every` on its own thread until stopped. The thread is
+/// never joined: a step in flight finishes within its bounded HTTP timeouts and only writes
+/// through the store, which refuses once closed, so it can never hold the close lifecycle.
+fn start_connection_ticker(host: Arc<Host>, every: Duration) -> mpsc::Sender<()> {
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let service = host.connections.clone();
+    drop(host);
+    let _ = std::thread::Builder::new()
+        .name("devworks-connections".into())
+        .spawn(move || {
+            loop {
+                match stop_rx.recv_timeout(every) {
+                    Err(mpsc::RecvTimeoutError::Timeout) => service.tick(),
+                    // Stopped, or the engine is gone.
+                    _ => return,
+                }
+            }
+        });
+    stop_tx
 }
 
 impl Engine {
@@ -326,6 +411,7 @@ impl Engine {
     /// and the runtime admits requests (or why it could not).
     pub fn start(config: DesktopConfig) -> Result<Self, StartError> {
         let shutdown_bound = config.shutdown_bound;
+        let connection_tick = config.connection_tick;
         let (booted_tx, booted_rx) = mpsc::channel::<Result<Arc<Host>, StartError>>();
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let (done_tx, done_rx) = mpsc::channel::<ShutdownSummary>();
@@ -394,6 +480,7 @@ impl Engine {
         let host = booted_rx
             .recv()
             .map_err(|_| StartError::Thread("the engine thread stopped during boot".into()))??;
+        let ticker = connection_tick.map(|every| start_connection_ticker(host.clone(), every));
         Ok(Self {
             host,
             shutdown_bound,
@@ -401,6 +488,7 @@ impl Engine {
             done: done_rx,
             finished: None,
             thread: Some(thread),
+            ticker,
         })
     }
 
@@ -418,6 +506,10 @@ impl Engine {
     /// Starts the bounded shutdown (stop delivery, collection and housekeeping, wait for
     /// in-flight deliveries, stop owned trees, release keep-awake) without blocking the caller.
     pub fn begin_shutdown(&mut self) {
+        // No new background connection step starts once the close lifecycle begins.
+        if let Some(ticker) = self.ticker.take() {
+            let _ = ticker.send(());
+        }
         // Web requests in flight stop at their next bounded wait; new ones are refused.
         self.host.web.shutdown();
         if let Some(stop) = self.stop.take() {
@@ -553,5 +645,51 @@ impl Backend for DesktopBackend {
             return Err("too large to preview".into());
         }
         Ok(bytes)
+    }
+    fn stage_api_key(&self, key: Secret) -> Result<Id, String> {
+        self.host
+            .connections
+            .stage_api_key(self.host.ctx.principal(), key)
+            .map_err(|e| e.to_string())
+    }
+    fn stage_setting_secret(&self, value: Secret) -> Result<String, String> {
+        self.host
+            .connections
+            .stage_setting_secret(value)
+            .map(|r| r.as_str().to_owned())
+            .map_err(|e| e.to_string())
+    }
+    fn submit_sign_in_code(&self, flow: &Id, pasted: Secret) -> Result<(), String> {
+        self.host
+            .connections
+            .submit_authorization_code(self.host.ctx.principal(), flow, pasted)
+            .map_err(|e| match e {
+                IntakeError::UnknownFlow => {
+                    "this sign-in is no longer open; start it again".to_owned()
+                }
+                IntakeError::NotBrowserFlow => {
+                    "this sign-in uses a device code, not a pasted code".to_owned()
+                }
+            })
+    }
+    fn secret_store(&self) -> crate::backend::SecretStoreStatus {
+        crate::backend::SecretStoreStatus {
+            name: self.host.connections.secret_store_name().to_owned(),
+            session_only: self
+                .host
+                .switchable
+                .as_ref()
+                .is_some_and(|s| s.is_session_only()),
+            unavailable: self.host.connections.secret_store_unavailable(),
+        }
+    }
+    fn use_session_only_secrets(&self) -> Result<(), String> {
+        match &self.host.switchable {
+            Some(s) => {
+                s.use_session_only();
+                Ok(())
+            }
+            None => Err("this workspace's secret store cannot be switched".into()),
+        }
     }
 }

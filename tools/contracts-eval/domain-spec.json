@@ -1669,7 +1669,144 @@
         "efforts": "Items<EffortName>",
         "image_input": "bool",
         "tools": "bool",
-        "revision": "Revision"
+        "revision": "Revision",
+        "context_tokens": "?PositiveCounter",
+        "connection_id": "?Id"
+      },
+      "since": {
+        "context_tokens": 2,
+        "connection_id": 2
+      }
+    },
+    "OpenRouterDataCollection": {
+      "kind": "enum",
+      "values": [
+        "allow",
+        "deny"
+      ]
+    },
+    "OpenRouterQuantization": {
+      "kind": "enum",
+      "values": [
+        "int4",
+        "int8",
+        "fp4",
+        "mxfp4",
+        "nvfp4",
+        "fp6",
+        "fp8",
+        "mxfp8",
+        "fp16",
+        "bf16",
+        "fp32",
+        "unknown"
+      ]
+    },
+    "OpenRouterSortBy": {
+      "kind": "enum",
+      "values": [
+        "price",
+        "throughput",
+        "latency"
+      ]
+    },
+    "OpenRouterPartition": {
+      "kind": "enum",
+      "values": [
+        "model",
+        "none"
+      ]
+    },
+    "OpenRouterCostTier": {
+      "kind": "enum",
+      "values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "OpenRouterSort": {
+      "kind": "record",
+      "fields": {
+        "by": "OpenRouterSortBy",
+        "partition": "?OpenRouterPartition"
+      }
+    },
+    "OpenRouterPercentiles": {
+      "kind": "record",
+      "fields": {
+        "p50": "?Finite",
+        "p75": "?Finite",
+        "p90": "?Finite",
+        "p99": "?Finite"
+      }
+    },
+    "OpenRouterMaxPrice": {
+      "kind": "record",
+      "fields": {
+        "prompt": "?Money",
+        "completion": "?Money",
+        "request": "?Money",
+        "image": "?Money"
+      }
+    },
+    "OpenRouterProviderRouting": {
+      "kind": "record",
+      "fields": {
+        "order": "?Items<Label>",
+        "allow_fallbacks": "?bool",
+        "require_parameters": "?bool",
+        "data_collection": "?OpenRouterDataCollection",
+        "zdr": "?bool",
+        "enforce_distillable_text": "?bool",
+        "only": "?Items<Label>",
+        "ignore": "?Items<Label>",
+        "quantizations": "?Items<OpenRouterQuantization>",
+        "sort": "?OpenRouterSort",
+        "preferred_min_throughput": "?OpenRouterPercentiles",
+        "preferred_max_latency": "?OpenRouterPercentiles",
+        "max_price": "?OpenRouterMaxPrice"
+      }
+    },
+    "OpenRouterConstraints": {
+      "kind": "record",
+      "fields": {
+        "allowed_models": "Items<Text>",
+        "excluded_models": "Items<Text>",
+        "cost_tier": "?OpenRouterCostTier",
+        "provider": "?OpenRouterProviderRouting"
+      }
+    },
+    "ConnectionLifecycle": {
+      "kind": "enum",
+      "values": [
+        "Disconnected",
+        "Authorizing",
+        "Connected",
+        "Refreshing",
+        "ReauthenticationRequired",
+        "Unavailable",
+        "Disabled"
+      ]
+    },
+    "SignInMethod": {
+      "kind": "enum",
+      "values": [
+        "DeviceCode",
+        "AuthorizationCode"
+      ]
+    },
+    "SignInChallenge": {
+      "kind": "record",
+      "fields": {
+        "flow_id": "Id",
+        "method": "SignInMethod",
+        "user_code": "?Label",
+        "verification_url": "?Url",
+        "authorize_url": "?Url",
+        "expires_at_ms": "Counter"
       }
     },
     "ConnectionRecord": {
@@ -1682,7 +1819,35 @@
         "state": "ItemState",
         "credential_ref": "?Id",
         "subscription_risk_accepted": "bool",
-        "risk_notice_sha256": "?Digest"
+        "risk_notice_sha256": "?Digest",
+        "endpoint": "?Url",
+        "lifecycle": "?ConnectionLifecycle",
+        "state_reason": "?Text",
+        "credential_revision": "?Counter",
+        "healthy": "?bool",
+        "checked_at_ms": "?Counter",
+        "discovered_at_ms": "?Counter",
+        "discovered_model_count": "?Counter",
+        "discovered_model_ids": "?Items<Text>",
+        "access_expires_at_ms": "?Counter",
+        "sign_in": "?SignInChallenge",
+        "enabled": "?bool",
+        "open_router": "?OpenRouterConstraints"
+      },
+      "since": {
+        "endpoint": 2,
+        "lifecycle": 2,
+        "state_reason": 2,
+        "credential_revision": 2,
+        "healthy": 2,
+        "checked_at_ms": 2,
+        "discovered_at_ms": 2,
+        "discovered_model_count": 2,
+        "discovered_model_ids": 2,
+        "access_expires_at_ms": 2,
+        "sign_in": 2,
+        "enabled": 2,
+        "open_router": 2
       }
     },
     "RouteChoice": {
@@ -2154,7 +2319,9 @@
           "name": "Label",
           "profile": "EndpointKind",
           "endpoint": "Url",
-          "credential_ref": "?Id"
+          "credential_ref": "?Id",
+          "enabled": "?bool",
+          "open_router": "?OpenRouterConstraints"
         },
         "Model": {
           "model": "RouteModel",
@@ -2183,6 +2350,12 @@
           "expected_revision": "Revision",
           "notice_sha256": "Digest",
           "accepted": "bool"
+        }
+      },
+      "variantSince": {
+        "Connection": {
+          "enabled": 2,
+          "open_router": 2
         }
       }
     },
@@ -6077,7 +6250,7 @@
       "result": "Page<RouteModel>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it)."
     },
     "router.connections": {
       "operation": "router.connections",
@@ -6088,7 +6261,7 @@
       "result": "Page<ConnectionRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read-only provider connections in ID order; never a credential value, token or key (credentialRef is an opaque handle). subscriptionRiskAccepted is the effective acceptance: false once the notice, profile, endpoint, account or restore epoch changed. Schema revision 2: the endpoint, the authentication lifecycle (Disconnected, Authorizing, Connected, Refreshing, ReauthenticationRequired, Unavailable, Disabled) with a safe reason, the credential revision, the last connection test (healthy, checkedAtMs), the last successful model discovery (discoveredAtMs, discoveredModelCount and, for at most 128 models, discoveredModelIds), the access-token expiry and, for a human caller only, the open sign-in challenge (device user code and verification URL, or browser authorization URL). Revision 2 also reports whether the connection is enabled (a disabled connection keeps its credential and is never routed through) and, for an OpenRouter connection, its constraints: allowed and excluded model patterns (applied to discovery and routing eligibility), the auto-router cost tier and the OpenRouter provider-routing object sent with its requests."
     },
     "router.route": {
       "operation": "router.route",
@@ -6207,7 +6380,7 @@
       "result": "MutationSummary",
       "effect": "External",
       "authority": "HumanConfiguration",
-      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound."
+      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value)."
     },
     "router.decision_models": {
       "operation": "router.decision_models",
@@ -7146,6 +7319,18 @@
       2
     ],
     "router.availability": [
+      1,
+      2
+    ],
+    "router.catalog": [
+      1,
+      2
+    ],
+    "router.connections": [
+      1,
+      2
+    ],
+    "router.configure": [
       1,
       2
     ],

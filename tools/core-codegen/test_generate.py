@@ -36,7 +36,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.list', 'resources.acquire', 'resources.renew', 'resources.release',
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
-            'workspace.logs', 'workspace.record_diagnostic', 'router.availability',
+            'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
+            'router.connections', 'router.configure',
             'knowledge.search', 'knowledge.read', 'knowledge.record', 'knowledge.revise',
             'knowledge.verify', 'knowledge.challenge', 'knowledge.diagnostics',
             'knowledge.subgraph', 'knowledge.entity_bundle', 'knowledge.entity_graph',
@@ -46,6 +47,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'knowledge.import_user_data', 'dreaming.revert', 'web.search', 'web.fetch'})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
+        self.assertEqual(carried['router.connections'], {2})
+        self.assertEqual(carried['router.configure'], {2})
         # Knowledge revision 2 reaches every operation whose input or result carries a gated
         # claim, entity, evidence, bundle or receipt member (every receipt carries its totals and
         # continuation); the deletions return a summary and stay at 1.

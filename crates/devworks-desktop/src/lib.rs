@@ -22,8 +22,9 @@
 //!   offline, loading, failed, stale and partial states ([`widgets::ViewState`]) — never
 //!   fabricated values (UI-06). The coordinator (DW-16) is not part of this build, and the composer
 //!   says so instead of pretending to send to a model. The composer's route and effort selectors
-//!   are bound to the router ([`routing`]); with no provider connection (DW-18) they report that
-//!   no model is eligible rather than pretending one is.
+//!   are bound to the router ([`routing`]), which reads the provider connections configured in
+//!   Settings → Provider connections ([`connections_screen`]); with none connected they report
+//!   that no model is eligible rather than pretending one is.
 //!
 //! The approved UI reference is `docs/planning/ui-reference.md`; the HTML prototype is a design
 //! reference only (ARCH-06: the shipped UI is egui, with no WebView).
@@ -35,6 +36,7 @@
 pub mod attachments;
 pub mod backend;
 pub mod chat;
+pub mod connections_screen;
 pub mod files;
 pub mod host;
 pub mod knowledge_screen;

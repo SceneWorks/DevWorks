@@ -153,6 +153,18 @@ impl UseCases {
         self
     }
 
+    /// Registers the provider-connection operations of the router family (`router.connections`,
+    /// `router.configure`: `ConnectionService`).
+    pub fn with_connections(
+        mut self,
+        service: Arc<router::connections::ConnectionService>,
+    ) -> Self {
+        for op in router::connections::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     /// Registers the unified Knowledge operations of the slice that manages claims, entities,
     /// evidence and lessons (`KnowledgeService`). The bundle, graph and summary reads keep no
     /// use case here (DW-31).

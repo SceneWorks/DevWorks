@@ -57,6 +57,11 @@ pub fn config(root: &Path) -> DesktopConfig {
     let mut c = DesktopConfig::new(root);
     c.user_name = "Test user".into();
     c.shutdown_bound = Duration::from_secs(5);
+    // Never the real OS secret store or the network.
+    c.secrets = Some(Arc::new(
+        devworks_core::ports::secrets::SessionSecrets::new(),
+    ));
+    c.http = Some(Arc::new(devworks_core::ports::http::NoNetwork));
     c
 }
 
