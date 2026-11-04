@@ -4295,3 +4295,44 @@ fn deleting_a_claim_scrubs_its_predicate_and_every_authored_field_everywhere() {
         );
     }
 }
+
+#[test]
+fn search_words_match_composed_and_decomposed_spellings_alike() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let nfc = "résumé";
+    let nfd = "re\u{301}sume\u{301}";
+    let composed = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Hiring",
+        draft("Fact", &format!("the {nfc} template")),
+    );
+    let decomposed = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Hiring",
+        draft("Fact", &format!("another {nfd} layout")),
+    );
+    // Stored either way, found by an exact query either way.
+    for query in [
+        nfc,
+        nfd,
+        &format!("{nfd} template"),
+        &format!("{nfc} layout"),
+    ] {
+        let found = ids(&fx.search(&user, proj("project-a"), query, json!({})));
+        let expect: Vec<String> = match query {
+            q if q.ends_with("template") => vec![composed.as_str().to_owned()],
+            q if q.ends_with("layout") => vec![decomposed.as_str().to_owned()],
+            _ => {
+                let mut both = vec![composed.as_str().to_owned(), decomposed.as_str().to_owned()];
+                both.sort();
+                both
+            }
+        };
+        let mut found = found;
+        found.sort();
+        assert_eq!(found, expect, "query {query:?}");
+    }
+}

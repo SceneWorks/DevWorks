@@ -80,16 +80,44 @@ pub fn fold_applicability(
     }
 }
 
-/// The search words of `text`: maximal runs of letters and digits, folded and unique, in order.
+/// The search words of `text`, folded and unique, in order, split where the index tokenizer
+/// (FTS5 `unicode61`) splits: a word is letters, digits and private-use characters, with the
+/// combining diacritical marks that follow them inside it (the tokenizer keeps those in the
+/// token and folds them away), so a decomposed (NFD) spelling gives the same words as a
+/// composed (NFC) one. Each word is searched as a quoted phrase, which the tokenizer splits
+/// again where it alone would, so a word here is never wider in effect than its tokens.
 pub fn words(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for w in text.split(|c: char| !c.is_alphanumeric()) {
-        let w = fold(w);
+    let mut word = String::new();
+    let mut push = |word: &mut String| {
+        let w = fold(word);
         if !w.is_empty() && !out.contains(&w) {
             out.push(w);
         }
+        word.clear();
+    };
+    for c in text.chars() {
+        if token_char(c) || (combining_diacritic(c) && !word.is_empty()) {
+            word.push(c);
+        } else {
+            push(&mut word);
+        }
     }
+    push(&mut word);
     out
+}
+
+/// A character the index tokenizer starts or continues a token with: letters and digits
+/// (Unicode L* and N*) and private-use characters (Co).
+fn token_char(c: char) -> bool {
+    c.is_alphanumeric()
+        || matches!(c, '\u{E000}'..='\u{F8FF}' | '\u{F0000}'..='\u{FFFFD}' | '\u{100000}'..='\u{10FFFD}')
+}
+
+/// A combining diacritical mark (U+0300..U+036F): the tokenizer keeps those it folds away
+/// inside a token (a superset here only joins what its phrase splits again).
+fn combining_diacritic(c: char) -> bool {
+    matches!(c, '\u{0300}'..='\u{036F}')
 }
 
 /// The reuse key of an entity: folded type and name.
@@ -191,6 +219,15 @@ mod tests {
             words("Use `cargo fmt`, ÉCOLE école!"),
             ["use", "cargo", "fmt", "école"]
         );
+        // A decomposed spelling keeps its marks inside the word, as the index tokenizer does.
+        assert_eq!(
+            words("re\u{301}sume\u{301}, résumé"),
+            ["re\u{301}sume\u{301}", "résumé"]
+        );
+        // Private-use characters are word characters too.
+        assert_eq!(words("a\u{E000}b c"), ["a\u{E000}b", "c"]);
+        // A mark with no letter before it is no word.
+        assert_eq!(words("\u{301} x"), ["x"]);
         assert_eq!(
             entity_key("Crate", " DevWorks  Core"),
             "crate|devworks core"
