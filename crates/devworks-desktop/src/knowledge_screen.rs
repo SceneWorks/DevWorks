@@ -239,8 +239,20 @@ pub struct ImportCandidate {
 /// on its confirmed reply.
 #[derive(Clone, Debug)]
 pub enum ImportStage {
+    /// Preparing the file's `artifacts.save` frame (nothing admitted yet).
     Saving {
         name: String,
+    },
+    /// Its exact `artifacts.save` frame is admitted (or being resubmitted to confirm it).
+    Storing {
+        name: String,
+        frame: Vec<u8>,
+    },
+    /// The save's outcome is not known: the frame is kept for Confirm outcomes, which
+    /// resubmits it unchanged (so the file is never stored twice).
+    Unconfirmed {
+        name: String,
+        frame: Vec<u8>,
     },
     Previewing {
         name: String,
@@ -274,13 +286,28 @@ pub enum ImportStage {
     },
 }
 impl ImportStage {
-    /// Whether a request of this import is in flight.
+    /// Whether a request of this import is in flight, or its file's save is unconfirmed (it
+    /// may have committed: neither cancelled nor replaced until confirmed).
     pub fn busy(&self) -> bool {
         matches!(
             self,
-            Self::Saving { .. } | Self::Previewing { .. } | Self::Importing { .. }
+            Self::Saving { .. }
+                | Self::Storing { .. }
+                | Self::Unconfirmed { .. }
+                | Self::Previewing { .. }
+                | Self::Importing { .. }
         )
     }
+}
+
+/// What the shell does after an import file's save task replied.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImportNext {
+    /// Admit this exact `artifacts.save` frame.
+    Store(Vec<u8>),
+    /// Run this preview query (`knowledge.diagnostics`).
+    Preview(Value),
+    Nothing,
 }
 /// The import format's schema reference.
 pub fn import_schema() -> Value {
@@ -827,17 +854,31 @@ impl KnowledgeScreen {
         });
         true
     }
-    /// Applies the import file's `artifacts.save` outcome; returns the exact preview query
-    /// (`knowledge.diagnostics` with the saved version and the format's schema) once stored.
+    /// Applies the import file's save task: its prepared frame (admit it next), or its
+    /// `artifacts.save` outcome: the exact preview query (`knowledge.diagnostics` with the saved
+    /// version and the format's schema) once stored, the frame kept when the outcome is unknown.
     pub fn import_saved(
         &mut self,
         outcome: Result<crate::backend::TaskOutput, String>,
-    ) -> Option<Value> {
-        let Some(ImportStage::Saving { name }) = self.import.clone() else {
-            return None;
+    ) -> ImportNext {
+        use crate::backend::TaskOutput;
+        let name = match self.import.clone() {
+            Some(ImportStage::Saving { name } | ImportStage::Storing { name, .. }) => name,
+            _ => return ImportNext::Nothing,
         };
         let stored = match outcome {
-            Ok(crate::backend::TaskOutput::Stored { outcome, .. }) => {
+            Ok(TaskOutput::Prepared { frame }) => {
+                self.import = Some(ImportStage::Storing {
+                    name,
+                    frame: frame.clone(),
+                });
+                return ImportNext::Store(frame);
+            }
+            Ok(TaskOutput::Stored { outcome, frame }) if crate::backend::is_unknown(&outcome) => {
+                self.import = Some(ImportStage::Unconfirmed { name, frame });
+                return ImportNext::Nothing;
+            }
+            Ok(TaskOutput::Stored { outcome, .. }) => {
                 ops::saved_artifact(outcome).map_err(|e| e.describe())
             }
             Ok(_) => Err("unexpected task output".into()),
@@ -853,15 +894,26 @@ impl KnowledgeScreen {
                     source: record.artifact,
                     scope,
                 });
-                Some(body)
+                ImportNext::Preview(body)
             }
             Err(error) => {
                 self.import = Some(ImportStage::Failed {
                     name,
                     error: format!("The file was not stored: {error}"),
                 });
-                None
+                ImportNext::Nothing
             }
+        }
+    }
+    /// The import file save whose outcome is not known (or still being admitted): its name
+    /// and exact frame.
+    pub fn import_frame(&self, unconfirmed_only: bool) -> Option<(String, Vec<u8>)> {
+        match self.import.as_ref()? {
+            ImportStage::Unconfirmed { name, frame } => Some((name.clone(), frame.clone())),
+            ImportStage::Storing { name, frame } if !unconfirmed_only => {
+                Some((name.clone(), frame.clone()))
+            }
+            _ => None,
         }
     }
     /// Applies the preview: one result per candidate and the digest that confirms exactly it.
@@ -1051,8 +1103,18 @@ impl KnowledgeScreen {
                     }
                 };
                 match &stage {
-                    ImportStage::Saving { name } => {
+                    ImportStage::Saving { name } | ImportStage::Storing { name, .. } => {
                         ui.label(format!("Storing {name}…"));
+                    }
+                    ImportStage::Unconfirmed { name, .. } => {
+                        chip(
+                            ui,
+                            format!(
+                                "{name}: not yet confirmed whether the file was stored. Use \
+                                 Confirm outcomes; it is never stored twice."
+                            ),
+                            Tone::Attention,
+                        );
                     }
                     ImportStage::Previewing { name, .. } => {
                         ui.label(format!("Previewing {name}…"));

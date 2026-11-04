@@ -635,7 +635,7 @@ impl Shell {
                 c.task(
                     Slot::KnowledgeImportSave,
                     "Storing the import file",
-                    move |b| attachments::store_file(b, &path, &name, media, "knowledge-import"),
+                    move |b| attachments::prepare_file(b, &path, &name, media, "knowledge-import"),
                 )
             });
         if !submitted {
@@ -1187,6 +1187,17 @@ impl Shell {
         if let (Some(p), Some(b)) = (path, self.backend()) {
             attachments::remove_owned(p, &b.scratch_dir());
         }
+    }
+
+    /// Admits a Knowledge import file's exact save frame (prepared, or unconfirmed).
+    fn submit_import_save(&mut self, frame: Vec<u8>) -> bool {
+        self.client.as_mut().is_some_and(|c| {
+            c.task(
+                Slot::KnowledgeImportSave,
+                "Storing the import file",
+                move |b| attachments::save(b, frame, None),
+            )
+        })
     }
 
     /// Admits an attachment's save frame (prepared, or unconfirmed) under `slot`.
@@ -1852,8 +1863,17 @@ impl Shell {
             }
             (Slot::KnowledgeRead(claim), Reply::Query(q)) => self.knowledge.read_reply(&claim, q),
             (Slot::KnowledgeDiagnostics, Reply::Query(q)) => self.knowledge.diagnostics_reply(q),
-            (Slot::KnowledgeImportSave, Reply::Task(r)) => {
-                if let Some(body) = self.knowledge.import_saved(r) {
+            (Slot::KnowledgeImportSave, Reply::Task(r)) => match self.knowledge.import_saved(r) {
+                knowledge_screen::ImportNext::Store(frame) => {
+                    if !self.submit_import_save(frame) {
+                        // Not admitted: nothing was stored.
+                        self.knowledge.import = Some(knowledge_screen::ImportStage::Failed {
+                            name: "the file".into(),
+                            error: "DevWorks is offline or closing.".into(),
+                        });
+                    }
+                }
+                knowledge_screen::ImportNext::Preview(body) => {
                     let submitted = self.query(
                         Slot::KnowledgeImportPreview,
                         "Previewing an import",
@@ -1864,7 +1884,8 @@ impl Shell {
                         self.knowledge.import = None;
                     }
                 }
-            }
+                knowledge_screen::ImportNext::Nothing => {}
+            },
             (Slot::KnowledgeImportPreview, Reply::Query(q)) => self.knowledge.import_previewed(q),
             (Slot::KnowledgeImport, Reply::Command(c)) => {
                 if self.knowledge.import_done(c) {
@@ -2375,12 +2396,22 @@ impl Shell {
                     })
                 })
                 .collect(),
+            knowledge_import: self
+                .knowledge
+                .import_frame(false)
+                .map(|(name, frame)| crate::memory::UnconfirmedImport { name, frame }),
             commands,
         }
     }
 
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
     fn restore_pending(&mut self, pending: crate::memory::PendingMemory) {
+        if let Some(i) = &pending.knowledge_import {
+            self.knowledge.import = Some(knowledge_screen::ImportStage::Unconfirmed {
+                name: i.name.clone(),
+                frame: i.frame.clone(),
+            });
+        }
         for c in pending.commands {
             let slot = c.slot.clone();
             let Some(u) = Unresolved::restored(c.slot, c.label, &c.operation, c.frame) else {
@@ -2822,6 +2853,7 @@ impl Shell {
             .count();
         self.client.as_ref().map_or(0, |c| c.unresolved().len())
             + attachments
+            + usize::from(self.knowledge.import_frame(true).is_some())
             + self
                 .chat
                 .removed
@@ -2847,6 +2879,13 @@ impl Shell {
             .collect();
         for local in locals {
             self.confirm_attachment(local);
+        }
+        // A Knowledge import file's save: its identical frame (not submitted while closing: it
+        // stays unconfirmed, its frame kept).
+        if let Some((name, frame)) = self.knowledge.import_frame(true)
+            && self.submit_import_save(frame.clone())
+        {
+            self.knowledge.import = Some(knowledge_screen::ImportStage::Storing { name, frame });
         }
         let removed: Vec<(u64, Vec<u8>, Option<PathBuf>)> = self
             .chat

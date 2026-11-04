@@ -625,3 +625,123 @@ fn an_entry_edited_while_saving_saves_again_onto_the_stored_revision() {
     assert!(tags.contains(&"fresh".to_owned()), "{tags:?}");
     h.state_mut().on_exit();
 }
+
+fn import_artifacts(backend: &dyn devworks_desktop::backend::Backend) -> usize {
+    ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(backend)))
+        .unwrap()
+        .0
+        .into_iter()
+        .filter(|a| a.name.0 == "memory.json")
+        .count()
+}
+
+#[test]
+fn an_unconfirmed_import_upload_is_confirmed_with_its_exact_frame_never_stored_twice() {
+    let root = Root::new("knowledge-import-unknown");
+    let engine = start(&root);
+    let real = engine.backend();
+    let file = root.file(
+        "memory.json",
+        serde_json::to_vec(
+            &json!({"format": "devworks/knowledge-import", "candidates": [
+            {"entry": {"kind": "decision", "summary": "Use SQLite for Knowledge"},
+                "sourceFile": "MEMORY.md", "verification": "verified"}]}),
+        )
+        .unwrap()
+        .as_slice(),
+    );
+    // The save commits, but every acknowledgment is lost, through the automatic resubmissions.
+    let lossy = LoseAcks::over(real.clone(), "artifacts.save", 4);
+    let script = Script::default();
+    script.files.lock().unwrap().push(vec![file.clone()]);
+    let mut h = harness(
+        shell_with(Ok(lossy.clone()), &root, script, None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Import from file");
+    assert!(
+        has_text(&h, "not yet confirmed whether the file was stored"),
+        "{:?}",
+        h.state().knowledge.import
+    );
+    assert_eq!(import_artifacts(&*real), 1, "it did commit");
+    // Neither a new import nor cancelling can replace it while it is unconfirmed.
+    let import = h.query_by_role_and_label(Role::Button, "Import from file");
+    assert!(import.is_none_or(|n| n.accesskit_node().is_disabled()));
+    let keys = lossy.request_keys();
+
+    // Closed and relaunched: the frame is kept and confirmed at the next launch, which
+    // replays the recorded save (the same request key) and previews it.
+    h.state_mut().on_exit();
+    drop(h);
+    let mut h = harness(
+        shell_with(Ok(lossy.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    assert!(
+        has_text(&h, "Import memory.json"),
+        "{:?}",
+        h.state().knowledge.import
+    );
+    let after = lossy.request_keys();
+    assert!(after.len() > keys.len(), "it was resubmitted");
+    assert!(
+        after.iter().all(|k| *k == keys[0]),
+        "every admission is the same request: {after:?}"
+    );
+    assert_eq!(import_artifacts(&*real), 1, "never stored twice");
+    click(&mut h, Role::Button, "Confirm import");
+    assert!(has_text(&h, "Imported 1 entries from memory.json"));
+    h.state_mut().on_exit();
+}
+
+#[test]
+fn an_unconfirmed_import_upload_is_confirmed_by_confirm_outcomes() {
+    let root = Root::new("knowledge-import-confirm");
+    let engine = start(&root);
+    let real = engine.backend();
+    let file = root.file(
+        "memory.json",
+        serde_json::to_vec(
+            &json!({"format": "devworks/knowledge-import", "candidates": [
+            {"entry": {"kind": "fact", "summary": "Knowledge imports confirm once"},
+                "sourceFile": "MEMORY.md", "verification": "verified"}]}),
+        )
+        .unwrap()
+        .as_slice(),
+    );
+    let lossy = LoseAcks::over(real.clone(), "artifacts.save", 4);
+    let script = Script::default();
+    script.files.lock().unwrap().push(vec![file]);
+    let mut h = harness(
+        shell_with(Ok(lossy.clone()), &root, script, None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Import from file");
+    assert!(has_text(
+        &h,
+        "not yet confirmed whether the file was stored"
+    ));
+    let first = lossy.request_keys()[0].clone();
+    click(&mut h, Role::Button, "Confirm outcomes");
+    assert!(
+        has_text(&h, "Import memory.json"),
+        "{:?}",
+        h.state().knowledge.import
+    );
+    assert!(lossy.request_keys().iter().all(|k| *k == first));
+    assert_eq!(import_artifacts(&*real), 1, "never stored twice");
+    h.state_mut().on_exit();
+}
