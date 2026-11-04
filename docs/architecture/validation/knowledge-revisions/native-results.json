@@ -30340,6 +30340,492 @@
       "normalized": null,
       "passed": true,
       "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-knowledge.relate",
+      "normalized": {
+        "body": {
+          "evidenceIds": [],
+          "kind": "knowledge.relate",
+          "objectId": "id-a",
+          "predicate": "fixture",
+          "scope": {
+            "kind": "Workspace"
+          },
+          "subjectId": "id-a"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-knowledge.tag",
+      "normalized": {
+        "body": {
+          "claimIds": [
+            "id-a"
+          ],
+          "expectedRevisions": [
+            {
+              "id": "id-a",
+              "revision": "1"
+            }
+          ],
+          "kind": "knowledge.tag",
+          "scope": {
+            "kind": "Workspace"
+          },
+          "tags": []
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-knowledge.retract",
+      "normalized": {
+        "body": {
+          "claimId": "id-a",
+          "evidenceIds": [],
+          "expectedRevision": "1",
+          "kind": "knowledge.retract",
+          "reason": "Fixture content",
+          "scope": {
+            "kind": "Workspace"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-knowledge.scope",
+      "normalized": {
+        "body": {
+          "claimIds": [
+            {
+              "id": "id-a",
+              "revision": "1"
+            }
+          ],
+          "destination": {
+            "kind": "Workspace"
+          },
+          "kind": "knowledge.scope"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-knowledge.import_user_data",
+      "normalized": {
+        "body": {
+          "kind": "knowledge.import_user_data",
+          "previewDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "schema": {
+            "revision": "1",
+            "schemaId": "fixture/object",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "scope": {
+            "kind": "Workspace"
+          },
+          "source": {
+            "artifactId": "artifact-a",
+            "byteLength": "8",
+            "mediaType": "text/plain",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "versionId": "version-a"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-dreaming.revert",
+      "normalized": {
+        "body": {
+          "expectedChangeDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expectedRevision": "1",
+          "kind": "dreaming.revert",
+          "proposalId": "id-a",
+          "runId": "id-a"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-knowledge.write_status",
+      "normalized": {
+        "body": {
+          "kind": "knowledge.write_status",
+          "writeId": "id-a"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-knowledge.write_status-cursor",
+      "normalized": {
+        "body": {
+          "cursor": "cursor-a",
+          "kind": "knowledge.write_status",
+          "writeId": "id-a"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-knowledge.write_status-cursor",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.record-totals",
+      "normalized": {
+        "kind": "knowledge.record",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.revise-totals",
+      "normalized": {
+        "kind": "knowledge.revise",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.relate-totals",
+      "normalized": {
+        "kind": "knowledge.relate",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.tag-totals",
+      "normalized": {
+        "kind": "knowledge.tag",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.verify-totals",
+      "normalized": {
+        "kind": "knowledge.verify",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.retract-totals",
+      "normalized": {
+        "kind": "knowledge.retract",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.scope-totals",
+      "normalized": {
+        "kind": "knowledge.scope",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.write_status-totals",
+      "normalized": {
+        "kind": "knowledge.write_status",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.import_user_data-totals",
+      "normalized": {
+        "kind": "knowledge.import_user_data",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.promote-totals",
+      "normalized": {
+        "kind": "knowledge.promote",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-knowledge.challenge-totals",
+      "normalized": {
+        "kind": "knowledge.challenge",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-dreaming.revert-totals",
+      "normalized": {
+        "kind": "dreaming.revert",
+        "value": {
+          "claimCount": "10000",
+          "claimIds": [],
+          "diagnostics": [],
+          "entityCount": "300",
+          "entityIds": [],
+          "nextCursor": "cursor-a",
+          "revision": "1",
+          "state": "ObservedComplete",
+          "writeId": "id-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-result-knowledge.receipt-totals",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "invalid counter",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-result-knowledge.receipt-negative-total",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
     }
   ],
   "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"

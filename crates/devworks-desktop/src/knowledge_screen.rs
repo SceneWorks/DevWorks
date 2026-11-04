@@ -871,7 +871,9 @@ impl KnowledgeScreen {
                 self.import = Some(ImportStage::Done {
                     name,
                     results,
-                    stored: value.claim_ids.0.len(),
+                    stored: value
+                        .claim_count
+                        .map_or(value.claim_ids.0.len(), |n| n.get() as usize),
                 });
                 true
             }

@@ -2399,6 +2399,27 @@ pub struct KnowledgeWriteReceipt {
     pub claim_ids: Items<Id>,
     pub revision: Revision,
     pub diagnostics: Items<Diagnostic>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub entity_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub claim_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 2))]
+    pub next_cursor: Option<Cursor>,
 }
 impl Check for KnowledgeWriteReceipt {
     fn check(&self) -> Result<(), String> {
@@ -2408,11 +2429,28 @@ impl Check for KnowledgeWriteReceipt {
         self.claim_ids.check()?;
         self.revision.check()?;
         self.diagnostics.check()?;
+        self.entity_count.check()?;
+        self.claim_count.check()?;
+        self.next_cursor.check()?;
         crate::protocol::rules::record(
             "KnowledgeWriteReceipt",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeWriteReceipt {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.entity_count = None;
+        }
+        if revision < 2 {
+            self.claim_count = None;
+        }
+        if revision < 2 {
+            self.next_cursor = None;
+        }
     }
 }
 

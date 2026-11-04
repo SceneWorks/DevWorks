@@ -7473,6 +7473,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "cursor": {
+              "$ref": "#/$defs/Text1To4096",
+              "x-since": 2
+            },
             "kind": {
               "const": "knowledge.write_status",
               "type": "string"

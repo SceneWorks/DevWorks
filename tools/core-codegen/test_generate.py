@@ -41,13 +41,17 @@ class SchemaRevisionRules(unittest.TestCase):
             'knowledge.verify', 'knowledge.challenge', 'knowledge.diagnostics',
             'knowledge.subgraph', 'knowledge.entity_bundle', 'knowledge.entity_graph',
             'knowledge.claim_bundle', 'knowledge.expand_frontier', 'knowledge.query',
-            'knowledge.promote', 'knowledge.tagged_lessons'})
+            'knowledge.promote', 'knowledge.tagged_lessons', 'knowledge.relate', 'knowledge.tag',
+            'knowledge.retract', 'knowledge.scope', 'knowledge.write_status',
+            'knowledge.import_user_data', 'dreaming.revert'})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
         # Knowledge revision 2 reaches every operation whose input or result carries a gated
-        # claim, entity, evidence or bundle member; revision-1-only writes stay at 1.
+        # claim, entity, evidence, bundle or receipt member (every receipt carries its totals and
+        # continuation); the deletions return a summary and stay at 1.
         self.assertEqual(carried['knowledge.subgraph'], {2})
-        self.assertEqual(carried['knowledge.tag'], set())
+        self.assertEqual(carried['knowledge.tag'], {2})
+        self.assertEqual(carried['dreaming.revert'], {2})
         self.assertEqual(carried['knowledge.delete_by_source'], set())
         self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:

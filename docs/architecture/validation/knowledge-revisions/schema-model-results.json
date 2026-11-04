@@ -1,15 +1,16 @@
 {
-  "date": "2026-11-03",
+  "date": "2026-11-04",
   "status": "Candidate schema/typed/binding checks passed; no production service, authority, source behavioral parity or platform acceptance",
   "host": "macOS-27.0.1-arm64-arm-64bit",
   "schemaFiles": 56,
   "domainTypeDefinitions": 244,
   "catalogOperations": 354,
   "inputCandidates": 354,
-  "revisionBindings": 394,
+  "revisionBindings": 401,
   "revisionedOperations": [
     "artifacts.list",
     "artifacts.save",
+    "dreaming.revert",
     "history.events",
     "history.evidence_links",
     "history.git_links",
@@ -21,15 +22,21 @@
     "knowledge.entity_bundle",
     "knowledge.entity_graph",
     "knowledge.expand_frontier",
+    "knowledge.import_user_data",
     "knowledge.promote",
     "knowledge.query",
     "knowledge.read",
     "knowledge.record",
+    "knowledge.relate",
+    "knowledge.retract",
     "knowledge.revise",
+    "knowledge.scope",
     "knowledge.search",
     "knowledge.subgraph",
+    "knowledge.tag",
     "knowledge.tagged_lessons",
     "knowledge.verify",
+    "knowledge.write_status",
     "resources.acquire",
     "resources.holders",
     "resources.list",
@@ -58,10 +65,10 @@
     "github.account",
     "browser.sessions"
   ],
-  "allMessageFixtures": 1321,
-  "newMessageFixtures": 992,
-  "newPositiveFixtures": 808,
-  "newNegativeFixtures": 184,
+  "allMessageFixtures": 1344,
+  "newMessageFixtures": 1015,
+  "newPositiveFixtures": 828,
+  "newNegativeFixtures": 187,
   "coreAndPriorMessagesRerun": 329,
   "historicalHelperFramesReplayed": 55,
   "newHelperExecutionClaimed": false,
@@ -2557,7 +2564,8 @@
         "r2-input-knowledge.record-lesson"
       ],
       "resultFixtureIds": [
-        "r2-result-knowledge.record"
+        "r2-result-knowledge.record",
+        "r2-result-knowledge.record-totals"
       ],
       "modes": [
         "Command"
@@ -2591,7 +2599,8 @@
         "r2-input-knowledge.revise"
       ],
       "resultFixtureIds": [
-        "r2-result-knowledge.revise"
+        "r2-result-knowledge.revise",
+        "r2-result-knowledge.revise-totals"
       ],
       "modes": [
         "Command"
@@ -2617,6 +2626,23 @@
       "wrongResultTagRejected": true
     },
     {
+      "operation": "knowledge.relate",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-knowledge.relate"
+      ],
+      "resultFixtureIds": [
+        "r2-result-knowledge.relate-totals"
+      ],
+      "modes": [
+        "Command"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
       "operation": "knowledge.tag",
       "schemaRevision": 1,
       "inputSchema": "domain-request.schema.json",
@@ -2626,6 +2652,23 @@
       ],
       "resultFixtureIds": [
         "result-knowledge.tag"
+      ],
+      "modes": [
+        "Command"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
+      "operation": "knowledge.tag",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-knowledge.tag"
+      ],
+      "resultFixtureIds": [
+        "r2-result-knowledge.tag-totals"
       ],
       "modes": [
         "Command"
@@ -2660,7 +2703,8 @@
         "r2-input-knowledge.verify-revision"
       ],
       "resultFixtureIds": [
-        "r2-result-knowledge.verify"
+        "r2-result-knowledge.verify",
+        "r2-result-knowledge.verify-totals"
       ],
       "modes": [
         "Command"
@@ -2686,6 +2730,23 @@
       "wrongResultTagRejected": true
     },
     {
+      "operation": "knowledge.retract",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-knowledge.retract"
+      ],
+      "resultFixtureIds": [
+        "r2-result-knowledge.retract-totals"
+      ],
+      "modes": [
+        "Command"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
       "operation": "knowledge.scope",
       "schemaRevision": 1,
       "inputSchema": "domain-request.schema.json",
@@ -2695,6 +2756,23 @@
       ],
       "resultFixtureIds": [
         "result-knowledge.scope"
+      ],
+      "modes": [
+        "Command"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
+      "operation": "knowledge.scope",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-knowledge.scope"
+      ],
+      "resultFixtureIds": [
+        "r2-result-knowledge.scope-totals"
       ],
       "modes": [
         "Command"
@@ -2782,6 +2860,24 @@
       ],
       "resultFixtureIds": [
         "result-knowledge.write_status"
+      ],
+      "modes": [
+        "Query"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
+      "operation": "knowledge.write_status",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-knowledge.write_status",
+        "r2-input-knowledge.write_status-cursor"
+      ],
+      "resultFixtureIds": [
+        "r2-result-knowledge.write_status-totals"
       ],
       "modes": [
         "Query"
@@ -3028,6 +3124,23 @@
       "wrongResultTagRejected": true
     },
     {
+      "operation": "knowledge.import_user_data",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-knowledge.import_user_data"
+      ],
+      "resultFixtureIds": [
+        "r2-result-knowledge.import_user_data-totals"
+      ],
+      "modes": [
+        "Command"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
       "operation": "knowledge.promote",
       "schemaRevision": 1,
       "inputSchema": "domain-request.schema.json",
@@ -3054,7 +3167,8 @@
         "r2-input-knowledge.promote-address"
       ],
       "resultFixtureIds": [
-        "r2-result-knowledge.promote"
+        "r2-result-knowledge.promote",
+        "r2-result-knowledge.promote-totals"
       ],
       "modes": [
         "Command"
@@ -3089,7 +3203,8 @@
         "r2-input-knowledge.challenge-resolve"
       ],
       "resultFixtureIds": [
-        "r2-result-knowledge.challenge"
+        "r2-result-knowledge.challenge",
+        "r2-result-knowledge.challenge-totals"
       ],
       "modes": [
         "Command"
@@ -3248,6 +3363,23 @@
       ],
       "resultFixtureIds": [
         "result-dreaming.revert"
+      ],
+      "modes": [
+        "Command"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
+      "operation": "dreaming.revert",
+      "schemaRevision": 2,
+      "inputSchema": "domain-request.r2.schema.json",
+      "resultSchema": "operation-result.r2.schema.json",
+      "inputFixtureIds": [
+        "r2-input-dreaming.revert"
+      ],
+      "resultFixtureIds": [
+        "r2-result-dreaming.revert-totals"
       ],
       "modes": [
         "Command"
@@ -16114,6 +16246,167 @@
       "schemaValid": false,
       "typedValid": false,
       "passed": true
+    },
+    {
+      "id": "r2-input-knowledge.relate",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-knowledge.tag",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-knowledge.retract",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-knowledge.scope",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-knowledge.import_user_data",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-dreaming.revert",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-knowledge.write_status",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-input-knowledge.write_status-cursor",
+      "entry": "domain-request.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-knowledge.write_status-cursor",
+      "entry": "domain-request",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.record-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.revise-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.relate-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.tag-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.verify-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.retract-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.scope-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.write_status-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.import_user_data-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.promote-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-knowledge.challenge-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r2-result-dreaming.revert-totals",
+      "entry": "operation-result.r2",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-result-knowledge.receipt-totals",
+      "entry": "operation-result",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-result-knowledge.receipt-negative-total",
+      "entry": "operation-result.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
     }
   ],
   "scenarios": 12,
@@ -16125,20 +16418,20 @@
     "docs/architecture/contracts/provider-package-fixtures.json": "2646790fe630e1a84514bb48e49d787fcd056e093bcd8a46f92a943dda821b97",
     "docs/architecture/validation/provider-package-contracts/actual-frame-fixtures.json": "a8e38cbf3a4ccf3b957a32b2733b3db1e98ae9ee12b97d339447d51f73ab729e",
     "docs/architecture/contracts/data-delivery-fixtures.json": "54fc2fac8841b1591c0f2653f7548dbf5a79a16b4e4958b194be739d277083b6",
-    "docs/architecture/contracts/domain-fixtures.json": "f8527f7276f666ac39a69d64016e4a5b64a9864f237badbd7a524bc9c18a96e7",
-    "docs/architecture/contracts/family-coverage.json": "d474621b5710e89f1b7cd8d5c4deaecd1dd27e6aaac61f3c907ff46eedb10402",
-    "docs/architecture/contracts/manifest.json": "c571e648594adef8141f064c8d5335e65ee01b6322f89b983d0d8796df1e563b",
+    "docs/architecture/contracts/domain-fixtures.json": "7ede95c9694a61699ec7e660091f59c1d8d0dfa4be7414074987180f942a03ed",
+    "docs/architecture/contracts/family-coverage.json": "2633d6b0ccadf4be1f7b70fc111f8ac39e55121891099b2cc94971b7a137d67c",
+    "docs/architecture/contracts/manifest.json": "627c19b57dc43b04fce6ff3c15aaccb191745f026888cd75bf4244b2d6fb31e7",
     "docs/architecture/devworks-capability-catalog.json": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
     "tools/contracts-eval/Cargo.lock": "cfb646cd5e037f4a97b1686830e7a582228b29c4ff3ba0ebcbc559b69786b34b",
     "tools/contracts-eval/domain_spec.py": "47e2e840854e19020b5f67066b128778d09b4b1a1c8670b0ba6f7351e3dc3d8f",
-    "tools/contracts-eval/domain-spec.json": "67ed76c0aabbf146447df6301b5cb483038d3602972ac28e26f3ba639464ab0a",
+    "tools/contracts-eval/domain-spec.json": "4fcf4d1d1452c21b8550df746ff366e6e2a94c04c02ceb8a9a9c0c1d0bf7b04b",
     "tools/contracts-eval/build_domain_contracts.py": "a4fc1eea7f7992744ff5f615bea538c80ed7505673e1696afaeb7037db9071b7",
     "tools/contracts-eval/build_register.py": "bab0f304b09de7a66b5f646fbc47cd08e43466e374d70dc71e62c8fa4dd65667",
     "tools/contracts-eval/build_domain_reference.py": "3e68b03c0124fc8744050889db7153903bb3b4f6e42b01c6caa8e0f5d939da5f",
-    "tools/contracts-eval/make_domain_fixtures.py": "6d7bd00c67f8b001570ee8d1f2ad95387f3d0ec7c266a46a678f80642b2380db",
+    "tools/contracts-eval/make_domain_fixtures.py": "596d247ef5f156303cd0808f9c08d44df7dbff858f1fd7b5d5f7027816de205f",
     "tools/contracts-eval/verify_domain_contracts.py": "03d811606ca9d92e6e61eb45b2b2c5d9c7b1ba9a038598121a861d43b554cec9",
     "tools/contracts-eval/src/data_delivery.rs": "f62c3062a84633fba38a16dc699a1cc58d131f6899757c76acd3e00a0c3d0d68",
-    "tools/contracts-eval/src/domain_generated.rs": "633216041cba2e0ddf33b324470c99f18299d688f5684b8b64770d9c3353c830",
+    "tools/contracts-eval/src/domain_generated.rs": "3e5d32b7ea4ff8e040c00795518fe316812d9145c7f7296ec773447dafddf01f",
     "tools/contracts-eval/src/domain_rules.rs": "a260d76d635a6ad0ec1ad1695c69c2e2ba5370a367183172db5bb33c5cc0a197",
     "tools/contracts-eval/src/domain_support.rs": "4082061615ab8dfd7fb53c09c00e786cbae372df26f55c93634aaa56a49d123e",
     "tools/contracts-eval/src/lib.rs": "bee52b2eda05d91b44088ebfc8680245d5d33f7d84041be381eaa3a3a07d69b8",
@@ -16162,11 +16455,11 @@
     "docs/architecture/contracts/command-request.schema.json": "8e821e7c0f306e8870a698537f1cb86b1108679ac07d442650a7e818e67f880f",
     "docs/architecture/contracts/delivery-barrier.schema.json": "25aaa75a46cef7a0e3d055b8dff1a76fc25325f0a2efe5202abd80e3c28a72c2",
     "docs/architecture/contracts/delivery-snapshot.schema.json": "a5b59fd9d7dbed631c1445dbbda361b53a7c799f98717b9f9d131d6fee42806b",
-    "docs/architecture/contracts/domain-command-reply.r2.schema.json": "e90adf983fdffabdd9180373323d1d472fda822f6a38e78c8d870ed2176cf8e7",
+    "docs/architecture/contracts/domain-command-reply.r2.schema.json": "53f73e556b9ee0004b056310745f8cf87f86e1c814bcf0384e297455247ec684",
     "docs/architecture/contracts/domain-command-reply.schema.json": "e04158c2b557d3d51a76fbb16530c736c9ee38163693bdde7aaf2e235ab8d9ed",
-    "docs/architecture/contracts/domain-query-reply.r2.schema.json": "f9912060f1763a8f289caaac6733f605ec4b623ae3095e7c9da0e4cee319ddaf",
+    "docs/architecture/contracts/domain-query-reply.r2.schema.json": "388c6520a692a81d08f60a3b00dbaca206602d2e45b89008ad9e95763ff76ed0",
     "docs/architecture/contracts/domain-query-reply.schema.json": "c28423264a36d66d72f867b88360cec8d6f013c48e2bcb1114ea91a7baa0a03f",
-    "docs/architecture/contracts/domain-request.r2.schema.json": "c6b6d2a441e41d67cc7995fcbe6516efb9e94a770505030c96a21aff042916ee",
+    "docs/architecture/contracts/domain-request.r2.schema.json": "2d38b7f57cd3c978e0f411170badc5f69ab4de5dc095c626a6e31e1343759753",
     "docs/architecture/contracts/domain-request.schema.json": "20fc9c1487c441454a04ba4e25835e662b85196914157e703efbfac2ec6da5bb",
     "docs/architecture/contracts/event.r2.schema.json": "ce845cc2bfb0d1adcf2f89dd76f6a08d6f8798d7026c1ab75146c0daffd2290a",
     "docs/architecture/contracts/event.schema.json": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc",
@@ -16176,9 +16469,9 @@
     "docs/architecture/contracts/index-command-request.schema.json": "eb2bfdf772de716567bb0a6aaf11a1e0810a9cefa2d147a44b461d5045092845",
     "docs/architecture/contracts/inference-request.schema.json": "303b3a3d4bd49a39c44148658c2bc6320a4e77453960b75f07cfeb2051da8211",
     "docs/architecture/contracts/inference-spec.schema.json": "e4734b6a32933313adcdf74f07ada57c2a20f7d911eb676c7c63d44f1225d516",
-    "docs/architecture/contracts/operation-completion.r2.schema.json": "a73aa77e123b2a945c71b5a8870ff8c8866fba52f04bd94ae739ffb079b0c4c5",
+    "docs/architecture/contracts/operation-completion.r2.schema.json": "6fd0a4058480be734c898f0c324b0e7dd1cdf266e44ac95b34eec8466261a24a",
     "docs/architecture/contracts/operation-completion.schema.json": "71dac8f2d36375ec018002888c64bf4cac3aeeb66c3905f02e35ba05300057fb",
-    "docs/architecture/contracts/operation-result.r2.schema.json": "3d11ae3a2352c5e2a272a42f6ab37b0080f87d033d6a9cbfbaf14f9f63b81b0b",
+    "docs/architecture/contracts/operation-result.r2.schema.json": "7feaf2e01260e2261bd56307588a2d148b8ee6a02a010e6943fc1402599b1c76",
     "docs/architecture/contracts/operation-result.schema.json": "6101efc5b26328981e7a4a6bee9fbea94284632ab2d7a34bf0d6b505536d876b",
     "docs/architecture/contracts/package-host-request.schema.json": "190beae90c974720523774ca4cb366033ba74ba104dc46dbcdd780b30811f5b9",
     "docs/architecture/contracts/package-manifest.schema.json": "7f5989387bc31c599cb97ffe0b43dc52227aa2e36c075c54be55e69d6edd8b21",

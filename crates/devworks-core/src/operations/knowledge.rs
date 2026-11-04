@@ -382,15 +382,27 @@ impl Revisioned for DeleteSelectedInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WriteStatusInput {
     pub write_id: Id,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 2))]
+    pub cursor: Option<Cursor>,
 }
 impl Check for WriteStatusInput {
     fn check(&self) -> Result<(), String> {
         self.write_id.check()?;
+        self.cursor.check()?;
         Ok(())
     }
 }
 impl Revisioned for WriteStatusInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.cursor = None;
+        }
+    }
 }
 
 /// `knowledge.subgraph` Query input.

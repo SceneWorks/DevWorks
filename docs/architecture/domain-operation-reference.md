@@ -256,15 +256,15 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `knowledge.read` | **Query**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`revision`: `?Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
 | `knowledge.record` | **Command**<br>`scope`: `DataScope`<br>`batch`: `KnowledgeBatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `knowledge.revise` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `ClaimDraft`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
-| `knowledge.relate` | **Command**<br>`scope`: `DataScope`<br>`subjectId`: `Id`<br>`predicate`: `Label`<br>`objectId`: `Id`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.tag` | **Command**<br>`scope`: `DataScope`<br>`claimIds`: `NonEmpty<Id>`<br>`expectedRevisions`: `NonEmpty<RevisionedRef>`<br>`tags`: `Items<Label>` | `KnowledgeWriteReceipt` |
+| `knowledge.relate` | **Command**<br>`scope`: `DataScope`<br>`subjectId`: `Id`<br>`predicate`: `Label`<br>`objectId`: `Id`<br>`evidenceIds`: `Items<Id>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.tag` | **Command**<br>`scope`: `DataScope`<br>`claimIds`: `NonEmpty<Id>`<br>`expectedRevisions`: `NonEmpty<RevisionedRef>`<br>`tags`: `Items<Label>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `knowledge.verify` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>`<br>`sourceRevision`: `?Text`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
-| `knowledge.retract` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.scope` | **Command**<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`destination`: `DataScope` | `KnowledgeWriteReceipt` |
+| `knowledge.retract` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.scope` | **Command**<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`destination`: `DataScope`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `knowledge.diagnostics` | **Query**<br>`scope`: `DataScope`<br>`sourceId`: `?Id`<br>`importSource`: `?ArtifactRef`<br>`importSchema`: `?SchemaRef`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<Diagnostic>` |
 | `knowledge.delete_by_source` | **Command**<br>`scope`: `DataScope`<br>`sourceId`: `Id`<br>`expectedScopeRevision`: `Revision`<br>`previewDigest`: `Digest`<br>`proposalId`: `?Id` | `MutationSummary` |
 | `knowledge.delete_selected` | **Command**<br>`scope`: `DataScope`<br>`claims`: `NonEmpty<RevisionedRef>`<br>`proposalId`: `?Id` | `MutationSummary` |
-| `knowledge.write_status` | **Query**<br>`writeId`: `Id` | `KnowledgeWriteReceipt` |
+| `knowledge.write_status` | **Query**<br>`writeId`: `Id`<br>`cursor`: `?Cursor`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `knowledge.subgraph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
 | `knowledge.entity_bundle` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
 | `knowledge.entity_graph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
@@ -272,7 +272,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `knowledge.expand_frontier` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
 | `knowledge.render_summary` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `ArtifactRef` |
 | `knowledge.query` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
-| `knowledge.import_user_data` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`schema`: `SchemaRef`<br>`previewDigest`: `Digest` | `KnowledgeWriteReceipt` |
+| `knowledge.import_user_data` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`schema`: `SchemaRef`<br>`previewDigest`: `Digest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `knowledge.promote` | **Command**<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`destination`: `DataScope`<br>`proposalId`: `?Id`<br>`action`: `?PromoteAction`<br>`address`: `?LessonAddress`<br>`reason`: `?Content`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `knowledge.challenge` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>`<br>`resolveChallengeId`: `?Id`<br>`outcome`: `?ChallengeOutcome`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `knowledge.tagged_lessons` | **Query**<br>`scope`: `DataScope`<br>`tags`: `NonEmpty<Label>`<br>`page`: `PageRequest`<br>`ruleStates`: `?Items<RuleState>`<br>`activity`: `?Label`<br>`view`: `?LessonView`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<KnowledgeClaim>` |
@@ -289,7 +289,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `dreaming.settings` | **Query**<br>`scope`: `DataScope`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`config`: `DreamConfig` | `DreamSettingsRecord` |
 | `dreaming.instructions` | **Query**<br>`scope`: `DataScope`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`content`: `ArtifactRef` | `Page<InstructionRecord>` |
 | `dreaming.propose` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`content`: `ArtifactRef` | `ProposalRecord` |
-| `dreaming.revert` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`proposalId`: `Id`<br>`expectedChangeDigest`: `Digest` | `KnowledgeWriteReceipt` |
+| `dreaming.revert` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`proposalId`: `Id`<br>`expectedChangeDigest`: `Digest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `dreaming.review` | **Command**<br>`proposalId`: `Id`<br>`expectedRevision`: `Revision`<br>`decision`: `ProposalDecision`<br>`rationale`: `Content` | `ProposalRecord` |
 
 ### Documents
@@ -1456,6 +1456,9 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `claimIds` | `Items<Id>` |
 | `revision` | `Revision` |
 | `diagnostics` | `Items<Diagnostic>` |
+| `entityCount` | `?Counter` · *revision 2+* |
+| `claimCount` | `?Counter` · *revision 2+* |
+| `nextCursor` | `?Cursor` · *revision 2+* |
 
 ### DreamRun
 

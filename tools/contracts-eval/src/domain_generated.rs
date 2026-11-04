@@ -2397,6 +2397,27 @@ pub struct KnowledgeWriteReceipt {
     pub claim_ids: Items<Id>,
     pub revision: Revision,
     pub diagnostics: Items<Diagnostic>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub entity_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub claim_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 2))]
+    pub next_cursor: Option<Cursor>,
 }
 impl Check for KnowledgeWriteReceipt {
     fn check(&self) -> Result<(), String> {
@@ -2406,11 +2427,28 @@ impl Check for KnowledgeWriteReceipt {
         self.claim_ids.check()?;
         self.revision.check()?;
         self.diagnostics.check()?;
+        self.entity_count.check()?;
+        self.claim_count.check()?;
+        self.next_cursor.check()?;
         super::domain_rules::record(
             "KnowledgeWriteReceipt",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeWriteReceipt {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.entity_count = None;
+        }
+        if revision < 2 {
+            self.claim_count = None;
+        }
+        if revision < 2 {
+            self.next_cursor = None;
+        }
     }
 }
 
@@ -7492,7 +7530,16 @@ pub enum DomainQuery {
         import_schema: Option<SchemaRef>,
     },
     #[serde(rename = "knowledge.write_status")]
-    KnowledgeWriteStatus { write_id: Id },
+    KnowledgeWriteStatus {
+        write_id: Id,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Cursor", extend("x-since" = 2))]
+        cursor: Option<Cursor>,
+    },
     #[serde(rename = "knowledge.subgraph")]
     KnowledgeSubgraph {
         scope: DataScope,
@@ -8602,8 +8649,9 @@ impl Check for DomainQuery {
                 import_source.check()?;
                 import_schema.check()?;
             }
-            Self::KnowledgeWriteStatus { write_id } => {
+            Self::KnowledgeWriteStatus { write_id, cursor } => {
                 write_id.check()?;
+                cursor.check()?;
             }
             Self::KnowledgeSubgraph { scope, query } => {
                 scope.check()?;
@@ -9289,6 +9337,11 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *import_schema = None;
+                }
+            }
+            Self::KnowledgeWriteStatus { cursor, .. } => {
+                if revision < 2 {
+                    *cursor = None;
                 }
             }
             Self::KnowledgeTaggedLessons {
@@ -14198,13 +14251,25 @@ impl Revisioned for OperationResult {
             Self::HistoryToolUsage { value } => value.retain_revision(revision),
             Self::KnowledgeSearch { value } => value.retain_revision(revision),
             Self::KnowledgeRead { value } => value.retain_revision(revision),
+            Self::KnowledgeRecord { value } => value.retain_revision(revision),
+            Self::KnowledgeRevise { value } => value.retain_revision(revision),
+            Self::KnowledgeRelate { value } => value.retain_revision(revision),
+            Self::KnowledgeTag { value } => value.retain_revision(revision),
+            Self::KnowledgeVerify { value } => value.retain_revision(revision),
+            Self::KnowledgeRetract { value } => value.retain_revision(revision),
+            Self::KnowledgeChallenge { value } => value.retain_revision(revision),
+            Self::KnowledgeScope { value } => value.retain_revision(revision),
+            Self::KnowledgeWriteStatus { value } => value.retain_revision(revision),
             Self::KnowledgeSubgraph { value } => value.retain_revision(revision),
             Self::KnowledgeEntityBundle { value } => value.retain_revision(revision),
             Self::KnowledgeEntityGraph { value } => value.retain_revision(revision),
             Self::KnowledgeClaimBundle { value } => value.retain_revision(revision),
             Self::KnowledgeExpandFrontier { value } => value.retain_revision(revision),
             Self::KnowledgeQuery { value } => value.retain_revision(revision),
+            Self::KnowledgeImportUserData { value } => value.retain_revision(revision),
+            Self::KnowledgePromote { value } => value.retain_revision(revision),
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
+            Self::DreamingRevert { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),
             Self::ResourcesAcquire { value } => value.retain_revision(revision),
             Self::ResourcesRenew { value } => value.retain_revision(revision),

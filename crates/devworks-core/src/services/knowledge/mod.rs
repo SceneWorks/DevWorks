@@ -144,9 +144,9 @@ pub const PREVIEW_COMPONENT: &str = "knowledge.preview";
 pub const IMPORT_COMPONENT: &str = "knowledge.import";
 /// Most claims one delete by source tombstones (a larger source is refused, never truncated).
 pub const MAX_SOURCE_DELETE: usize = 10_000;
-/// Most challenges, addresses, tags, cited evidence records and aliases one record carries,
-/// and most identifiers one write receipt names: the wire lists' capacity. A write that would
-/// exceed one is refused, so no list is ever cut short.
+/// Most challenges, addresses, tags, cited evidence records and aliases one record carries:
+/// the record's own wire lists' capacity. A write that would exceed one is refused, so no list
+/// is ever cut short. (A receipt is not bound by it: it pages, see `receipt_of`.)
 pub const MAX_CHALLENGES: usize = 128;
 pub const MAX_LIST: usize = 128;
 /// Schema revision 2 of the Knowledge operations.
@@ -537,20 +537,52 @@ fn diagnostic(id: &str, severity: Severity, component: &str, code: &str, msg: &s
     }
 }
 
-fn receipt_of(w: &crate::ports::storage::StoredWrite) -> KnowledgeWriteReceipt {
+/// How many IDs of each list one receipt names (the wire `Items` bound).
+pub const RECEIPT_WINDOW: usize = 128;
+
+/// What a receipt cursor is bound to: the write (immutable once committed) and the reader.
+fn receipt_binding(ctx: &InvocationContext, write: &Id) -> CursorBinding {
+    CursorBinding::new(ctx, "knowledge.write_status", &[write.as_str()], 0)
+}
+
+/// The receipt of a write, naming window `window` of its claim IDs, entity IDs and notes (128
+/// of each). It carries both ID totals, and a cursor while any list has more, so a bulk write
+/// is named completely across write_status pages instead of being cut or refused.
+fn receipt_of(
+    ctx: &InvocationContext,
+    w: &crate::ports::storage::StoredWrite,
+    window: usize,
+) -> KnowledgeWriteReceipt {
+    let start = window.saturating_mul(RECEIPT_WINDOW);
+    let slice = |ids: &[Id]| -> Vec<Id> {
+        ids.iter()
+            .skip(start)
+            .take(RECEIPT_WINDOW)
+            .cloned()
+            .collect()
+    };
+    let end = start.saturating_add(RECEIPT_WINDOW);
+    let more = w.claim_ids.len() > end || w.entity_ids.len() > end || w.diagnostics.len() > end;
     KnowledgeWriteReceipt {
         write_id: w.write_id.clone(),
         state: OperationState::ObservedComplete,
-        entity_ids: id_list(&w.entity_ids),
-        claim_ids: id_list(&w.claim_ids),
+        entity_ids: BoundedList(slice(&w.entity_ids)),
+        claim_ids: BoundedList(slice(&w.claim_ids)),
         revision: rev(w.scope_revision),
+        // The write's notes page with its IDs: a write with many notes loses none.
         diagnostics: BoundedList(
             w.diagnostics
                 .iter()
-                .take(128)
+                .skip(start)
+                .take(RECEIPT_WINDOW)
                 .filter_map(|d| serde_json::from_value(d.clone()).ok())
                 .collect(),
         ),
+        entity_count: Some(counter(w.entity_ids.len() as i64)),
+        claim_count: Some(counter(w.claim_ids.len() as i64)),
+        next_cursor: more.then(|| {
+            BoundedText(receipt_binding(ctx, &w.write_id).encode(&(window + 1).to_string()))
+        }),
     }
 }
 
@@ -834,9 +866,28 @@ impl KnowledgeService {
             _ => return Err(not_found(WRITE, &i.write_id).into()),
         };
         let revision = k.knowledge_scope_revision(&write.scope)?;
+        let window = match &i.cursor {
+            None => 0,
+            Some(c) => {
+                let window: usize = receipt_binding(ctx, &write.write_id)
+                    .decode(&c.0)?
+                    .parse()
+                    .map_err(|_| StorageError::CursorExpired)?;
+                // Only a window that names something is a continuation.
+                let start = window.saturating_mul(RECEIPT_WINDOW);
+                if window == 0
+                    || (start >= write.claim_ids.len()
+                        && start >= write.entity_ids.len()
+                        && start >= write.diagnostics.len())
+                {
+                    return Err(StorageError::CursorExpired.into());
+                }
+                window
+            }
+        };
         Ok((
             OperationResult::KnowledgeWriteStatus {
-                value: receipt_of(&write),
+                value: receipt_of(ctx, &write, window),
             },
             revision,
         ))
@@ -1275,7 +1326,8 @@ pub(crate) fn bundle_of(
                     claim.predicate
                 )),
             });
-            for o in different.iter().take(16) {
+            // Every conflicting claim the conflict names is in the bundle (at most 127).
+            for o in different.iter().take(127) {
                 claims.push(claim_wire(k, o, th)?);
             }
         }
@@ -1284,7 +1336,7 @@ pub(crate) fn bundle_of(
     let relations = if historical {
         Vec::new()
     } else {
-        k.knowledge_relations(&claim.id, 129)?
+        k.knowledge_relations(&claim.id, &scoped.keys(), 129)?
     };
     truncated |= relations.len() > 128;
     let visible_relations: Vec<_> = relations
@@ -1316,11 +1368,11 @@ pub(crate) fn bundle_of(
             }
         }
     }
-    // The supersession chain, both directions, bounded.
+    // The supersession chain, both directions, up to the wire list's 128 (flagged past it).
     let mut supersession = Vec::new();
     let mut back = wire.supersedes.clone();
     while let Some(id) = back.take() {
-        if supersession.len() >= 32 || supersession.contains(&id) {
+        if supersession.len() >= 128 || supersession.contains(&id) {
             truncated = true;
             break;
         }
@@ -1334,7 +1386,7 @@ pub(crate) fn bundle_of(
     }
     let mut forward = wire.superseded_by.clone();
     while let Some(id) = forward.take() {
-        if supersession.len() >= 64 || supersession.contains(&id) {
+        if supersession.len() >= 128 || supersession.contains(&id) {
             truncated = true;
             break;
         }

@@ -1029,7 +1029,15 @@
         "entity_ids": "Items<Id>",
         "claim_ids": "Items<Id>",
         "revision": "Revision",
-        "diagnostics": "Items<Diagnostic>"
+        "diagnostics": "Items<Diagnostic>",
+        "entity_count": "?Counter",
+        "claim_count": "?Counter",
+        "next_cursor": "?Cursor"
+      },
+      "since": {
+        "entity_count": 2,
+        "claim_count": 2,
+        "next_cursor": 2
       }
     },
     "DreamRun": {
@@ -4438,12 +4446,16 @@
       "operation": "knowledge.write_status",
       "mode": "Query",
       "fields": {
-        "write_id": "Id"
+        "write_id": "Id",
+        "cursor": "?Cursor"
       },
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "The durable receipt of a committed Knowledge write."
+      "rules": "The durable receipt of a committed Knowledge write. Schema revision 2: entityCount and claimCount are the totals the write changed; a receipt names at most 128 entity IDs, claim IDs and diagnostics, and nextCursor (when any list has more) continues through write_status with cursor, so every ID and note of a bulk write is readable and none is dropped.",
+      "since": {
+        "cursor": 2
+      }
     },
     "knowledge.subgraph": {
       "operation": "knowledge.subgraph",
@@ -7169,6 +7181,34 @@
       2
     ],
     "knowledge.tagged_lessons": [
+      1,
+      2
+    ],
+    "knowledge.relate": [
+      1,
+      2
+    ],
+    "knowledge.tag": [
+      1,
+      2
+    ],
+    "knowledge.retract": [
+      1,
+      2
+    ],
+    "knowledge.scope": [
+      1,
+      2
+    ],
+    "knowledge.write_status": [
+      1,
+      2
+    ],
+    "knowledge.import_user_data": [
+      1,
+      2
+    ],
+    "dreaming.revert": [
       1,
       2
     ]

@@ -4108,14 +4108,26 @@
     "KnowledgeWriteReceipt": {
       "additionalProperties": false,
       "properties": {
+        "claimCount": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "claimIds": {
           "$ref": "#/$defs/List_Id_0_128"
         },
         "diagnostics": {
           "$ref": "#/$defs/List_Diagnostic_0_128"
         },
+        "entityCount": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "entityIds": {
           "$ref": "#/$defs/List_Id_0_128"
+        },
+        "nextCursor": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         },
         "revision": {
           "$ref": "#/$defs/Revision"

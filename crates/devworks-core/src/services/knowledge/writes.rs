@@ -15,10 +15,10 @@ use crate::gateway::AdmittedCommand;
 use crate::operations::knowledge as ops;
 use crate::ports::IdKind;
 use crate::ports::storage::{
-    ArtifactRead, AuthorityRead, ClaimBody, ClaimQuery, KNOWLEDGE_PAGE_MAX, KnowledgeRead,
-    KnowledgeScope, NewEvent, StorageError, StoredAddress, StoredChallenge, StoredClaim,
-    StoredEntity, StoredEvidence, StoredHistory, StoredLesson, StoredLessonEvent, StoredRelation,
-    StoredVersion, StoredWrite, WriteChange, WriteTransaction,
+    ArtifactRead, AuthorityRead, ClaimBody, ClaimQuery, DeletedClaims, KNOWLEDGE_PAGE_MAX,
+    KnowledgeRead, KnowledgeScope, NewEvent, StorageError, StoredAddress, StoredChallenge,
+    StoredClaim, StoredEntity, StoredEvidence, StoredHistory, StoredLesson, StoredLessonEvent,
+    StoredRelation, StoredVersion, StoredWrite, WriteChange, WriteTransaction,
 };
 use crate::protocol::provider::{ArtifactRef, SchemaRef};
 use crate::protocol::records::{
@@ -273,10 +273,6 @@ impl<'a> Writer<'a> {
     /// Advances every touched scope, records the write and its history event, and returns the
     /// receipt (its revision is `primary`'s scope revision after the write).
     fn finish(mut self, primary: &KnowledgeScope) -> Result<KnowledgeWriteReceipt, Failure> {
-        // The receipt (and write_status) names every claim and entity the write changed.
-        if self.claim_ids.len() > MAX_LIST || self.entity_ids.len() > MAX_LIST {
-            return Err(invalid("receipt_bound"));
-        }
         for s in self.touched.clone().into_values() {
             self.k().bump_scope(&s)?;
         }
@@ -301,7 +297,7 @@ impl<'a> Writer<'a> {
         self.k().put_knowledge_write(&write)?;
         if !self.changed() {
             // Nothing changed: the receipt answers write_status; history records changes only.
-            return Ok(receipt_of(&write));
+            return Ok(receipt_of(self.ctx, &write, 0));
         }
         let event = EventId(self.tx.new_id(IdKind::Event));
         let counts = |kind: &str| {
@@ -332,7 +328,7 @@ impl<'a> Writer<'a> {
             kind: WRITE_EVENT.into(),
             payload,
         })?;
-        Ok(receipt_of(&write))
+        Ok(receipt_of(self.ctx, &write, 0))
     }
 }
 
@@ -1195,9 +1191,13 @@ fn relate(
             merged.body.superseded_by = Some(into.id.clone());
             w.put_claim(merged, Some(from.revision), "Merged")?;
             let mut target = into.clone();
+            // Only what the target did not cite already is the merge's: an unmerge takes
+            // back exactly these.
+            let mut added = Vec::new();
             for e in from.body.evidence_ids.iter().chain(&evidence) {
                 if !target.body.evidence_ids.contains(e) {
                     target.body.evidence_ids.push(e.clone());
+                    added.push(e.clone());
                 }
             }
             let stored = w.put_claim(target, Some(into.revision), "MergedInto")?;
@@ -1208,6 +1208,7 @@ fn relate(
                 model::SAME_AS,
                 &into.id,
                 &evidence,
+                &added,
             )?;
             let message = format!(
                 "Lesson {} merged into {}: {moved} source events moved.",
@@ -1233,28 +1234,34 @@ fn relate(
             restored.body.superseded_by = None;
             let restored = w.put_claim(restored, Some(from.revision), "Unmerged")?;
             let now = w.now;
-            if let Some(r) = w.k().remove_live_knowledge_relation(
+            let merge = w.k().remove_live_knowledge_relation(
                 &scoped.exact,
                 &from.id,
                 model::SAME_AS,
                 &into.id,
                 now,
-            )? {
-                w.changes.push(WriteChange {
-                    target_kind: "Relation".into(),
-                    id: r,
-                    before: None,
-                    after: None,
-                });
-            }
+            )?;
+            let added = match &merge {
+                Some(r) => {
+                    w.changes.push(WriteChange {
+                        target_kind: "Relation".into(),
+                        id: r.id.clone(),
+                        before: None,
+                        after: None,
+                    });
+                    r.added_evidence_ids.clone()
+                }
+                None => Vec::new(),
+            };
             // A rule that took effect only by the merged events returns to candidate evidence.
             let events = w.k().knowledge_lesson_event_count(&into.id)?;
             let threshold = w.threshold(&into.scope)?;
             let mut target = into.clone();
+            // Evidence the target cited before the merge (or that this unmerge cites) stays.
             target
                 .body
                 .evidence_ids
-                .retain(|e| !from.body.evidence_ids.contains(e) || evidence.contains(e));
+                .retain(|e| !added.contains(e) || evidence.contains(e));
             if into.body.lesson_effect.as_deref() == Some("Recurrence")
                 && events < threshold
                 && let Some(l) = target.lesson.as_mut()
@@ -1280,7 +1287,15 @@ fn relate(
             let (Node::Claim(a), Node::Claim(b)) = (&subject, &object) else {
                 return Err(invalid("contradicts"));
             };
-            if store_relation(&mut w, &scoped, &a.id, model::CONTRADICTS, &b.id, &evidence)? {
+            if store_relation(
+                &mut w,
+                &scoped,
+                &a.id,
+                model::CONTRADICTS,
+                &b.id,
+                &evidence,
+                &[],
+            )? {
                 let message = format!(
                     "Claims {} and {} contradict each other; both are kept, with the conflict shown.",
                     a.id.as_str(),
@@ -1297,6 +1312,7 @@ fn relate(
                 &i.predicate.0,
                 object.id(),
                 &evidence,
+                &[],
             )?;
         }
     }
@@ -1314,6 +1330,7 @@ fn store_relation(
     predicate: &str,
     object: &Id,
     evidence: &[Id],
+    added: &[Id],
 ) -> Result<bool, Failure> {
     // The store decides duplicates within this scope, over every live relation (not a page):
     // another project's identical relation is its own record and never suppresses this one.
@@ -1328,6 +1345,7 @@ fn store_relation(
         created_at_ms: w.now,
         removed_at_ms: None,
         write_id: w.write_id.clone(),
+        added_evidence_ids: added.to_vec(),
     };
     match w.k().put_knowledge_relation(&relation) {
         Ok(()) => {}
@@ -1897,12 +1915,14 @@ pub(super) struct DeletionPlan {
     pub digest: String,
 }
 
-/// Evidence cited only by `deleted` claims (independent surviving evidence stays).
+/// Evidence cited only by the deleted `claims` (independent surviving evidence stays). The
+/// store decides "cited by a surviving claim" over every claim, so evidence with many users is
+/// neither kept by a bounded listing nor purged while still cited.
 fn orphaned_evidence(
     k: &dyn KnowledgeRead,
     claims: &[StoredClaim],
+    deleted: &DeletedClaims<'_>,
 ) -> Result<Vec<StoredEvidence>, StorageError> {
-    let deleted: HashSet<Id> = claims.iter().map(|c| c.id.clone()).collect();
     let mut out: BTreeMap<String, StoredEvidence> = BTreeMap::new();
     // Every cited evidence record, from the claims' complete citation lists (never a bounded
     // listing, which would leave content of later evidence behind).
@@ -1917,10 +1937,7 @@ fn orphaned_evidence(
             if e.deleted_at_ms.is_some() {
                 continue;
             }
-            let users = k.knowledge_evidence_users(&e.id, KNOWLEDGE_PAGE_MAX)?;
-            if users.len() < KNOWLEDGE_PAGE_MAX as usize
-                && users.iter().all(|u| deleted.contains(u))
-            {
+            if !k.knowledge_evidence_cited_beyond(&e.id, deleted)? {
                 out.insert(e.id.as_str().to_owned(), e);
             }
         }
@@ -1946,7 +1963,7 @@ pub(super) fn deletion_plan(
             break;
         }
     }
-    let deleted: HashSet<Id> = claims.iter().map(|c| c.id.clone()).collect();
+    let gone = DeletedClaims::Source { scope, source };
     let mut entities: Vec<StoredEntity> = Vec::new();
     let mut after: Option<String> = None;
     loop {
@@ -1954,11 +1971,8 @@ pub(super) fn deletion_plan(
         let full = page.len() == 500;
         after = page.last().map(|e| e.id.as_str().to_owned());
         for e in page {
-            // An entity another source's claims still use is kept.
-            let users = k.knowledge_entity_users(&e.id, KNOWLEDGE_PAGE_MAX)?;
-            if users.len() < KNOWLEDGE_PAGE_MAX as usize
-                && users.iter().all(|u| deleted.contains(&u.id))
-            {
+            // An entity another source's claims still use is kept (decided over every claim).
+            if !k.knowledge_entity_used_beyond(&e.id, &gone)? {
                 entities.push(e);
             }
         }
@@ -1966,7 +1980,7 @@ pub(super) fn deletion_plan(
             break;
         }
     }
-    let evidence = orphaned_evidence(k, &claims)?;
+    let evidence = orphaned_evidence(k, &claims, &gone)?;
     let mut parts = vec![
         "knowledge.delete_by_source".to_owned(),
         scope.key(),
@@ -2097,7 +2111,8 @@ fn delete_selected(
             selected.push(c);
         }
     }
-    let evidence = orphaned_evidence(w.tx.knowledge(), &selected)?;
+    let ids: Vec<Id> = selected.iter().map(|c| c.id.clone()).collect();
+    let evidence = orphaned_evidence(w.tx.knowledge(), &selected, &DeletedClaims::Ids(&ids))?;
     for c in &selected {
         tombstone_claim(&mut w, c)?;
     }

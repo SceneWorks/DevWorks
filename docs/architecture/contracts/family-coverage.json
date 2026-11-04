@@ -1,6 +1,6 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-03",
+  "date": "2026-11-04",
   "catalogSha256": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
   "familyCount": 48,
   "operationCount": 354,
@@ -6345,6 +6345,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6391,6 +6399,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6491,6 +6507,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6537,6 +6561,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6729,11 +6761,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "The durable receipt of a committed Knowledge write.",
+          "semanticRules": "The durable receipt of a committed Knowledge write. Schema revision 2: entityCount and claimCount are the totals the write changed; a receipt names at most 128 entity IDs, claim IDs and diagnostics, and nextCursor (when any list has more) continues through write_status with cursor, so every ID and note of a bulk write is readable and none is dropped.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -7145,6 +7185,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7648,6 +7696,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",

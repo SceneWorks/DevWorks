@@ -3052,7 +3052,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.tag",
@@ -3074,7 +3074,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.verify",
@@ -3118,7 +3118,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.scope",
@@ -3140,7 +3140,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.diagnostics",
@@ -3228,7 +3228,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.subgraph",
@@ -3404,7 +3404,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "knowledge.promote",
@@ -3644,7 +3644,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeWriteReceipt",
         result_schema: schema_of::<KnowledgeWriteReceipt>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "dreaming.review",

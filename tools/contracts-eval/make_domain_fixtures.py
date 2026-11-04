@@ -503,5 +503,17 @@ for name in ['knowledge.subgraph','knowledge.entity_bundle','knowledge.entity_gr
  case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':bundle_r2})
 case('reject-r1-result-knowledge.claim-lesson','operation-result',{'kind':'knowledge.search','value':{'items':[claim_r2],'hasMore':False}},False,False)
 case('reject-r2-result-knowledge.unknown-rule-state','operation-result.r2',{'kind':'knowledge.search','value':{'items':[{**claim_r2,'lesson':{**lesson_record,'ruleState':'Approved'}}],'hasMore':False}},False,False)
+# Schema revision 2 (DW-30 review): a receipt of a bulk write carries its totals and a cursor
+# that write_status continues, so a write past 128 IDs is named completely.
+receipt_r2={**sample('KnowledgeWriteReceipt'),'entityCount':'300','claimCount':'10000','nextCursor':'cursor-a'}
+for name in ['knowledge.relate','knowledge.tag','knowledge.retract','knowledge.scope','knowledge.import_user_data','dreaming.revert']:
+ case('r2-input-'+name,'domain-request.r2',command_at(name))
+case('r2-input-knowledge.write_status','domain-request.r2',domain('knowledge.write_status'))
+case('r2-input-knowledge.write_status-cursor','domain-request.r2',domain('knowledge.write_status',cursor='cursor-a'))
+case('reject-r1-knowledge.write_status-cursor','domain-request',domain('knowledge.write_status',None,cursor='cursor-a'),False,False)
+for name in ['knowledge.record','knowledge.revise','knowledge.relate','knowledge.tag','knowledge.verify','knowledge.retract','knowledge.scope','knowledge.write_status','knowledge.import_user_data','knowledge.promote','knowledge.challenge','dreaming.revert']:
+ case('r2-result-'+name+'-totals','operation-result.r2',{'kind':name,'value':receipt_r2})
+case('reject-r1-result-knowledge.receipt-totals','operation-result',{'kind':'knowledge.record','value':receipt_r2},False,False)
+case('reject-r2-result-knowledge.receipt-negative-total','operation-result.r2',{'kind':'knowledge.record','value':{**receipt_r2,'claimCount':'-1'}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

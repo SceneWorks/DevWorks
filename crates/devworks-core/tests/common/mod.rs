@@ -1787,7 +1787,12 @@ impl KnowledgeRead for Unsupported {
     fn knowledge_evidence_users(&self, _: &Id, _: u16) -> Result<Vec<Id>, StorageError> {
         nope()
     }
-    fn knowledge_relations(&self, _: &Id, _: u16) -> Result<Vec<StoredRelation>, StorageError> {
+    fn knowledge_relations(
+        &self,
+        _: &Id,
+        _: &[String],
+        _: u16,
+    ) -> Result<Vec<StoredRelation>, StorageError> {
         nope()
     }
     fn knowledge_history(&self, _: &Id, _: u16) -> Result<Vec<StoredHistory>, StorageError> {
@@ -1860,6 +1865,20 @@ impl KnowledgeRead for Unsupported {
         _: Option<&str>,
         _: u16,
     ) -> Result<Vec<StoredEntity>, StorageError> {
+        nope()
+    }
+    fn knowledge_entity_used_beyond(
+        &self,
+        _: &Id,
+        _: &DeletedClaims<'_>,
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn knowledge_evidence_cited_beyond(
+        &self,
+        _: &Id,
+        _: &DeletedClaims<'_>,
+    ) -> Result<bool, StorageError> {
         nope()
     }
     fn knowledge_counts(&self, _: &[String]) -> Result<KnowledgeCounts, StorageError> {
@@ -1954,7 +1973,7 @@ impl KnowledgeRepository for Unsupported {
         _: &str,
         _: &Id,
         _: i64,
-    ) -> Result<Option<Id>, StorageError> {
+    ) -> Result<Option<StoredRelation>, StorageError> {
         nope()
     }
     fn map_knowledge_import(&mut self, _: &Id, _: i64, _: &Id, _: &Id) -> Result<(), StorageError> {

@@ -195,6 +195,21 @@ pub struct StoredRelation {
     pub created_at_ms: i64,
     pub removed_at_ms: Option<i64>,
     pub write_id: Id,
+    /// For a `same_as` lesson merge: the evidence the merge added to the object's citations,
+    /// which an unmerge takes back (and nothing else).
+    pub added_evidence_ids: Vec<Id>,
+}
+
+/// The claims a deletion removes, as the store can test membership in them.
+#[derive(Clone, Copy, Debug)]
+pub enum DeletedClaims<'a> {
+    /// Exactly these claims (a selected deletion).
+    Ids(&'a [Id]),
+    /// Every live claim of exactly `scope` whose source is `source` (a delete by source).
+    Source {
+        scope: &'a KnowledgeScope,
+        source: &'a str,
+    },
 }
 
 /// One immutable revision snapshot of an entity or claim.
@@ -387,9 +402,14 @@ pub trait KnowledgeRead {
     fn knowledge_evidence(&self, id: &Id) -> Result<Option<StoredEvidence>, StorageError>;
     /// The claims that cite `evidence`, at most `limit`.
     fn knowledge_evidence_users(&self, evidence: &Id, limit: u16) -> Result<Vec<Id>, StorageError>;
-    /// Live relations whose subject or object is `id`, at most `limit`.
-    fn knowledge_relations(&self, id: &Id, limit: u16)
-    -> Result<Vec<StoredRelation>, StorageError>;
+    /// Live relations of the given scope keys whose subject or object is `id`, at most `limit`
+    /// (the scopes apply before the limit).
+    fn knowledge_relations(
+        &self,
+        id: &Id,
+        scopes: &[String],
+        limit: u16,
+    ) -> Result<Vec<StoredRelation>, StorageError>;
     /// The revision snapshots of `target`, newest first, at most `limit`.
     fn knowledge_history(
         &self,
@@ -454,6 +474,19 @@ pub trait KnowledgeRead {
         after: Option<&str>,
         limit: u16,
     ) -> Result<Vec<StoredEntity>, StorageError>;
+    /// Whether a live claim outside `deleted` names `entity` (as subject or object): decided over
+    /// every claim, never a bounded listing.
+    fn knowledge_entity_used_beyond(
+        &self,
+        entity: &Id,
+        deleted: &DeletedClaims<'_>,
+    ) -> Result<bool, StorageError>;
+    /// Whether a live claim outside `deleted` cites `evidence`: decided over every claim.
+    fn knowledge_evidence_cited_beyond(
+        &self,
+        evidence: &Id,
+        deleted: &DeletedClaims<'_>,
+    ) -> Result<bool, StorageError>;
     fn knowledge_counts(&self, scopes: &[String]) -> Result<KnowledgeCounts, StorageError>;
     /// The claim an import candidate became.
     fn knowledge_imported(
@@ -491,7 +524,7 @@ pub trait KnowledgeRepository: KnowledgeRead {
     /// [`StorageError::Duplicate`].
     fn put_knowledge_relation(&mut self, relation: &StoredRelation) -> Result<(), StorageError>;
     /// Marks the live relation of `scope` with this subject, predicate and object removed,
-    /// returning its ID (`None` when there is none).
+    /// returning it as it was removed (`None` when there is none).
     fn remove_live_knowledge_relation(
         &mut self,
         scope: &KnowledgeScope,
@@ -499,7 +532,7 @@ pub trait KnowledgeRepository: KnowledgeRead {
         predicate: &str,
         object: &Id,
         at_ms: i64,
-    ) -> Result<Option<Id>, StorageError>;
+    ) -> Result<Option<StoredRelation>, StorageError>;
     /// Marks a live relation removed; `false` when it was not live.
     fn remove_knowledge_relation(&mut self, id: &Id, at_ms: i64) -> Result<bool, StorageError>;
     /// Appends a revision snapshot; an existing `(target, revision)` is

@@ -303,6 +303,27 @@ fn placeholders(n: usize, p: &mut Vec<Sql>, values: impl IntoIterator<Item = Str
     out.join(",")
 }
 
+/// A condition true for a claim row `c` outside `deleted` (its values appended to `p`).
+fn outside_of(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>) -> String {
+    match deleted {
+        DeletedClaims::Ids([]) => "1".into(),
+        DeletedClaims::Ids(ids) => {
+            let list = placeholders(ids.len(), p, ids.iter().map(|i| i.as_str().to_owned()));
+            format!("c.id NOT IN ({list})")
+        }
+        DeletedClaims::Source { scope, source } => {
+            p.push(Sql::Text(scope.key()));
+            p.push(Sql::Text((*source).to_owned()));
+            // `IS`, not `=`: a claim without a source is outside the source, never unknown.
+            format!(
+                "NOT (c.scope_key IS ?{} AND c.source IS ?{})",
+                p.len() - 1,
+                p.len()
+            )
+        }
+    }
+}
+
 /// The rule state of a lesson row as read: an inferred lesson whose distinct events reach its
 /// scope's threshold is `Effective` (the same rule as the service's `effective_rule_state`).
 fn effective_state_sql(thresholds: &[(String, i64)], p: &mut Vec<Sql>) -> String {
@@ -521,7 +542,26 @@ type RawRelation = (
     i64,
     Option<i64>,
     String,
+    String,
 );
+const RELATION_COLUMNS: &str = "id,scope_key,project_id,subject_id,predicate,object_id,\
+     evidence_json,author_id,created_at,removed_at,write_id,added_evidence_json";
+fn relation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawRelation> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+        r.get(7)?,
+        r.get(8)?,
+        r.get(9)?,
+        r.get(10)?,
+        r.get(11)?,
+    ))
+}
 fn relation_of(r: RawRelation) -> Result<StoredRelation, StorageError> {
     Ok(StoredRelation {
         id: id_of(r.0)?,
@@ -534,6 +574,7 @@ fn relation_of(r: RawRelation) -> Result<StoredRelation, StorageError> {
         created_at_ms: r.8,
         removed_at_ms: r.9,
         write_id: id_of(r.10)?,
+        added_evidence_ids: ids_of(&r.11)?,
     })
 }
 
@@ -817,31 +858,27 @@ macro_rules! knowledge_reads {
             fn knowledge_relations(
                 &self,
                 id: &Id,
+                scopes: &[String],
                 limit: u16,
             ) -> Result<Vec<StoredRelation>, StorageError> {
                 let limit = check_limit(limit)?;
+                if scopes.is_empty() {
+                    return Ok(Vec::new());
+                }
+                // Scope applies before LIMIT: another project's relations never use the budget.
+                let mut p = vec![Sql::Text(id.as_str().into())];
+                let list = placeholders(scopes.len(), &mut p, scopes.iter().cloned());
+                p.push(Sql::Integer(limit));
                 rows(
                     self.conn,
-                    "SELECT id,scope_key,project_id,subject_id,predicate,object_id,evidence_json,\
-                     author_id,created_at,removed_at,write_id FROM knowledge_relations WHERE \
-                     (subject_id=?1 OR object_id=?1) AND removed_at IS NULL ORDER BY created_at, id \
-                     LIMIT ?2",
-                    vec![Sql::Text(id.as_str().into()), Sql::Integer(limit)],
-                    |r| {
-                        Ok((
-                            r.get(0)?,
-                            r.get(1)?,
-                            r.get(2)?,
-                            r.get(3)?,
-                            r.get(4)?,
-                            r.get(5)?,
-                            r.get(6)?,
-                            r.get(7)?,
-                            r.get(8)?,
-                            r.get(9)?,
-                            r.get(10)?,
-                        ))
-                    },
+                    &format!(
+                        "SELECT {RELATION_COLUMNS} FROM knowledge_relations WHERE \
+                         (subject_id=?1 OR object_id=?1) AND removed_at IS NULL AND \
+                         scope_key IN ({list}) ORDER BY created_at, id LIMIT ?{}",
+                        p.len()
+                    ),
+                    p,
+                    relation_row,
                 )?
                 .into_iter()
                 .map(relation_of)
@@ -1106,6 +1143,40 @@ macro_rules! knowledge_reads {
                         Sql::Integer(limit),
                     ],
                 )
+            }
+            fn knowledge_entity_used_beyond(
+                &self,
+                entity: &Id,
+                deleted: &DeletedClaims<'_>,
+            ) -> Result<bool, StorageError> {
+                let mut p = vec![Sql::Text(entity.as_str().into())];
+                let outside = outside_of(deleted, &mut p);
+                db(self.conn.query_row(
+                    &format!(
+                        "SELECT EXISTS(SELECT 1 FROM knowledge_claims c WHERE \
+                         (c.subject_id=?1 OR c.object_id=?1) AND c.lifecycle<>'Deleted' AND \
+                         {outside})"
+                    ),
+                    params_from_iter(p),
+                    |r| r.get(0),
+                ))
+            }
+            fn knowledge_evidence_cited_beyond(
+                &self,
+                evidence: &Id,
+                deleted: &DeletedClaims<'_>,
+            ) -> Result<bool, StorageError> {
+                let mut p = vec![Sql::Text(evidence.as_str().into())];
+                let outside = outside_of(deleted, &mut p);
+                db(self.conn.query_row(
+                    &format!(
+                        "SELECT EXISTS(SELECT 1 FROM knowledge_claim_evidence ce JOIN \
+                         knowledge_claims c ON c.id=ce.claim_id WHERE ce.evidence_id=?1 AND \
+                         c.lifecycle<>'Deleted' AND {outside})"
+                    ),
+                    params_from_iter(p),
+                    |r| r.get(0),
+                ))
             }
             fn knowledge_counts(&self, scopes: &[String]) -> Result<KnowledgeCounts, StorageError> {
                 let mut out = KnowledgeCounts::default();
@@ -1501,9 +1572,10 @@ impl KnowledgeRepository for Unit<'_> {
             });
         }
         db(self.conn.execute(
-            "INSERT INTO knowledge_relations(id,scope_key,project_id,subject_id,predicate,\
-             object_id,evidence_json,author_id,created_at,removed_at,write_id) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            &format!(
+                "INSERT INTO knowledge_relations({RELATION_COLUMNS}) \
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"
+            ),
             params![
                 r.id.as_str(),
                 r.scope.key(),
@@ -1516,6 +1588,7 @@ impl KnowledgeRepository for Unit<'_> {
                 r.created_at_ms,
                 r.removed_at_ms,
                 r.write_id.as_str(),
+                ids_json(&r.added_evidence_ids),
             ],
         ))?;
         Ok(())
@@ -1656,20 +1729,23 @@ impl KnowledgeRepository for Unit<'_> {
         predicate: &str,
         object: &Id,
         at_ms: i64,
-    ) -> Result<Option<Id>, StorageError> {
-        let id: Option<String> = db(self
+    ) -> Result<Option<StoredRelation>, StorageError> {
+        let raw = db(self
             .conn
             .query_row(
-                "SELECT id FROM knowledge_relations WHERE scope_key=?1 AND subject_id=?2 AND \
-                 predicate=?3 AND object_id=?4 AND removed_at IS NULL",
+                &format!(
+                    "SELECT {RELATION_COLUMNS} FROM knowledge_relations WHERE scope_key=?1 AND \
+                     subject_id=?2 AND predicate=?3 AND object_id=?4 AND removed_at IS NULL"
+                ),
                 params![scope.key(), subject.as_str(), predicate, object.as_str()],
-                |r| r.get(0),
+                relation_row,
             )
             .optional())?;
-        let Some(id) = id else { return Ok(None) };
-        let id = id_of(id)?;
-        self.remove_knowledge_relation(&id, at_ms)?;
-        Ok(Some(id))
+        let Some(raw) = raw else { return Ok(None) };
+        let mut relation = relation_of(raw)?;
+        self.remove_knowledge_relation(&relation.id, at_ms)?;
+        relation.removed_at_ms = Some(at_ms);
+        Ok(Some(relation))
     }
 
     fn purge_knowledge_lesson_records(&mut self, claim: &Id) -> Result<(), StorageError> {

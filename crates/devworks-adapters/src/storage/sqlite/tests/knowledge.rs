@@ -1792,6 +1792,91 @@ fn user_import_previews_exactly_and_stores_only_verified_candidates_once() {
     assert_eq!(f.code, DomainErrorCode::Conflict);
 }
 
+/// Saves `bytes` as the user's artifact and returns its reference.
+fn saved_import(fx: &Fx, user: &InvocationContext, bytes: &[u8], key: &str) -> Value {
+    let relative = format!("{key}.json");
+    std::fs::write(fx.sources.root.location.join(&relative), bytes).unwrap();
+    fx.sources
+        .handles
+        .lock()
+        .unwrap()
+        .insert(format!("ticket-{key}"), relative);
+    let frame = json!({"protocol": "1.0-draft.1", "requestKey": format!("save-{key}"),
+        "command": {"kind": "Save", "projectId": "project-a", "title": "Memory export",
+        "mediaType": "application/json",
+        "source": {"kind": "Upload", "ticketId": format!("ticket-{key}")},
+        "expectedDigest": sha256_hex(bytes), "expectedBytes": bytes.len().to_string()}});
+    let reply = {
+        let authority = fx.authority();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*fx.store,
+            ids: &*fx.h.ids,
+        };
+        fx.cases
+            .command(
+                &gateway,
+                user,
+                "artifacts.save",
+                frame.to_string().as_bytes(),
+            )
+            .expect("addressable")
+    };
+    match applied(reply) {
+        OperationResult::ArtifactsSave { value } => serde_json::to_value(&value.artifact).unwrap(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_import_of_every_candidate_its_format_allows_stores_and_names_them_all() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // A stale candidate first, then its verified twin: the twin is stored, not a duplicate.
+    let mut candidates = vec![
+        json!({"entry": {"kind": "fact", "summary": "Port 8080"}, "sourceFile": "a.md",
+            "verification": "stale"}),
+        json!({"entry": {"kind": "fact", "summary": "port 8080"}, "sourceFile": "b.md",
+            "verification": "verified"}),
+    ];
+    candidates.extend((2..200).map(|i| {
+        json!({"entry": {"kind": "fact", "summary": format!("Fact {i}")}, "sourceFile": "c.md",
+            "verification": "verified"})
+    }));
+    let bytes =
+        serde_json::to_vec(&json!({"format": IMPORT_SCHEMA_ID, "candidates": candidates})).unwrap();
+    let source = saved_import(&fx, &user, &bytes, "bulk");
+    let schema =
+        json!({"schemaId": IMPORT_SCHEMA_ID, "revision": "1", "sha256": import_schema_digest()});
+    let (d, _) = fx.diagnostics(
+        &user,
+        json!({"scope": proj("project-a"), "importSource": source, "importSchema": schema}),
+    );
+    let outcomes: Vec<&str> = d
+        .iter()
+        .filter(|x| x.component.0 == "knowledge.import")
+        .map(|x| x.code.0.as_str())
+        .collect();
+    assert_eq!(outcomes.len(), 200);
+    assert_eq!(&outcomes[..2], ["stale", "would_store"]);
+    let digest = d
+        .iter()
+        .find(|x| x.component.0 == "knowledge.preview")
+        .unwrap()
+        .id
+        .as_str()
+        .to_owned();
+    let r = receipt(fx.cmd(
+        &user,
+        "knowledge.import_user_data",
+        json!({"scope": proj("project-a"), "source": source, "schema": schema,
+        "previewDigest": digest}),
+    ));
+    assert_eq!(r.claim_count.unwrap().get(), 199);
+    let (pages, _, ids) = all_receipt_ids(&fx, &user, r.write_id.as_str());
+    assert_eq!((pages, ids.len()), (2, 199));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Codex round 1
 
@@ -2087,15 +2172,95 @@ fn another_projects_identical_relation_is_its_own_record() {
     assert_eq!((seen("project-a"), seen("project-b")), (1, 1));
 }
 
+/// Every claim and entity ID a write's receipt names, across its write_status pages.
+fn all_receipt_ids(fx: &Fx, ctx: &InvocationContext, write: &str) -> (usize, usize, Vec<String>) {
+    let status = |cursor: Option<String>| {
+        let mut body = json!({"writeId": write});
+        if let Some(c) = cursor {
+            body["cursor"] = json!(c);
+        }
+        match result(fx.q(ctx, "knowledge.write_status", body)) {
+            OperationResult::KnowledgeWriteStatus { value } => value,
+            other => panic!("{other:?}"),
+        }
+    };
+    let first = status(None);
+    let totals = (
+        first.claim_count.as_ref().unwrap().get() as usize,
+        first.entity_count.as_ref().unwrap().get() as usize,
+    );
+    let (mut claims, mut entities, mut pages) = (Vec::new(), Vec::new(), 0);
+    let mut page = Some(first);
+    while let Some(r) = page {
+        pages += 1;
+        assert!(r.claim_ids.0.len() <= 128 && r.entity_ids.0.len() <= 128);
+        claims.extend(r.claim_ids.0.iter().map(|i| i.as_str().to_owned()));
+        entities.extend(r.entity_ids.0.iter().map(|i| i.as_str().to_owned()));
+        page = r.next_cursor.map(|c| status(Some(c.0)));
+    }
+    assert_eq!((claims.len(), entities.len()), totals, "every ID once");
+    claims.sort();
+    claims.dedup();
+    assert_eq!(claims.len(), totals.0, "no ID twice");
+    (pages, entities.len(), claims)
+}
+
 #[test]
-fn a_write_whose_receipt_would_exceed_its_lists_is_refused_not_truncated() {
+fn a_write_with_more_notes_than_a_receipt_holds_keeps_them_all() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let topic = json!([{"clientId": "s", "label": "Topic", "entityType": "t", "aliases": []}]);
+    receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": topic, "evidence": [], "claims": [draft("Fact", "base")]}),
+    ));
+    // The entity is reused (one note) and every claim conflicts with the base (128 notes).
+    let claims: Vec<Value> = (0..128)
+        .map(|i| draft("Fact", &format!("other {i}")))
+        .collect();
+    let r = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": topic, "evidence": [], "claims": claims}),
+    ));
+    assert_eq!(r.diagnostics.0.len(), 128);
+    let mut notes: Vec<String> = r
+        .diagnostics
+        .0
+        .iter()
+        .map(|d| d.id.as_str().to_owned())
+        .collect();
+    let mut cursor = r.next_cursor.map(|c| c.0);
+    while let Some(c) = cursor {
+        match result(fx.q(
+            &user,
+            "knowledge.write_status",
+            json!({"writeId": r.write_id, "cursor": c}),
+        )) {
+            OperationResult::KnowledgeWriteStatus { value } => {
+                notes.extend(value.diagnostics.0.iter().map(|d| d.id.as_str().to_owned()));
+                cursor = value.next_cursor.map(|c| c.0);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    let count = notes.len();
+    notes.sort();
+    notes.dedup();
+    assert_eq!((count, notes.len()), (129, 129));
+}
+
+#[test]
+fn a_write_past_a_receipts_window_is_named_completely() {
     let fx = Fx::new();
     let user = fx.user();
     let target = fx.claim_id(&user, proj("project-a"), "T", draft("Fact", "target"));
     let claims: Vec<Value> = (0..128)
         .map(|i| draft("Fact", &format!("bulk {i}")))
         .collect();
-    let f = refused(fx.record(
+    // 128 new claims plus the existing claim the evidence attaches to: 129 changed.
+    let r = receipt(fx.record(
         &user,
         proj("project-a"),
         json!({
@@ -2104,13 +2269,81 @@ fn a_write_whose_receipt_would_exceed_its_lists_is_refused_not_truncated() {
             "sourceRef": "log:x"}, "snippet": "attached"}],
         "claims": claims}),
     ));
-    assert_eq!(f.code, DomainErrorCode::InvalidArgument);
-    assert_eq!(f.target_kind.unwrap().0, "receipt_bound");
-    assert_eq!(
-        fx.revision(&target),
-        1,
-        "nothing of the refused write stays"
+    assert_eq!(r.claim_ids.0.len(), 128);
+    assert_eq!(r.claim_count.unwrap().get(), 129);
+    assert!(r.next_cursor.is_some());
+    let (pages, _, ids) = all_receipt_ids(&fx, &user, r.write_id.as_str());
+    assert_eq!(pages, 2);
+    assert!(ids.contains(&target.as_str().to_owned()));
+    // A cursor of another write, or an altered one, is not a continuation.
+    let other = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": [], "evidence": [], "claims": [with(draft("Fact", "one more"),
+            json!({"subjectId": r.entity_ids.0[0]}))]}),
+    ));
+    let f = query_fault(fx.q(
+        &user,
+        "knowledge.write_status",
+        json!({"writeId": other.write_id, "cursor": r.next_cursor.unwrap().0}),
+    ));
+    assert_eq!(f.code, DomainErrorCode::CursorExpired);
+}
+
+#[test]
+fn deleting_a_source_past_a_receipts_window_deletes_and_names_all_of_it() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let mut recorded = Vec::new();
+    for batch in 0..3 {
+        let entities: Vec<Value> = (0..100)
+            .map(|i| {
+                json!({"clientId": format!("e{i}"), "label": format!("Bulk {batch}-{i}"),
+                "entityType": "t", "aliases": [], "source": "bulk-run"})
+            })
+            .collect();
+        let claims: Vec<Value> = (0..100)
+            .map(|i| {
+                with(
+                    draft("Fact", &format!("bulk fact {batch}-{i}")),
+                    json!({"subjectId": format!("e{i}"), "source": "bulk-run"}),
+                )
+            })
+            .collect();
+        let r = receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": entities, "evidence": [], "claims": claims}),
+        ));
+        recorded.extend(r.claim_ids.0.iter().map(|i| i.as_str().to_owned()));
+    }
+    let (d, scope_revision) = fx.diagnostics(
+        &user,
+        json!({"scope": proj("project-a"), "sourceId": "bulk-run"}),
     );
+    let digest = d
+        .iter()
+        .find(|x| x.component.0 == "knowledge.preview")
+        .unwrap()
+        .id
+        .as_str()
+        .to_owned();
+    let s = summary(fx.cmd(
+        &user,
+        "knowledge.delete_by_source",
+        json!({"scope": proj("project-a"), "sourceId": "bulk-run",
+        "expectedScopeRevision": scope_revision.to_string(), "previewDigest": digest}),
+    ));
+    assert!(s.changed);
+    let (pages, entities, mut ids) = all_receipt_ids(&fx, &user, s.id.as_str());
+    assert_eq!((pages, entities), (3, 300));
+    recorded.sort();
+    ids.sort();
+    assert_eq!(ids, recorded, "the receipt names every deleted claim");
+    for id in [&recorded[0], &recorded[299]] {
+        let c = fx.claim(&user, proj("project-a"), &Id::new(id.clone()).unwrap());
+        assert_eq!(wire(c.lifecycle.as_ref().unwrap()), "Deleted");
+    }
 }
 
 #[test]
@@ -2201,4 +2434,237 @@ fn a_deleted_claim_leaves_no_live_relation_in_another_bundle() {
         json!({"scope": ws(), "claims": [{"id": x, "revision": rev.to_string()}]}),
     ));
     assert_eq!(related(), 0);
+}
+
+#[test]
+fn an_unmerge_takes_back_only_the_citations_its_merge_added() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let r = receipt(fx.record(
+        &a,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": "Rules", "entityType": "t", "aliases": []}],
+        "evidence": [
+            {"id": "shared", "source": {"kind": "Observation", "sourceRef": "log:1"},
+                "snippet": "cited by both"},
+            {"id": "own", "source": {"kind": "Observation", "sourceRef": "log:2"},
+                "snippet": "cited by A only"}],
+        "claims": [
+            with(draft("Lesson", "rule a"), json!({"evidenceIds": ["shared", "own"],
+                "lesson": lesson_draft("Agent", Some("ea"), None)})),
+            with(draft("Lesson", "rule b"), json!({"evidenceIds": ["shared"],
+                "lesson": lesson_draft("Agent", Some("eb"), None)}))]}),
+    ));
+    let (la, lb) = (r.claim_ids.0[0].clone(), r.claim_ids.0[1].clone());
+    let cited = |id: &Id| -> BTreeSet<String> {
+        fx.read_claim(&a, proj("project-a"), id)
+            .evidence
+            .0
+            .iter()
+            .map(|e| e.snippet.0.clone())
+            .collect()
+    };
+    let relate = |p: &str| {
+        receipt(fx.cmd(
+            &a,
+            "knowledge.relate",
+            json!({"scope": proj("project-a"), "subjectId": la,
+            "predicate": p, "objectId": lb, "evidenceIds": []}),
+        ))
+    };
+    relate("same_as");
+    assert_eq!(cited(&lb).len(), 2);
+    relate("unmerge");
+    // B cited the shared evidence itself: the unmerge keeps it.
+    assert_eq!(cited(&lb), BTreeSet::from(["cited by both".to_owned()]));
+}
+
+#[test]
+fn another_projects_relations_never_use_a_bundles_relation_budget() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let x = fx.claim_id(&user, ws(), "X", draft("Fact", "general x"));
+    let y = fx.claim_id(&user, ws(), "Y", draft("Fact", "general y"));
+    let z = fx.claim_id(&user, ws(), "Z", draft("Fact", "general z"));
+    let relate = |scope: Value, predicate: String, object: &Id| {
+        receipt(fx.cmd(
+            &user,
+            "knowledge.relate",
+            json!({"scope": scope, "subjectId": x,
+            "predicate": predicate, "objectId": object, "evidenceIds": []}),
+        ))
+    };
+    // Project B's relations come first and fill more than a bundle's budget.
+    for i in 0..129 {
+        relate(proj("project-b"), format!("depends_on_{i}"), &y);
+    }
+    relate(proj("project-a"), "contradicts".into(), &z);
+    let b = fx.read_claim(&user, proj("project-a"), &x);
+    assert_eq!(b.relations.unwrap().0.len(), 1);
+    assert!(
+        !b.truncated,
+        "project B's rows are not project A's to count"
+    );
+    assert!(
+        b.conflicts.0.iter().any(|c| c.claim_ids.0.contains(&z)),
+        "project A's contradiction is shown"
+    );
+}
+
+#[test]
+fn a_source_whose_entity_and_evidence_have_many_users_deletes_them_too() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // More claims than a bounded user listing holds, all of one source, sharing one entity and
+    // one evidence record.
+    let first = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": "Busy secret entity", "entityType": "t",
+            "aliases": [], "source": "big-run"}],
+        "evidence": [{"id": "e", "source": {"kind": "Observation", "sourceRef": "log:big"},
+            "snippet": "busy secret snippet"}],
+        "claims": (0..128).map(|i| with(draft("Fact", &format!("big {i}")),
+            json!({"source": "big-run", "evidenceIds": ["e"]}))).collect::<Vec<_>>()}),
+    ));
+    let entity = first.entity_ids.0[0].clone();
+    let evidence = fx
+        .read_claim(&user, proj("project-a"), &first.claim_ids.0[0])
+        .evidence
+        .0[0]
+        .id
+        .clone();
+    for batch in 1..4 {
+        let claims: Vec<Value> = (0..128)
+            .map(|i| {
+                with(
+                    draft("Fact", &format!("big {batch}-{i}")),
+                    json!({"subjectId": entity, "source": "big-run", "evidenceIds": [evidence]}),
+                )
+            })
+            .collect();
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": [], "evidence": [], "claims": claims}),
+        ));
+    }
+    let (d, scope_revision) = fx.diagnostics(
+        &user,
+        json!({"scope": proj("project-a"), "sourceId": "big-run"}),
+    );
+    let digest = d
+        .iter()
+        .find(|x| x.component.0 == "knowledge.preview")
+        .unwrap()
+        .id
+        .as_str()
+        .to_owned();
+    summary(fx.cmd(
+        &user,
+        "knowledge.delete_by_source",
+        json!({"scope": proj("project-a"), "sourceId": "big-run",
+        "expectedScopeRevision": scope_revision.to_string(), "previewDigest": digest}),
+    ));
+    let text = all_text(&fx);
+    for secret in ["Busy secret entity", "busy secret snippet"] {
+        assert!(!text.contains(secret), "{secret} survived the deletion");
+    }
+    let e = fx
+        .read(move |s| s.knowledge().knowledge_entity(&entity))
+        .unwrap();
+    assert!(e.deleted_at_ms.is_some());
+    let ev = fx
+        .read(move |s| s.knowledge().knowledge_evidence(&evidence))
+        .unwrap();
+    assert!(ev.deleted_at_ms.is_some() && ev.snippet.is_empty());
+}
+
+#[test]
+fn a_shared_entity_or_evidence_another_source_uses_is_kept() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let r = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": "Shared entity", "entityType": "t",
+            "aliases": [], "source": "run-1"}],
+        "evidence": [{"id": "e", "source": {"kind": "Observation", "sourceRef": "log:s"},
+            "snippet": "shared snippet"}],
+        "claims": [
+            with(draft("Fact", "from run 1"), json!({"source": "run-1", "evidenceIds": ["e"]})),
+            // No source at all: still outside run-1.
+            with(draft("Fact", "sourceless"), json!({"evidenceIds": ["e"]}))]}),
+    ));
+    let entity = r.entity_ids.0[0].clone();
+    let (d, scope_revision) = fx.diagnostics(
+        &user,
+        json!({"scope": proj("project-a"), "sourceId": "run-1"}),
+    );
+    let digest = d
+        .iter()
+        .find(|x| x.component.0 == "knowledge.preview")
+        .unwrap()
+        .id
+        .as_str()
+        .to_owned();
+    summary(fx.cmd(
+        &user,
+        "knowledge.delete_by_source",
+        json!({"scope": proj("project-a"), "sourceId": "run-1",
+        "expectedScopeRevision": scope_revision.to_string(), "previewDigest": digest}),
+    ));
+    let kept = fx.read_claim(&user, proj("project-a"), &r.claim_ids.0[1]);
+    assert_eq!(kept.evidence.0[0].snippet.0, "shared snippet");
+    assert_eq!(kept.entities.0[0].label.0, "Shared entity");
+    let e = fx
+        .read(move |s| s.knowledge().knowledge_entity(&entity))
+        .unwrap();
+    assert!(e.deleted_at_ms.is_none());
+}
+
+#[test]
+fn a_bundle_shows_its_whole_chain_and_every_conflicting_claim_up_to_the_wire_bound() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let first = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Chain",
+        draft("Fact", "version 0"),
+    );
+    let subject = fx.claim(&user, proj("project-a"), &first).subject_id;
+    let mut last = first.clone();
+    for i in 1..=40 {
+        last = receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", &format!("version {i}")),
+                json!({"subjectId": subject, "supersedes": last}))]}),
+        ))
+        .claim_ids
+        .0[0]
+            .clone();
+    }
+    let b = fx.read_claim(&user, proj("project-a"), &last);
+    assert_eq!(b.supersession_ids.0.len(), 40);
+    assert!(!b.truncated);
+    // Twenty active claims state the same subject differently: the bundle carries them all.
+    let other = fx.claim_id(&user, proj("project-a"), "Busy", draft("Fact", "state 0"));
+    let busy = fx.claim(&user, proj("project-a"), &other).subject_id;
+    for i in 1..20 {
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", &format!("state {i}")), json!({"subjectId": busy}))]}),
+        ));
+    }
+    let b = fx.read_claim(&user, proj("project-a"), &other);
+    assert_eq!(b.conflicts.0[0].claim_ids.0.len(), 20);
+    assert_eq!(b.claims.0.len(), 20);
 }

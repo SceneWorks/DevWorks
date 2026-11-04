@@ -1,6 +1,6 @@
 {
   "contract": "1.0-draft.1",
-  "date": "2026-11-03",
+  "date": "2026-11-04",
   "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
   "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
   "schemaSources": [
@@ -81,7 +81,7 @@
     },
     {
       "file": "domain-command-reply.r2.schema.json",
-      "sha256": "e90adf983fdffabdd9180373323d1d472fda822f6a38e78c8d870ed2176cf8e7"
+      "sha256": "53f73e556b9ee0004b056310745f8cf87f86e1c814bcf0384e297455247ec684"
     },
     {
       "file": "domain-command-reply.schema.json",
@@ -89,7 +89,7 @@
     },
     {
       "file": "domain-query-reply.r2.schema.json",
-      "sha256": "f9912060f1763a8f289caaac6733f605ec4b623ae3095e7c9da0e4cee319ddaf"
+      "sha256": "388c6520a692a81d08f60a3b00dbaca206602d2e45b89008ad9e95763ff76ed0"
     },
     {
       "file": "domain-query-reply.schema.json",
@@ -97,7 +97,7 @@
     },
     {
       "file": "domain-request.r2.schema.json",
-      "sha256": "c6b6d2a441e41d67cc7995fcbe6516efb9e94a770505030c96a21aff042916ee"
+      "sha256": "2d38b7f57cd3c978e0f411170badc5f69ab4de5dc095c626a6e31e1343759753"
     },
     {
       "file": "domain-request.schema.json",
@@ -137,7 +137,7 @@
     },
     {
       "file": "operation-completion.r2.schema.json",
-      "sha256": "a73aa77e123b2a945c71b5a8870ff8c8866fba52f04bd94ae739ffb079b0c4c5"
+      "sha256": "6fd0a4058480be734c898f0c324b0e7dd1cdf266e44ac95b34eec8466261a24a"
     },
     {
       "file": "operation-completion.schema.json",
@@ -145,7 +145,7 @@
     },
     {
       "file": "operation-result.r2.schema.json",
-      "sha256": "3d11ae3a2352c5e2a272a42f6ab37b0080f87d033d6a9cbfbaf14f9f63b81b0b"
+      "sha256": "7feaf2e01260e2261bd56307588a2d148b8ee6a02a010e6943fc1402599b1c76"
     },
     {
       "file": "operation-result.schema.json",

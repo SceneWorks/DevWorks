@@ -169,6 +169,11 @@ CREATE TABLE knowledge_relations (
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     removed_at INTEGER CHECK (removed_at IS NULL OR removed_at >= created_at),
     write_id TEXT NOT NULL CHECK (length(write_id) BETWEEN 1 AND 128),
+    -- A same_as lesson merge: the citations it added to the object (an unmerge takes back
+    -- exactly these, never evidence the object already cited).
+    added_evidence_json TEXT NOT NULL DEFAULT '[]' CHECK (
+        json_valid(added_evidence_json) AND json_type(added_evidence_json) = 'array'
+    ),
     CHECK (
         (scope_key = 'workspace' AND project_id IS NULL)
         OR (project_id IS NOT NULL AND scope_key = 'project:' || project_id)
