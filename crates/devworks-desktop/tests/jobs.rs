@@ -726,3 +726,63 @@ fn an_automatic_refresh_keeps_the_expanded_jobs_list() {
         "the later page is still shown"
     );
 }
+
+#[test]
+fn a_refresh_while_more_jobs_is_pending_keeps_the_requested_page() {
+    let root = Root::new("jobs-more-during-refresh");
+    let engine = start(&root);
+    seed_prompt(&engine);
+    let backend = engine.backend();
+    let page = usize::from(ops::PAGE_LIMIT);
+    let title = |n: usize| format!("Job {n:04}");
+    for n in 1..=page + 5 {
+        create_job(&*backend, &title(n));
+    }
+    let gate = Gate::new("jobs.list")
+        .with_frame_field("/body/page/cursor")
+        .missing_hints();
+    let mut h = harness(
+        shell_with(Ok(gate.over(backend)), &root, Script::default(), None),
+        1440.0,
+        9000.0,
+    );
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let _release = Release(gate.clone());
+    settle(&mut h);
+    click_nav(&mut h, "Scheduled jobs");
+    assert_eq!(h.state().jobs.list.items.len(), page);
+    let generation = h.state().jobs.list_generation;
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "More jobs").click();
+    step_until(&mut h, "the pending More jobs request", |s| {
+        s.client().is_some_and(|c| {
+            c.activities()
+                .iter()
+                .any(|a| a.label == "Loading more jobs")
+        })
+    });
+    // Refresh's first page wins the race; later pages stay held until it is applied.
+    h.state_mut().load_jobs();
+    step_until(&mut h, "the refreshed first page", |s| {
+        s.jobs.list_generation != generation || s.jobs.list_refresh.is_some()
+    });
+    gate.open();
+    settle(&mut h);
+    assert_eq!(h.state().jobs.list.items.len(), page + 5);
+    let titles: Vec<String> = h
+        .state()
+        .jobs
+        .list
+        .items
+        .iter()
+        .map(|j| j.title.0.clone())
+        .collect();
+    assert_eq!(titles, (1..=page + 5).map(title).collect::<Vec<_>>());
+    assert_eq!(h.state().jobs.list_pages, 2);
+    assert!(!h.state().jobs.list.more && h.state().jobs.list_refresh.is_none());
+}

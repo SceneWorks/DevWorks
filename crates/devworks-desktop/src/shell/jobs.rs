@@ -350,11 +350,14 @@ pub struct JobsUi {
     pub list_cursor: Option<String>,
     /// How many pages the shown list holds (the first and each More jobs page).
     pub list_pages: usize,
+    /// Furthest page requested, including a More jobs request still in flight. A refresh must
+    /// preserve that request even if it replaces the list before the later page replies.
+    pub list_requested_pages: usize,
     /// The shown list's identity: a More jobs page continues only the list it was asked for.
     pub list_generation: u64,
     /// The last list or refresh identity handed out.
     pub generations: u64,
-    /// A refresh re-reading every shown page, replacing the list once they are all read.
+    /// A refresh re-reading every shown or requested page, replacing the list once all are read.
     pub list_refresh: Option<ListRefresh>,
     /// The listed scope: a project's jobs, or the app-level ones (`None`).
     pub scope: Option<String>,
@@ -403,6 +406,7 @@ impl JobsUi {
         self.list = ListState::default();
         self.list_cursor = None;
         self.list_pages = 0;
+        self.list_requested_pages = 0;
         self.list_refresh = None;
         self.list_generation = self.generation();
     }
@@ -421,6 +425,7 @@ impl JobsUi {
         };
         self.list_cursor = cursor;
         self.list_pages = pages;
+        self.list_requested_pages = pages;
         self.list_refresh = None;
         self.list_generation = self.generation();
     }
@@ -541,9 +546,12 @@ impl Shell {
                         continue;
                     };
                     let slot = Slot::JobsMore(self.jobs.list_generation);
-                    self.query(slot, "Loading more jobs", "jobs.list", move |b| {
+                    if self.query(slot, "Loading more jobs", "jobs.list", move |b| {
                         ops::jobs_list_after(b, scope.as_deref(), Some(&cursor))
-                    });
+                    }) {
+                        self.jobs.list_requested_pages =
+                            self.jobs.list_requested_pages.max(self.jobs.list_pages + 1);
+                    }
                 }
                 JobAction::Scope(s) => {
                     self.jobs.set_scope(s);
@@ -665,9 +673,11 @@ impl Shell {
         use crate::backend::Reply;
         match (slot, reply) {
             (Slot::JobsList, Reply::Query(q)) => match ops::jobs_page(q) {
-                // More pages are shown: every one is read again before the list is replaced,
-                // so a refresh never collapses it to the first page.
-                Ok((items, Some(cursor))) if self.jobs.list_pages > 1 => {
+                // More pages are shown or requested: read them before replacing the list,
+                // including a More jobs response that this refresh will make stale.
+                Ok((items, Some(cursor)))
+                    if self.jobs.list_pages.max(self.jobs.list_requested_pages) > 1 =>
+                {
                     let generation = self.jobs.generation();
                     self.jobs.list_refresh = Some(ListRefresh {
                         generation,
@@ -695,9 +705,12 @@ impl Shell {
                         let mut refresh = self.jobs.list_refresh.take()?;
                         append_jobs(&mut refresh.items, items);
                         refresh.pages += 1;
-                        // Up to the pages shown now (More jobs may have added one meanwhile).
+                        // Include pages requested while this refresh was in flight.
                         match cursor {
-                            Some(c) if refresh.pages < self.jobs.list_pages => {
+                            Some(c)
+                                if refresh.pages
+                                    < self.jobs.list_pages.max(self.jobs.list_requested_pages) =>
+                            {
                                 self.jobs.list_refresh = Some(refresh);
                                 self.refresh_next_jobs(g, c);
                             }
