@@ -1587,6 +1587,13 @@ fn deletion_is_permissioned_previewed_and_keeps_provenance() {
         .read(move |s| s.knowledge().knowledge_evidence(&evidence))
         .unwrap();
     assert!(e.deleted_at_ms.is_some() && e.snippet.is_empty());
+    // A bundle never lists purged evidence, though the claim's IDs still name it.
+    assert!(
+        fx.read_claim(&user, proj("project-a"), &keep)
+            .evidence
+            .0
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1783,4 +1790,415 @@ fn user_import_previews_exactly_and_stores_only_verified_candidates_once() {
     // The old preview no longer matches the store, so it cannot import twice.
     let f = refused(fx.cmd(&user, "knowledge.import_user_data", body(&digest)));
     assert_eq!(f.code, DomainErrorCode::Conflict);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Codex round 1
+
+/// Every text value of the store's Knowledge rows and snapshots (to prove content is gone).
+fn all_text(fx: &Fx) -> String {
+    fx.store
+        .with_writer_connection(|c| {
+            let mut out = String::new();
+            for sql in [
+                "SELECT snapshot_json FROM knowledge_history",
+                "SELECT reason || coalesce(resolution,'') || evidence_json FROM knowledge_challenges",
+                "SELECT name || coalesce(reference,'') FROM knowledge_addresses",
+                "SELECT event_key || coalesce(source_ref,'') FROM knowledge_lesson_events",
+                "SELECT body_json || coalesce(applicability_json,'') FROM knowledge_claims",
+            ] {
+                let mut st = c.prepare(sql).unwrap();
+                let rows = st.query_map([], |r| r.get::<_, String>(0)).unwrap();
+                for r in rows {
+                    out.push_str(&r.unwrap());
+                    out.push('\n');
+                }
+            }
+            Ok(out)
+        })
+        .unwrap()
+}
+
+#[test]
+fn deleting_a_lesson_scrubs_its_challenges_addresses_and_references_everywhere() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let lesson = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Secret",
+        with(
+            draft("Lesson", "secret rule text"),
+            json!({"lesson": with(lesson_draft("Prompt", Some("secret-prompt-ref"), None),
+                json!({"applicability": {"activities": ["implementing"],
+                    "paths": ["secret/path.rs"], "tools": ["secret-tool"],
+                    "repositoryIds": []}}))}),
+        ),
+    );
+    let rev = fx.revision(&lesson);
+    receipt(fx.cmd(
+        &user,
+        "knowledge.challenge",
+        json!({"scope": proj("project-a"),
+        "claimId": lesson, "expectedRevision": rev.to_string(),
+        "reason": "secret challenge reason", "evidenceIds": []}),
+    ));
+    let rev = fx.revision(&lesson);
+    receipt(fx.cmd(
+        &user,
+        "knowledge.promote",
+        json!({"claimId": lesson,
+        "expectedRevision": rev.to_string(), "destination": proj("project-a"),
+        "action": "Address", "address": {"kind": "Test", "name": "secret_address_name",
+            "reference": "secret/address/ref"}}),
+    ));
+    assert!(all_text(&fx).contains("secret challenge reason"));
+    let rev = fx.revision(&lesson);
+    summary(fx.cmd(
+        &user,
+        "knowledge.delete_selected",
+        json!({"scope": proj("project-a"),
+        "claims": [{"id": lesson, "revision": rev.to_string()}]}),
+    ));
+    // The deleted claim reads with identity and attribution only.
+    let c = fx.claim(&user, proj("project-a"), &lesson);
+    let l = c.lesson.unwrap();
+    assert!(l.challenges.0.is_empty() && l.addressed_by.0.is_empty());
+    assert!(l.applicability.paths.0.is_empty() && l.source_ref.is_none());
+    assert_eq!(c.author_id.unwrap().0.as_str(), "user-a");
+    // No row or snapshot (including the deletion snapshot) keeps any of the content.
+    let text = all_text(&fx);
+    for secret in [
+        "secret rule text",
+        "secret challenge reason",
+        "secret_address_name",
+        "secret/address/ref",
+        "secret-prompt-ref",
+        "secret/path.rs",
+        "secret-tool",
+    ] {
+        assert!(!text.contains(secret), "{secret} survived the deletion");
+    }
+    // The challenge keeps its identity, state and author; the event count is kept.
+    let challenges = fx.read(|s| s.knowledge().knowledge_challenges(&lesson, 10));
+    assert_eq!(challenges.len(), 1);
+    assert_eq!(challenges[0].author.0.as_str(), "user-a");
+    assert_eq!(
+        fx.read(|s| s.knowledge().knowledge_lesson_event_count(&lesson)),
+        1
+    );
+}
+
+#[test]
+fn nested_merges_unwind_one_level_at_a_time_without_losing_events() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let lesson = |name: &str, event: &str| {
+        fx.claim_id(
+            &a,
+            proj("project-a"),
+            name,
+            with(
+                draft("Lesson", name),
+                json!({"lesson": lesson_draft("Agent", Some(event), None)}),
+            ),
+        )
+    };
+    let (la, lb, lc) = (lesson("A", "ea"), lesson("B", "eb"), lesson("C", "ec"));
+    let relate = |s: &Id, p: &str, o: &Id| {
+        fx.cmd(
+            &a,
+            "knowledge.relate",
+            json!({"scope": proj("project-a"), "subjectId": s,
+            "predicate": p, "objectId": o, "evidenceIds": []}),
+        )
+    };
+    let recurrence = |id: &Id| {
+        fx.claim(&a, proj("project-a"), id)
+            .lesson
+            .unwrap()
+            .recurrence
+            .get()
+    };
+    receipt(relate(&la, "same_as", &lb));
+    receipt(relate(&lb, "same_as", &lc));
+    assert_eq!(recurrence(&lc), 3);
+    // The inner merge cannot be unwound while its target is itself merged.
+    assert_eq!(
+        refused(relate(&la, "unmerge", &lb)).code,
+        DomainErrorCode::Conflict
+    );
+    receipt(relate(&lb, "unmerge", &lc));
+    assert_eq!(
+        (recurrence(&lb), recurrence(&lc)),
+        (2, 1),
+        "B gets its own and A's events back"
+    );
+    receipt(relate(&la, "unmerge", &lb));
+    assert_eq!(
+        (recurrence(&la), recurrence(&lb), recurrence(&lc)),
+        (1, 1, 1)
+    );
+}
+
+#[test]
+fn a_past_revision_reads_with_its_own_entities_and_evidence() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let r = receipt(fx.record(&user, proj("project-a"), json!({
+        "entities": [{"clientId": "old", "label": "Old subject", "entityType": "t", "aliases": []},
+            {"clientId": "new", "label": "New subject", "entityType": "t", "aliases": []}],
+        "evidence": [{"id": "e1", "source": {"kind": "Observation", "sourceRef": "log:1"},
+            "snippet": "first evidence"},
+            {"id": "e2", "source": {"kind": "Observation", "sourceRef": "log:2"},
+            "snippet": "second evidence"}],
+        "claims": [with(draft("Fact", "first"), json!({"subjectId": "old", "evidenceIds": ["e1"]}))]})));
+    let claim = r.claim_ids.0[0].clone();
+    let bundle = fx.read_claim(&user, proj("project-a"), &claim);
+    let old = bundle.entities.0[0].id.clone();
+    let e1 = bundle.evidence.0[0].id.clone();
+    let (new, e2) = {
+        let others: Vec<Id> = r
+            .entity_ids
+            .0
+            .iter()
+            .filter(|e| **e != old)
+            .cloned()
+            .collect();
+        let w = fx
+            .read({
+                let id = r.write_id.clone();
+                move |s| s.knowledge().knowledge_write(&id)
+            })
+            .unwrap();
+        let evidence: Vec<Id> = w
+            .changes
+            .iter()
+            .filter(|c| c.target_kind == "Evidence" && c.id != e1)
+            .map(|c| c.id.clone())
+            .collect();
+        (others[0].clone(), evidence[0].clone())
+    };
+    // A later entity revision (a new alias) is not part of the first revision's view.
+    receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": [{"clientId": "o",
+        "label": "Old subject", "entityType": "t", "aliases": ["later alias"]}],
+        "evidence": [], "claims": []}),
+    ));
+    receipt(fx.cmd(
+        &user,
+        "knowledge.revise",
+        json!({"scope": proj("project-a"), "claimId": claim,
+        "expectedRevision": "1", "replacement": with(draft("Fact", "second"),
+            json!({"subjectId": new, "evidenceIds": [e2]}))}),
+    ));
+    let past = match result(fx.q(
+        &user,
+        "knowledge.read",
+        json!({"scope": proj("project-a"),
+        "claimId": claim, "revision": "1"}),
+    )) {
+        OperationResult::KnowledgeRead { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let entity_ids: Vec<&Id> = past.entities.0.iter().map(|e| &e.id).collect();
+    assert_eq!(
+        entity_ids,
+        [&old],
+        "the revision's subject, not the current one"
+    );
+    assert!(
+        past.entities.0[0].aliases.0.is_empty(),
+        "the entity as it was then"
+    );
+    let evidence_ids: Vec<&Id> = past.evidence.0.iter().map(|e| &e.id).collect();
+    assert_eq!(evidence_ids, [&e1]);
+    assert!(past.relations.is_none() && past.conflicts.0.is_empty());
+    let now = fx.read_claim(&user, proj("project-a"), &claim);
+    assert_eq!(now.entities.0[0].id, new);
+    assert_eq!(now.evidence.0[0].id, e2);
+}
+
+#[test]
+fn an_observation_that_changes_staleness_expires_a_stale_filtered_cursor() {
+    let fx = Fx::new();
+    let user = fx.user();
+    for i in 0..3 {
+        receipt(fx.record(&user, proj("project-a"), json!({
+            "entities": [{"clientId": "s", "label": "Watched", "entityType": "t", "aliases": []}],
+            "evidence": [{"id": "e", "source": {"kind": "Code", "sourceRef": format!("repo:f{i}")},
+                "snippet": "x", "sourceRevision": "c1"}],
+            "claims": [with(draft("Fact", &format!("watched fact {i}")), json!({"evidenceIds": ["e"]}))]})));
+    }
+    let body = |cursor: Option<&str>| {
+        let mut page = json!({"limit": 1});
+        if let Some(c) = cursor {
+            page["cursor"] = json!(c);
+        }
+        json!({"scope": proj("project-a"), "text": "watched", "tags": [], "kinds": [],
+            "page": page, "entityLimit": 50, "claimLimit": 50, "stale": false})
+    };
+    let first = match result(fx.q(&user, "knowledge.search", body(None))) {
+        OperationResult::KnowledgeSearch { value } => value.next_cursor.unwrap().0,
+        other => panic!("{other:?}"),
+    };
+    // The same revision again changes nothing: the cursor still continues.
+    fx.write({
+        let k = fx.knowledge.clone();
+        move |tx| k.observe_source(tx, "repo:f0", "c1")
+    });
+    assert!(matches!(
+        fx.q(&user, "knowledge.search", body(Some(&first))),
+        DomainQueryReply::Result { .. }
+    ));
+    let changed = fx.write({
+        let k = fx.knowledge.clone();
+        move |tx| k.observe_source(tx, "repo:f0", "c2")
+    });
+    assert_eq!(changed.len(), 1);
+    let f = query_fault(fx.q(&user, "knowledge.search", body(Some(&first))));
+    assert_eq!(f.code, DomainErrorCode::CursorExpired);
+}
+
+#[test]
+fn another_projects_identical_relation_is_its_own_record() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let x = fx.claim_id(&user, ws(), "X", draft("Fact", "general x"));
+    let y = fx.claim_id(&user, ws(), "Y", draft("Fact", "general y"));
+    let relate = |p: &str| {
+        fx.cmd(
+            &user,
+            "knowledge.relate",
+            json!({"scope": proj(p), "subjectId": x,
+            "predicate": "depends_on", "objectId": y, "evidenceIds": []}),
+        )
+    };
+    receipt(relate("project-a"));
+    // Project B's relation is recorded, not suppressed by project A's.
+    receipt(relate("project-b"));
+    assert!(matches!(
+        decision(relate("project-b")),
+        DomainDecision::NoChange { .. }
+    ));
+    let seen = |p: &str| fx.read_claim(&user, proj(p), &x).relations.unwrap().0.len();
+    assert_eq!((seen("project-a"), seen("project-b")), (1, 1));
+}
+
+#[test]
+fn a_write_whose_receipt_would_exceed_its_lists_is_refused_not_truncated() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let target = fx.claim_id(&user, proj("project-a"), "T", draft("Fact", "target"));
+    let claims: Vec<Value> = (0..128)
+        .map(|i| draft("Fact", &format!("bulk {i}")))
+        .collect();
+    let f = refused(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": "Bulk", "entityType": "t", "aliases": []}],
+        "evidence": [{"id": "e", "claimId": target, "source": {"kind": "Observation",
+            "sourceRef": "log:x"}, "snippet": "attached"}],
+        "claims": claims}),
+    ));
+    assert_eq!(f.code, DomainErrorCode::InvalidArgument);
+    assert_eq!(f.target_kind.unwrap().0, "receipt_bound");
+    assert_eq!(
+        fx.revision(&target),
+        1,
+        "nothing of the refused write stays"
+    );
+}
+
+#[test]
+fn a_new_delivery_expires_an_undelivered_cursor() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let rules: Vec<Id> = (0..3)
+        .map(|i| {
+            fx.claim_id(
+                &user,
+                proj("project-a"),
+                &format!("R{i}"),
+                with(
+                    draft("Lesson", &format!("rule {i}")),
+                    json!({"lesson": lesson_draft("Prompt", None, None)}),
+                ),
+            )
+        })
+        .collect();
+    fx.write(|tx| {
+        tx.sessions().insert_session(&StoredSession {
+            conversation_id: id("conversation-s1"),
+            id: id("s1"),
+            agent_id: actor("agent-a"),
+            project_id: Some(project("project-a")),
+            root_id: None,
+            title: "Chat".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("agent-a"),
+            created_at_ms: 1,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })
+    });
+    let body = |cursor: Option<&str>| {
+        let mut page = json!({"limit": 1});
+        if let Some(c) = cursor {
+            page["cursor"] = json!(c);
+        }
+        json!({"scope": proj("project-a"), "tags": ["lesson"], "view": "Undelivered", "page": page})
+    };
+    let cursor = || match result(fx.q(&user, "knowledge.tagged_lessons", body(None))) {
+        OperationResult::KnowledgeTaggedLessons { value } => value.next_cursor.unwrap().0,
+        other => panic!("{other:?}"),
+    };
+    let deliver = |rule: &Id| {
+        let (rule, rev) = (rule.clone(), fx.revision(rule));
+        fx.write({
+            let k = fx.knowledge.clone();
+            move |tx| k.record_delivery(tx, &id("s1"), &[(rule, rev)])
+        });
+    };
+    let first = cursor();
+    deliver(&rules[2]);
+    // The view lost a member: continuing the old page would skip or repeat a lesson.
+    let f = query_fault(fx.q(&user, "knowledge.tagged_lessons", body(Some(&first))));
+    assert_eq!(f.code, DomainErrorCode::CursorExpired);
+    // Recording the same delivery again changes nothing, so a fresh cursor still continues.
+    let fresh = cursor();
+    deliver(&rules[2]);
+    assert!(matches!(
+        fx.q(&user, "knowledge.tagged_lessons", body(Some(&fresh))),
+        DomainQueryReply::Result { .. }
+    ));
+}
+
+#[test]
+fn a_deleted_claim_leaves_no_live_relation_in_another_bundle() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let x = fx.claim_id(&user, ws(), "X", draft("Fact", "general x"));
+    let y = fx.claim_id(&user, ws(), "Y", draft("Fact", "general y"));
+    receipt(fx.cmd(
+        &user,
+        "knowledge.relate",
+        json!({"scope": ws(), "subjectId": x,
+        "predicate": "depends_on", "objectId": y, "evidenceIds": []}),
+    ));
+    let related = || fx.read_claim(&user, ws(), &y).relations.unwrap().0.len();
+    assert_eq!(related(), 1);
+    let rev = fx.revision(&x);
+    summary(fx.cmd(
+        &user,
+        "knowledge.delete_selected",
+        json!({"scope": ws(), "claims": [{"id": x, "revision": rev.to_string()}]}),
+    ));
+    assert_eq!(related(), 0);
 }

@@ -69,6 +69,41 @@ fn split(list: &str) -> Vec<String> {
         .collect()
 }
 
+/// The replacement an edit submits: the selected claim exactly as it is, with only the fields
+/// the editor shows replaced (entry kind, text, tags and, for a lesson, its activities). The
+/// subject, predicate, object, confidence, cited evidence, structured value, normalized text,
+/// source, effective time, origin reference and the rest of the applicability are kept, so an
+/// edit never drops citations or content it did not show.
+pub fn revision_of_claim(c: &KnowledgeClaim, d: &Draft, kind: &str) -> Value {
+    let mut v = json!({"kind": kind, "entryKind": d.entry_kind, "subjectId": c.subject_id,
+        "predicate": c.predicate, "value": d.value.trim(), "confidence": c.confidence.get(),
+        "evidenceIds": c.evidence_ids, "tags": split(&d.tags)});
+    if let Some(o) = &c.object_id {
+        v["objectId"] = json!(o);
+    }
+    if let Some(j) = &c.value_json {
+        v["valueJson"] = j.0.clone();
+    }
+    if let Some(t) = &c.normalized_text {
+        v["normalizedText"] = json!(t);
+    }
+    if let Some(t) = &c.effective_at_ms {
+        v["effectiveAtMs"] = json!(t);
+    }
+    if let Some(s) = &c.source {
+        v["source"] = json!(s);
+    }
+    if let Some(r) = &c.origin_ref {
+        v["originRef"] = json!(r);
+    }
+    if let Some(l) = &c.lesson {
+        let mut applicability = serde_json::to_value(&l.applicability).expect("applicability");
+        applicability["activities"] = json!(split(&d.activities));
+        v["lesson"] = json!({"source": l.source, "applicability": applicability});
+    }
+    v
+}
+
 /// A create or edit draft.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Draft {
@@ -423,19 +458,11 @@ impl KnowledgeScreen {
                 let Some(current) = self.selected_claim().filter(|c| c.id == *id) else {
                     return Err("Select the entry again before saving.".into());
                 };
-                claim["subjectId"] = json!(current.subject_id);
-                if d.entry_kind == "Lesson" {
-                    // A revision keeps the lesson's provenance; only applicability changes.
-                    let source = current
-                        .lesson
-                        .as_ref()
-                        .map_or("Prompt".to_owned(), |l| wire(&l.source));
-                    claim["lesson"]["source"] = json!(source);
-                }
                 Ok((
                     "knowledge.revise",
-                    json!({"scope": self.scope(), "claimId": id,
-                        "expectedRevision": revision.to_string(), "replacement": claim}),
+                    json!({"scope": current.scope, "claimId": id,
+                        "expectedRevision": revision.to_string(),
+                        "replacement": revision_of_claim(current, d, kind)}),
                 ))
             }
             None => {
@@ -464,7 +491,9 @@ impl KnowledgeScreen {
             return Err(format!("{} needs a reason.", change.label()));
         }
         let revision = c.revision.get().to_string();
-        let scope = self.scope();
+        // Every change acts in the scope the claim lives in (a general claim shown in a project
+        // listing stays general); only "Make general" names another scope.
+        let scope = serde_json::to_value(&c.scope).expect("scope");
         Ok(match change {
             Change::Verify => (
                 "knowledge.verify",
@@ -1495,6 +1524,100 @@ mod tests {
             json!({"kind": "Project", "projectId": "project-x"})
         );
         assert_eq!(body["page"]["cursor"], json!("c"));
+    }
+
+    fn general_lesson() -> KnowledgeClaim {
+        serde_json::from_value(json!({
+            "id": "claim-g", "revision": "4", "kind": "Lesson", "subjectId": "entity-s",
+            "predicate": "observed", "objectId": "entity-o", "value": "Old text",
+            "confidence": 0.3, "state": "Active", "evidenceIds": ["ev-1", "ev-2"],
+            "tags": ["lesson"], "scope": {"kind": "Workspace"},
+            "valueJson": {"steps": [1, 2]}, "normalizedText": "old text body",
+            "effectiveAtMs": "9", "source": "run-7", "entryKind": "Lesson",
+            "lifecycle": "Active", "originRef": "message-3",
+            "lesson": {"ruleState": "Candidate", "source": "Agent",
+                "applicability": {"activities": ["reviewing"], "paths": ["src/lib.rs"],
+                    "tools": ["gh"], "harness": "claude-code", "repositoryIds": ["repo-a"]},
+                "recurrence": "1", "recurrenceThreshold": "3", "challenges": [],
+                "addressedBy": [], "deliveredSessions": "0"}
+        }))
+        .unwrap()
+    }
+    fn showing(claim: KnowledgeClaim) -> KnowledgeScreen {
+        let mut s = KnowledgeScreen::new();
+        s.set_projects(vec![("project-x".into(), "Project X".into())]);
+        s.project = Some("project-x".into());
+        s.begin_listing(false);
+        s.selected = Some(claim.id.clone());
+        s.items = vec![claim];
+        s
+    }
+
+    #[test]
+    fn an_edit_replaces_only_what_the_editor_shows() {
+        let c = general_lesson();
+        let s = showing(c.clone());
+        let d = Draft {
+            revises: Some((c.id.clone(), 4)),
+            entry_kind: "Lesson",
+            subject: String::new(),
+            value: "New text".into(),
+            tags: "lesson, edited".into(),
+            activities: "implementing".into(),
+        };
+        let (op, body) = s.save_body(&d).unwrap();
+        assert_eq!(op, "knowledge.revise");
+        let r = &body["replacement"];
+        assert_eq!(r["value"], json!("New text"));
+        assert_eq!(r["tags"], json!(["lesson", "edited"]));
+        // Everything the editor does not show is the claim's own.
+        assert_eq!(r["evidenceIds"], json!(["ev-1", "ev-2"]));
+        assert_eq!(r["objectId"], json!("entity-o"));
+        assert_eq!(r["predicate"], json!("observed"));
+        assert_eq!(r["confidence"], json!(0.3));
+        assert_eq!(r["valueJson"], json!({"steps": [1, 2]}));
+        assert_eq!(r["normalizedText"], json!("old text body"));
+        assert_eq!(r["source"], json!("run-7"));
+        assert_eq!(r["effectiveAtMs"], json!("9"));
+        assert_eq!(r["lesson"]["source"], json!("Agent"));
+        let a = &r["lesson"]["applicability"];
+        assert_eq!(a["activities"], json!(["implementing"]));
+        assert_eq!(a["paths"], json!(["src/lib.rs"]));
+        assert_eq!(a["tools"], json!(["gh"]));
+        assert_eq!(a["harness"], json!("claude-code"));
+        // The edit acts in the claim's scope, not the project listing's.
+        assert_eq!(body["scope"], json!({"kind": "Workspace"}));
+    }
+
+    #[test]
+    fn changes_act_in_the_claims_own_scope() {
+        let mut s = showing(general_lesson());
+        s.reason = "checked".into();
+        s.tag_edit = "lesson".into();
+        for change in [
+            Change::Verify,
+            Change::Retract,
+            Change::Challenge,
+            Change::Retire,
+            Change::Delete,
+            Change::SaveTags,
+        ] {
+            let (_, body) = s.change_body(change).unwrap();
+            assert_eq!(body["scope"], json!({"kind": "Workspace"}), "{change:?}");
+        }
+        // Making a general lesson effective (or rejecting it) keeps it general.
+        for change in [Change::Promote, Change::Reject] {
+            let (_, body) = s.change_body(change).unwrap();
+            assert_eq!(
+                body["destination"],
+                json!({"kind": "Workspace"}),
+                "{change:?}"
+            );
+        }
+        // Only the explicit scope change names another scope.
+        let (op, body) = s.change_body(Change::MakeGeneral).unwrap();
+        assert_eq!(op, "knowledge.scope");
+        assert_eq!(body["destination"], json!({"kind": "Workspace"}));
     }
 
     #[test]

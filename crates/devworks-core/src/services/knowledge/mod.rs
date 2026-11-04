@@ -144,6 +144,11 @@ pub const PREVIEW_COMPONENT: &str = "knowledge.preview";
 pub const IMPORT_COMPONENT: &str = "knowledge.import";
 /// Most claims one delete by source tombstones (a larger source is refused, never truncated).
 pub const MAX_SOURCE_DELETE: usize = 10_000;
+/// Most challenges, addresses, tags, cited evidence records and aliases one record carries,
+/// and most identifiers one write receipt names: the wire lists' capacity. A write that would
+/// exceed one is refused, so no list is ever cut short.
+pub const MAX_CHALLENGES: usize = 128;
+pub const MAX_LIST: usize = 128;
 /// Schema revision 2 of the Knowledge operations.
 pub const REVISION_2: SchemaRevision = SchemaRevision(2);
 
@@ -379,8 +384,14 @@ pub(crate) fn claim_wire(
     let lifecycle: KnowledgeLifecycle =
         model::parse(&c.lifecycle).ok_or_else(|| corrupt("lifecycle"))?;
     let stale = c.lifecycle == "Active" && read.knowledge_claim_stale(&c.id)?;
-    let challenges = read.knowledge_challenges(&c.id, 128)?;
-    let open_challenge = read.knowledge_open_challenges(&c.id)? > 0;
+    // A deleted claim shows no challenge or address content: only its identity remains.
+    let deleted = c.lifecycle == "Deleted";
+    let challenges = if deleted {
+        Vec::new()
+    } else {
+        read.knowledge_challenges(&c.id, MAX_CHALLENGES as u16)?
+    };
+    let open_challenge = !deleted && read.knowledge_open_challenges(&c.id)? > 0;
     let state = match c.lifecycle.as_str() {
         "Retracted" | "Deleted" => KnowledgeState::Retracted,
         _ if open_challenge => KnowledgeState::Challenged,
@@ -401,7 +412,11 @@ pub(crate) fn claim_wire(
             let applicability: Applicability = serde_json::from_value(l.applicability.clone())
                 .map_err(|_| corrupt("applicability"))?;
             let deliveries = read.knowledge_deliveries(&c.id)?;
-            let addresses = read.knowledge_addresses(&c.id)?;
+            let addresses = if deleted {
+                Vec::new()
+            } else {
+                read.knowledge_addresses(&c.id)?
+            };
             Some(LessonRecord {
                 rule_state: model::parse::<RuleState>(&rule_state)
                     .ok_or_else(|| corrupt("rule state"))?,
@@ -789,18 +804,17 @@ impl KnowledgeService {
             _ => return Err(not_found(CLAIM, &i.claim_id).into()),
         };
         let th = thresholds(snapshot.configuration(), &scoped.readable)?;
-        let wire = match &i.revision {
+        let (wire, at) = match &i.revision {
             Some(r) if r.get() != claim.revision => {
                 let Some(h) = k.knowledge_history_at(&claim.id, r.get())? else {
                     return Err(not_found("knowledge_revision", &claim.id).into());
                 };
-                serde_json::from_value::<KnowledgeClaim>(h.snapshot.clone()).map_err(|_| {
-                    StorageError::InvalidRecord("stored claim revision snapshot".into())
-                })?
+                let (wire, entities) = snapshot_claim(&h.snapshot)?;
+                (wire, Some(entities))
             }
-            _ => claim_wire(k, &claim, &th)?,
+            _ => (claim_wire(k, &claim, &th)?, None),
         };
-        let bundle = bundle_of(k, &scoped, &claim, wire, &th)?;
+        let bundle = bundle_of(k, &scoped, &claim, wire, &th, at)?;
         Ok((
             OperationResult::KnowledgeRead { value: bundle },
             k.knowledge_scope_revision(&scoped.exact)?,
@@ -1056,31 +1070,44 @@ impl KnowledgeService {
             });
         };
         let now = tx.now_ms();
+        let mut touched: Vec<KnowledgeScope> = Vec::new();
         for (claim, revision) in rules {
             // Only a rule the session may be given: general, or of the session's own project.
-            match tx.knowledge().knowledge_claim(claim)? {
+            let scope = match tx.knowledge().knowledge_claim(claim)? {
                 Some(c)
                     if c.revision >= *revision
                         && *revision >= 1
                         && c.scope
                             .project()
-                            .is_none_or(|p| Some(p) == s.project_id.as_ref()) => {}
+                            .is_none_or(|p| Some(p) == s.project_id.as_ref()) =>
+                {
+                    c.scope
+                }
                 _ => {
                     return Err(StorageError::NotFound {
                         kind: CLAIM,
                         id: claim.as_str().to_owned(),
                     });
                 }
+            };
+            if tx
+                .knowledge()
+                .record_knowledge_delivery(session, claim, *revision, now)?
+                && !touched.contains(&scope)
+            {
+                touched.push(scope);
             }
-            tx.knowledge()
-                .record_knowledge_delivery(session, claim, *revision, now)?;
+        }
+        // A delivery changes the Undelivered view's membership: its listings' cursors expire.
+        for scope in &touched {
+            tx.knowledge().bump_scope(scope)?;
         }
         Ok(())
     }
 
     /// Records the current revision of a source (a repository path, a document version); claims
     /// recorded or verified against an earlier revision read stale until verified again.
-    /// Returns the claims that became stale.
+    /// Returns the claims whose stale status changed (stale now, or current again).
     pub fn observe_source(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -1093,8 +1120,21 @@ impl KnowledgeService {
             ));
         }
         let now = tx.now_ms();
-        tx.knowledge()
-            .observe_knowledge_source(source_ref, revision, now)
+        let changed = tx
+            .knowledge()
+            .observe_knowledge_source(source_ref, revision, now)?;
+        // A changed stale status changes what a stale-filtered listing returns: every scope it
+        // touched advances, so a cursor read before it expires instead of skipping a claim.
+        let mut scopes: Vec<KnowledgeScope> = Vec::new();
+        for (_, scope) in &changed {
+            if !scopes.contains(scope) {
+                scopes.push(scope.clone());
+            }
+        }
+        for scope in &scopes {
+            tx.knowledge().bump_scope(scope)?;
+        }
+        Ok(changed.into_iter().map(|(id, _)| id).collect())
     }
 
     /// Every effective rule a session of `project` (`None`: a workspace session) may be given:
@@ -1172,26 +1212,37 @@ pub(crate) fn bundle_of(
     claim: &StoredClaim,
     wire: KnowledgeClaim,
     th: &BTreeMap<String, i64>,
+    at: Option<BTreeMap<String, i64>>,
 ) -> Result<KnowledgeBundle, StorageError> {
+    // Entities and evidence are the ones the shown revision names (`wire`), not the current
+    // revision's; a past revision shows each entity as it was at that revision's time.
     let mut entities = Vec::new();
-    for id in std::iter::once(&claim.subject_id).chain(claim.object_id.iter()) {
-        if let Some(e) = k.knowledge_entity(id)?
+    for id in std::iter::once(&wire.subject_id).chain(wire.object_id.iter()) {
+        let Some(e) = k.knowledge_entity(id)? else {
+            continue;
+        };
+        if !scoped.sees(&e.scope) || entities.iter().any(|x: &KnowledgeEntity| x.id == e.id) {
+            continue;
+        }
+        entities.push(match &at {
+            Some(revisions) => entity_at(k, &e, revisions)?,
+            None => entity_wire(&e),
+        });
+    }
+    let mut evidence = Vec::new();
+    for id in &wire.evidence_ids.0 {
+        if let Some(e) = k.knowledge_evidence(id)?
+            && e.deleted_at_ms.is_none()
             && scoped.sees(&e.scope)
-            && !entities.iter().any(|x: &KnowledgeEntity| x.id == e.id)
         {
-            entities.push(entity_wire(&e));
+            evidence.push(evidence_wire(&e, Some(&claim.id))?);
         }
     }
-    let evidence = k
-        .knowledge_claim_evidence(&claim.id)?
-        .iter()
-        .filter(|e| scoped.sees(&e.scope))
-        .map(|e| evidence_wire(e, Some(&claim.id)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut claims = vec![wire];
+    let historical = at.is_some();
+    let mut claims = vec![wire.clone()];
     let mut conflicts = Vec::new();
     let mut truncated = false;
-    if claim.lifecycle == "Active" {
+    if claim.lifecycle == "Active" && !historical {
         let others =
             k.knowledge_claims_about(&scoped.keys(), &claim.subject_id, &claim.predicate, 129)?;
         truncated |= others.len() > 128;
@@ -1229,7 +1280,12 @@ pub(crate) fn bundle_of(
             }
         }
     }
-    let relations = k.knowledge_relations(&claim.id, 129)?;
+    // Relations and contradictions are current facts: a past revision is shown without them.
+    let relations = if historical {
+        Vec::new()
+    } else {
+        k.knowledge_relations(&claim.id, 129)?
+    };
     truncated |= relations.len() > 128;
     let visible_relations: Vec<_> = relations
         .iter()
@@ -1262,7 +1318,7 @@ pub(crate) fn bundle_of(
     }
     // The supersession chain, both directions, bounded.
     let mut supersession = Vec::new();
-    let mut back = claim.body.supersedes.clone();
+    let mut back = wire.supersedes.clone();
     while let Some(id) = back.take() {
         if supersession.len() >= 32 || supersession.contains(&id) {
             truncated = true;
@@ -1276,7 +1332,7 @@ pub(crate) fn bundle_of(
             _ => break,
         }
     }
-    let mut forward = claim.body.superseded_by.clone();
+    let mut forward = wire.superseded_by.clone();
     while let Some(id) = forward.take() {
         if supersession.len() >= 64 || supersession.contains(&id) {
             truncated = true;
@@ -1302,20 +1358,22 @@ pub(crate) fn bundle_of(
         conflicts: BoundedList(conflicts.into_iter().take(500).collect()),
         supersession_ids: BoundedList(supersession.into_iter().take(128).collect()),
         summary: None,
-        relations: Some(BoundedList(
-            visible_relations
-                .iter()
-                .map(|r| KnowledgeRelation {
-                    id: r.id.clone(),
-                    subject_id: r.subject_id.clone(),
-                    predicate: label(&r.predicate, "-"),
-                    object_id: r.object_id.clone(),
-                    evidence_ids: id_list(&r.evidence_ids),
-                    author_id: r.author.clone(),
-                    created_at_ms: counter(r.created_at_ms),
-                })
-                .collect(),
-        )),
+        relations: (!historical).then(|| {
+            BoundedList(
+                visible_relations
+                    .iter()
+                    .map(|r| KnowledgeRelation {
+                        id: r.id.clone(),
+                        subject_id: r.subject_id.clone(),
+                        predicate: label(&r.predicate, "-"),
+                        object_id: r.object_id.clone(),
+                        evidence_ids: id_list(&r.evidence_ids),
+                        author_id: r.author.clone(),
+                        created_at_ms: counter(r.created_at_ms),
+                    })
+                    .collect(),
+            )
+        }),
         revisions: Some(BoundedList(
             history
                 .iter()
@@ -1325,6 +1383,43 @@ pub(crate) fn bundle_of(
         )),
         scope_revision: Some(rev(k.knowledge_scope_revision(&scoped.exact)?)),
     })
+}
+
+/// The member of a claim snapshot naming the revisions of its subject and object entities.
+pub(crate) const SNAPSHOT_ENTITIES: &str = "$entities";
+
+/// A claim revision snapshot: the wire claim and the entity revisions it named.
+fn snapshot_claim(
+    snapshot: &Value,
+) -> Result<(KnowledgeClaim, BTreeMap<String, i64>), StorageError> {
+    let mut v = snapshot.clone();
+    let entities = v
+        .as_object_mut()
+        .and_then(|m| m.remove(SNAPSHOT_ENTITIES))
+        .and_then(|e| serde_json::from_value::<BTreeMap<String, i64>>(e).ok())
+        .unwrap_or_default();
+    let wire = serde_json::from_value::<KnowledgeClaim>(v)
+        .map_err(|_| StorageError::InvalidRecord("stored claim revision snapshot".into()))?;
+    Ok((wire, entities))
+}
+
+/// An entity at the revision a past claim revision named. A deleted entity, or a revision
+/// that is not recorded (or was purged), shows the entity as it is now (for a deleted entity,
+/// its tombstone).
+fn entity_at(
+    k: &dyn KnowledgeRead,
+    current: &StoredEntity,
+    revisions: &BTreeMap<String, i64>,
+) -> Result<KnowledgeEntity, StorageError> {
+    if current.deleted_at_ms.is_none()
+        && let Some(r) = revisions.get(current.id.as_str())
+        && *r != current.revision
+        && let Some(h) = k.knowledge_history_at(&current.id, *r)?
+        && let Ok(e) = serde_json::from_value::<KnowledgeEntity>(h.snapshot)
+    {
+        return Ok(e);
+    }
+    Ok(entity_wire(current))
 }
 
 /// Applicability with every list empty (a lesson recorded without one).

@@ -6,9 +6,9 @@
 use super::import::{self, Candidate, Outcome};
 use super::model::{self, fold, fold_tags, wire};
 use super::{
-    CHALLENGE, CLAIM, ENTITY, EVIDENCE, LESSON, LIFECYCLE, MAX_SOURCE_DELETE, PREVIEW, Reach,
-    SCOPE, Scoped, WRITE_AGGREGATE, WRITE_EVENT, claim_wire, diagnostic, entity_wire, nests,
-    no_applicability, reach, receipt_of, thresholds, writable,
+    CHALLENGE, CLAIM, ENTITY, EVIDENCE, LESSON, LIFECYCLE, MAX_CHALLENGES, MAX_LIST,
+    MAX_SOURCE_DELETE, PREVIEW, Reach, SCOPE, Scoped, WRITE_AGGREGATE, WRITE_EVENT, claim_wire,
+    diagnostic, entity_wire, nests, no_applicability, reach, receipt_of, thresholds, writable,
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::AdmittedCommand;
@@ -164,6 +164,14 @@ impl<'a> Writer<'a> {
         expected: Option<i64>,
         change: &str,
     ) -> Result<StoredClaim, Failure> {
+        // Every list a claim carries fits its wire list: a write past it is refused, never cut.
+        if claim.tags.len() > MAX_LIST || claim.body.evidence_ids.len() > MAX_LIST {
+            return Err(refuse(
+                DomainErrorCode::InvalidArgument,
+                "list_bound",
+                Some(&claim.id),
+            ));
+        }
         claim.updated_at_ms = self.now.max(claim.created_at_ms);
         let stored = self.k().put_knowledge_claim(&claim, expected)?;
         let scope = stored.scope.clone();
@@ -171,8 +179,17 @@ impl<'a> Writer<'a> {
         let mut thm = BTreeMap::new();
         thm.insert(scope.key(), th);
         let wire = claim_wire(self.tx.knowledge(), &stored, &thm)?;
-        let snapshot = serde_json::to_value(&wire)
+        let mut snapshot = serde_json::to_value(&wire)
             .map_err(|e| StorageError::InvalidRecord(format!("claim snapshot: {e}")))?;
+        // The revisions of the entities this revision names, so a read of it shows them as
+        // they were (not as later revisions changed them).
+        let mut entities = serde_json::Map::new();
+        for id in std::iter::once(&stored.subject_id).chain(stored.object_id.iter()) {
+            if let Some(e) = self.k().knowledge_entity(id)? {
+                entities.insert(e.id.as_str().to_owned(), json!(e.revision));
+            }
+        }
+        snapshot[super::SNAPSHOT_ENTITIES] = Value::Object(entities);
         self.history(
             &stored.id,
             stored.revision,
@@ -199,6 +216,13 @@ impl<'a> Writer<'a> {
         expected: Option<i64>,
         change: &str,
     ) -> Result<StoredEntity, Failure> {
+        if entity.aliases.len() > MAX_LIST {
+            return Err(refuse(
+                DomainErrorCode::InvalidArgument,
+                "list_bound",
+                Some(&entity.id),
+            ));
+        }
         entity.updated_at_ms = self.now.max(entity.created_at_ms);
         let stored = self.k().put_knowledge_entity(&entity, expected)?;
         let snapshot = serde_json::to_value(entity_wire(&stored))
@@ -249,6 +273,10 @@ impl<'a> Writer<'a> {
     /// Advances every touched scope, records the write and its history event, and returns the
     /// receipt (its revision is `primary`'s scope revision after the write).
     fn finish(mut self, primary: &KnowledgeScope) -> Result<KnowledgeWriteReceipt, Failure> {
+        // The receipt (and write_status) names every claim and entity the write changed.
+        if self.claim_ids.len() > MAX_LIST || self.entity_ids.len() > MAX_LIST {
+            return Err(invalid("receipt_bound"));
+        }
         for s in self.touched.clone().into_values() {
             self.k().bump_scope(&s)?;
         }
@@ -713,7 +741,7 @@ fn add_event(
         actor: w.ctx.principal().clone(),
         at_ms: w.now,
         write_id: w.write_id.clone(),
-        merged_from: None,
+        merge_path: Vec::new(),
     };
     Ok(w.k().add_knowledge_lesson_event(&event)?)
 }
@@ -1196,25 +1224,28 @@ fn relate(
             {
                 return Err(conflict(LIFECYCLE, &from.id));
             }
+            // Nested merges unwind outermost first: while the target is itself merged into
+            // another lesson, the events it holds are there, and unmerging it comes first.
+            require_active(&into)?;
             let moved = w.k().unmerge_knowledge_lesson_events(&from.id)?;
             let mut restored = from.clone();
             restored.lifecycle = "Active".into();
             restored.body.superseded_by = None;
             let restored = w.put_claim(restored, Some(from.revision), "Unmerged")?;
-            for r in w.k().knowledge_relations(&from.id, 500)? {
-                if r.predicate == model::SAME_AS
-                    && r.subject_id == from.id
-                    && r.object_id == into.id
-                {
-                    let now = w.now;
-                    w.k().remove_knowledge_relation(&r.id, now)?;
-                    w.changes.push(WriteChange {
-                        target_kind: "Relation".into(),
-                        id: r.id.clone(),
-                        before: None,
-                        after: None,
-                    });
-                }
+            let now = w.now;
+            if let Some(r) = w.k().remove_live_knowledge_relation(
+                &scoped.exact,
+                &from.id,
+                model::SAME_AS,
+                &into.id,
+                now,
+            )? {
+                w.changes.push(WriteChange {
+                    target_kind: "Relation".into(),
+                    id: r,
+                    before: None,
+                    after: None,
+                });
             }
             // A rule that took effect only by the merged events returns to candidate evidence.
             let events = w.k().knowledge_lesson_event_count(&into.id)?;
@@ -1284,13 +1315,8 @@ fn store_relation(
     object: &Id,
     evidence: &[Id],
 ) -> Result<bool, Failure> {
-    if w.k()
-        .knowledge_relations(subject, 500)?
-        .iter()
-        .any(|r| r.subject_id == *subject && r.predicate == predicate && r.object_id == *object)
-    {
-        return Ok(false);
-    }
+    // The store decides duplicates within this scope, over every live relation (not a page):
+    // another project's identical relation is its own record and never suppresses this one.
     let relation = StoredRelation {
         id: w.tx.new_id(IdKind::KnowledgeRelation),
         scope: scoped.exact.clone(),
@@ -1303,7 +1329,11 @@ fn store_relation(
         removed_at_ms: None,
         write_id: w.write_id.clone(),
     };
-    w.k().put_knowledge_relation(&relation)?;
+    match w.k().put_knowledge_relation(&relation) {
+        Ok(()) => {}
+        Err(StorageError::Duplicate { .. }) => return Ok(false),
+        Err(e) => return Err(e.into()),
+    }
     w.changes.push(WriteChange {
         target_kind: "Relation".into(),
         id: relation.id.clone(),
@@ -1643,6 +1673,17 @@ fn promote(
             };
             let existing = w.k().knowledge_addresses(&c.id)?;
             let kind = wire(&address.kind);
+            if existing.len() >= MAX_LIST
+                && !existing
+                    .iter()
+                    .any(|a| a.kind == kind && a.name == address.name.0)
+            {
+                return Err(refuse(
+                    DomainErrorCode::InvalidArgument,
+                    "list_bound",
+                    Some(&c.id),
+                ));
+            }
             let reference = address.reference.as_ref().map(|r| r.0.clone());
             if !existing
                 .iter()
@@ -1699,6 +1740,17 @@ fn challenge(
     let outcome_name = i.outcome.as_ref().map(wire);
     match (&i.resolve_challenge_id, outcome_name.as_deref()) {
         (None, None) => {
+            if w.k()
+                .knowledge_challenges(&c.id, MAX_CHALLENGES as u16)?
+                .len()
+                >= MAX_CHALLENGES
+            {
+                return Err(refuse(
+                    DomainErrorCode::InvalidArgument,
+                    "list_bound",
+                    Some(&c.id),
+                ));
+            }
             let ch = StoredChallenge {
                 id: w.tx.new_id(IdKind::KnowledgeChallenge),
                 claim_id: c.id.clone(),
@@ -1755,6 +1807,9 @@ fn challenge(
 
 /// Strips authored content from a revision snapshot, keeping identity, attribution, times and
 /// lifecycle (explicit deletion purges content, never provenance).
+fn empty_applicability() -> Value {
+    json!({"activities": [], "paths": [], "tools": [], "repositoryIds": []})
+}
 fn retained(snapshot: &Value) -> Value {
     let mut v = snapshot.clone();
     if let Some(m) = v.as_object_mut() {
@@ -1772,10 +1827,16 @@ fn retained(snapshot: &Value) -> Value {
         if m.contains_key("tags") {
             m.insert("tags".into(), json!([]));
         }
+        m.remove("originRef");
         if let Some(l) = m.get_mut("lesson").and_then(Value::as_object_mut) {
             l.remove("quotedWords");
             l.remove("sourceRef");
             l.remove("reason");
+            // Challenge reasons and addresses are content too; their identity lives on in the
+            // scrubbed side records.
+            l.insert("challenges".into(), json!([]));
+            l.insert("addressedBy".into(), json!([]));
+            l.insert("applicability".into(), empty_applicability());
         }
     }
     v
@@ -1794,6 +1855,14 @@ fn tombstone_claim(w: &mut Writer<'_>, c: &StoredClaim) -> Result<(), Failure> {
     next.body.lesson_source_ref = None;
     next.body.lesson_reason = None;
     next.body.reason = Some(format!("Deleted by {}", w.ctx.principal().0.as_str()));
+    next.body.origin_ref = None;
+    if let Some(l) = next.lesson.as_mut() {
+        l.applicability = empty_applicability();
+    }
+    w.k().purge_knowledge_lesson_records(&c.id)?;
+    // Its relations go too: a deleted endpoint leaves no live link in another bundle.
+    let now = w.now;
+    w.k().remove_knowledge_relations_of(&c.id, now)?;
     w.k().purge_knowledge_history(&c.id, &retained)?;
     w.put_claim(next, Some(c.revision), "Deleted")?;
     Ok(())
@@ -1805,6 +1874,8 @@ fn tombstone_entity(w: &mut Writer<'_>, e: &StoredEntity) -> Result<(), Failure>
     next.aliases.clear();
     next.canonical_name = None;
     next.external_id = None;
+    let now = w.now;
+    w.k().remove_knowledge_relations_of(&e.id, now)?;
     w.k().purge_knowledge_history(&e.id, &retained)?;
     w.put_entity(next, Some(e.revision), "Deleted")?;
     Ok(())

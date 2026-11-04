@@ -633,10 +633,10 @@ type RawEvent = (
     String,
     i64,
     String,
-    Option<String>,
+    String,
 );
 const EVENT_COLUMNS: &str =
-    "claim_id,event_key,source,source_ref,session_id,actor_id,at,write_id,merged_from";
+    "claim_id,event_key,source,source_ref,session_id,actor_id,at,write_id,merge_path";
 fn event_row(r: &Row<'_>) -> rusqlite::Result<RawEvent> {
     Ok((
         r.get(0)?,
@@ -660,7 +660,7 @@ fn event_of(r: RawEvent) -> Result<StoredLessonEvent, StorageError> {
         actor: ActorId(id_of(r.5)?),
         at_ms: r.6,
         write_id: id_of(r.7)?,
-        merged_from: opt_id(r.8)?,
+        merge_path: ids_of(&r.8)?,
     })
 }
 
@@ -951,7 +951,8 @@ macro_rules! knowledge_reads {
                 rows(
                     self.conn,
                     &format!(
-                        "SELECT {EVENT_COLUMNS} FROM knowledge_lesson_events WHERE merged_from=?1 \
+                        "SELECT {EVENT_COLUMNS} FROM knowledge_lesson_events WHERE \
+                         json_extract(merge_path,'$[#-1]')=?1 AND merge_path<>'[]' \
                          ORDER BY at, event_key LIMIT ?2"
                     ),
                     vec![Sql::Text(source.as_str().into()), Sql::Integer(limit)],
@@ -1104,17 +1105,6 @@ macro_rules! knowledge_reads {
                         Sql::Text(after.unwrap_or("").into()),
                         Sql::Integer(limit),
                     ],
-                )
-            }
-            fn knowledge_claim_evidence(
-                &self,
-                claim: &Id,
-            ) -> Result<Vec<StoredEvidence>, StorageError> {
-                evidence_where(
-                    self.conn,
-                    "JOIN knowledge_claim_evidence ce ON ce.evidence_id=e.id WHERE \
-                     ce.claim_id=?1 AND e.deleted_at IS NULL ORDER BY e.recorded_at, e.id LIMIT 500",
-                    vec![Sql::Text(claim.as_str().into())],
                 )
             }
             fn knowledge_counts(&self, scopes: &[String]) -> Result<KnowledgeCounts, StorageError> {
@@ -1494,9 +1484,14 @@ impl KnowledgeRepository for Unit<'_> {
 
     fn put_knowledge_relation(&mut self, r: &StoredRelation) -> Result<(), StorageError> {
         let live: bool = db(self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM knowledge_relations WHERE subject_id=?1 AND predicate=?2 \
-             AND object_id=?3 AND removed_at IS NULL)",
-            params![r.subject_id.as_str(), r.predicate, r.object_id.as_str()],
+            "SELECT EXISTS(SELECT 1 FROM knowledge_relations WHERE scope_key=?4 AND subject_id=?1 \
+             AND predicate=?2 AND object_id=?3 AND removed_at IS NULL)",
+            params![
+                r.subject_id.as_str(),
+                r.predicate,
+                r.object_id.as_str(),
+                r.scope.key()
+            ],
             |x| x.get(0),
         ))?;
         if live {
@@ -1627,27 +1622,89 @@ impl KnowledgeRepository for Unit<'_> {
                 e.actor.0.as_str(),
                 e.at_ms,
                 e.write_id.as_str(),
-                e.merged_from.as_ref().map(Id::as_str),
+                ids_json(&e.merge_path),
             ],
         ))? == 1)
     }
 
     fn merge_knowledge_lesson_events(&mut self, from: &Id, to: &Id) -> Result<i64, StorageError> {
         // An event the target already has stays with the source (one event counts once).
+        // Each moved event pushes `from` onto its merge path, keeping earlier merges below it.
         Ok(db(self.conn.execute(
-            "UPDATE knowledge_lesson_events SET claim_id=?2, merged_from=?1 WHERE claim_id=?1 AND \
+            "UPDATE knowledge_lesson_events SET claim_id=?2, \
+             merge_path=json_insert(merge_path,'$[#]',?1) WHERE claim_id=?1 AND \
              event_key NOT IN (SELECT event_key FROM knowledge_lesson_events WHERE claim_id=?2)",
             params![from.as_str(), to.as_str()],
         ))? as i64)
     }
 
     fn unmerge_knowledge_lesson_events(&mut self, from: &Id) -> Result<i64, StorageError> {
+        // Only events whose latest merge left `from` return, one level popped.
         Ok(db(self.conn.execute(
-            "UPDATE knowledge_lesson_events SET claim_id=?1, merged_from=NULL WHERE \
-             merged_from=?1 AND event_key NOT IN (SELECT event_key FROM knowledge_lesson_events \
-             WHERE claim_id=?1)",
+            "UPDATE knowledge_lesson_events SET claim_id=?1, \
+             merge_path=json_remove(merge_path,'$[#-1]') WHERE merge_path<>'[]' AND \
+             json_extract(merge_path,'$[#-1]')=?1 AND event_key NOT IN \
+             (SELECT event_key FROM knowledge_lesson_events WHERE claim_id=?1)",
             params![from.as_str()],
         ))? as i64)
+    }
+
+    fn remove_live_knowledge_relation(
+        &mut self,
+        scope: &KnowledgeScope,
+        subject: &Id,
+        predicate: &str,
+        object: &Id,
+        at_ms: i64,
+    ) -> Result<Option<Id>, StorageError> {
+        let id: Option<String> = db(self
+            .conn
+            .query_row(
+                "SELECT id FROM knowledge_relations WHERE scope_key=?1 AND subject_id=?2 AND \
+                 predicate=?3 AND object_id=?4 AND removed_at IS NULL",
+                params![scope.key(), subject.as_str(), predicate, object.as_str()],
+                |r| r.get(0),
+            )
+            .optional())?;
+        let Some(id) = id else { return Ok(None) };
+        let id = id_of(id)?;
+        self.remove_knowledge_relation(&id, at_ms)?;
+        Ok(Some(id))
+    }
+
+    fn purge_knowledge_lesson_records(&mut self, claim: &Id) -> Result<(), StorageError> {
+        let id = claim.as_str();
+        db(self.conn.execute(
+            "UPDATE knowledge_challenges SET reason='', evidence_json='[]', \
+             resolution=CASE WHEN resolution IS NULL THEN NULL ELSE '' END WHERE claim_id=?1",
+            params![id],
+        ))?;
+        db(self.conn.execute(
+            "DELETE FROM knowledge_addresses WHERE claim_id=?1",
+            params![id],
+        ))?;
+        // Event references can be content (a review URL, a message): keep each distinct event
+        // as an opaque digest so the count and attribution stay, the text does not.
+        let events = rows(
+            self.conn,
+            "SELECT event_key FROM knowledge_lesson_events WHERE claim_id=?1",
+            vec![Sql::Text(id.into())],
+            |r| r.get::<_, String>(0),
+        )?;
+        for key in events {
+            let digest = format!(
+                "purged|{}",
+                devworks_core::fingerprint::sha256_hex(key.as_bytes())
+            );
+            if !key.starts_with("purged|") {
+                db(self.conn.execute(
+                    "UPDATE knowledge_lesson_events SET event_key=?3, source_ref=NULL \
+                     WHERE claim_id=?1 AND event_key=?2",
+                    params![id, key, digest],
+                ))?;
+            }
+        }
+        Ok(())
     }
 
     fn put_knowledge_challenge(&mut self, c: &StoredChallenge) -> Result<(), StorageError> {
@@ -1709,13 +1766,20 @@ impl KnowledgeRepository for Unit<'_> {
         claim: &Id,
         revision: i64,
         at_ms: i64,
-    ) -> Result<(), StorageError> {
-        db(self.conn.execute(
+    ) -> Result<bool, StorageError> {
+        Ok(db(self.conn.execute(
             "INSERT OR IGNORE INTO knowledge_deliveries(session_id,claim_id,revision,delivered_at) \
              VALUES(?1,?2,?3,?4)",
             params![session.as_str(), claim.as_str(), revision, at_ms],
-        ))?;
-        Ok(())
+        ))? == 1)
+    }
+
+    fn remove_knowledge_relations_of(&mut self, id: &Id, at_ms: i64) -> Result<i64, StorageError> {
+        Ok(db(self.conn.execute(
+            "UPDATE knowledge_relations SET removed_at=?2 WHERE (subject_id=?1 OR object_id=?1) \
+             AND removed_at IS NULL",
+            params![id.as_str(), at_ms],
+        ))? as i64)
     }
 
     fn observe_knowledge_source(
@@ -1723,24 +1787,42 @@ impl KnowledgeRepository for Unit<'_> {
         source_ref: &str,
         revision: &str,
         at_ms: i64,
-    ) -> Result<Vec<Id>, StorageError> {
+    ) -> Result<Vec<(Id, KnowledgeScope)>, StorageError> {
+        // The stale status of every claim with a basis on this source, before and after.
+        let status = |conn: &Connection| {
+            rows(
+                conn,
+                &format!(
+                    "SELECT c.id, c.scope_key, c.project_id, {STALE_SQL} FROM knowledge_claims c \
+                     WHERE c.id IN (SELECT claim_id FROM knowledge_claim_basis WHERE source_ref=?1) \
+                     ORDER BY c.id"
+                ),
+                vec![Sql::Text(source_ref.into())],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, bool>(3)?,
+                    ))
+                },
+            )
+        };
+        let before = status(self.conn)?;
         db(self.conn.execute(
             "INSERT INTO knowledge_source_heads(source_ref,source_revision,observed_at) \
              VALUES(?1,?2,?3) ON CONFLICT(source_ref) DO UPDATE SET \
              source_revision=excluded.source_revision, observed_at=excluded.observed_at",
             params![source_ref, revision, at_ms],
         ))?;
-        rows(
-            self.conn,
-            "SELECT b.claim_id FROM knowledge_claim_basis b JOIN knowledge_claims c ON \
-             c.id=b.claim_id WHERE b.source_ref=?1 AND b.source_revision<>?2 AND \
-             c.lifecycle='Active' ORDER BY b.claim_id",
-            vec![Sql::Text(source_ref.into()), Sql::Text(revision.into())],
-            |r| r.get::<_, String>(0),
-        )?
-        .into_iter()
-        .map(id_of)
-        .collect()
+        let after = status(self.conn)?;
+        let mut changed = Vec::new();
+        for ((id, key, project, was), (_, _, _, now)) in before.into_iter().zip(after) {
+            if was != now {
+                changed.push((id_of(id)?, scope_of(&key, project)?));
+            }
+        }
+        Ok(changed)
     }
 
     fn map_knowledge_import(

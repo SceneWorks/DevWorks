@@ -18,11 +18,12 @@ pub const IMPORT_SCHEMA_ID: &str = "devworks/knowledge-import";
 pub const IMPORT_SCHEMA_REVISION: i64 = 1;
 /// Largest import file read.
 pub const MAX_IMPORT_BYTES: u64 = 4 * 1024 * 1024;
-/// Most candidates in one import.
-pub const MAX_CANDIDATES: usize = 200;
+/// Most candidates in one import: every stored candidate is named in the write receipt, whose
+/// identifier lists hold 128.
+pub const MAX_CANDIDATES: usize = 128;
 
 /// The JSON Schema of the import format (its digest is the `SchemaRef` digest).
-pub const IMPORT_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"devworks/knowledge-import/1","type":"object","additionalProperties":false,"required":["format","candidates"],"properties":{"format":{"const":"devworks/knowledge-import"},"candidates":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["entry","sourceFile","verification"],"properties":{"sourceFile":{"type":"string","minLength":1,"maxLength":4096},"verification":{"enum":["verified","stale","unverifiable","personal"]},"verificationNote":{"type":"string","maxLength":4096},"entry":{"type":"object","additionalProperties":false,"required":["kind","summary"],"properties":{"kind":{"enum":["goal","decision","constraint","fact","gotcha","attempt","architecture","lesson"]},"summary":{"type":"string","minLength":1,"maxLength":500},"body":{"type":"string","maxLength":16000},"subject":{"type":"string","minLength":1,"maxLength":256},"confidence":{"enum":["high","medium","low"]},"tags":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":64}},"activities":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":64}}}}}}}}}"#;
+pub const IMPORT_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"devworks/knowledge-import/1","type":"object","additionalProperties":false,"required":["format","candidates"],"properties":{"format":{"const":"devworks/knowledge-import"},"candidates":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","additionalProperties":false,"required":["entry","sourceFile","verification"],"properties":{"sourceFile":{"type":"string","minLength":1,"maxLength":4096},"verification":{"enum":["verified","stale","unverifiable","personal"]},"verificationNote":{"type":"string","maxLength":4096},"entry":{"type":"object","additionalProperties":false,"required":["kind","summary"],"properties":{"kind":{"enum":["goal","decision","constraint","fact","gotcha","attempt","architecture","lesson"]},"summary":{"type":"string","minLength":1,"maxLength":500},"body":{"type":"string","maxLength":16000},"subject":{"type":"string","minLength":1,"maxLength":256},"confidence":{"enum":["high","medium","low"]},"tags":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":64}},"activities":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":64}}}}}}}}}"#;
 
 /// The digest a `SchemaRef` must carry for this format.
 pub fn import_schema_digest() -> String {
@@ -300,6 +301,16 @@ mod tests {
                 &evaluate(&c, |_, _| false, |_| false)
             )
         );
+    }
+
+    #[test]
+    fn an_import_never_exceeds_what_its_receipt_names() {
+        let one =
+            r#"{"entry":{"kind":"fact","summary":"x"},"sourceFile":"a","verification":"verified"}"#;
+        let many = |n: usize| file(&vec![one; n].join(","));
+        assert_eq!(parse(&many(MAX_CANDIDATES)).unwrap().len(), 128);
+        assert!(parse(&many(MAX_CANDIDATES + 1)).is_err());
+        assert!(IMPORT_SCHEMA.contains(r#""maxItems":128,"items":{"type":"object""#));
     }
 
     #[test]

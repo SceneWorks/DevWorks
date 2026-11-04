@@ -174,8 +174,9 @@ CREATE TABLE knowledge_relations (
         OR (project_id IS NOT NULL AND scope_key = 'project:' || project_id)
     )
 ) STRICT;
+-- One live relation per scope: another project's identical relation is its own record.
 CREATE UNIQUE INDEX knowledge_relations_live
-    ON knowledge_relations(subject_id, predicate, object_id) WHERE removed_at IS NULL;
+    ON knowledge_relations(scope_key, subject_id, predicate, object_id) WHERE removed_at IS NULL;
 CREATE INDEX knowledge_relations_object ON knowledge_relations(object_id);
 
 -- Revision history: one immutable snapshot per revision of an entity or claim, attributed and
@@ -227,12 +228,16 @@ CREATE TABLE knowledge_lesson_events (
     actor_id TEXT NOT NULL REFERENCES actors(id),
     at INTEGER NOT NULL CHECK (at >= 0),
     write_id TEXT NOT NULL CHECK (length(write_id) BETWEEN 1 AND 128),
-    -- The lesson this event was recorded on before a same_as merge moved it here.
-    merged_from TEXT,
+    -- The lessons this event was merged from, oldest first: a same_as merge pushes the lesson
+    -- it leaves and an unmerge pops it, so nested merges stay reversible.
+    merge_path TEXT NOT NULL DEFAULT '[]' CHECK (
+        json_valid(merge_path) AND json_type(merge_path) = 'array'
+    ),
     PRIMARY KEY (claim_id, event_key)
 ) STRICT, WITHOUT ROWID;
-CREATE INDEX knowledge_lesson_events_merged ON knowledge_lesson_events(merged_from)
-    WHERE merged_from IS NOT NULL;
+CREATE INDEX knowledge_lesson_events_merged
+    ON knowledge_lesson_events(json_extract(merge_path, '$[#-1]'))
+    WHERE merge_path <> '[]';
 
 CREATE TABLE knowledge_challenges (
     id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),

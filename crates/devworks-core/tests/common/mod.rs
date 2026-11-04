@@ -1862,9 +1862,6 @@ impl KnowledgeRead for Unsupported {
     ) -> Result<Vec<StoredEntity>, StorageError> {
         nope()
     }
-    fn knowledge_claim_evidence(&self, _: &Id) -> Result<Vec<StoredEvidence>, StorageError> {
-        nope()
-    }
     fn knowledge_counts(&self, _: &[String]) -> Result<KnowledgeCounts, StorageError> {
         nope()
     }
@@ -1933,7 +1930,10 @@ impl KnowledgeRepository for Unsupported {
         _: &Id,
         _: i64,
         _: i64,
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn remove_knowledge_relations_of(&mut self, _: &Id, _: i64) -> Result<i64, StorageError> {
         nope()
     }
     fn observe_knowledge_source(
@@ -1941,7 +1941,20 @@ impl KnowledgeRepository for Unsupported {
         _: &str,
         _: &str,
         _: i64,
-    ) -> Result<Vec<Id>, StorageError> {
+    ) -> Result<Vec<(Id, KnowledgeScope)>, StorageError> {
+        nope()
+    }
+    fn purge_knowledge_lesson_records(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn remove_live_knowledge_relation(
+        &mut self,
+        _: &KnowledgeScope,
+        _: &Id,
+        _: &str,
+        _: &Id,
+        _: i64,
+    ) -> Result<Option<Id>, StorageError> {
         nope()
     }
     fn map_knowledge_import(&mut self, _: &Id, _: i64, _: &Id, _: &Id) -> Result<(), StorageError> {

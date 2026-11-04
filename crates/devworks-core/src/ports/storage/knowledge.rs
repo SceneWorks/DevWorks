@@ -256,7 +256,8 @@ pub struct StoredLessonEvent {
     pub actor: ActorId,
     pub at_ms: i64,
     pub write_id: Id,
-    pub merged_from: Option<Id>,
+    /// The lessons this event was merged from, oldest first (a merge pushes, an unmerge pops).
+    pub merge_path: Vec<Id>,
 }
 
 /// A challenge of a claim or rule.
@@ -415,7 +416,7 @@ pub trait KnowledgeRead {
         claim: &Id,
         limit: u16,
     ) -> Result<Vec<StoredLessonEvent>, StorageError>;
-    /// Events moved onto some lesson from `source` by a same_as merge.
+    /// Events whose latest merge moved them off `source` (what unmerging `source` restores).
     fn knowledge_merged_events(
         &self,
         source: &Id,
@@ -453,8 +454,6 @@ pub trait KnowledgeRead {
         after: Option<&str>,
         limit: u16,
     ) -> Result<Vec<StoredEntity>, StorageError>;
-    /// Live evidence cited by `claim`.
-    fn knowledge_claim_evidence(&self, claim: &Id) -> Result<Vec<StoredEvidence>, StorageError>;
     fn knowledge_counts(&self, scopes: &[String]) -> Result<KnowledgeCounts, StorageError>;
     /// The claim an import candidate became.
     fn knowledge_imported(
@@ -491,6 +490,16 @@ pub trait KnowledgeRepository: KnowledgeRead {
     /// Inserts a relation; a live relation with the same subject, predicate and object is
     /// [`StorageError::Duplicate`].
     fn put_knowledge_relation(&mut self, relation: &StoredRelation) -> Result<(), StorageError>;
+    /// Marks the live relation of `scope` with this subject, predicate and object removed,
+    /// returning its ID (`None` when there is none).
+    fn remove_live_knowledge_relation(
+        &mut self,
+        scope: &KnowledgeScope,
+        subject: &Id,
+        predicate: &str,
+        object: &Id,
+        at_ms: i64,
+    ) -> Result<Option<Id>, StorageError>;
     /// Marks a live relation removed; `false` when it was not live.
     fn remove_knowledge_relation(&mut self, id: &Id, at_ms: i64) -> Result<bool, StorageError>;
     /// Appends a revision snapshot; an existing `(target, revision)` is
@@ -509,31 +518,41 @@ pub trait KnowledgeRepository: KnowledgeRead {
         &mut self,
         event: &StoredLessonEvent,
     ) -> Result<bool, StorageError>;
-    /// Moves every event of `from` onto `to` (a same_as merge), marking them merged from
-    /// `from`; an event `to` already has stays once. Returns how many moved.
+    /// Moves every event of `from` onto `to` (a same_as merge), pushing `from` onto each
+    /// event's merge path (earlier merges stay below it); an event `to` already has stays with
+    /// `from`, counted once. Returns how many moved.
     fn merge_knowledge_lesson_events(&mut self, from: &Id, to: &Id) -> Result<i64, StorageError>;
-    /// Moves the events merged from `from` back onto it (unmerge). Returns how many moved.
+    /// Moves the events whose latest merge left `from` back onto it, popping it from their
+    /// merge path (unmerge; nested merges unwind one level at a time). Returns how many moved.
     fn unmerge_knowledge_lesson_events(&mut self, from: &Id) -> Result<i64, StorageError>;
     /// Inserts a challenge, or replaces one that is `Open` (a resolution); a resolved one is
     /// [`StorageError::InvalidRecord`].
     fn put_knowledge_challenge(&mut self, challenge: &StoredChallenge) -> Result<(), StorageError>;
     /// Inserts or updates the address of the same claim, kind and name.
     fn put_knowledge_address(&mut self, address: &StoredAddress) -> Result<(), StorageError>;
-    /// Records that `session` was supplied `claim` at `revision` (idempotent per revision).
+    /// Records that `session` was supplied `claim` at `revision`; `false` when it already was.
     fn record_knowledge_delivery(
         &mut self,
         session: &Id,
         claim: &Id,
         revision: i64,
         at_ms: i64,
-    ) -> Result<(), StorageError>;
-    /// Records the current revision of a source; returns the claims whose basis it makes stale.
+    ) -> Result<bool, StorageError>;
+    /// Marks every live relation whose subject or object is `id` removed (its endpoint was
+    /// deleted), returning how many.
+    fn remove_knowledge_relations_of(&mut self, id: &Id, at_ms: i64) -> Result<i64, StorageError>;
+    /// Records the current revision of a source; returns the claims whose stale status the
+    /// observation changed (became stale, or current again), with their scopes.
     fn observe_knowledge_source(
         &mut self,
         source_ref: &str,
         revision: &str,
         at_ms: i64,
-    ) -> Result<Vec<Id>, StorageError>;
+    ) -> Result<Vec<(Id, KnowledgeScope)>, StorageError>;
+    /// Scrubs the lesson side records of a deleted claim: challenge reasons, resolutions and
+    /// evidence are emptied (identity, state, author and times kept), addresses are removed,
+    /// and event references become opaque digests (the distinct-event count is kept).
+    fn purge_knowledge_lesson_records(&mut self, claim: &Id) -> Result<(), StorageError>;
     fn map_knowledge_import(
         &mut self,
         artifact_version: &Id,
