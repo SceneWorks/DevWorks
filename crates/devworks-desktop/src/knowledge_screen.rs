@@ -164,6 +164,19 @@ impl Change {
     }
 }
 
+/// What the write in flight took from the screen's forms. On success only that is cleared,
+/// and only if unchanged since (an edit made while it was saving stays); an unrelated write
+/// leaves every form alone.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Submitted {
+    /// A create or edit draft, as saved.
+    Draft(Draft),
+    /// The reason a lifecycle change carried.
+    Reason(String),
+    /// Nothing typed is consumed (tags are re-read from the entry, a cleanup keeps its source).
+    Nothing,
+}
+
 /// One previewed candidate of an import: its outcome code and description.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImportCandidate {
@@ -294,9 +307,15 @@ pub struct KnowledgeScreen {
     pub draft: Option<Draft>,
     /// The write in flight (its label); further writes wait for its outcome.
     pub writing: Option<String>,
+    /// What the write in flight took from the forms (`None`: unknown, as for a write held
+    /// from an earlier launch, which clears nothing).
+    pub submitted: Option<Submitted>,
     pub message: Option<(Tone, String)>,
     pub reason: String,
     pub tag_edit: String,
+    /// The tags last read for the selected entry (the tag field is refreshed from a re-read
+    /// only while it still shows them, so tags being typed survive another write's reload).
+    pub tags_loaded: Option<(Id, String)>,
     pub scrolls: crate::virtual_list::Scrolls,
     /// The selected subview (Entries, Documents).
     pub tab: usize,
@@ -483,6 +502,15 @@ impl KnowledgeScreen {
         }
     }
 
+    /// What a lifecycle change takes from the forms (its reason, when it needs one).
+    pub fn change_submission(&self, change: Change) -> Submitted {
+        if change.needs_reason() {
+            Submitted::Reason(self.reason.clone())
+        } else {
+            Submitted::Nothing
+        }
+    }
+
     /// The command a lifecycle change of the selected entry submits.
     pub fn change_body(&self, change: Change) -> Result<(&'static str, Value), String> {
         let c = self.selected_claim().ok_or("Select an entry first.")?;
@@ -592,7 +620,7 @@ impl KnowledgeScreen {
         }
         match ops::query_result(outcome) {
             Ok((OperationResult::KnowledgeRead { value }, _)) => {
-                self.tag_edit = value
+                let loaded = value
                     .claims
                     .0
                     .iter()
@@ -606,6 +634,16 @@ impl KnowledgeScreen {
                             .join(", ")
                     })
                     .unwrap_or_default();
+                let edited = self
+                    .tags_loaded
+                    .as_ref()
+                    .is_some_and(|(id, shown)| id.as_str() == claim && *shown != self.tag_edit);
+                if !edited {
+                    self.tag_edit = loaded.clone();
+                }
+                if let Some(id) = &self.selected {
+                    self.tags_loaded = Some((id.clone(), loaded));
+                }
                 self.detail = Some(value);
                 self.detail_error = None;
             }
@@ -1003,15 +1041,35 @@ impl KnowledgeScreen {
         }
     }
     /// Applies a write's outcome; `true` when it was recorded (the listing and selection are
-    /// re-read). A draft or reason is cleared only now, never before the outcome is known.
+    /// re-read). Only what this write submitted is cleared, only now (never before the outcome
+    /// is known), and only if unchanged since: an edit made while it was saving, or a draft or
+    /// reason another write never used, stays. A previewed cleanup is read again (its digest
+    /// names the scope revision the write moved).
     pub fn written(&mut self, outcome: CommandOutcome) -> bool {
         let label = self.writing.take().unwrap_or_else(|| "Change".into());
         match ops::command_result(outcome) {
             Ok(_) => {
-                self.draft = None;
-                self.reason.clear();
+                let mut kept = false;
+                match self.submitted.take() {
+                    Some(Submitted::Draft(d)) if self.draft.as_ref() == Some(&d) => {
+                        self.draft = None;
+                    }
+                    Some(Submitted::Draft(_)) => kept = self.draft.is_some(),
+                    Some(Submitted::Reason(r)) if self.reason == r => self.reason.clear(),
+                    _ => {}
+                }
                 self.source_preview = None;
-                self.message = Some((Tone::Good, format!("{label} recorded.")));
+                self.message = Some((
+                    Tone::Good,
+                    if kept {
+                        format!(
+                            "{label} recorded. The edits made while it was saving stay in the \
+                             form."
+                        )
+                    } else {
+                        format!("{label} recorded.")
+                    },
+                ));
                 true
             }
             Err(Failure::Unknown) => {
@@ -1030,6 +1088,7 @@ impl KnowledgeScreen {
                 false
             }
             Err(e) => {
+                self.submitted = None;
                 self.message = Some((
                     Tone::Bad,
                     format!("{label} was not recorded. {}", e.describe()),

@@ -390,3 +390,104 @@ fn an_unknown_write_blocks_new_saves_and_is_confirmed_once_at_the_next_launch() 
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn a_completed_write_clears_only_the_form_it_submitted_and_only_if_unchanged() {
+    let root = Root::new("knowledge-forms");
+    let engine = start(&root);
+    let real = engine.backend();
+    // Entry saves reply only when the gate opens (the save commits first).
+    let gate = Gate::holding_replies("knowledge.record");
+    let verify_gate = Gate::holding_replies("knowledge.verify");
+    let mut h = harness(
+        shell_with(
+            Ok(verify_gate.over(gate.over(real.clone()))),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New entry");
+    type_into(&mut h, "Entry subject", "Storage");
+    type_into(&mut h, "Entry text", "First entry");
+    click(&mut h, Role::Button, "Save entry");
+    assert!(has_text(&h, "Entry recorded."));
+    assert!(
+        h.state().knowledge.draft.is_none(),
+        "the saved draft is cleared"
+    );
+
+    // An unrelated change leaves an open draft, a typed reason and typed tags alone.
+    let label = h.state().knowledge.items[0]
+        .value
+        .as_ref()
+        .unwrap()
+        .0
+        .clone();
+    h.get_by_label(&format!("Fact  ·  {label}")).click();
+    settle(&mut h);
+    click(&mut h, Role::Button, "New entry");
+    type_into(&mut h, "Entry text", "Unsaved thought");
+    type_into(&mut h, "Change reason", "a reason not yet used");
+    h.state_mut().knowledge.tag_edit = "kept".into();
+    click(&mut h, Role::Button, Change::SaveTags.label());
+    assert!(has_text(&h, "Save tags recorded."));
+    assert_eq!(
+        h.state().knowledge.draft.as_ref().map(|d| d.value.as_str()),
+        Some("Unsaved thought")
+    );
+    assert_eq!(h.state().knowledge.reason, "a reason not yet used");
+    // Tags typed while another write completes survive the entry's re-read.
+    type_into(&mut h, "Edit tags", ", typed");
+    type_into(&mut h, "Change reason", " (now used)");
+    click(&mut h, Role::Button, Change::Verify.label());
+    assert!(has_text(&h, "Verify recorded."));
+    assert_eq!(h.state().knowledge.tag_edit, "kept, typed");
+    assert!(
+        h.state().knowledge.reason.is_empty(),
+        "the reason Verify used is cleared"
+    );
+    assert!(
+        h.state().knowledge.draft.is_some(),
+        "Verify never used the draft"
+    );
+
+    // Text typed while its own save is pending is kept, not erased by the save's success.
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save entry").click();
+    step_until(&mut h, "the entry is being saved", |s| {
+        s.knowledge.writing.is_some()
+    });
+    type_into(&mut h, "Entry text", " and more");
+    gate.open();
+    settle(&mut h);
+    assert!(
+        has_text(&h, "The edits made while it was saving stay in the form"),
+        "{:?}",
+        h.state().knowledge.message
+    );
+    assert_eq!(
+        h.state().knowledge.draft.as_ref().map(|d| d.value.as_str()),
+        Some("Unsaved thought and more")
+    );
+
+    // The same for a reason: one typed further while its change is pending stays.
+    type_into(&mut h, "Change reason", "checked again");
+    verify_gate.close();
+    h.get_by_role_and_label(Role::Button, Change::Verify.label())
+        .click();
+    step_until(&mut h, "the verification is being recorded", |s| {
+        s.knowledge.writing.is_some()
+    });
+    type_into(&mut h, "Change reason", ", twice");
+    verify_gate.open();
+    settle(&mut h);
+    assert!(has_text(&h, "Verify recorded."));
+    assert_eq!(h.state().knowledge.reason, "checked again, twice");
+    h.state_mut().on_exit();
+}

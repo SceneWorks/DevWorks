@@ -654,13 +654,20 @@ impl Shell {
             move |b| knowledge_screen::query(b, "knowledge.read", body),
         );
     }
-    /// Submits one Knowledge write at a time; the screen's draft and reason stay until its
-    /// outcome is recorded.
-    fn knowledge_write(&mut self, label: &str, op: &'static str, body: serde_json::Value) {
+    /// Submits one Knowledge write at a time; what it took from the screen's forms
+    /// (`submitted`) stays until its outcome is recorded.
+    fn knowledge_write(
+        &mut self,
+        label: &str,
+        op: &'static str,
+        body: serde_json::Value,
+        submitted: knowledge_screen::Submitted,
+    ) {
         if self.knowledge.writing.is_some() {
             return;
         }
         self.knowledge.writing = Some(label.to_owned());
+        self.knowledge.submitted = Some(submitted);
         if !self.command(Slot::KnowledgeWrite, label, op, move |b| {
             knowledge_screen::command(b, op, body)
         }) {
@@ -683,6 +690,7 @@ impl Shell {
                 },
             ));
             self.knowledge.writing = held;
+            self.knowledge.submitted = None;
         }
     }
     fn knowledge_actions(&mut self, actions: Vec<KnowledgeAction>) {
@@ -711,7 +719,12 @@ impl Shell {
                     self.read_knowledge(id);
                 }
                 KnowledgeAction::Save(draft) => match self.knowledge.save_body(&draft) {
-                    Ok((op, body)) => self.knowledge_write("Entry", op, body),
+                    Ok((op, body)) => self.knowledge_write(
+                        "Entry",
+                        op,
+                        body,
+                        knowledge_screen::Submitted::Draft(draft),
+                    ),
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
                 KnowledgeAction::PreviewSource => match self.knowledge.preview_body() {
@@ -757,11 +770,19 @@ impl Shell {
                     }
                 }
                 KnowledgeAction::DeleteSource => match self.knowledge.delete_source_body() {
-                    Ok((op, body)) => self.knowledge_write("Delete by source", op, body),
+                    Ok((op, body)) => self.knowledge_write(
+                        "Delete by source",
+                        op,
+                        body,
+                        knowledge_screen::Submitted::Nothing,
+                    ),
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
                 KnowledgeAction::Change(change) => match self.knowledge.change_body(change) {
-                    Ok((op, body)) => self.knowledge_write(change.label(), op, body),
+                    Ok((op, body)) => {
+                        let submitted = self.knowledge.change_submission(change);
+                        self.knowledge_write(change.label(), op, body, submitted)
+                    }
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
             }
