@@ -30,8 +30,8 @@ use devworks_core::ports::process::{ControlChannel, ControlPipe, ProcessSpec};
 use devworks_core::protocol::Id;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 /// Largest DevTools message accepted (full-page screenshots arrive as one message).
 pub const MESSAGE_LIMIT: usize = 64 * 1024 * 1024;
@@ -476,26 +476,102 @@ fn create_new(path: &Path) -> Result<std::fs::File, BrowserFault> {
 
 /// Most messages buffered from the browser before the reader waits (the browser then waits too).
 const BUFFERED: usize = 4096;
+/// Most messages queued for the browser; a full queue means it stopped reading.
+const QUEUED: usize = 256;
+/// How long one write to the browser may block before the browser counts as no longer reading
+/// its pipe.
+pub const WRITE_STALL: Duration = Duration::from_secs(5);
 
 /// A DevTools pipe: NUL-terminated JSON messages over the browser's private control channel. A
-/// reader thread splits incoming messages into a bounded queue; it ends with the channel.
+/// reader thread splits incoming messages into a bounded queue; it ends with the channel. A
+/// writer thread drains a bounded outgoing queue, so a send never blocks: a browser that stops
+/// reading (a full queue, or one write blocked past the stall bound) closes the transport, and
+/// the session is then torn down through its process owner. Closing never waits for the writer.
 pub struct PipeTransport {
-    writer: Option<Box<dyn Write + Send>>,
+    outgoing: Option<mpsc::SyncSender<Vec<u8>>>,
+    writer: Arc<WriterState>,
+    stall: Duration,
     incoming: mpsc::Receiver<Result<String, String>>,
     closed: bool,
 }
 
+/// What the writer thread reports: since when its current write blocks, and why it ended.
+#[derive(Default)]
+struct WriterState {
+    busy_since: Mutex<Option<Instant>>,
+    failed: Mutex<Option<String>>,
+}
+
 impl PipeTransport {
     pub fn new(writer: Box<dyn Write + Send>, reader: Box<dyn Read + Send>) -> Self {
+        Self::with_stall_bound(writer, reader, WRITE_STALL)
+    }
+
+    /// [`Self::new`] with an explicit write stall bound.
+    pub fn with_stall_bound(
+        writer: Box<dyn Write + Send>,
+        reader: Box<dyn Read + Send>,
+        stall: Duration,
+    ) -> Self {
         let (tx, incoming) = mpsc::sync_channel(BUFFERED);
         std::thread::Builder::new()
             .name("devtools-pipe".into())
             .spawn(move || read_messages(reader, tx))
             .ok();
+        let (outgoing, queued) = mpsc::sync_channel(QUEUED);
+        let state = Arc::new(WriterState::default());
+        let st = state.clone();
+        let spawned = std::thread::Builder::new()
+            .name("devtools-pipe-writer".into())
+            .spawn(move || write_messages(writer, queued, &st));
+        if let Err(e) = spawned {
+            *lock(&state.failed) = Some(format!("the DevTools pipe writer did not start: {e}"));
+        }
         Self {
-            writer: Some(writer),
+            outgoing: Some(outgoing),
+            writer: state,
+            stall,
             incoming,
             closed: false,
+        }
+    }
+
+    /// Why the browser no longer takes messages, if it does not: the writer failed, or its
+    /// current write has blocked past the stall bound.
+    fn stalled(&self) -> Option<String> {
+        if let Some(why) = lock(&self.writer.failed).clone() {
+            return Some(why);
+        }
+        lock(&self.writer.busy_since)
+            .filter(|t| t.elapsed() >= self.stall)
+            .map(|_| "the browser stopped reading its DevTools pipe".to_owned())
+    }
+
+    fn fail(&mut self, why: String) -> BrowserFault {
+        self.closed = true;
+        self.outgoing = None;
+        BrowserFault::Closed(why)
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Writes queued messages until the queue closes or a write fails. Dropping the writer closes
+/// the host's write end, which tells the browser the session is over.
+fn write_messages(
+    mut writer: Box<dyn Write + Send>,
+    queued: mpsc::Receiver<Vec<u8>>,
+    state: &WriterState,
+) {
+    for message in queued {
+        *lock(&state.busy_since) = Some(Instant::now());
+        let written = writer.write_all(&message).and_then(|()| writer.flush());
+        *lock(&state.busy_since) = None;
+        if let Err(e) = written {
+            *lock(&state.failed) = Some(format!("DevTools pipe: {e}"));
+            return;
         }
     }
 }
@@ -540,26 +616,45 @@ fn read_messages(reader: Box<dyn Read + Send>, tx: mpsc::SyncSender<Result<Strin
 }
 
 impl CdpTransport for PipeTransport {
+    /// Queues one message; it never waits for the browser.
     fn send(&mut self, message: &str) -> Result<(), BrowserFault> {
-        let Some(w) = self.writer.as_mut().filter(|_| !self.closed) else {
+        if self.closed {
             return Err(BrowserFault::Closed("the DevTools pipe is closed".into()));
-        };
+        }
         if message.as_bytes().contains(&0) {
             return Err(BrowserFault::Protocol("a message contains NUL".into()));
         }
-        let sent = w
-            .write_all(message.as_bytes())
-            .and_then(|()| w.write_all(&[0]))
-            .and_then(|()| w.flush());
-        sent.map_err(|e| {
-            self.closed = true;
-            BrowserFault::Closed(format!("DevTools pipe: {e}"))
-        })
+        if let Some(why) = self.stalled() {
+            return Err(self.fail(why));
+        }
+        let mut bytes = Vec::with_capacity(message.len() + 1);
+        bytes.extend_from_slice(message.as_bytes());
+        bytes.push(0);
+        let queued = match &self.outgoing {
+            Some(q) => q.try_send(bytes),
+            None => return Err(self.fail("the DevTools pipe is closed".into())),
+        };
+        match queued {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => {
+                Err(self.fail("the browser stopped reading its DevTools pipe".into()))
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                let why = self
+                    .stalled()
+                    .unwrap_or_else(|| "the DevTools pipe is closed".into());
+                Err(self.fail(why))
+            }
+        }
     }
 
     fn recv(&mut self, timeout: Duration) -> Result<Option<String>, BrowserFault> {
         if self.closed {
             return Err(BrowserFault::Closed("the DevTools pipe is closed".into()));
+        }
+        // A browser that stopped reading is lost even while it still writes.
+        if let Some(why) = self.stalled() {
+            return Err(self.fail(why));
         }
         match self.incoming.recv_timeout(timeout) {
             Ok(Ok(m)) => Ok(Some(m)),
@@ -577,7 +672,9 @@ impl CdpTransport for PipeTransport {
 
     fn close(&mut self) {
         self.closed = true;
-        // Closing the host's write end tells the browser the session is over.
-        self.writer = None;
+        // The writer ends once its queue closes (dropping the host's write end tells the browser
+        // the session is over); a write still blocked ends when the browser's tree is stopped.
+        // Nothing here waits for it.
+        self.outgoing = None;
     }
 }

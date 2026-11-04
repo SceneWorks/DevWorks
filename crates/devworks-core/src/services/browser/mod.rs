@@ -1029,7 +1029,33 @@ impl BrowserService {
     fn run_close(&self, id: &Id, _op: &OperationRecord) -> EffectOutcome {
         let slot = self.slot(id);
         slot.closing.store(true, Ordering::SeqCst);
-        let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
+        let mut guard = match slot.live.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                // An action holds the connection and may wait out a call bound: the browser's
+                // tree is stopped first, through the process owner and never the connection,
+                // which ends that call; the connection is then free to take.
+                if let Ok(Some(s)) = self.read_session(id)
+                    && let Some(pid) = s.process_id.clone()
+                {
+                    let _ = self.processes.cancel(
+                        &OwnedProcess {
+                            id: pid,
+                            identity: crate::ports::process::NativeIdentity {
+                                pid: 0,
+                                birth: String::new(),
+                                group: None,
+                            },
+                            lease: None,
+                        },
+                        Duration::ZERO,
+                        self.config.close_bound,
+                    );
+                }
+                slot.live.lock().unwrap_or_else(|p| p.into_inner())
+            }
+        };
         let s = match self.read_session(id) {
             Ok(Some(s)) => s,
             Ok(None) => {
@@ -2201,7 +2227,7 @@ impl BrowserService {
             "BrowserSessionRequested",
             json!({"browserSessionId": id.as_str(), "assetId": asset_id.as_str(), "state": "Starting"}),
         )?;
-        self.enqueue(tx, &session, &event, &op)?;
+        self.enqueue(tx, &session, &event, &op, true)?;
         Ok(Decided {
             decision: DomainDecision::Accepted {
                 operation_id: op.clone(),
@@ -2210,12 +2236,17 @@ impl BrowserService {
         })
     }
 
+    /// Queues the effect of `op`. Work of a root-scoped session (Create, navigation, input,
+    /// upload) carries its root, so the root's run controls gate it; cleanup (`gated` false:
+    /// Close) carries none, so a paused, held or stopped root never keeps a browser running.
+    /// Its lineage stays on the operation (the closer's root and assignment) and the event.
     fn enqueue(
         &self,
         tx: &mut dyn WriteTransaction,
         s: &StoredBrowserSession,
         event: &EventId,
         op: &OperationId,
+        gated: bool,
     ) -> Result<(), StorageError> {
         let id = tx.new_id(IdKind::QueueEntry);
         let now = tx.now_ms();
@@ -2223,7 +2254,7 @@ impl BrowserService {
             id,
             consumer: EFFECT_CONSUMER.into(),
             event_id: event.clone(),
-            root_id: s.root_id.clone(),
+            root_id: if gated { s.root_id.clone() } else { None },
             operation_id: Some(op.clone()),
             // Unordered: a failed or held action never blocks the session's later ones. Actions
             // keep commit order through their recorded predecessor (`after`).
@@ -2297,7 +2328,7 @@ impl BrowserService {
             "BrowserSessionCloseRequested",
             json!({"browserSessionId": id.as_str(), "state": next.phase.as_str()}),
         )?;
-        self.enqueue(tx, &next, &event, &op)?;
+        self.enqueue(tx, &next, &event, &op, false)?;
         Ok(Decided {
             decision: DomainDecision::Accepted {
                 operation_id: op.clone(),
@@ -2463,7 +2494,7 @@ impl BrowserService {
             "BrowserActionRequested",
             json!({"browserSessionId": s.id.as_str(), "capability": capability, "actorId": ctx.principal().0.as_str()}),
         )?;
-        self.enqueue(tx, &s, &event, &op)?;
+        self.enqueue(tx, &s, &event, &op, true)?;
         Ok(Decided {
             decision: DomainDecision::Accepted {
                 operation_id: op.clone(),
@@ -2680,7 +2711,7 @@ impl BrowserService {
                 .max(after);
         }
         // Notifications buffered since the last read are published as one observation first.
-        let mut fresh = Vec::new();
+        let mut published_now = false;
         if s.phase == BrowserPhase::Ready
             && let Some(slot) = self.existing_slot(id)
         {
@@ -2705,8 +2736,8 @@ impl BrowserService {
             if let Some((batch, cdp)) = pending {
                 let (doc, truncated) = batch.document(id, channel.as_str(), cdp > 0);
                 let published = self.publish_observation(&s, channel, &doc, truncated, None);
-                let (evidence, sequence) = match published {
-                    Ok(p) => p,
+                match published {
+                    Ok(_) => published_now = true,
                     Err(e) => {
                         // Nothing was recorded: the notifications stay pending for a retry.
                         let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
@@ -2719,50 +2750,21 @@ impl BrowserService {
                         }
                         return Err(evidence_failure(e));
                     }
-                };
-                fresh.push(BrowserObservation {
-                    session_id: id.clone(),
-                    sequence: counter(sequence),
-                    evidence,
-                    truncated,
-                });
+                }
             }
         }
         let limit = (page.limit.get() as usize).clamp(1, MAX_PAGE as usize);
-        // One row of lookahead, within the repository's page bound.
-        let ask = (limit + 1).min(MAX_PAGE as usize) as u16;
-        let mut rows = snapshot
-            .browser()
-            .browser_observations(id, channel, position, ask)?;
-        if rows.len() == limit
-            && usize::from(ask) == limit
-            && let Some(last) = rows.last().map(|o| o.sequence)
-        {
-            rows.extend(
-                snapshot
-                    .browser()
-                    .browser_observations(id, channel, last, 1)?,
-            );
-        }
-        let mut items = Vec::new();
-        for o in rows {
-            let Some(v) = snapshot.artifacts().version(&o.version_id)? else {
-                continue;
-            };
-            items.push(BrowserObservation {
-                session_id: id.clone(),
-                sequence: counter(o.sequence),
-                evidence: crate::services::artifacts::version_ref(&v),
-                truncated: o.truncated,
-            });
-        }
-        let known: HashSet<i64> = items.iter().map(|i| i.sequence.get()).collect();
-        items.extend(
-            fresh
-                .into_iter()
-                .filter(|f| f.sequence.get() > position && !known.contains(&f.sequence.get())),
-        );
-        items.sort_by_key(|i| i.sequence.get());
+        // The page is read from a snapshot that sees this query's own publication: committed
+        // sequences form a gap-free prefix (each is allocated and committed by the single
+        // writer in turn), so a snapshot taken after the publication also sees every earlier
+        // one another query published meanwhile, and a continuation never skips one.
+        let mut items = if published_now {
+            read_snapshot(&*self.store, &ReadOptions::default(), |fresh| {
+                observation_page(fresh, id, channel, position, limit)
+            })?
+        } else {
+            observation_page(snapshot, id, channel, position, limit)?
+        };
         let more = items.len() > limit;
         items.truncate(limit);
         let next_cursor = if more {
@@ -2780,7 +2782,44 @@ impl BrowserService {
     }
 }
 
-/// Whether an uncertain action's outcome is still not established.
+/// One page (plus one row of lookahead) of a session's observations after `position`.
+fn observation_page(
+    snapshot: &dyn ReadSnapshot,
+    id: &Id,
+    channel: BrowserChannel,
+    position: i64,
+    limit: usize,
+) -> Result<Vec<BrowserObservation>, StorageError> {
+    // One row of lookahead, within the repository's page bound.
+    let ask = (limit + 1).min(MAX_PAGE as usize) as u16;
+    let mut rows = snapshot
+        .browser()
+        .browser_observations(id, channel, position, ask)?;
+    if rows.len() == limit
+        && usize::from(ask) == limit
+        && let Some(last) = rows.last().map(|o| o.sequence)
+    {
+        rows.extend(
+            snapshot
+                .browser()
+                .browser_observations(id, channel, last, 1)?,
+        );
+    }
+    let mut items = Vec::new();
+    for o in rows {
+        let Some(v) = snapshot.artifacts().version(&o.version_id)? else {
+            continue;
+        };
+        items.push(BrowserObservation {
+            session_id: id.clone(),
+            sequence: counter(o.sequence),
+            evidence: crate::services::artifacts::version_ref(&v),
+            truncated: o.truncated,
+        });
+    }
+    Ok(items)
+}
+
 /// The staged file name of the `n`th file: `<n>-<safe name>`, at most
 /// [`STAGED_NAME_MAX_BYTES`] UTF-8 bytes. A longer name loses the end of its stem (cut on a
 /// character boundary) and keeps a short extension, so the platform never refuses it.
@@ -2804,6 +2843,7 @@ fn staged_name(n: usize, name: &str) -> String {
     format!("{prefix}{stem}{ext}")
 }
 
+/// Whether an uncertain action's outcome is still not established.
 fn unresolved(state: Option<OperationState>) -> bool {
     matches!(
         state,

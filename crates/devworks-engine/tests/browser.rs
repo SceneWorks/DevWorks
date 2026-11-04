@@ -147,6 +147,9 @@ struct FakeBrowser {
     frame_covered: bool,
     /// Out-of-process frame owners are laid out below the viewport.
     frame_hidden: bool,
+    /// Reads wait (past their timeout) while set; `reads_stalled` records that one waited.
+    stall_reads: bool,
+    reads_stalled: bool,
 }
 
 impl FakeBrowser {
@@ -641,6 +644,12 @@ impl CdpTransport for FakeTransport {
         loop {
             {
                 let mut b = self.browser.lock().unwrap();
+                if b.stall_reads {
+                    b.reads_stalled = true;
+                    drop(b);
+                    std::thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
                 if let Some(m) = b.out.pop_front() {
                     return Ok(Some(m));
                 }
@@ -747,13 +756,22 @@ impl BrowserPlatform for FakePlatform {
     ) -> Result<Box<dyn CdpTransport>, BrowserFault> {
         // The browser service always launches with a private control channel; the fake speaks
         // CDP in process instead of over it.
-        if control.is_none() {
+        let Some((writer, mut reader)) = control else {
             return Err(BrowserFault::NotReady("no control pipe".into()));
-        }
+        };
         let mut b = FakeBrowser::new();
         b.protocol = self.protocol.lock().unwrap().clone();
         b.hang = self.hang.lock().unwrap().clone();
         let b = Arc::new(Mutex::new(b));
+        // As with a real browser, the connection ends once every process of the tree holding
+        // the control pipe is gone (its end of the pipe reads end-of-file).
+        let watched = b.clone();
+        std::thread::spawn(move || {
+            let _writer = writer;
+            let mut buf = [0u8; 64];
+            while matches!(std::io::Read::read(&mut reader, &mut buf), Ok(n) if n > 0) {}
+            watched.lock().unwrap().closed = true;
+        });
         self.browsers
             .lock()
             .unwrap()
@@ -2668,6 +2686,179 @@ fn a_closed_project_starts_no_browser_session() {
             "{p}"
         );
     }
+}
+
+#[test]
+fn a_close_is_never_held_by_a_pause_of_the_sessions_root() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let run = |op: &str, command: Value| {
+        let frame = json!({"protocol": "1.0-draft.1", "requestKey": fx.key(), "command": command});
+        let reply = fx
+            .app()
+            .command(&user, op, frame.to_string().as_bytes())
+            .expect("addressable");
+        assert!(
+            matches!(Fx::decision(&reply), DomainDecision::Applied { .. }),
+            "{op}: {reply:?}"
+        );
+    };
+    let root = devworks_core::protocol::RootId(id("root-a"));
+    let control = |r: &devworks_core::protocol::RootId| {
+        let r = r.clone();
+        read(&**fx.app().store(), move |s| s.runs().root_control(&r))
+            .map_or(1, |c| c.revision)
+            .to_string()
+    };
+    run(
+        "runs.start",
+        json!({"kind": "runs.start", "rootId": "root-a", "expectedWorkRevision": "1", "expectedControlRevision": control(&root)}),
+    );
+    // A session created within the running root.
+    let in_root =
+        user.clone()
+            .with_lineage(Some(ProjectId(id("project-a"))), Some(root.clone()), None);
+    let session = fx.create(
+        &in_root,
+        json!({"kind": "Project", "projectId": "project-a"}),
+    );
+    let identity = fx.identity(&session);
+    run(
+        "runs.pause",
+        json!({"kind": "runs.pause", "rootId": "root-a", "expectedControlRevision": control(&root)}),
+    );
+    // A person outside the root closes it: cleanup is never held by the root's pause.
+    let closed = fx.close(&user, &session);
+    assert_eq!(closed.phase, BrowserPhase::Closed);
+    assert_eq!(NativeProcessHost.probe(&identity), Probe::Gone);
+}
+
+#[test]
+fn a_notice_page_never_skips_an_observation_published_meanwhile() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let console = |after: i64| {
+        match fx.result(
+        &user,
+        "browser.console",
+        json!({"sessionId": session.as_str(), "afterSequence": after.to_string(), "page": {"limit": 50}}),
+    ) {
+        OperationResult::BrowserConsole { value } => value
+            .items
+            .0
+            .iter()
+            .map(|o| o.sequence.get())
+            .collect::<Vec<i64>>(),
+        other => panic!("{other:?}"),
+    }
+    };
+    let last = console(0).into_iter().max().unwrap_or(0);
+    let b = fx.platform.browser(&session);
+    {
+        // A notification for query A, whose reads stall once its snapshot is open and it holds
+        // the session's connection.
+        let mut br = b.lock().unwrap();
+        let s = br.pages[0].session.clone();
+        br.emit(
+            Some(&s),
+            "Runtime.consoleAPICalled",
+            json!({"type": "log", "args": [{"type": "string", "value": "second"}]}),
+        );
+        br.stall_reads = true;
+    }
+    std::thread::scope(|scope| {
+        let a = scope.spawn(|| console(last));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !b.lock().unwrap().reads_stalled {
+            assert!(Instant::now() < deadline, "query A never read");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // Meanwhile another publication of the session's console channel commits.
+        let sid = session.clone();
+        let e = Evidence {
+            scope: ArtifactScope::Workspace,
+            producer: user.principal().clone(),
+            principal_kind: "Human".into(),
+            agent_session: None,
+            root: None,
+            assignment: None,
+            title: "Browser console observation".into(),
+            media_type: "application/json".into(),
+            tags: vec![],
+            source: json!({"kind": "BrowserConsole"}),
+        };
+        fx.app()
+            .artifacts()
+            .publish_evidence(&**fx.app().store(), e, b"{}", move |tx, r| {
+                let sequence = tx.browser().next_observation_sequence(&sid)?;
+                let recorded_at_ms = tx.now_ms();
+                tx.browser()
+                    .insert_browser_observation(&StoredBrowserObservation {
+                        session_id: sid.clone(),
+                        sequence,
+                        channel: BrowserChannel::Console,
+                        artifact_id: r.artifact_id.clone(),
+                        version_id: r.version_id.clone(),
+                        truncated: false,
+                        recorded_at_ms,
+                    })
+            })
+            .unwrap();
+        b.lock().unwrap().stall_reads = false;
+        // A publishes its own notification after the other one: its page holds both, so a
+        // continuation after its last sequence never skips the other.
+        assert_eq!(a.join().unwrap(), vec![last + 1, last + 2]);
+    });
+}
+
+#[test]
+fn close_ends_an_action_waiting_on_an_unanswered_call_without_waiting_for_it() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let h = Harness::new();
+    let platform = Arc::new(FakePlatform::new(&h.root));
+    let real: Arc<dyn BrowserPlatform> = platform.clone();
+    // A call the browser never answers holds the connection for the whole (long) call bound.
+    let fx = Fx::boot_with(
+        h,
+        platform,
+        real,
+        BrowserConfig {
+            call_timeout: Duration::from_secs(8),
+            ..config()
+        },
+    );
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let identity = fx.identity(&session);
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    fx.platform
+        .browser(&session)
+        .lock()
+        .unwrap()
+        .hang
+        .insert("Input.insertText".into());
+    let rev = fx.session(&session).revision.to_string();
+    fx.accepted(
+        &user,
+        "browser.input",
+        json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": {"kind": "Text", "node": node(&snap, &ax, "Name"), "text": "a"}}),
+    );
+    fx.drive(300);
+    // Close stops the tree through the process owner, which ends the call; it waits for nothing.
+    let started = Instant::now();
+    let closed = fx.close(&user, &session);
+    assert_eq!(closed.phase, BrowserPhase::Closed);
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "close waited {:?} for the unanswered call",
+        started.elapsed()
+    );
+    assert_eq!(NativeProcessHost.probe(&identity), Probe::Gone);
 }
 
 #[test]

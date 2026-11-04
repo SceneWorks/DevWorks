@@ -348,3 +348,44 @@ fn the_browser_command_asks_for_the_private_pipe_and_connect_needs_it() {
         Err(BrowserFault::NotReady(_))
     ));
 }
+
+#[test]
+fn a_browser_that_stops_reading_closes_the_pipe_without_blocking_the_host() {
+    // The browser's end of the host-to-browser pipe stays open but is never read.
+    let (from_host, host_writer) = std::io::pipe().unwrap();
+    let (host_reader, _to_host) = std::io::pipe().unwrap();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut t = PipeTransport::with_stall_bound(
+            Box::new(host_writer),
+            Box::new(host_reader),
+            Duration::from_millis(300),
+        );
+        let big = format!("{{\"pad\":\"{}\"}}", "x".repeat(64 * 1024));
+        let started = std::time::Instant::now();
+        let mut refused = None;
+        for _ in 0..1000 {
+            match t.send(&big) {
+                Ok(()) => std::thread::sleep(Duration::from_millis(5)),
+                Err(e) => {
+                    refused = Some(e);
+                    break;
+                }
+            }
+        }
+        let read = t.recv(Duration::from_millis(10));
+        // Closing never waits for the blocked writer.
+        t.close();
+        let _ = done.send((refused, read.is_err(), started.elapsed()));
+    });
+    let (refused, read_closed, took) = finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the host blocked on a browser that stopped reading");
+    assert!(
+        matches!(refused, Some(BrowserFault::Closed(_))),
+        "{refused:?}"
+    );
+    assert!(read_closed, "a stalled pipe is closed for reads too");
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    drop(from_host);
+}
