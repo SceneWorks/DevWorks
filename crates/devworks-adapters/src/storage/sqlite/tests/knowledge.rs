@@ -4336,3 +4336,72 @@ fn search_words_match_composed_and_decomposed_spellings_alike() {
         assert_eq!(found, expect, "query {query:?}");
     }
 }
+
+// Codex round 8
+
+/// The recurrence a lesson's revision `revision` reads with.
+fn recurrence_at(fx: &Fx, ctx: &InvocationContext, lesson: &Id, revision: i64) -> u64 {
+    let past = match result(fx.q(
+        ctx,
+        "knowledge.read",
+        json!({"scope": proj("project-a"), "claimId": lesson,
+        "revision": revision.to_string()}),
+    )) {
+        OperationResult::KnowledgeRead { value } => value,
+        other => panic!("{other:?}"),
+    };
+    past.claims
+        .0
+        .iter()
+        .find(|c| c.id == *lesson)
+        .unwrap()
+        .lesson
+        .as_ref()
+        .unwrap()
+        .recurrence
+        .get() as u64
+}
+
+#[test]
+fn a_recorded_lessons_first_revision_reads_with_its_first_event() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let lesson = lesson_in_a(&fx, &a, "A", "Agent", "e1");
+    recur_in_a(&fx, &a, &lesson, "Agent", "e2");
+    assert_eq!(recurrence_at(&fx, &a, &lesson, 1), 1);
+    assert_eq!(rule(&fx, &a, &lesson).2, 2);
+}
+
+#[test]
+fn an_imported_lessons_first_revision_reads_with_its_first_event() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let bytes = serde_json::to_vec(&json!({"format": IMPORT_SCHEMA_ID, "candidates": [
+        {"entry": {"kind": "lesson", "summary": "Run fmt before committing"},
+            "sourceFile": "a.md", "verification": "verified"}]}))
+    .unwrap();
+    let source = saved_import(&fx, &user, &bytes, "lesson");
+    let schema =
+        json!({"schemaId": IMPORT_SCHEMA_ID, "revision": "1", "sha256": import_schema_digest()});
+    let (d, _) = fx.diagnostics(
+        &user,
+        json!({"scope": proj("project-a"), "importSource": source, "importSchema": schema}),
+    );
+    let digest = d
+        .iter()
+        .find(|x| x.component.0 == "knowledge.preview")
+        .unwrap()
+        .id
+        .as_str()
+        .to_owned();
+    let r = receipt(fx.cmd(
+        &user,
+        "knowledge.import_user_data",
+        json!({"scope": proj("project-a"), "source": source, "schema": schema,
+        "previewDigest": digest}),
+    ));
+    let lesson = r.claim_ids.0[0].clone();
+    recur_in_a(&fx, &user, &lesson, "Agent", "later");
+    assert_eq!(recurrence_at(&fx, &user, &lesson, 1), 1);
+    assert_eq!(rule(&fx, &user, &lesson).2, 2);
+}

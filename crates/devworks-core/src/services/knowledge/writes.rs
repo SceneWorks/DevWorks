@@ -191,9 +191,20 @@ impl<'a> Writer<'a> {
     /// Stores a claim (insert when `expected` is `None`), its snapshot and the change.
     pub fn put_claim(
         &mut self,
-        mut claim: StoredClaim,
+        claim: StoredClaim,
         expected: Option<i64>,
         change: &str,
+    ) -> Result<StoredClaim, Failure> {
+        let stored = self.store_claim(claim, expected)?;
+        self.snapshot_claim(&stored, expected, change)?;
+        Ok(stored)
+    }
+    /// Stores a claim's row only: its revision snapshot follows ([`Self::snapshot_claim`]) once
+    /// the rows it reads (a new lesson's first event) exist.
+    fn store_claim(
+        &mut self,
+        mut claim: StoredClaim,
+        expected: Option<i64>,
     ) -> Result<StoredClaim, Failure> {
         // Every list a claim carries fits its wire list: a write past it is refused, never cut.
         if claim.tags.len() > MAX_LIST || claim.body.evidence_ids.len() > MAX_LIST {
@@ -210,12 +221,21 @@ impl<'a> Writer<'a> {
             self.unfenced(&prior.scope, prior.source.as_deref())?;
         }
         claim.updated_at_ms = self.now.max(claim.created_at_ms);
-        let stored = self.k().put_knowledge_claim(&claim, expected)?;
+        Ok(self.k().put_knowledge_claim(&claim, expected)?)
+    }
+    /// Records the snapshot of a stored claim's revision (as it reads now, with its side rows)
+    /// and the change.
+    fn snapshot_claim(
+        &mut self,
+        stored: &StoredClaim,
+        expected: Option<i64>,
+        change: &str,
+    ) -> Result<(), Failure> {
         let scope = stored.scope.clone();
         let th = self.threshold(&scope)?;
         let mut thm = BTreeMap::new();
         thm.insert(scope.key(), th);
-        let wire = claim_wire(self.tx.knowledge(), &stored, &thm)?;
+        let wire = claim_wire(self.tx.knowledge(), stored, &thm)?;
         let mut snapshot = serde_json::to_value(&wire)
             .map_err(|e| StorageError::InvalidRecord(format!("claim snapshot: {e}")))?;
         // The revisions of the entities this revision names, so a read of it shows them as
@@ -245,7 +265,7 @@ impl<'a> Writer<'a> {
             self.claim_ids.push(stored.id.clone());
         }
         self.touched.insert(scope.key(), scope);
-        Ok(stored)
+        Ok(())
     }
     pub fn put_entity(
         &mut self,
@@ -1093,15 +1113,19 @@ fn record_claim(
             Some(t)
         }
     };
-    let stored = w.put_claim(claim, None, "Recorded")?;
-    let stored = match &stored.lesson {
-        Some(l) => {
-            let source = l.source.clone();
-            let reference = stored.body.lesson_source_ref.clone();
-            add_event(w, &stored.id, &source, reference.as_deref())?;
-            take_effect_if_due(w, stored)?
-        }
-        None => stored,
+    // A new lesson's first event exists before its creation snapshot is taken, so revision 1
+    // reads with that recurrence.
+    let stored = w.store_claim(claim, None)?;
+    if let Some(l) = &stored.lesson {
+        let source = l.source.clone();
+        let reference = stored.body.lesson_source_ref.clone();
+        add_event(w, &stored.id, &source, reference.as_deref())?;
+    }
+    w.snapshot_claim(&stored, None, "Recorded")?;
+    let stored = if stored.lesson.is_some() {
+        take_effect_if_due(w, stored)?
+    } else {
+        stored
     };
     if let Some(t) = superseded {
         let mut next = t.clone();
@@ -3386,11 +3410,13 @@ fn import_user_data(
             updated_at_ms: w.now,
             deleted_at_ms: None,
         };
-        let stored = w.put_claim(claim, None, "Imported")?;
+        // Its first event exists before its creation snapshot is taken.
+        let stored = w.store_claim(claim, None)?;
         if stored.lesson.is_some() {
             let event_ref = format!("{}#{}", version.id.as_str(), c.index);
             add_event(&mut w, &stored.id, "Agent", Some(&event_ref))?;
         }
+        w.snapshot_claim(&stored, None, "Imported")?;
         let write_id = w.write_id.clone();
         w.k()
             .map_knowledge_import(&version.id, c.index as i64, &stored.id, &write_id)?;
