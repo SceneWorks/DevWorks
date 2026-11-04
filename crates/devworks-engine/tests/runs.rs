@@ -4763,6 +4763,35 @@ fn pending_feature_stop_with_a_running_issue(
 }
 
 #[test]
+fn a_completed_feature_stop_is_not_reused_when_newly_linked_work_is_running() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host.clone(), None);
+    applied(&fx.stop(&fx.user, "root-f"));
+    let first = fx.control("root-f").stop_operation_id.unwrap();
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    spawn_tree(&fx, &processes, "root-b", "project-b");
+    applied(&fx.set_feature("root-i", Some("root-f")));
+    let second = match decision(&fx.stop(&fx.user, "root-f")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("newly linked work requires a new stop: {other:?}"),
+    };
+    assert_ne!(first, second);
+    runtime().block_on(sup.tick()).unwrap();
+    assert_eq!(host.stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(processes.owned().len(), 1, "unrelated work keeps running");
+    assert_eq!(
+        read(&*fx.store, |s| s.operations().operation(&second))
+            .unwrap()
+            .state,
+        OperationState::ObservedComplete
+    );
+    let again = fx.stop(&fx.user, "root-f");
+    assert!(matches!(decision(&again), DomainDecision::NoChange { .. }));
+    assert_eq!(fx.control("root-f").stop_operation_id, Some(second));
+}
+
+#[test]
 fn a_process_only_card_linked_during_a_pending_feature_stop_is_covered() {
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());

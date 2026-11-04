@@ -262,6 +262,8 @@ fn the_plan_editor_keeps_what_it_does_not_show() {
     form.snapshot = feature;
     h.state_mut().work.plan = Some(form);
     click(&mut h, Role::Button, "Add requirement");
+    click(&mut h, Role::Button, "Add acceptance criterion");
+    click(&mut h, Role::Button, "Remove acceptance criterion 2");
     let form = h.state().work.plan.as_ref().unwrap();
     assert_eq!(form.requirements.last().unwrap().id, "E3");
     let mut form = form.clone();
@@ -955,4 +957,368 @@ fn a_plan_stays_savable_after_a_covering_card_leaves_its_feature() {
     let saved = get(feature.id.as_str()).pending_plan.unwrap().draft;
     assert_eq!(saved.requirements.0[0].statement.0, "pay by card");
     assert!(saved.requirements.0[0].covered_by_task_ids.0.is_empty());
+}
+
+fn approve_plan(
+    engine: &devworks_desktop::host::Engine,
+    backend: &dyn Backend,
+    feature: &WorkRecord,
+) -> WorkRecord {
+    use devworks_core::ports::storage::{StorageError, WriteOptions, run_write};
+    use devworks_core::protocol::results::OperationResult;
+    let pending = feature.pending_plan.as_ref().unwrap();
+    let proposal = match ops::command_result(backend.command(
+        "features.request_plan_approval",
+        &wops::work_command(
+            backend,
+            "features.request_plan_approval",
+            json!({"featureId":feature.id,
+            "expectedRevision":feature.revision, "planRevision":pending.revision,
+            "planDigest":devworks_core::services::work::plan_digest(&pending.draft)}),
+        ),
+    ))
+    .unwrap()
+    {
+        OperationResult::FeaturesRequestPlanApproval { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let ctx = engine.host().user().clone();
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        move |tx| {
+            devworks_core::services::work::plans::decide_plan_approval(
+                tx,
+                &ctx,
+                &proposal.id,
+                1,
+                true,
+            )
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        },
+    )
+    .unwrap()
+}
+
+fn initial_approved_plan(
+    engine: &devworks_desktop::host::Engine,
+    backend: &dyn Backend,
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+) -> WorkRecord {
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let feature = features_from_screen(h, backend, project.id.0.as_str(), &["Checkout"]).remove(0);
+    click_row(h, "Checkout  ·");
+    click(h, Role::Button, "Edit plan");
+    {
+        let form = h.state_mut().work.plan.as_mut().unwrap();
+        form.text = "Ship checkout".into();
+        form.requirements
+            .push(devworks_desktop::shell::work::Entry {
+                id: "E1".into(),
+                text: "Pay by card".into(),
+            });
+    }
+    click(h, Role::Button, "Save plan draft");
+    let saved = wops::work_record(backend.query(
+        "features.get",
+        &wops::work_get(backend, "features.get", feature.id.as_str()),
+    ))
+    .unwrap();
+    let approved = approve_plan(engine, backend, &saved);
+    h.state_mut()
+        .work
+        .detail
+        .insert(approved.id.as_str().to_owned(), approved.clone());
+    click(h, Role::Button, "Edit plan");
+    assert!(
+        h.get_by_role_and_label(Role::TextInput, "Requirement 1 ID")
+            .accesskit_node()
+            .is_disabled()
+    );
+    approved
+}
+
+fn decision_text(
+    backend: &dyn Backend,
+    reference: &devworks_core::protocol::provider::ArtifactRef,
+) -> String {
+    match ops::read_content(
+        backend.query("artifacts.read", &ops::artifact_read(backend, reference)),
+    )
+    .unwrap()
+    {
+        devworks_core::protocol::records::ArtifactReadContent::Text { content, .. } => content.0,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_approved_requirement_is_dropped_with_a_project_decision_and_can_be_restored() {
+    use devworks_core::ports::storage::{ArtifactScope, read_snapshot};
+    use devworks_core::protocol::records::RequirementStatus;
+    let root = Root::new("plan-drop-decision");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1100.0);
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*backend, &mut h);
+    h.state_mut().work.plan.as_mut().unwrap().text = "Revised checkout plan".into();
+    click(&mut h, Role::Button, "Drop requirement E1");
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Save plan draft")
+            .accesskit_node()
+            .is_disabled()
+    );
+    type_into(
+        &mut h,
+        Role::TextInput,
+        "Decision to drop E1",
+        "Payments moved to another feature",
+    );
+    click(&mut h, Role::Button, "Save plan draft");
+    assert!(h.state().work.plan.is_none());
+    let saved = wops::work_record(backend.query(
+        "features.get",
+        &wops::work_get(&*backend, "features.get", feature.id.as_str()),
+    ))
+    .unwrap();
+    assert!(
+        matches!(saved.requirements.0[0].status, RequirementStatus::Confirmed),
+        "the active plan is untouched"
+    );
+    assert!(
+        decision_text(
+            &*backend,
+            &saved.pending_plan.as_ref().unwrap().draft.content
+        )
+        .contains("Revised checkout plan")
+    );
+    let dropped = &saved.pending_plan.as_ref().unwrap().draft.requirements.0[0];
+    assert!(matches!(dropped.status, RequirementStatus::Dropped));
+    let reference = dropped.drop_decision.as_ref().unwrap();
+    assert!(decision_text(&*backend, reference).contains("Payments moved to another feature"));
+    let aid = reference.artifact_id.clone();
+    let artifact = read_snapshot(
+        &**engine.host().runtime().store(),
+        &Default::default(),
+        move |s| s.artifacts().artifact(&aid),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        artifact.scope,
+        ArtifactScope::Project(feature.project_id.clone())
+    );
+    let approved_drop = approve_plan(&engine, &*backend, &saved);
+    h.state_mut()
+        .work
+        .detail
+        .insert(feature.id.as_str().to_owned(), approved_drop);
+    click(&mut h, Role::Button, "Edit plan");
+    h.get_by_label("Dropped requirements").click();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Restore requirement E1");
+    click(&mut h, Role::ComboBox, "Status of requirement E1");
+    h.get_by_label("Confirmed").click();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Save plan draft");
+    let restored = wops::work_record(backend.query(
+        "features.get",
+        &wops::work_get(&*backend, "features.get", feature.id.as_str()),
+    ))
+    .unwrap();
+    assert!(matches!(
+        restored.requirements.0[0].status,
+        RequirementStatus::Dropped
+    ));
+    let pending = &restored.pending_plan.unwrap().draft.requirements.0[0];
+    assert!(matches!(pending.status, RequirementStatus::Confirmed));
+    assert!(pending.drop_decision.is_none());
+}
+
+#[test]
+fn later_drop_decision_edits_are_preserved_across_the_save() {
+    drop_save_race(false);
+}
+#[test]
+fn keeping_a_requirement_during_its_drop_save_preserves_the_later_draft() {
+    drop_save_race(true);
+}
+
+fn drop_save_race(keep: bool) {
+    use devworks_core::protocol::records::RequirementStatus;
+    struct OpenOnDrop(Gate);
+    impl Drop for OpenOnDrop {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let root = Root::new("plan-drop-race");
+    let engine = start(&root);
+    let real = engine.backend();
+    let gate = Gate::new("artifacts.save");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1600.0,
+        1100.0,
+    );
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*real, &mut h);
+    click(&mut h, Role::Button, "Drop requirement E1");
+    type_into(
+        &mut h,
+        Role::TextInput,
+        "Decision to drop E1",
+        "First submitted decision",
+    );
+    let _release = OpenOnDrop(gate.clone());
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save plan draft")
+        .click();
+    h.run_steps(3);
+    {
+        let form = h.state_mut().work.plan.as_mut().unwrap();
+        form.goals.push("A later goal".into());
+        if keep {
+            form.drops.remove("E1");
+        } else {
+            form.drops.get_mut("E1").unwrap().reason = "Later decision".into();
+        }
+    }
+    gate.open();
+    settle(&mut h);
+    let saved = wops::work_record(real.query(
+        "features.get",
+        &wops::work_get(&*real, "features.get", feature.id.as_str()),
+    ))
+    .unwrap();
+    let first = &saved.pending_plan.as_ref().unwrap().draft;
+    assert!(first.goals.0.is_empty());
+    assert!(
+        decision_text(
+            &*real,
+            first.requirements.0[0].drop_decision.as_ref().unwrap()
+        )
+        .contains("First submitted decision")
+    );
+    assert!(h.state().work.plan.is_some(), "the later draft stays open");
+    click(&mut h, Role::Button, "Save plan draft");
+    assert!(h.state().work.plan.is_none());
+    let saved = wops::work_record(real.query(
+        "features.get",
+        &wops::work_get(&*real, "features.get", feature.id.as_str()),
+    ))
+    .unwrap();
+    let pending = saved.pending_plan.unwrap().draft;
+    assert_eq!(pending.goals.0[0].0, "A later goal");
+    let requirement = &pending.requirements.0[0];
+    if keep {
+        assert!(matches!(requirement.status, RequirementStatus::Confirmed));
+        assert!(requirement.drop_decision.is_none());
+    } else {
+        assert!(matches!(requirement.status, RequirementStatus::Dropped));
+        assert!(
+            decision_text(&*real, requirement.drop_decision.as_ref().unwrap())
+                .contains("Later decision")
+        );
+    }
+}
+
+#[test]
+fn a_drop_decision_upload_failure_keeps_the_draft_and_changes_no_plan() {
+    let root = Root::new("plan-drop-failure");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1100.0);
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*backend, &mut h);
+    click(&mut h, Role::Button, "Drop requirement E1");
+    type_into(
+        &mut h,
+        Role::TextInput,
+        "Decision to drop E1",
+        "Keep this decision after an IO failure",
+    );
+    let scratch = backend.scratch_dir();
+    let backup = scratch.with_file_name("saved-plan-scratch");
+    std::fs::rename(&scratch, &backup).unwrap();
+    std::fs::write(&scratch, b"cannot create a directory here").unwrap();
+    click(&mut h, Role::Button, "Save plan draft");
+    std::fs::remove_file(&scratch).unwrap();
+    std::fs::rename(&backup, &scratch).unwrap();
+    assert!(h.state().work.plan_saving.is_empty());
+    let form = h
+        .state()
+        .work
+        .plan
+        .as_ref()
+        .expect("the failed draft stays open");
+    assert!(form.drops["E1"].reason.contains("IO failure"));
+    let saved = wops::work_record(backend.query(
+        "features.get",
+        &wops::work_get(&*backend, "features.get", feature.id.as_str()),
+    ))
+    .unwrap();
+    assert!(
+        saved.pending_plan.is_none(),
+        "upload failure never reaches edit_plan"
+    );
+    click(&mut h, Role::Button, "Save plan draft");
+    assert!(
+        h.state().work.plan.is_none(),
+        "retry settles the original draft"
+    );
+}
+
+#[test]
+fn a_drop_decision_upload_pending_at_close_finishes_after_relaunch() {
+    use devworks_core::protocol::records::RequirementStatus;
+    let root = Root::new("plan-drop-relaunch");
+    let engine = start(&root);
+    let real = engine.backend();
+    let gate = Gate::new("artifacts.save");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1600.0,
+        1100.0,
+    );
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*real, &mut h);
+    click(&mut h, Role::Button, "Drop requirement E1");
+    type_into(
+        &mut h,
+        Role::TextInput,
+        "Decision to drop E1",
+        "Retain this decision across close",
+    );
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save plan draft")
+        .click();
+    h.run_steps(3);
+    h.state_mut().on_exit();
+    drop(h);
+    gate.open();
+    let mut h = harness(
+        shell_with(Ok(real.clone()), &root, Script::default(), None),
+        1600.0,
+        1100.0,
+    );
+    settle(&mut h);
+    let saved = wops::work_record(real.query(
+        "features.get",
+        &wops::work_get(&*real, "features.get", feature.id.as_str()),
+    ))
+    .unwrap();
+    let requirement = &saved.pending_plan.unwrap().draft.requirements.0[0];
+    assert!(matches!(requirement.status, RequirementStatus::Dropped));
+    assert!(
+        decision_text(&*real, requirement.drop_decision.as_ref().unwrap())
+            .contains("Retain this decision across close")
+    );
+    assert!(h.state().work.plan_saving.is_empty());
+    assert!(h.state().work.plan.is_none());
 }

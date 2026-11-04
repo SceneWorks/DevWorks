@@ -170,6 +170,8 @@ pub enum Slot {
     WorkOrder(String),
     /// A plan text stored as an artifact for a feature's pending plan.
     WorkPlanText(String),
+    /// Project-owned decisions for requirements dropped by a plan save.
+    WorkPlanDrop(String),
     /// A feature's plan draft save (`features.edit_plan`).
     WorkPlan(String),
     /// A root's run controls (inspect) and one Start/Pause/Continue.

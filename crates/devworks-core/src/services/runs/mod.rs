@@ -1948,6 +1948,14 @@ impl ControlService {
                     live.is_none() && !Self::root_has_work(tx, &card.root)?
                 };
             }
+            // Terminal coverage describes an earlier decision. A new Stop must also inspect
+            // the cards linked now, including work linked after that decision completed.
+            if is_terminal(rec.state) {
+                for card in linked_roots(tx, &root)? {
+                    nothing_live &= tx.runs().live_activation(&card.id)?.is_none()
+                        && !Self::root_has_work(tx, &card.id)?;
+                }
+            }
             if intent && (!is_terminal(rec.state) || nothing_live) {
                 return Ok(Decided {
                     decision: DomainDecision::NoChange {

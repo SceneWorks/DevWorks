@@ -124,6 +124,30 @@ pub struct PlanForm {
     /// The draft the form started from: what the form does not show (requirement status, drop
     /// decisions and coverage; criterion state and evidence) is kept from it, never dropped.
     pub base: PlanBase,
+    /// Explicit drops being authored; their decisions are stored before the draft command.
+    #[serde(default)]
+    pub drops: BTreeMap<String, DropDraft>,
+    #[serde(default)]
+    pub statuses: BTreeMap<String, RequirementStatus>,
+}
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DropDraft {
+    pub reason: String,
+    pub artifact: Option<ArtifactRef>,
+}
+impl DropDraft {
+    fn same_edits(&self, other: &Self) -> bool {
+        self.reason == other.reason
+            && (self
+                .artifact
+                .as_ref()
+                .map(|a| (&a.artifact_id, &a.version_id))
+                == other
+                    .artifact
+                    .as_ref()
+                    .map(|a| (&a.artifact_id, &a.version_id))
+                || !self.reason.trim().is_empty())
+    }
 }
 /// One requirement, criterion or test being edited: its ID and its full text.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -169,6 +193,16 @@ pub fn same_plan_edits(a: &PlanForm, b: &PlanForm) -> bool {
         && a.acceptance_tests == b.acceptance_tests
         && a.goals == b.goals
         && a.repositories == b.repositories
+        && a.statuses.len() == b.statuses.len()
+        && a.statuses.iter().all(|(id, status)| {
+            b.statuses.get(id).is_some_and(|other| {
+                std::mem::discriminant(status) == std::mem::discriminant(other)
+            })
+        })
+        && a.drops.len() == b.drops.len()
+        && a.drops
+            .iter()
+            .all(|(id, d)| b.drops.get(id).is_some_and(|b| d.same_edits(b)))
 }
 
 /// The plan editor after the save of `saved` was applied as `record`: closed when it holds
@@ -181,11 +215,18 @@ pub fn plan_after_save(
     record: &WorkRecord,
 ) -> Option<PlanForm> {
     match live {
-        Some(l) if l.snapshot.id == saved.snapshot.id => {
+        Some(mut l) if l.snapshot.id == saved.snapshot.id => {
             if same_plan_edits(&l, saved) {
                 return None;
             }
             let fresh = open_plan_form(record);
+            for (id, drop) in &mut l.drops {
+                if let Some(done) = saved.drops.get(id)
+                    && drop.same_edits(done)
+                {
+                    drop.artifact = done.artifact.clone();
+                }
+            }
             Some(PlanForm {
                 snapshot: fresh.snapshot,
                 base: fresh.base,
@@ -270,6 +311,8 @@ pub fn open_plan_form(f: &WorkRecord) -> PlanForm {
         original: String::new(),
         content,
         base,
+        drops: BTreeMap::new(),
+        statuses: BTreeMap::new(),
     }
 }
 
@@ -294,7 +337,7 @@ pub fn plan_body(form: &PlanForm, content: &ArtifactRef) -> Value {
     let written: Vec<&Entry> = form
         .requirements
         .iter()
-        .filter(|e| !e.text.trim().is_empty())
+        .filter(|e| !e.text.trim().is_empty() || form.drops.contains_key(&e.id))
         .collect();
     let mut reqs: Vec<Value> = written
         .iter()
@@ -307,11 +350,37 @@ pub fn plan_body(form: &PlanForm, content: &ArtifactRef) -> Value {
             {
                 Some(b) => {
                     let mut v = serde_json::to_value(b).unwrap_or(Value::Null);
-                    v["statement"] = json!(e.text);
+                    if !e.text.trim().is_empty() {
+                        v["statement"] = json!(e.text);
+                    }
+                    if let Some(status) = form.statuses.get(&e.id) { v["status"] = json!(status); }
+                    if let Some(drop) = form.drops.get(&e.id) {
+                        v["status"] = json!("Dropped");
+                        v["dropDecision"] = json!(drop.artifact);
+                    } else if matches!(b.status, RequirementStatus::Dropped) {
+                        // A dropped entry is normally hidden and retained below. Making it
+                        // editable is the explicit Restore action, never an implicit rewrite.
+                        let status = form
+                            .snapshot
+                            .requirements
+                            .0
+                            .iter()
+                            .find(|r| {
+                                r.id == b.id && !matches!(r.status, RequirementStatus::Dropped)
+                            })
+                            .map(|r| r.status.clone())
+                            .unwrap_or(RequirementStatus::Proposed);
+                        let status = form.statuses.get(&e.id).cloned().unwrap_or(status);
+                        v["status"] = json!(status);
+                        v.as_object_mut()
+                            .expect("requirement")
+                            .remove("dropDecision");
+                    }
                     v
                 }
-                None => json!({"id": e.id.trim(), "statement": e.text, "status": "Confirmed",
-                "coveredByTaskIds": []}),
+                None => json!({"id": e.id.trim(), "statement": e.text,
+                    "status": form.statuses.get(&e.id).cloned().unwrap_or(RequirementStatus::Confirmed),
+                    "coveredByTaskIds": []}),
             }
         })
         .collect();
@@ -836,8 +905,21 @@ impl Shell {
     /// editor stays open, and edits made meanwhile are kept as a draft (lock-free: the user
     /// never waits on an upload to keep writing, and nothing they write is lost or mixed in).
     fn save_plan(&mut self, form: PlanForm) {
+        if let Some(error) = plan_error(&form) {
+            self.work.message = Some((Tone::Bad, error));
+            if self.work.plan.is_none() {
+                self.work.plan = Some(form);
+            }
+            return;
+        }
+        let decisions: Vec<_> = form
+            .drops
+            .iter()
+            .filter(|(_, d)| d.artifact.is_none())
+            .map(|(id, d)| format!("## {id}\n\n{}", d.reason))
+            .collect();
         let unchanged = form.content.is_some() && form.text == form.original;
-        if unchanged {
+        if decisions.is_empty() && unchanged {
             let content = form.content.clone().expect("checked");
             self.work
                 .plan_saving
@@ -847,36 +929,44 @@ impl Shell {
         }
         let id = form.snapshot.id.as_str().to_owned();
         let project = form.snapshot.project_id.clone();
-        let text = form.text.clone();
-        let started = self.client.as_mut().is_some_and(|c| {
-            c.task(
+        let (slot, title, text) = if decisions.is_empty() {
+            (
                 Slot::WorkPlanText(id.clone()),
-                "Storing the plan text",
-                move |b| {
-                    let dir = b.scratch_dir();
-                    std::fs::create_dir_all(&dir)
-                        .map_err(|e| format!("could not write the plan text: {e}"))?;
-                    let path = dir.join(format!("plan-{}.md", b.token("p")));
-                    std::fs::write(&path, text.as_bytes())
-                        .map_err(|e| format!("could not write the plan text: {e}"))?;
-                    let digest = devworks_core::fingerprint::sha256_hex(text.as_bytes());
-                    let ticket = b.mint_project_upload(&project, &path)?;
-                    let frame = ops::save_project_artifact(
-                        b,
-                        project.0.as_str(),
-                        ticket.as_str(),
-                        "Feature plan",
-                        "text/markdown",
-                        &digest,
-                        text.len() as u64,
-                    );
-                    let outcome = resolve_command(b, "artifacts.save", &frame);
-                    if ops::saved_artifact(outcome.clone()).is_ok() {
-                        crate::attachments::remove_owned(&path, &dir);
-                    }
-                    Ok(TaskOutput::Stored { outcome, frame })
-                },
+                "Feature plan",
+                form.text.clone(),
             )
+        } else {
+            (
+                Slot::WorkPlanDrop(id.clone()),
+                "Requirement drop decisions",
+                format!("# Requirement drop decisions\n\n{}", decisions.join("\n\n")),
+            )
+        };
+        let started = self.client.as_mut().is_some_and(|c| {
+            c.task(slot, "Storing the plan and decisions", move |b| {
+                let dir = b.scratch_dir();
+                std::fs::create_dir_all(&dir)
+                    .map_err(|e| format!("could not write the plan text: {e}"))?;
+                let path = dir.join(format!("plan-{}.md", b.token("p")));
+                std::fs::write(&path, text.as_bytes())
+                    .map_err(|e| format!("could not write the plan text: {e}"))?;
+                let digest = devworks_core::fingerprint::sha256_hex(text.as_bytes());
+                let ticket = b.mint_project_upload(&project, &path)?;
+                let frame = ops::save_project_artifact(
+                    b,
+                    project.0.as_str(),
+                    ticket.as_str(),
+                    title,
+                    "text/markdown",
+                    &digest,
+                    text.len() as u64,
+                );
+                let outcome = resolve_command(b, "artifacts.save", &frame);
+                if ops::saved_artifact(outcome.clone()).is_ok() {
+                    crate::attachments::remove_owned(&path, &dir);
+                }
+                Ok(TaskOutput::Stored { outcome, frame })
+            })
         });
         if started {
             self.work.plan_saving.insert(id, form);
@@ -1195,6 +1285,27 @@ impl Shell {
                 }
                 Err(e) => self.work_failure("Reordering", e),
             },
+            (Slot::WorkPlanDrop(id), Reply::Task(t)) => {
+                let stored = match t {
+                    Ok(TaskOutput::Stored { outcome, .. }) => ops::saved_artifact(outcome),
+                    Ok(_) => Err(Failure::Other("unexpected reply".into())),
+                    Err(e) => Err(Failure::Other(e)),
+                };
+                match (stored, self.work.plan_saving.get_mut(&id)) {
+                    (Ok(record), Some(form)) => {
+                        for drop in form.drops.values_mut().filter(|d| d.artifact.is_none()) {
+                            drop.artifact = Some(record.artifact.clone());
+                        }
+                        let form = form.clone();
+                        self.save_plan(form);
+                    }
+                    (Ok(_), None) => {}
+                    (Err(e), _) => {
+                        self.unsaved_plan(&id);
+                        self.work_failure("Storing requirement decisions", e);
+                    }
+                }
+            }
             (Slot::WorkPlanText(id), Reply::Task(t)) => {
                 let stored = match t {
                     Ok(TaskOutput::Stored { outcome, .. }) => ops::saved_artifact(outcome),
@@ -1471,6 +1582,7 @@ impl Shell {
             .filter(|id| {
                 self.waiting(&Slot::WorkCommand(id.clone()))
                     || self.waiting(&Slot::WorkPlanText(id.clone()))
+                    || self.waiting(&Slot::WorkPlanDrop(id.clone()))
                     || self.waiting(&Slot::WorkPlan(id.clone()))
             })
             .collect();
@@ -2744,13 +2856,7 @@ fn plan_form(
             .desired_rows(4),
     );
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Plan text"));
-    let reserved = form
-        .base
-        .requirements
-        .iter()
-        .map(|r| r.id.as_str().to_owned())
-        .collect::<Vec<_>>();
-    entry_list(ui, "Requirement", "E", &mut form.requirements, &reserved);
+    requirement_editor(ui, form);
     entry_list(ui, "Acceptance criterion", "A", &mut form.acceptance, &[]);
     entry_list(ui, "Acceptance test", "T", &mut form.acceptance_tests, &[]);
     ui.label(RichText::new("Goals").strong());
@@ -2786,8 +2892,13 @@ fn plan_form(
         form.original = String::new();
     }
     let mut cancel = false;
+    let error = plan_error(form);
+    if let Some(error) = &error {
+        widgets::caption(ui, error);
+    }
     ui.horizontal(|ui| {
-        let ok = enabled && (form.content.is_some() || !form.text.trim().is_empty());
+        let ok =
+            enabled && error.is_none() && (form.content.is_some() || !form.text.trim().is_empty());
         if ui
             .add_enabled(ok, egui::Button::new("Save plan draft"))
             .clicked()
@@ -2800,6 +2911,258 @@ fn plan_form(
     });
     if cancel {
         work.plan = None;
+    }
+}
+
+/// Refuse unsupported omissions before submitting, preserving the whole draft.
+pub fn plan_error(form: &PlanForm) -> Option<String> {
+    if form.snapshot.approval.is_some() {
+        for r in &form.snapshot.requirements.0 {
+            match form.requirements.iter().find(|e| e.id == r.id.as_str()) {
+                None if !form
+                    .base
+                    .requirements
+                    .iter()
+                    .any(|b| b.id == r.id && matches!(b.status, RequirementStatus::Dropped)) =>
+                {
+                    return Some(format!(
+                        "Requirement {} belongs to the approved plan; drop it with a decision.",
+                        r.id.as_str()
+                    ));
+                }
+                Some(e) if e.text.trim().is_empty() && !form.drops.contains_key(&e.id) => {
+                    return Some(format!(
+                        "Requirement {} needs its statement, or an explicit drop decision.",
+                        r.id.as_str()
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    form.drops
+        .iter()
+        .find(|(_, d)| d.artifact.is_none() && d.reason.trim().is_empty())
+        .map(|(id, _)| format!("Give a decision to drop requirement {id}."))
+}
+
+fn requirement_editor(ui: &mut Ui, form: &mut PlanForm) {
+    ui.label(RichText::new("Requirements").strong());
+    let approved: BTreeSet<_> = if form.snapshot.approval.is_some() {
+        form.snapshot
+            .requirements
+            .0
+            .iter()
+            .map(|r| r.id.as_str().to_owned())
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    let mut remove = None;
+    for (i, entry) in form.requirements.iter_mut().enumerate() {
+        let dropped = form.drops.contains_key(&entry.id);
+        let previous_id = entry.id.clone();
+        ui.horizontal(|ui| {
+            let r = ui.add_enabled(
+                !approved.contains(&entry.id) && !dropped,
+                egui::TextEdit::singleline(&mut entry.id).desired_width(56.0),
+            );
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::TextInput,
+                    !approved.contains(&entry.id) && !dropped,
+                    format!("Requirement {} ID", i + 1),
+                )
+            });
+            if dropped {
+                if ui
+                    .small_button(format!("Keep requirement {}", entry.id))
+                    .clicked()
+                {
+                    form.drops.remove(&entry.id);
+                }
+            } else if approved.contains(&entry.id) {
+                if ui
+                    .small_button(format!("Drop requirement {}", entry.id))
+                    .clicked()
+                {
+                    let artifact = form
+                        .base
+                        .requirements
+                        .iter()
+                        .find(|r| {
+                            r.id.as_str() == entry.id
+                                && matches!(r.status, RequirementStatus::Dropped)
+                        })
+                        .and_then(|r| r.drop_decision.clone());
+                    form.drops.insert(
+                        entry.id.clone(),
+                        DropDraft {
+                            reason: String::new(),
+                            artifact,
+                        },
+                    );
+                }
+            } else if ui
+                .small_button(format!("Remove requirement {}", i + 1))
+                .clicked()
+            {
+                remove = Some(i);
+            }
+        });
+        let r = ui.add_enabled(
+            !form.drops.contains_key(&entry.id),
+            egui::TextEdit::multiline(&mut entry.text)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY),
+        );
+        r.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::TextInput,
+                !form.drops.contains_key(&entry.id),
+                format!("Requirement {} text", i + 1),
+            )
+        });
+        if previous_id != entry.id
+            && let Some(status) = form.statuses.remove(&previous_id)
+        {
+            form.statuses.insert(entry.id.clone(), status);
+        }
+        if !form.drops.contains_key(&entry.id) {
+            let original = form
+                .base
+                .requirements
+                .iter()
+                .find(|r| r.id.as_str() == entry.id);
+            let status = form
+                .statuses
+                .get(&entry.id)
+                .cloned()
+                .or_else(|| original.map(|r| r.status.clone()))
+                .unwrap_or(RequirementStatus::Confirmed);
+            let mut proposed = matches!(
+                status,
+                RequirementStatus::Proposed | RequirementStatus::Dropped
+            );
+            // A restoration whose old status is no longer known defaults to Proposed and
+            // visibly offers both choices; it never silently promotes an old proposal.
+            if matches!(status, RequirementStatus::Dropped)
+                && let Some(r) = form.snapshot.requirements.0.iter().find(|r| {
+                    r.id.as_str() == entry.id && !matches!(r.status, RequirementStatus::Dropped)
+                })
+            {
+                proposed = matches!(r.status, RequirementStatus::Proposed);
+            }
+            let before = proposed;
+            egui::ComboBox::from_id_salt(("requirement-status", &entry.id))
+                .selected_text(if proposed { "Proposed" } else { "Confirmed" })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut proposed, true, "Proposed");
+                    ui.selectable_value(&mut proposed, false, "Confirmed");
+                })
+                .response
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::ComboBox,
+                        true,
+                        format!("Status of requirement {}", entry.id),
+                    )
+                });
+            if before != proposed {
+                form.statuses.insert(
+                    entry.id.clone(),
+                    if proposed {
+                        RequirementStatus::Proposed
+                    } else {
+                        RequirementStatus::Confirmed
+                    },
+                );
+            }
+        }
+        if let Some(drop) = form.drops.get_mut(&entry.id) {
+            if drop.artifact.is_some() {
+                widgets::caption(
+                    ui,
+                    "The recorded decision is preserved unless you write a replacement.",
+                );
+            }
+            let r = ui.add(
+                egui::TextEdit::multiline(&mut drop.reason)
+                    .desired_rows(2)
+                    .hint_text("Why is this requirement being dropped?"),
+            );
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::TextInput,
+                    true,
+                    format!("Decision to drop {}", entry.id),
+                )
+            });
+            if r.changed() {
+                drop.artifact = if drop.reason.trim().is_empty() {
+                    form.base
+                        .requirements
+                        .iter()
+                        .find(|r| {
+                            r.id.as_str() == entry.id
+                                && matches!(r.status, RequirementStatus::Dropped)
+                        })
+                        .and_then(|r| r.drop_decision.clone())
+                } else {
+                    None
+                };
+            }
+        }
+    }
+    if let Some(i) = remove {
+        let e = form.requirements.remove(i);
+        form.drops.remove(&e.id);
+        form.statuses.remove(&e.id);
+    }
+    let hidden: Vec<_> = form
+        .base
+        .requirements
+        .iter()
+        .filter(|r| {
+            matches!(r.status, RequirementStatus::Dropped)
+                && !form.requirements.iter().any(|e| e.id == r.id.as_str())
+        })
+        .cloned()
+        .collect();
+    if !hidden.is_empty() {
+        ui.collapsing("Dropped requirements", |ui| {
+            for r in hidden {
+                ui.label(format!("{}: {}", r.id.as_str(), r.statement.0));
+                if ui
+                    .small_button(format!("Restore requirement {}", r.id.as_str()))
+                    .clicked()
+                {
+                    form.requirements.push(Entry {
+                        id: r.id.as_str().to_owned(),
+                        text: r.statement.0,
+                    });
+                }
+            }
+        });
+    }
+    if !approved.is_empty() {
+        widgets::caption(
+            ui,
+            "Approved requirement IDs stay stable. Dropping one records a decision with the pending draft.",
+        );
+    }
+    if ui.small_button("Add requirement").clicked() {
+        let reserved: Vec<_> = form
+            .base
+            .requirements
+            .iter()
+            .map(|r| r.id.as_str().to_owned())
+            .collect();
+        let id = next_id(&form.requirements, "E", &reserved);
+        form.requirements.push(Entry {
+            id,
+            text: String::new(),
+        });
     }
 }
 
@@ -2849,20 +3212,24 @@ fn entry_list(
                     format!("{what} {} ID", i + 1),
                 )
             });
-            let r = ui.add(egui::TextEdit::multiline(&mut e.text).desired_rows(2));
-            r.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::Role::TextInput,
-                    true,
-                    format!("{what} {} text", i + 1),
-                )
-            });
             if ui
                 .small_button(format!("Remove {} {}", what.to_lowercase(), i + 1))
                 .clicked()
             {
                 remove = Some(i);
             }
+        });
+        let r = ui.add(
+            egui::TextEdit::multiline(&mut e.text)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY),
+        );
+        r.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::TextInput,
+                true,
+                format!("{what} {} text", i + 1),
+            )
         });
     }
     if let Some(i) = remove {
