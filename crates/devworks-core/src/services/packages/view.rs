@@ -237,6 +237,9 @@ pub fn package_record(
             .and_then(|f| f["code"].as_str())
             .map(|c| label(c, "Failed")),
         available: None,
+        // The fact (an active, installed version), not derived from availability: a first
+        // install that is incompatible is not installed.
+        installed: Some(p.installed && p.active_digest.is_some()),
     })
 }
 
@@ -285,6 +288,7 @@ pub fn offered_record(
         .or_else(|| offers.first())?;
     let supported = super::index::supported(&best.entry, &host.target_triple);
     let mut r = PackageRecord {
+        installed: Some(false),
         id: Id::new(package_id).ok()?,
         version: label(&best.entry.version, "0.0.0"),
         digest: digest(&best.entry.manifest_digest)?,

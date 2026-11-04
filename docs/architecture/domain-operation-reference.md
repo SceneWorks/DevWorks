@@ -2204,6 +2204,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `contributions` | `?Rows<Label>` · *revision 2+* |
 | `pendingBundle` | `?ArtifactRef` · *revision 2+* |
 | `available` | `?Items<PackageOffer>` · *revision 2+* |
+| `installed` | `?bool` · *revision 2+* |
 
 ### HelpTopic
 

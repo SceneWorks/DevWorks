@@ -929,6 +929,7 @@ dependencies = [
  "devworks-extension-protocol",
  "ed25519-dalek",
  "rusqlite",
+ "semver",
  "serde_json",
  "tokio",
 ]

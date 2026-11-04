@@ -1863,7 +1863,8 @@
         "failure_code": "?Label",
         "contributions": "?Rows<Label>",
         "pending_bundle": "?ArtifactRef",
-        "available": "?Items<PackageOffer>"
+        "available": "?Items<PackageOffer>",
+        "installed": "?bool"
       },
       "since": {
         "registry_revision": 2,
@@ -1890,7 +1891,8 @@
         "failure_code": 2,
         "contributions": 2,
         "pending_bundle": 2,
-        "available": 2
+        "available": 2,
+        "installed": 2
       }
     },
     "HelpTopic": {

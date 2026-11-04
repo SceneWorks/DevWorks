@@ -395,8 +395,7 @@ impl AddonsScreen {
             && !offers.0.is_empty()
         {
             ui.label(RichText::new("Available").strong());
-            let installed = !matches!(r.availability, Some(PackageAvailability::NotInstalled))
-                && r.trust_state.0 != "Available";
+            let installed = r.installed == Some(true);
             for o in &offers.0 {
                 ui.horizontal(|ui| {
                     ui.label(format!(
@@ -457,16 +456,16 @@ impl AddonsScreen {
                 actions.push(AddonsAction::Approve {
                     package: id.clone(),
                     bundle: bundle.clone(),
-                    update: r
-                        .availability
-                        .as_ref()
-                        .is_some_and(|a| !matches!(a, PackageAvailability::NotInstalled)),
+                    // From the installation state, never from availability (an incompatible
+                    // first install is not installed: it is installed, not updated).
+                    update: r.installed == Some(true),
                 });
             }
         }
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
-            let installed = !matches!(r.availability, Some(PackageAvailability::NotInstalled));
+            // Lifecycle actions follow the installation state itself.
+            let installed = r.installed == Some(true);
             if installed && r.enabled && ui.button("Disable").clicked() {
                 actions.push(AddonsAction::Disable(id.clone()));
             }
@@ -516,9 +515,7 @@ impl AddonsScreen {
             }
         });
         // Publisher trust for automatic compatible updates (EXT-07).
-        if r.signer_key.is_some()
-            && !matches!(r.availability, Some(PackageAvailability::NotInstalled))
-        {
+        if r.signer_key.is_some() && r.installed == Some(true) {
             let mut trust = r.publisher_trusted == Some(true);
             if ui
                 .checkbox(&mut trust, "Trust this publisher's compatible signed updates")
@@ -528,8 +525,12 @@ impl AddonsScreen {
                 actions.push(AddonsAction::TrustPublisher { package: id.clone(), revision, trust });
             }
         }
-        // Pack configuration against its declared schema.
-        if let Some(schema) = &r.configuration_schema {
+        // Pack configuration against its declared schema (an installed package's only).
+        if let Some(schema) = r
+            .configuration_schema
+            .as_ref()
+            .filter(|_| r.installed == Some(true))
+        {
             ui.collapsing("Configuration", |ui| {
                 ui.label(
                     RichText::new(format!(
@@ -882,4 +883,74 @@ pub fn install_from_file(
     Ok(TaskOutput::Package {
         outcome: resolve_command(backend, op, &frame),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn record(installed: bool) -> PackageRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": "first-pack", "version": "1.0.0", "digest": "a".repeat(64), "revision": "1",
+            "enabled": false, "trustState": "AwaitingApproval", "contributionIds": [],
+            "availability": "Incompatible", "availabilityReason": "no helper for this platform",
+            "installed": installed, "pendingVersion": "1.0.0", "pendingDigest": "a".repeat(64),
+            "pendingWaits": ["ExactVersionApproval"],
+            "pendingBundle": {"artifactId": "bundle-a", "versionId": "v1", "sha256": "b".repeat(64),
+                "byteLength": "10", "mediaType": "application/vnd.devworks.package"},
+            "configurationSchema": {"schemaId": "first-pack/config", "revision": "1", "sha256": "c".repeat(64)},
+            "signerKey": "d".repeat(64)
+        }))
+        .unwrap()
+    }
+
+    fn render(r: PackageRecord) -> (Harness<'static>, Rc<RefCell<Vec<AddonsAction>>>) {
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let sink = actions.clone();
+        let mut screen = AddonsScreen::default();
+        let h = Harness::new_ui(move |ui| {
+            let mut out = Vec::new();
+            screen.detail(ui, &r, &mut out);
+            sink.borrow_mut().extend(out);
+        });
+        (h, actions)
+    }
+
+    #[test]
+    fn an_incompatible_first_install_is_approved_by_installing_and_offers_no_installed_actions() {
+        let (mut h, actions) = render(record(false));
+        h.run();
+        // Lifecycle actions of an installed package are not offered.
+        for label in ["Uninstall", "Update from file…", "Disable", "Enable"] {
+            assert!(
+                h.query_by_label(label).is_none(),
+                "{label} offered for a package that is not installed"
+            );
+        }
+        assert!(h.query_by_label("Configuration").is_none());
+        h.get_by_label("Approve and activate 1.0.0").click();
+        h.run();
+        let a = actions.borrow();
+        assert!(
+            matches!(a.last(), Some(AddonsAction::Approve { update: false, .. })),
+            "{a:?}"
+        );
+    }
+
+    #[test]
+    fn an_installed_package_is_approved_by_updating() {
+        let (mut h, actions) = render(record(true));
+        h.run();
+        assert!(h.query_by_label("Uninstall").is_some());
+        h.get_by_label("Approve and activate 1.0.0").click();
+        h.run();
+        assert!(matches!(
+            actions.borrow().last(),
+            Some(AddonsAction::Approve { update: true, .. })
+        ));
+    }
 }

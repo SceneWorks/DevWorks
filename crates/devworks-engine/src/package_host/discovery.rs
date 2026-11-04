@@ -110,21 +110,37 @@ fn is_executable(p: &Path) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_file())
 }
 
-/// The version a version command printed: the first `[v]N(.N)*` token, normalized to
-/// `major.minor.patch` (`v20.11.1`, `8.0.204`, `cargo 1.82.0 (…)`, `Apple Swift version 6.0.3`).
+/// The version a version command printed: the first token that starts with `[v]N.N`, as a
+/// SemVer version. A two-part core is padded (`8.0` is `8.0.0`); prerelease and build data are
+/// kept (`10.0.100-preview.1` stays a prerelease, so a stable-only requirement is not met). A
+/// token that is not lossless SemVer (four numeric parts, an unparsable suffix) is returned as
+/// printed, so it satisfies no requirement (reported `Incompatible` with what was found) instead
+/// of being rounded to a stable version. `v20.11.1`, `8.0.204`, `cargo 1.82.0 (…)`,
+/// `Apple Swift version 6.0.3 (…)`.
 pub fn parse_version(output: &str) -> Option<String> {
     for token in output.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',') {
         let t = token.trim_start_matches('v').trim_start_matches("swift-");
-        let parts: Vec<&str> = t.split(['.', '-']).take(3).collect();
-        if parts.is_empty() || !parts[0].chars().all(|c| c.is_ascii_digit()) || parts[0].is_empty()
-        {
+        let core_len = t
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(t.len());
+        let (core, rest) = t.split_at(core_len);
+        if !core.starts_with(|c: char| c.is_ascii_digit()) || !core.contains('.') {
             continue;
         }
-        let nums: Vec<u64> = parts.iter().map_while(|p| p.parse::<u64>().ok()).collect();
-        if nums.len() >= 2 || (nums.len() == 1 && t.contains('.')) {
-            let n = |i: usize| nums.get(i).copied().unwrap_or(0);
-            return Some(format!("{}.{}.{}", n(0), n(1), n(2)));
+        let parts: Vec<&str> = core.split('.').collect();
+        let numeric = parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+        if !numeric || parts.len() > 3 || !(rest.is_empty() || rest.starts_with(['-', '+'])) {
+            return Some(t.to_owned());
         }
+        let mut padded: Vec<&str> = parts.clone();
+        padded.resize(3, "0");
+        let candidate = format!("{}{rest}", padded.join("."));
+        return Some(match semver::Version::parse(&candidate) {
+            Ok(v) => v.to_string(),
+            Err(_) => t.to_owned(),
+        });
     }
     None
 }

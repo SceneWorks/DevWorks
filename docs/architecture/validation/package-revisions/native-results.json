@@ -28437,6 +28437,7 @@
           "failureCode": "StartupTimeout",
           "hostTargetSupported": true,
           "id": "id-a",
+          "installed": true,
           "languages": [
             "csharp"
           ],
@@ -28537,6 +28538,7 @@
           "failureCode": "StartupTimeout",
           "hostTargetSupported": true,
           "id": "id-a",
+          "installed": true,
           "languages": [
             "csharp"
           ],
@@ -28637,6 +28639,7 @@
           "failureCode": "StartupTimeout",
           "hostTargetSupported": true,
           "id": "id-a",
+          "installed": true,
           "languages": [
             "csharp"
           ],
@@ -28737,6 +28740,7 @@
           "failureCode": "StartupTimeout",
           "hostTargetSupported": true,
           "id": "id-a",
+          "installed": true,
           "languages": [
             "csharp"
           ],
@@ -28837,6 +28841,7 @@
           "failureCode": "StartupTimeout",
           "hostTargetSupported": true,
           "id": "id-a",
+          "installed": true,
           "languages": [
             "csharp"
           ],
@@ -28937,6 +28942,7 @@
           "failureCode": "StartupTimeout",
           "hostTargetSupported": true,
           "id": "id-a",
+          "installed": true,
           "languages": [
             "csharp"
           ],
@@ -29037,6 +29043,7 @@
           "failureCode": "StartupTimeout",
           "hostTargetSupported": true,
           "id": "id-a",
+          "installed": true,
           "languages": [
             "csharp"
           ],
@@ -29140,6 +29147,7 @@
               "failureCode": "StartupTimeout",
               "hostTargetSupported": true,
               "id": "id-a",
+              "installed": true,
               "languages": [
                 "csharp"
               ],

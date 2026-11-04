@@ -11788,6 +11788,10 @@
         "id": {
           "$ref": "#/$defs/Id"
         },
+        "installed": {
+          "type": "boolean",
+          "x-since": 2
+        },
         "languages": {
           "$ref": "#/$defs/List_Text1To256_0_128",
           "x-since": 2

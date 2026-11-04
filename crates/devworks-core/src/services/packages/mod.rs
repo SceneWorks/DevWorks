@@ -1899,7 +1899,7 @@ impl PackageService {
     /// failed repeatedly). When `admitted_nothing` (no invocation of the new generation was
     /// admitted) and the active version replaced a predecessor whose state is still compatible,
     /// the host's guarded automatic rollback restores the predecessor in the same unit of work.
-    /// Returns whether it rolled back.
+    /// Returns whether it rolled back, and the registry head as this unit of work left it.
     pub fn startup_failed(
         &self,
         key: &HelperKey,
@@ -1907,7 +1907,7 @@ impl PackageService {
         message: &str,
         attempts: i64,
         admitted_nothing: bool,
-    ) -> Result<bool, StorageError> {
+    ) -> Result<StartupFailure, StorageError> {
         let svc = self.clone_ports();
         let key = key.clone();
         let (package_id, digest, code, message) = (
@@ -1917,13 +1917,21 @@ impl PackageService {
             message.to_owned(),
         );
         run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let at = |tx: &mut dyn WriteTransaction,
+                      rolled_back|
+             -> Result<StartupFailure, StorageError> {
+                Ok(StartupFailure {
+                    rolled_back,
+                    registry_revision: tx.packages().registry_revision()?,
+                })
+            };
             let Some(mut p) = tx.packages().package(&package_id)? else {
-                return Ok(false);
+                return at(tx, false);
             };
             // Only the current instance's failure counts: an attempt under another state
             // generation or configuration (a stale one) changes nothing.
             if !key.is_current(&p) {
-                return Ok(false);
+                return at(tx, false);
             }
             let host = tx.store().host_actor.clone();
             // Never back into a version whose own startup failure is recorded (it just exhausted
@@ -1960,7 +1968,7 @@ impl PackageService {
                             json!({"failedDigest": failed, "restoredDigest": pred, "code": code}),
                         )?;
                         svc.observe(tx, "StartupRollback")?;
-                        return Ok(true);
+                        return at(tx, true);
                     }
                     Ok(false) => tx.rollback_to(sp)?,
                     Err(e) => {
@@ -1993,7 +2001,7 @@ impl PackageService {
                 Some(DiagnosticOutcome::Failed),
             )?;
             svc.observe(tx, "StartupFailed")?;
-            Ok(false)
+            at(tx, false)
         })
     }
 
@@ -2348,6 +2356,15 @@ impl PackageService {
         }
         DomainDecision::Refused { fault }
     }
+}
+
+/// What recording a helper's startup failure did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StartupFailure {
+    /// The guarded automatic rollback restored the predecessor.
+    pub rolled_back: bool,
+    /// The registry head as the recording unit of work left it.
+    pub registry_revision: i64,
 }
 
 /// The complete identity of one helper instance: package, active version, state generation and

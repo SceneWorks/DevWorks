@@ -1469,3 +1469,35 @@ fn installing_an_offered_pack_leaves_no_download_behind() {
         .unwrap_or_default();
     assert!(left.is_empty(), "{left:?}");
 }
+
+#[test]
+fn index_sources_keep_paths_with_spaces() {
+    let root = Root::new("index-sources");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let dir = root.dir("My Packs");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    let key = devworks_core::settings::catalog::PACKAGE_INDEX_SOURCES_KEY;
+    let label = descriptor(key).unwrap().label;
+    type_into(&mut h, "Search settings", "index sources");
+    settle(&mut h);
+    click(&mut h, Role::Button, &format!("Add {label}"));
+    let location = dir.display().to_string();
+    let publisher = "0123456789abcdef".repeat(4);
+    type_into(&mut h, &format!("{label} 1 location"), &location);
+    type_into(&mut h, &format!("{label} 1 key"), &publisher);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Save changes");
+    assert!(has_text(&h, "Settings saved."));
+    let (_, entries) = ops::settings_entries(
+        backend.query("settings.read_effective", &ops::settings_read(&*backend)),
+    )
+    .unwrap();
+    let saved = entries.iter().find(|e| e.key.0 == key).unwrap();
+    assert_eq!(
+        saved.value.value.0,
+        json!([{"location": location, "publicKey": publisher}])
+    );
+}

@@ -286,6 +286,8 @@ struct App {
     probe_path: Option<String>,
     /// The install-directory port, when a test instruments it.
     files: Option<Arc<dyn PackageFiles>>,
+    /// The host's restart budget per instance key (`config()` otherwise).
+    restart_limit: Option<u32>,
 }
 fn config() -> HostConfig {
     HostConfig {
@@ -373,6 +375,7 @@ impl App {
             runtimes: Arc::new(RuntimeCache::new()),
             probe_path,
             files,
+            restart_limit: None,
         };
         if me.probe_path.is_none() {
             me.runtimes.set(std::collections::BTreeMap::from([(
@@ -455,7 +458,10 @@ impl App {
                     roots: ProtectedRoots::new(vec![], vec![], None),
                     protected_branches: vec![],
                 },
-                config: config(),
+                config: HostConfig {
+                    restart_limit: self.restart_limit.unwrap_or(config().restart_limit),
+                    ..config()
+                },
                 runtimes: self.probe_path.as_ref().map(|p| RuntimePorts {
                     cache: self.runtimes.clone(),
                     search_path: Some(p.clone()),
@@ -3064,6 +3070,7 @@ fn host_seams_act_only_for_the_complete_current_instance_key() {
         assert!(
             !svc.startup_failed(&stale, "HelperExited", "stale", 2, true)
                 .unwrap()
+                .rolled_back
         );
         assert_eq!(availability(&a.record("keyed-pack")), "Ready");
     }
@@ -3550,5 +3557,111 @@ fn the_registry_is_read_whole_and_a_new_identity_beyond_capacity_is_refused() {
             DomainErrorCode::Conflict,
             Some("package_registry_capacity".into())
         )
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review round 6: explicit retries, lossless versions
+
+#[test]
+fn an_explicit_retry_restarts_a_helper_even_before_reconciliation_saw_its_failure() {
+    let _s = serial();
+    let fail = Marker::absent("retry-pack", "fail-on-activate");
+    let mut a = App::new();
+    // One start per budget: the first failure spends it.
+    a.restart_limit = Some(1);
+    package(a.install(&a.user, &Spec::new("retry-pack", "1.0.0")));
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "slow-initialize".into(),
+            ..Spec::new("z-busy", "1.0.0")
+        },
+    ));
+    a.ready("retry-pack");
+    a.ready("z-busy");
+    a.shutdown();
+    // At the next boot, one reconciliation pass starts retry-pack (which fails at once, spending
+    // its budget and recording the failure) and then z-busy (slow), during which the person
+    // retries: no pass sees the recorded failure before the retry.
+    fail.set();
+    let store = a.store.clone();
+    let composition = a.composition();
+    let booted = std::thread::scope(|scope| {
+        let booting = scope.spawn(|| a.rt.block_on(boot(composition)));
+        let until = Instant::now() + Duration::from_secs(20);
+        loop {
+            let p = read(&*store, |s| s.packages().package("retry-pack")).unwrap();
+            if p.failure.is_some() {
+                break;
+            }
+            assert!(Instant::now() < until, "the failure was never recorded");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // The retry, as `addons.enable` commits it: the failure cleared, the registry advanced.
+        drop(fail);
+        write(&*store, |tx| {
+            let mut p = tx.packages().package("retry-pack")?.unwrap();
+            p.failure = None;
+            let expected = p.revision;
+            tx.packages().update_package(&p, expected)?;
+            let head = tx.packages().registry_revision()?;
+            tx.packages().advance_registry(head)?;
+            Ok(())
+        })
+        .unwrap();
+        booting.join().unwrap()
+    });
+    a.app = Some(booted.expect("boot"));
+    // The retried key gets a new budget: the helper starts and the package is Ready.
+    a.app().packages().unwrap().reconcile();
+    a.ready("retry-pack");
+    assert_eq!(availability(&a.record("retry-pack")), "Ready");
+}
+
+#[test]
+fn a_prerelease_runtime_never_satisfies_a_stable_requirement() {
+    use devworks_engine::package_host::discovery::parse_version;
+    for (printed, version) in [
+        ("10.0.100-preview.1.25120.13", "10.0.100-preview.1.25120.13"),
+        (
+            "rustc 1.84.0-nightly (90b35a623 2024-11-26)",
+            "1.84.0-nightly",
+        ),
+        ("v20.11.1", "20.11.1"),
+        ("8.0", "8.0.0"),
+        ("1.2.3+build.5", "1.2.3+build.5"),
+        ("cargo 1.82.0 (8f40fc59f 2024-08-21)", "1.82.0"),
+        // Not lossless SemVer: kept as printed (it satisfies nothing).
+        ("1.2.3.4", "1.2.3.4"),
+        ("6.0.3rc1", "6.0.3rc1"),
+    ] {
+        assert_eq!(
+            parse_version(printed).as_deref(),
+            Some(version),
+            "{printed}"
+        );
+    }
+    let _s = serial();
+    let a = App::new();
+    let needs = |pkg: &str| Spec {
+        runtimes: vec![
+            json!({"runtimeId": "dotnet", "versionRequirement": ">=8", "required": true}),
+        ],
+        ..Spec::new(pkg, "1.0.0")
+    };
+    a.runtimes.set(std::collections::BTreeMap::from([(
+        "dotnet".to_owned(),
+        RuntimeObservation::Found(parse_version("10.0.100-preview.1").unwrap()),
+    )]));
+    let rec = package(a.install(&a.user, &needs("preview-pack")));
+    assert_eq!(availability(&rec), "MissingDependency");
+    let q = &rec.prerequisites.unwrap().0[0];
+    assert_eq!(
+        (
+            format!("{:?}", q.state.clone().unwrap()),
+            q.detected_version.as_ref().unwrap().0.as_str()
+        ),
+        ("Incompatible".into(), "10.0.100-preview.1")
     );
 }

@@ -4461,6 +4461,13 @@ pub struct PackageRecord {
     )]
     #[schemars(with = "Items<PackageOffer>", extend("x-since" = 2))]
     pub available: Option<Items<PackageOffer>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub installed: Option<bool>,
 }
 impl Check for PackageRecord {
     fn check(&self) -> Result<(), String> {
@@ -4497,6 +4504,7 @@ impl Check for PackageRecord {
         self.contributions.check()?;
         self.pending_bundle.check()?;
         self.available.check()?;
+        self.installed.check()?;
         crate::protocol::rules::record(
             "PackageRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -4583,6 +4591,9 @@ impl Revisioned for PackageRecord {
         }
         if revision < 2 {
             self.available = None;
+        }
+        if revision < 2 {
+            self.installed = None;
         }
     }
 }

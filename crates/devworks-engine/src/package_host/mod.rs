@@ -416,6 +416,10 @@ struct Attempts {
     /// The budget is spent: the key is never started again (the durable failure or guarded
     /// rollback being recorded changes the activation intent; an enable starts a new budget).
     exhausted: bool,
+    /// The registry head once the spent budget's failure was durably recorded: a later
+    /// registry that still wants this key cleared that failure (an explicit retry such as
+    /// `addons.enable`), so it gets a new budget even if no pass saw the failure in between.
+    exhausted_at: Option<i64>,
 }
 
 pub struct PackageHost {
@@ -705,13 +709,15 @@ impl PackageHost {
                 if let Some((k, (i, configuration))) = want
                     && !has_current
                 {
-                    let attempts = self
-                        .attempts
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .get(&(pkg.clone(), k.clone()))
-                        .cloned()
-                        .unwrap_or_default();
+                    let attempts = {
+                        let mut all = self.attempts.lock().unwrap_or_else(|p| p.into_inner());
+                        let a = all.entry((pkg.clone(), k.clone())).or_default();
+                        if a.exhausted && a.exhausted_at.is_some_and(|at| registry > at) {
+                            // Wanted again after its failure was recorded: an explicit retry.
+                            *a = Attempts::default();
+                        }
+                        a.clone()
+                    };
                     if !attempts.exhausted && attempts.next_at.is_none_or(|t| Instant::now() >= t) {
                         let inst = Arc::new(Instance {
                             package_id: pkg.clone(),
@@ -1016,8 +1022,16 @@ impl PackageHost {
                 // A recorded failure or a guarded rollback changed the registry: admissions
                 // that read it earlier read it again (no reconciliation here: this may run
                 // inside one).
-                Ok(_) => {
+                Ok(recorded) => {
                     self.epoch.fetch_add(1, Ordering::SeqCst);
+                    if let Some(a) = self
+                        .attempts
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .get_mut(&(inst.package_id.clone(), inst.key.clone()))
+                    {
+                        a.exhausted_at = Some(recorded.registry_revision);
+                    }
                 }
                 // Nothing was recorded: the budget is not spent, the next failure records it.
                 Err(_) => {
