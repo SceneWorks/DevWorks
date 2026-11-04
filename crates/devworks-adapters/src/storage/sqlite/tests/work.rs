@@ -1376,6 +1376,123 @@ fn a_coverage_gap_only_the_pending_draft_has_never_holds_the_active_plan() {
     assert!(matches!(c.e1(), Readiness::Blocked { .. }));
 }
 
+/// A settled, non-blocking finding (it fills an assessment's finding list).
+fn settled_finding(i: usize) -> Value {
+    json!({"id": format!("S{i}"), "disposition": "ResolvedDecision", "blocking": false,
+        "prerequisite": false, "state": "Resolved", "requirementIds": [],
+        "affectedWorkIds": [], "summary": "settled", "missing": "", "consequence": "",
+        "attempts": [], "insufficiency": "", "closureCondition": "", "decision": "decided",
+        "confidence": "High", "evidence": [], "closureEvidence": []})
+}
+
+#[test]
+fn a_coverage_loss_the_full_assessment_cannot_record_refuses_the_membership_change() {
+    let (c, cards) = Coverage::new(&["Pay"], &[0]);
+    let pay = &cards[0];
+    // The active assessment holds its limit of findings (all settled).
+    let active = c.shown().approval.unwrap();
+    let f = c.fx.fresh(&c.f);
+    work_of(applied(c.fx.command_at(
+        &c.fx.agent(),
+        "features.edit",
+        json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "changes": {"readiness": {"kind": "Assess",
+                "planRevision": active.plan_revision.as_str(),
+                "planDigest": String::from(active.plan_digest.clone()),
+                "expectedAssessmentRevision": c.revision().unwrap(), "summary": "full",
+                "findings": (0..128).map(settled_finding).collect::<Vec<_>>()}}}),
+        Some(2),
+    )));
+    assert_eq!(c.shown().readiness.unwrap().findings.0.len(), 128);
+    let readiness = c.revision();
+    // Pay is E1's only covering card: its departure cannot be recorded, so it is refused and
+    // nothing of it is written (the card stays, unpaused; the requirement stays covered).
+    let before = c.fx.fresh(pay);
+    let fault = refused(c.fx.command(
+        &c.fx.user(),
+        "tasks.set_feature",
+        json!({"taskId": before.id.as_str(), "expectedRevision": before.revision.as_str(),
+            "clearFeature": true}),
+    ));
+    assert_eq!(kind_of(&fault), "finding_limit");
+    let after = c.fx.fresh(pay);
+    assert_eq!(
+        (after.parent_id.clone(), after.revision.clone()),
+        (Some(c.f.id.clone()), before.revision.clone())
+    );
+    let holds = {
+        let w = RootId(pay.id.clone());
+        c.fx.read(move |s| s.runs().blockers(&BlockerFilter::RootLevel(w), None, 100))
+    };
+    assert!(holds.is_empty(), "no unlink pause was written");
+    assert_eq!(c.revision(), readiness);
+    assert!(c.e1().is_current());
+}
+
+#[test]
+fn adopting_a_replacement_whose_assessment_cannot_take_a_carried_finding_is_refused() {
+    let (c, cards) = Coverage::new(&["Pay", "Wallet"], &[0, 1]);
+    // An open finding of the active plan (Pay leaves, then Wallet: E1 lost its coverage).
+    c.set_feature(&cards[0], None);
+    c.set_feature(&cards[1], None);
+    let open = Coverage::open_ids(&c.shown().readiness.unwrap());
+    assert_eq!(open.len(), 1);
+    // A replacement draft, assessed; its stored assessment is then made to hold the limit of
+    // findings without the active plan's open one (defence in depth: the service keeps it).
+    let f = c.edit_plan(&c.fx.fresh(&c.f), &[]);
+    let pending = f.pending_plan.clone().unwrap();
+    c.assess(&f, pending.revision.as_str(), plan_digest(&pending.draft));
+    let fid = c.f.id.clone();
+    c.fx.write(move |tx| {
+        let stored = tx.work().readiness(&fid)?.unwrap();
+        let mut body = stored.body.clone();
+        body["pending"]["findings"] = json!((0..128).map(settled_finding).collect::<Vec<_>>());
+        tx.work().put_readiness(
+            &StoredReadiness {
+                feature_id: fid.clone(),
+                revision: stored.revision + 1,
+                body,
+            },
+            Some(stored.revision),
+        )
+    });
+    // Adoption would carry the open finding past the limit: it is refused, nothing adopted.
+    let f = c.fx.fresh(&c.f);
+    let proposal = match applied(c.fx.command(
+        &c.fx.agent(),
+        "features.request_plan_approval",
+        json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "planRevision": pending.revision.as_str(),
+            "planDigest": plan_digest(&pending.draft)}),
+    )) {
+        OperationResult::FeaturesRequestPlanApproval { value } => value,
+        other => panic!("{other:?}"),
+    };
+    // The approvals seam's caller rolls its unit of work back on a refusal.
+    let ctx = c.fx.user();
+    let decided: Result<(), StorageError> = run_write(
+        &*c.fx.store,
+        WriteOptions::default(),
+        move |tx| match decide_plan_approval(tx, &ctx, &proposal.id, 1, true) {
+            Err(devworks_core::services::sessions::Failure::Refused(r)) => {
+                Err(StorageError::InvalidRecord(r.target_kind.to_string()))
+            }
+            other => panic!("{:?}", other.map(|w| w.revision)),
+        },
+    );
+    assert!(
+        matches!(&decided, Err(StorageError::InvalidRecord(k)) if k == "finding_limit"),
+        "{decided:?}"
+    );
+    let shown = c.shown();
+    assert!(shown.pending_plan.is_some(), "nothing was adopted");
+    assert_eq!(
+        Coverage::open_ids(&shown.readiness.unwrap()),
+        open,
+        "the active plan keeps its open finding"
+    );
+}
+
 #[test]
 fn a_card_leaving_again_after_its_coverage_finding_closed_blocks_the_requirement_again() {
     use devworks_core::protocol::records::FindingState;

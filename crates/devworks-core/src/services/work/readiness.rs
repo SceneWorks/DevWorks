@@ -816,7 +816,11 @@ fn of_stem(f: &ReadinessFinding, stem: &str) -> bool {
 /// finding is recorded and the earlier one keeps its closure; while an occurrence is still open
 /// the same departure adds none. It closes as any finding does (`CloseFinding`). Without a
 /// stored assessment of a generation nothing of it is ready to begin with, and its first
-/// assessment reviews the plan as it is. Returns the requirements either generation lost.
+/// assessment reviews the plan as it is. An assessment already holding its limit of findings
+/// (128, the wire bound; settled ones are kept as history) cannot take the finding, so the
+/// membership change is refused (`finding_limit`) rather than leave the requirement unguarded,
+/// as every other path that must add a finding at the limit is. Returns the requirements either
+/// generation lost.
 pub(crate) fn coverage_lost(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -898,10 +902,16 @@ pub(crate) fn coverage_lost(
                 continue;
             };
             let holds = lost && (body.units.contains_key(r.as_str()) || recorded);
-            if holds && body.findings.len() < 128 {
-                body.findings.push(finding.clone());
-                recorded = true;
+            if !holds {
+                continue;
             }
+            // A required finding is never dropped: at the assessment's finding limit the
+            // membership change is refused, and nothing of it is written.
+            if body.findings.len() >= 128 {
+                return Err(invalid("finding_limit", Some(&feature.id)));
+            }
+            body.findings.push(finding.clone());
+            recorded = true;
         }
         if recorded {
             added.push(id.as_str().to_owned());
@@ -1042,7 +1052,7 @@ pub(crate) fn record_adoption(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     feature: &StoredWork,
-) -> Result<(), StorageError> {
+) -> R<()> {
     let Some(mut stored) = tx.work().readiness(&feature.id)? else {
         return Ok(());
     };
@@ -1062,8 +1072,13 @@ pub(crate) fn record_adoption(
             promoted.reviewed_pending = false;
             // Approval never closes a finding (AGENT-20): one still open in the replaced
             // plan's assessment stays open in the adopted one.
-            if let Some(old) = &slots.active {
-                carry_open(old, &mut promoted);
+            // At the finding limit the adoption is refused rather than carry a finding the
+            // assessment cannot hold (it would fall out of every bounded view of it).
+            if let Some(old) = &slots.active
+                && carry_open(old, &mut promoted)
+                && promoted.findings.len() > 128
+            {
+                return Err(invalid("finding_limit", Some(&feature.id)));
             }
             slots.active = Some(promoted);
         }
@@ -1090,5 +1105,6 @@ pub(crate) fn record_adoption(
         stored.revision,
         "ReadinessInvalidated",
         json!({"staleUnits": stale, "currentUnits": kept}),
-    )
+    )?;
+    Ok(())
 }
