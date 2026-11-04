@@ -22,7 +22,7 @@ use crate::protocol::records::{
 use crate::protocol::{Id, Revision};
 use crate::services::process::OwnedProcess;
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 /// Most notifications buffered per channel before publication; older ones are dropped.
@@ -286,6 +286,9 @@ pub struct Live {
     pub network: Notices,
     /// The registered target set changed since the session record was last written.
     pub targets_changed: bool,
+    /// Advances with every change of the registered target set: a list captured under the
+    /// session's lock carries it, so an older list is never recorded over a newer one.
+    pub targets_version: u64,
     /// Permissions whose denial the browser accepted / refused, and the download policy.
     pub policy: Value,
     pending_attach: Vec<Value>,
@@ -296,11 +299,50 @@ pub struct Live {
 
 fn text(s: &str) -> String {
     let cut: String = s.chars().take(TEXT_LIMIT).collect();
-    Redactor::new().redact_text(&cut)
+    let redactor = Redactor::new();
+    // A secret written percent-encoded is still a secret: when the decoded text holds one the
+    // encoded text hides, the decoded text is kept, redacted.
+    if cut.contains('%') {
+        let decoded = percent_decode(&cut, false);
+        let clean = redactor.redact_text(&decoded);
+        if clean != decoded {
+            return clean;
+        }
+    }
+    redactor.redact_text(&cut)
 }
 
-/// The URL as evidence: user info, fragment and the values of credential-shaped query
-/// parameters are removed; the rest is bounded and redacted.
+/// Percent-decodes `s` (invalid escapes stay literal; `plus` also reads `+` as a space, as in a
+/// query), lossily as UTF-8.
+fn percent_decode(s: &str, plus: bool) -> String {
+    let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16);
+    let mut out = Vec::with_capacity(b.len());
+    let mut k = 0;
+    while k < b.len() {
+        if b[k] == b'%'
+            && k + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[k + 1]), hex(b[k + 2]))
+        {
+            out.push((h * 16 + l) as u8);
+            k += 3;
+            continue;
+        }
+        out.push(if plus && b[k] == b'+' { b' ' } else { b[k] });
+        k += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Whether a URL component holds a secret once decoded (the generic redactor reads only text).
+fn secret_when_decoded(component: &str) -> bool {
+    let decoded = percent_decode(component, true);
+    Redactor::new().redact_text(&decoded) != decoded
+}
+
+/// The URL as evidence: user info and fragment are dropped; a credential-shaped query
+/// parameter (by its decoded, case-folded name) or a component that holds a secret once
+/// decoded is replaced; everything else keeps its original encoding, bounded and redacted.
 pub fn safe_url(url: &str) -> String {
     // The fragment never leaves the page; it is dropped before anything else is read.
     let url = url.split('#').next().unwrap_or(url);
@@ -315,7 +357,17 @@ pub fn safe_url(url: &str) -> String {
                 None => (rest, ""),
             };
             let host = authority.rsplit('@').next().unwrap_or(authority);
-            format!("{scheme}://{host}{path}")
+            let path: Vec<String> = path
+                .split('/')
+                .map(|seg| {
+                    if secret_when_decoded(seg) {
+                        "[REDACTED]".to_owned()
+                    } else {
+                        seg.to_owned()
+                    }
+                })
+                .collect();
+            format!("{scheme}://{host}{}", path.join("/"))
         }
         None => base.to_owned(),
     };
@@ -325,7 +377,10 @@ pub fn safe_url(url: &str) -> String {
             .split('&')
             .filter(|p| !p.is_empty())
             .map(|p| match p.split_once('=') {
-                Some((k, _)) if sensitive_param(k) => format!("{k}=[REDACTED]"),
+                Some((k, v)) if sensitive_param(k) || secret_when_decoded(v) => {
+                    format!("{k}=[REDACTED]")
+                }
+                None if secret_when_decoded(p) => "[REDACTED]".to_owned(),
                 _ => p.to_owned(),
             })
             .collect();
@@ -336,11 +391,18 @@ pub fn safe_url(url: &str) -> String {
     }
     text(&out)
 }
+/// Whether a query parameter name is credential-shaped: judged on its percent-decoded name,
+/// with full-width forms folded to ASCII and Unicode case folded.
 fn sensitive_param(name: &str) -> bool {
-    let n: String = name
-        .to_ascii_lowercase()
+    let n: String = percent_decode(name, true)
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| match c {
+            // Full-width ASCII forms (U+FF01..U+FF5E) read as their ASCII letters.
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            c => c,
+        })
+        .flat_map(char::to_lowercase)
+        .filter(|c| c.is_alphanumeric())
         .collect();
     [
         "token",
@@ -378,6 +440,7 @@ impl Live {
             console: Notices::default(),
             network: Notices::default(),
             targets_changed: false,
+            targets_version: 0,
             policy: Value::Null,
             pending_attach: Vec::new(),
             pending_children: Vec::new(),
@@ -556,6 +619,7 @@ impl Live {
         t.origin = origin;
         self.targets.push(t);
         self.targets_changed = true;
+        self.targets_version += 1;
         let i = self.targets.len() - 1;
         if origin == "popup" {
             let (id, opener) = (self.targets[i].id.clone(), self.targets[i].opener.clone());
@@ -746,6 +810,7 @@ impl Live {
                     t.closed = true;
                     t.invalidate();
                     self.targets_changed = true;
+                    self.targets_version += 1;
                     let id = t.id.clone();
                     self.console
                         .push(json!({"at": at, "kind": "targetClosed", "target": id}));
@@ -770,6 +835,7 @@ impl Live {
                     t.crashed = true;
                     t.invalidate();
                     self.targets_changed = true;
+                    self.targets_version += 1;
                     let id = t.id.clone();
                     self.console.push(json!({
                         "at": at, "kind": "crash", "target": id,
@@ -1465,6 +1531,20 @@ impl Live {
                 let (x, y) = self
                     .place_click(i, &n, node, bounds)
                     .map_err(post_dispatch)?;
+                // The point must reach the node: through every frame owner on the way, and at
+                // the end the node itself or one of its descendants. Whatever covers it (a modal,
+                // a sticky header, an element of an embedding document) gets nothing.
+                if !self
+                    .click_reaches(i, &n, x, y, bounds)
+                    .map_err(post_dispatch)?
+                {
+                    return Err(ActionError::Refused {
+                        kind: "browser_node",
+                        detail: "another element covers the node where it would be clicked; it \
+                                 was scrolled into view and nothing was clicked"
+                            .into(),
+                    });
+                }
                 let button = match button {
                     MouseButton::Primary => "left",
                     MouseButton::Secondary => "right",
@@ -1495,6 +1575,22 @@ impl Live {
                 .map_err(before_or_after)?;
                 // Focus ran page handlers: from here on every failure is post-dispatch.
                 self.resolve_node(node).map_err(post_dispatch)?;
+                // Text goes to whatever holds focus: the node must hold it now (a handler may
+                // have moved it elsewhere).
+                let held = self
+                    .call(
+                        Some(&n.session),
+                        "Accessibility.getPartialAXTree",
+                        json!({"backendNodeId": n.backend, "fetchRelatives": false}),
+                        bounds.call,
+                    )
+                    .map_err(ActionError::After)?;
+                if !ax_focused(&held, n.backend) {
+                    return Err(ActionError::Refused {
+                        kind: "browser_focus",
+                        detail: "the node did not keep keyboard focus; nothing was typed".into(),
+                    });
+                }
                 self.call(
                     Some(&s),
                     "Input.insertText",
@@ -1742,17 +1838,10 @@ impl Live {
             .get("clientHeight")
             .and_then(Value::as_f64)
             .unwrap_or(600.0);
-        // Local roots from the page down to the frame's session, each with its offset and the
-        // owner element (in its parent) through which it is entered.
-        let mut hops = self.hops(i, &frame.session, false, bounds)?;
-        hops.reverse();
+        let (roots, owners) = self.chain(i, &frame.session, bounds)?;
         let mut visible = (0.0, 0.0, w, h);
-        let mut roots = vec![(page, Affine::IDENTITY, None::<i64>)];
-        for hop in hops {
-            let parent = roots.last().map_or(Affine::IDENTITY, |r| r.1);
-            visible = intersect(visible, rect(&parent.quad(&hop.content)));
-            roots.last_mut().expect("a root").2 = Some(hop.owner);
-            roots.push((hop.session, parent.then(&hop.map), None));
+        for quad in &owners {
+            visible = intersect(visible, rect(quad));
         }
         // A frame inside its local root's document (not the root's own frame) has an owner there.
         let root_frame = match self.targets[i].child_of_session(&frame.session) {
@@ -1784,7 +1873,10 @@ impl Live {
             (cx - qw, cy + qh),
             (cx + qw, cy + qh),
         ] {
-            if self.reaches(&roots, &frame.cdp, px, py, bounds)? {
+            let in_frame = |hit: &Value| {
+                hit.get("frameId").and_then(Value::as_str) == Some(frame.cdp.as_str())
+            };
+            if self.reaches(&roots, &in_frame, px, py, bounds)? {
                 return Ok((px, py));
             }
         }
@@ -1794,12 +1886,66 @@ impl Live {
         })
     }
 
-    /// Whether a top-level point hits through each local root's next owner into `frame` (each
-    /// root is hit-tested at the point mapped back into its own viewport).
+    /// The local roots from the page down to `session` (each with the map from its viewport to
+    /// the top-level one, and the owner element in it of the next root), and each out-of-process
+    /// frame owner's quad in top-level coordinates.
+    fn chain(
+        &mut self,
+        i: usize,
+        session: &str,
+        bounds: &Bounds,
+    ) -> Result<(Vec<Root>, Vec<Vec<f64>>), ActionError> {
+        let mut hops = self.hops(i, session, false, bounds)?;
+        hops.reverse();
+        let page = self.targets[i].cdp_session.clone();
+        let mut roots: Vec<Root> = vec![(page, Affine::IDENTITY, None)];
+        let mut owners = Vec::new();
+        for hop in hops {
+            let parent = roots.last().map_or(Affine::IDENTITY, |r| r.1);
+            owners.push(parent.quad(&hop.content));
+            roots.last_mut().expect("a root").2 = Some(hop.owner);
+            roots.push((hop.session, parent.then(&hop.map), None));
+        }
+        Ok((roots, owners))
+    }
+
+    /// Whether a click at the top-level point reaches `n`: hit-testing finds each frame owner on
+    /// the way, and in the node's own document the node itself or one of its descendants.
+    fn click_reaches(
+        &mut self,
+        i: usize,
+        n: &NodeRef,
+        x: f64,
+        y: f64,
+        bounds: &Bounds,
+    ) -> Result<bool, ActionError> {
+        let tree = self
+            .call(
+                Some(&n.session),
+                "DOM.describeNode",
+                json!({"backendNodeId": n.backend, "depth": -1, "pierce": true}),
+                bounds.call,
+            )
+            .map_err(ActionError::Before)?;
+        let mut within = HashSet::from([n.backend]);
+        if let Some(node) = tree.get("node") {
+            subtree(node, &mut within);
+        }
+        let (roots, _) = self.chain(i, &n.session, bounds)?;
+        let at_node = |hit: &Value| {
+            hit.get("backendNodeId")
+                .and_then(Value::as_i64)
+                .is_some_and(|b| within.contains(&b))
+        };
+        self.reaches(&roots, &at_node, x, y, bounds)
+    }
+
+    /// Whether a top-level point hits through each local root's next owner, and at the last root
+    /// satisfies `last` (each root is hit-tested at the point mapped back into its own viewport).
     fn reaches(
         &mut self,
-        roots: &[(String, Affine, Option<i64>)],
-        frame: &str,
+        roots: &[Root],
+        last: &dyn Fn(&Value) -> bool,
         x: f64,
         y: f64,
         bounds: &Bounds,
@@ -1818,7 +1964,7 @@ impl Live {
                 .map_err(ActionError::Before)?;
             let ok = match next {
                 Some(owner) => hit.get("backendNodeId").and_then(Value::as_i64) == Some(*owner),
-                None => hit.get("frameId").and_then(Value::as_str) == Some(frame),
+                None => last(&hit),
             };
             if !ok {
                 return Ok(false);
@@ -1999,6 +2145,47 @@ pub fn post_dispatch(e: ActionError) -> ActionError {
             ActionError::After(CdpError::Protocol(format!("after the action: {detail}")))
         }
     }
+}
+
+/// A local root on the way from the page to a document: its session, the map from its viewport
+/// into the top-level one, and the owner element (in it) of the next root.
+type Root = (String, Affine, Option<i64>);
+
+/// Every backend node ID of a described subtree (shadow roots and frame documents included).
+fn subtree(node: &Value, out: &mut HashSet<i64>) {
+    if out.len() >= 50_000 {
+        return;
+    }
+    if let Some(b) = node.get("backendNodeId").and_then(Value::as_i64) {
+        out.insert(b);
+    }
+    for k in ["children", "shadowRoots", "pseudoElements"] {
+        for c in node.get(k).and_then(Value::as_array).into_iter().flatten() {
+            subtree(c, out);
+        }
+    }
+    if let Some(d) = node.get("contentDocument") {
+        subtree(d, out);
+    }
+}
+
+/// Whether a partial accessibility tree reports `backend` focused.
+fn ax_focused(tree: &Value, backend: i64) -> bool {
+    tree.get("nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|n| n.get("backendDOMNodeId").and_then(Value::as_i64) == Some(backend))
+        .any(|n| {
+            n.get("properties")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|p| {
+                    p.get("name").and_then(Value::as_str) == Some("focused")
+                        && p.pointer("/value/value").and_then(Value::as_bool) == Some(true)
+                })
+        })
 }
 
 /// One out-of-process frame boundary on the way from a document up to its page.
@@ -2298,6 +2485,44 @@ mod tests {
             safe_url("https://h.test/cb?code=xyz&state=ok"),
             "https://h.test/cb?code=[REDACTED]&state=ok"
         );
+    }
+
+    #[test]
+    fn credential_names_and_secrets_are_found_however_they_are_encoded() {
+        let token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+        // A percent-encoded name is judged decoded; its original encoding stays.
+        assert_eq!(
+            safe_url("https://h.test/a?%70%61%73%73%77%6f%72%64=hunter2&q=%41b"),
+            "https://h.test/a?%70%61%73%73%77%6f%72%64=[REDACTED]&q=%41b"
+        );
+        // Full-width forms and case fold before the name is classified.
+        assert_eq!(
+            safe_url(
+                "https://h.test/a?%EF%BC%B0%EF%BD%81%EF%BD%93%EF%BD%93%EF%BD%97%EF%BD%8F%EF%BD%92%EF%BD%84=x"
+            ),
+            "https://h.test/a?%EF%BC%B0%EF%BD%81%EF%BD%93%EF%BD%93%EF%BD%97%EF%BD%8F%EF%BD%92%EF%BD%84=[REDACTED]"
+        );
+        assert_eq!(
+            safe_url("https://h.test/a?PASS%57ORD=x"),
+            "https://h.test/a?PASS%57ORD=[REDACTED]"
+        );
+        // An encoded secret in a value, a bare parameter or a path segment is found decoded.
+        let encoded = token.replace('_', "%5F");
+        assert_eq!(
+            safe_url(&format!("https://h.test/a?q={encoded}&n=1")),
+            "https://h.test/a?q=[REDACTED]&n=1"
+        );
+        assert_eq!(
+            safe_url(&format!("https://h.test/a/{encoded}/b")),
+            "https://h.test/a/[REDACTED]/b"
+        );
+        assert_eq!(
+            safe_url(&format!("https://h.test/a?{encoded}")),
+            "https://h.test/a?[REDACTED]"
+        );
+        // Console and dialog text: an encoded secret does not pass through.
+        assert!(!text(&format!("visit /cb?t={encoded}")).contains("abcdefghij"));
+        assert_eq!(text("100% done"), "100% done");
     }
 
     #[test]

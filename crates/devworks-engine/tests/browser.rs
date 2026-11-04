@@ -151,6 +151,10 @@ struct FakeBrowser {
     frame_hidden: bool,
     /// A CSS scale of out-of-process frame owners (around their top-left corner).
     frame_scale: Option<f64>,
+    /// An element covers this node: hit-testing over it finds the cover (backend 99).
+    cover: Option<i64>,
+    /// Focusing a page node does not take (a handler moves focus away at once).
+    steal_focus: bool,
     /// Reads wait (past their timeout) while set; `reads_stalled` records that one waited.
     stall_reads: bool,
     reads_stalled: bool,
@@ -327,14 +331,27 @@ impl FakeBrowser {
                 self.children[k].focused = true;
                 self.reply(id, json!({}))
             }
-            // The frame's document is 100 x 50 at its own origin.
+            // The frame's document is 100 x 50 at its own origin; its button at (20, 10)-(40, 30).
             "DOM.getNodeForLocation" => {
                 let (x, y) = (p["x"].as_f64().unwrap(), p["y"].as_f64().unwrap());
+                let node = if (20.0..40.0).contains(&x) && (10.0..30.0).contains(&y) {
+                    5
+                } else {
+                    1
+                };
                 if (0.0..100.0).contains(&x) && (0.0..50.0).contains(&y) {
-                    self.reply(id, json!({"backendNodeId": 1, "frameId": frame}))
+                    self.reply(id, json!({"backendNodeId": node, "frameId": frame}))
                 } else {
                     self.error(id, "No node found at given location")
                 }
+            }
+            "Accessibility.getPartialAXTree" => {
+                let b = p["backendNodeId"].as_i64().unwrap_or(-1);
+                let focused = b == 6 && self.children[k].focused;
+                self.reply(
+                    id,
+                    json!({"nodes": [{"nodeId": "p", "backendDOMNodeId": b, "properties": [{"name": "focused", "value": {"value": focused}}]}]}),
+                )
             }
             "DOM.scrollIntoViewIfNeeded" | "DOM.getContentQuads" | "DOM.focus" | "DOM.describeNode"
                 if !matches!(p["backendNodeId"].as_i64(), Some(5 | 6)) =>
@@ -512,6 +529,9 @@ impl FakeBrowser {
                 let node = self.pages[i].nodes[k].clone();
                 match method.as_str() {
                     "DOM.focus" => {
+                        if self.steal_focus {
+                            return self.reply(&id, json!({}));
+                        }
                         self.pages[i].focused = Some(b);
                         for c in self.children.iter_mut().filter(|c| c.page == i) {
                             c.focused = false;
@@ -557,10 +577,21 @@ impl FakeBrowser {
                 let hit = self.hit(i, x, y);
                 let backend = match hit {
                     Some(20) if self.frame_covered => 99,
+                    Some(b) if self.cover == Some(b) => 99,
                     Some(b) => b,
                     None => 1,
                 };
                 self.reply(&id, json!({"backendNodeId": backend, "frameId": frame}))
+            }
+            "Accessibility.getPartialAXTree" => {
+                let i = page.unwrap();
+                let b = p["backendNodeId"].as_i64().unwrap_or(-1);
+                let focused = self.pages[i].focused == Some(b)
+                    && !self.children.iter().any(|c| c.page == i && c.focused);
+                self.reply(
+                    &id,
+                    json!({"nodes": [{"nodeId": "p", "backendDOMNodeId": b, "properties": [{"name": "focused", "value": {"value": focused}}]}]}),
+                )
             }
             "Input.dispatchMouseEvent" if p["type"] == "mouseWheel" => {
                 let i = page.unwrap();
@@ -3009,6 +3040,81 @@ fn a_page_with_more_frames_than_registered_is_snapshotted_with_its_list_cut() {
     let ax = fx.json(&page.accessibility);
     assert_eq!(ax["frames"].as_array().unwrap().len(), MAX_FRAMES);
     assert_eq!(ax["framesTruncated"], true);
+}
+
+#[test]
+fn a_click_is_never_sent_to_whatever_covers_its_node() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    let b = fx.platform.browser(&session);
+    // A modal covers the button: the click is refused and no mouse event is sent.
+    b.lock().unwrap().cover = Some(11);
+    let mice = requests(&b, "Input.dispatchMouseEvent");
+    let click = |n: Value| json!({"kind": "Click", "node": n, "button": "Primary"});
+    assert_eq!(
+        failed_kind(fx.input(&user, &session, click(node(&snap, &ax, "Submit")))),
+        "browser_node"
+    );
+    assert_eq!(requests(&b, "Input.dispatchMouseEvent"), mice);
+    // An element of the embedding page covering a frame's owner takes nothing either.
+    let (_, frame) = oopif_targets(&fx, &user, &session);
+    let inner = fx.inspect(&user, &frame);
+    let inner_ax = fx.json(&inner.accessibility);
+    b.lock().unwrap().frame_covered = true;
+    let mice = requests(&b, "Input.dispatchMouseEvent");
+    assert_eq!(
+        failed_kind(fx.input(&user, &session, click(node(&inner, &inner_ax, "Inside")))),
+        "browser_node"
+    );
+    assert_eq!(requests(&b, "Input.dispatchMouseEvent"), mice);
+    assert_eq!(b.lock().unwrap().children[0].clicked, 0);
+    // Uncovered, the click reaches the node in the frame.
+    b.lock().unwrap().frame_covered = false;
+    fx.observation(fx.input(&user, &session, click(node(&inner, &inner_ax, "Inside"))));
+    assert_eq!(b.lock().unwrap().children[0].clicked, 1);
+}
+
+#[test]
+fn text_is_never_typed_when_its_node_does_not_keep_focus() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    let b = fx.platform.browser(&session);
+    b.lock().unwrap().steal_focus = true;
+    assert_eq!(
+        failed_kind(fx.input(
+            &user,
+            &session,
+            json!({"kind": "Text", "node": node(&snap, &ax, "Name"), "text": "Ada"})
+        )),
+        "browser_focus"
+    );
+    assert_eq!(requests(&b, "Input.insertText"), 0, "nothing was typed");
+}
+
+#[test]
+fn an_older_target_list_is_never_recorded_over_a_newer_one() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    // Two lists captured in order (a popup opened, then closed) reach the store out of order.
+    let newer = vec!["t1".to_owned()];
+    let older = vec!["t1".to_owned(), "t2".to_owned()];
+    fx.svc().record_targets(&session, 1_001, newer.clone());
+    fx.svc().record_targets(&session, 1_000, older);
+    assert_eq!(
+        fx.session(&session).targets,
+        newer,
+        "the closed tab never comes back"
+    );
 }
 
 #[test]

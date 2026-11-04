@@ -224,6 +224,9 @@ pub fn launch_args(profile: &Profile) -> Vec<String> {
 struct Slot {
     closing: AtomicBool,
     live: Mutex<Option<Live>>,
+    /// The version of the last target list recorded; held while a list is written, so lists
+    /// are recorded in version order whatever order their writers reach the store.
+    recorded: Mutex<u64>,
 }
 
 /// What `decide` may check without waiting for an in-flight action: the live target, frame,
@@ -556,6 +559,7 @@ impl BrowserService {
             .or_insert_with(|| {
                 Arc::new(Slot {
                     closing: AtomicBool::new(false),
+                    recorded: Mutex::new(0),
                     live: Mutex::new(None),
                 })
             })
@@ -1278,6 +1282,7 @@ impl BrowserService {
         self.publish_view(live);
         let changed = std::mem::take(&mut live.targets_changed);
         let targets = live.open_targets();
+        let version = live.targets_version;
         let lost = live.cdp.closed();
         if lost {
             let l = guard.take().expect("live");
@@ -1286,7 +1291,7 @@ impl BrowserService {
         } else {
             drop(guard);
             if changed {
-                self.record_targets(id, targets);
+                self.record_targets(id, version, targets);
             }
         }
         match outcome {
@@ -1348,14 +1353,29 @@ impl BrowserService {
 
     /// Records the session's registered targets; if the write fails, the live session keeps
     /// its change flag so the next pass records them again.
-    fn record_targets(&self, id: &Id, targets: Vec<String>) {
-        let written = self.update(id, move |s| {
-            if s.targets == targets {
-                return None;
+    #[doc(hidden)]
+    pub fn record_targets(&self, id: &Id, version: u64, targets: Vec<String>) {
+        let Some(slot) = self.existing_slot(id) else {
+            return;
+        };
+        let written = {
+            let mut recorded = slot.recorded.lock().unwrap_or_else(|p| p.into_inner());
+            // A list captured before the one already recorded is stale: never written over it.
+            if version <= *recorded {
+                return;
             }
-            s.targets = targets.clone();
-            Some(("BrowserTargetsChanged", json!({"targets": targets})))
-        });
+            let written = self.update(id, move |s| {
+                if s.targets == targets {
+                    return None;
+                }
+                s.targets = targets.clone();
+                Some(("BrowserTargetsChanged", json!({"targets": targets})))
+            });
+            if written.is_ok() {
+                *recorded = version;
+            }
+            written
+        };
         if written.is_err()
             && let Some(slot) = self.existing_slot(id)
             && let Some(live) = slot.live.lock().unwrap_or_else(|p| p.into_inner()).as_mut()
@@ -1713,9 +1733,10 @@ impl BrowserService {
             self.publish_view(live);
             let changed = std::mem::take(&mut live.targets_changed);
             let targets = live.open_targets();
+            let version = live.targets_version;
             drop(guard);
             if changed {
-                self.record_targets(&id, targets);
+                self.record_targets(&id, version, targets);
             }
         }
     }
@@ -2628,6 +2649,7 @@ impl BrowserService {
         self.publish_view(live);
         let changed = std::mem::take(&mut live.targets_changed);
         let targets = live.open_targets();
+        let version = live.targets_version;
         if live.cdp.closed() {
             let l = guard.take().expect("live");
             drop(guard);
@@ -2635,7 +2657,7 @@ impl BrowserService {
         } else {
             drop(guard);
             if changed {
-                self.record_targets(id, targets);
+                self.record_targets(id, version, targets);
             }
         }
         r
