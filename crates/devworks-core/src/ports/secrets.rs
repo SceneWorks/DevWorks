@@ -1,6 +1,17 @@
-//! The OS secret facility (SEC-01, AD 39, AD 73): API keys and OAuth tokens live only here, never
-//! in SQLite, logs, diagnostics, receipts or results. Application records hold an opaque handle
-//! (`credential_ref`) and a credential revision instead.
+//! The OS secret facility (SEC-01, AD 39, AD 73): API keys, OAuth tokens and settings
+//! credentials live only here, never in SQLite, logs, diagnostics, receipts or results.
+//! Application records hold an opaque handle instead: a provider connection its `credential_ref`
+//! and credential revision, a setting such as `web.searchCredential` a host-minted
+//! `{"secretRef": "dwsecret-..."}` reference.
+//!
+//! One abstraction with two sides. [`SecretStore`] is the facility itself (write, read, delete,
+//! list by namespace). [`SecretResolver`] is the read side for settings references, for the one
+//! adapter that sends the credential (the web search provider). The production resolver is the
+//! provider connection service over the host's [`SecretStore`] (it stores a settings secret under
+//! its reference as the handle), so the desktop host's web tools resolve `web.searchCredential`
+//! from the same OS facility as the provider credentials. [`NoSecretStore`] answers only where no
+//! native store is composed (a composition without the connection service); a feature that needs
+//! a credential then reports `CredentialsRequired` instead of reading one from anywhere else.
 //!
 //! Handles are immutable: a replaced credential is written under a new handle, published by a
 //! compare-and-set of the connection's credential revision, and the old handle is then deleted.
@@ -9,9 +20,10 @@
 //! reconcile without reading or printing any value.
 //!
 //! Production adapters live in `devworks-adapters::secrets` (macOS Keychain, Windows Credential
-//! Manager, Linux Secret Service). [`SessionSecrets`] keeps secrets in memory for the current app
-//! session only: it is the test substitute and the explicit, user-chosen fallback when the OS
-//! facility is unavailable, never a silent plaintext disk fallback.
+//! Manager, Linux Secret Service; on any other platform every call is unavailable).
+//! [`SessionSecrets`] keeps secrets in memory for the current app session only: it is the test
+//! substitute and the explicit, user-chosen fallback when the OS facility is unavailable, never
+//! a silent plaintext disk fallback.
 use crate::protocol::Id;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -20,10 +32,8 @@ use std::sync::Mutex;
 pub use crate::authority::redact::SecretRef;
 
 // ---------------------------------------------------------------------------------------------
-// Read side for settings credentials (`{"secretRef": "dwsecret-..."}` values; the API DW-51's
-// web tools resolve their search credential through). One secret-store abstraction: the
-// production resolver is the provider-connection service over this module's [`SecretStore`],
-// which stores a settings secret under its reference as the handle.
+// Read side for settings credentials (`{"secretRef": "dwsecret-..."}` values), which the web
+// tools resolve their search credential through.
 
 /// A resolved credential. Its `Debug` never shows the value.
 #[derive(Clone, PartialEq, Eq)]
@@ -59,7 +69,8 @@ pub trait SecretResolver: Send + Sync {
     fn resolve(&self, reference: &SecretRef) -> Result<SecretValue, SecretUnavailable>;
 }
 
-/// No native secret store is composed.
+/// No native secret store is composed: every reference is `Unsupported`. Production hosts
+/// compose the provider connection service instead.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoSecretStore;
 impl SecretResolver for NoSecretStore {

@@ -7,6 +7,7 @@ pub mod power;
 pub mod process;
 pub mod secrets;
 pub mod storage;
+pub mod web;
 
 /// The OS cryptographic random generator (core `Entropy`: PKCE verifiers, sign-in state).
 #[derive(Clone, Copy, Debug, Default)]
