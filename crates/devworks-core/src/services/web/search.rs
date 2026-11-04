@@ -5,9 +5,10 @@ use crate::authority::redact::Redactor;
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
 use crate::operations::web::SearchInput;
-use crate::ports::Preparation;
 use crate::ports::secrets::SecretUnavailable;
+use crate::ports::storage::{StorageError, WriteOptions, run_write};
 use crate::ports::web::{NetFault, SearchFault, SearchRequest};
+use crate::ports::{Authorization, Preparation};
 use crate::protocol::data::DataScope;
 use crate::protocol::records::{
     DiagnosticErrorClass, DiagnosticOutcome, Severity, TrustLevel, WebResult,
@@ -16,8 +17,9 @@ use crate::protocol::support::{BoundedList, BoundedText, Page, Url};
 use crate::protocol::{
     CorrelationId, Counter, DomainErrorCode, DomainFault, ProjectId, RetryAdvice,
 };
+use crate::services::artifacts::observed::AUTHORITY_CHANGED;
 use crate::services::cursor::CursorBinding;
-use crate::services::diagnostics::LogEntry;
+use crate::services::diagnostics::{LogEntry, LogRefusal};
 use serde_json::json;
 use std::time::Duration;
 
@@ -27,6 +29,7 @@ const TITLE_LIMIT: usize = 256;
 const SNIPPET_LIMIT: usize = 65_536;
 
 impl WebService {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn search(
         &self,
         ctx: &InvocationContext,
@@ -35,6 +38,7 @@ impl WebService {
         policy: &WebPolicy,
         project: Option<ProjectId>,
         correlation: &CorrelationId,
+        authorization: &Authorization,
     ) -> Result<Page<WebResult>, DomainFault> {
         let started = self.clock.now_ms().get();
         let requested = input.provider_id.as_str();
@@ -325,8 +329,13 @@ impl WebService {
                 provider_id: Some(input.provider_id.clone()),
             });
         }
-        let next = offset.saturating_add(count);
-        let has_more = page.more && next <= provider.offset_max();
+        // The cursor steps over exactly the provider positions this page consumed (results with
+        // unusable URLs included), never the requested count: a provider that answers a short
+        // page while it has more must not have the rest skipped. A page that consumed nothing
+        // cannot advance, so it ends the listing rather than repeating itself.
+        let consumed = page.hits.len().min(count as usize) as u32;
+        let next = offset.saturating_add(consumed);
+        let has_more = page.more && consumed > 0 && next <= provider.offset_max();
         // The activity is retained before any result is published (TOOL-08).
         let mut e = LogEntry::new(
             SEARCH_COMPONENT,
@@ -354,14 +363,44 @@ impl WebService {
             })
             .to_string(),
         );
-        if self.diagnostics.log(e).is_err() {
-            return Err(fault(
-                DomainErrorCode::StorageUnavailable,
-                RetryAdvice::SameCommand,
-                "web_store",
-                correlation,
-                None,
-            ));
+        // Recorded only while the invocation's authority still holds, checked in the same write:
+        // a principal revoked or re-bound while the provider answered records no success.
+        let (diagnostics, owned_ctx, authorization) =
+            (self.diagnostics.clone(), ctx.clone(), authorization.clone());
+        let recorded = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            if !crate::authority::authorization_holds_in(tx, &owned_ctx, &authorization)? {
+                return Ok(false);
+            }
+            diagnostics.log_in(tx, &e).map_err(|e| match e {
+                LogRefusal::Storage(s) => s,
+                LogRefusal::Invalid(why) => StorageError::InvalidRecord(why.into()),
+            })?;
+            Ok(true)
+        });
+        match recorded {
+            Ok(true) => self.diagnostics.committed(),
+            Ok(false) => {
+                return Err(refuse(
+                    DomainErrorCode::PermissionDenied,
+                    RetryAdvice::Never,
+                    AUTHORITY_CHANGED,
+                    DiagnosticErrorClass::Permission,
+                    format!(
+                        "Search with {configured} answered, but the caller's authority changed meanwhile; nothing was published"
+                    ),
+                    true,
+                    &redactor,
+                ));
+            }
+            Err(_) => {
+                return Err(fault(
+                    DomainErrorCode::StorageUnavailable,
+                    RetryAdvice::SameCommand,
+                    "web_store",
+                    correlation,
+                    None,
+                ));
+            }
         }
         Ok(Page {
             items: BoundedList(items),

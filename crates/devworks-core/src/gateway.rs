@@ -73,11 +73,18 @@ pub struct AdmittedQuery {
     fingerprint: Fingerprint,
     revision: SchemaRevision,
     prepared: Option<Prepared>,
+    authorization: Authorization,
 }
 impl AdmittedQuery {
     /// What the use case's [`QueryHandler::prepare`] established for this query, if anything.
     pub fn prepared<T: std::any::Any>(&self) -> Option<&T> {
         self.prepared.as_ref().and_then(Prepared::get)
+    }
+    /// What current authority established for this query (its fences and grants). A use case
+    /// that writes during preparation re-checks it inside that write
+    /// ([`crate::authority::authorization_holds_in`]), as a command's unit of work does.
+    pub fn authorization(&self) -> &Authorization {
+        &self.authorization
     }
     pub fn descriptor(&self) -> &'static OperationDescriptor {
         self.descriptor
@@ -282,6 +289,7 @@ impl Gateway<'_> {
             fingerprint: decoded.fingerprint,
             revision: decoded.revision,
             prepared: None,
+            authorization: authorization.clone(),
         };
         // Preparation runs only for an admitted, currently authorized query, before (never
         // inside) its read snapshot, so slow external reads hold no snapshot or lock.

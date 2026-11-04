@@ -262,6 +262,10 @@ struct Fx {
 
 impl Fx {
     fn new() -> Self {
+        Self::with_provider(None)
+    }
+    /// The fixture with `provider` in place of the Brave provider (still configured as `brave`).
+    fn with_provider(provider: Option<Arc<dyn SearchProvider>>) -> Self {
         let h = Harness::new();
         let store = Arc::new(h.store());
         let files = Arc::new(NativeArtifactFiles::new(
@@ -284,14 +288,16 @@ impl Fx {
         let names = Arc::new(Names::default());
         let net = Arc::new(Mapped::new());
         let secrets = Arc::new(Secrets::default());
-        let providers: Vec<Arc<dyn SearchProvider>> = vec![Arc::new(
-            BraveSearch::with_endpoint(
-                names.clone(),
-                net.clone(),
-                "http://search.test/res/v1/web/search",
+        let providers: Vec<Arc<dyn SearchProvider>> = vec![provider.unwrap_or_else(|| {
+            Arc::new(
+                BraveSearch::with_endpoint(
+                    names.clone(),
+                    net.clone(),
+                    "http://search.test/res/v1/web/search",
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        )];
+        })];
         let web = Arc::new(WebService::new(
             store.clone(),
             artifacts,
@@ -993,7 +999,11 @@ fn time_limits_cancellation_and_unknown_outcomes_are_explicit() {
     ));
     assert_eq!(f.code, DomainErrorCode::OutcomeUnknown);
     assert!(started.elapsed() < Duration::from_secs(5));
-    // Nothing listening: not sent, an external failure.
+    // Nothing listening (a port that was bound, then closed): refused, so not sent and not a
+    // timeout. Windows reports a refused loopback connect only after its SYN retries (about two
+    // seconds), so the limit is restored first; the refused/timeout classification itself is
+    // checked deterministically in `connecting_is_cancellable_and_classified`.
+    fx.set("web.timeoutMs", json!(30_000));
     let closed = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -1008,7 +1018,6 @@ fn time_limits_cancellation_and_unknown_outcomes_are_explicit() {
     let f = refused(fx.fetch("http://unknown-name.test/"));
     assert_eq!(f.code, DomainErrorCode::ExternalFailure);
     // Shutdown stops a fetch in flight at its next wait, and refuses new ones.
-    fx.set("web.timeoutMs", json!(30_000));
     let web = fx.web.clone();
     let stopper = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(400));
@@ -1363,6 +1372,340 @@ fn provider_failures_are_typed_and_unknown_after_dispatch() {
     );
     assert_eq!(hits.load(Ordering::SeqCst), 5);
     assert!(!format!("{:?}", fx.records("web.search")).contains(KEY));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review round 1: refusals roll back, authority is fenced, cursors step by what was consumed,
+// connecting is cancellable
+
+fn fetched_records(fx: &Fx) -> usize {
+    fx.records("web.fetch")
+        .iter()
+        .filter(|r| r.code == "fetched")
+        .count()
+}
+
+#[test]
+fn a_storage_limit_found_in_the_recording_write_rolls_the_recording_back() {
+    let fx = Fx::new();
+    fx.serve(
+        "docs.test",
+        PUBLIC,
+        Arc::new(|_| response("200 OK", &[("Content-Type", "text/plain")], b"0123456789")),
+    );
+    // The same bytes already live in project-b, so the pre-check (which counts only bytes no
+    // blob holds yet) passes for project-a and the limit is first found inside the write, after
+    // the blob, artifact, version, tags and links were inserted.
+    document(fx.fetch_as(
+        &fx.user(),
+        "http://docs.test/",
+        json!({"kind": "Project", "projectId": "project-b"}),
+        1000,
+        5000,
+    ));
+    fx.set("storage.artifactQuotaBytes", json!(5));
+    let f = refused(fx.fetch("http://docs.test/"));
+    assert_eq!(
+        (f.code, target(&f).as_str()),
+        (DomainErrorCode::CapacityWait, "artifact_storage_quota")
+    );
+    let (usage, unresolved) = fx.read(|s| {
+        Ok((
+            s.artifacts().project_usage(&project("project-a"))?,
+            s.operations().unresolved(10)?.len(),
+        ))
+    });
+    assert_eq!(usage, 0, "nothing of the refused recording committed");
+    assert_eq!(unresolved, 0, "its staging operation was resolved");
+    assert_eq!(
+        fetched_records(&fx),
+        1,
+        "only the project-b fetch succeeded"
+    );
+}
+
+/// Changes the agent's binding (revoked, or re-bound to another project) from inside a request.
+fn rebind(store: &Arc<SqliteStore>, user: InvocationContext, revoke: bool) {
+    run_write(&**store, WriteOptions::default(), move |tx| {
+        let revision = tx
+            .authority()
+            .principal(&actor("agent-a"))?
+            .expect("bound")
+            .revision;
+        let done = if revoke {
+            auth::revoke_principal(tx, &user, &actor("agent-a"), revision).map(|_| ())
+        } else {
+            let binding = NewPrincipalBinding {
+                actor: actor("agent-a"),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: Some(project("project-b")),
+                tool_families: None,
+                bound_by: actor("user-a"),
+            };
+            auth::bind_principal(tx, &user, binding, Some(revision)).map(|_| ())
+        };
+        done.map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    })
+    .expect("rebind");
+}
+
+#[test]
+fn authority_changed_while_a_fetch_is_in_flight_publishes_nothing() {
+    for revoke in [true, false] {
+        let fx = Fx::new();
+        let (store, user) = (fx.store.clone(), fx.user());
+        let once = Arc::new(Mutex::new(Some((store, user))));
+        fx.serve(
+            "docs.test",
+            PUBLIC,
+            Arc::new(move |_| {
+                if let Some((store, user)) = once.lock().unwrap().take() {
+                    rebind(&store, user, revoke);
+                }
+                response("200 OK", &[("Content-Type", "text/plain")], b"secret plans")
+            }),
+        );
+        let f = refused(fx.fetch_as(
+            &fx.agent("agent-a"),
+            "http://docs.test/",
+            json!({"kind": "Project", "projectId": "project-a"}),
+            1000,
+            5000,
+        ));
+        assert_eq!(
+            (f.code, target(&f).as_str()),
+            (DomainErrorCode::PermissionDenied, "authority_changed"),
+            "revoke: {revoke}"
+        );
+        let usage = fx.read(|s| s.artifacts().project_usage(&project("project-a")));
+        assert_eq!(
+            usage, 0,
+            "no artifact or origin link persisted (revoke: {revoke})"
+        );
+        assert_eq!(
+            fetched_records(&fx),
+            0,
+            "no success recorded (revoke: {revoke})"
+        );
+    }
+}
+
+#[test]
+fn authority_changed_while_a_search_is_in_flight_records_no_success() {
+    let fx = Fx::new();
+    configure_search(&fx);
+    let (store, user) = (fx.store.clone(), fx.user());
+    let once = Arc::new(Mutex::new(Some((store, user))));
+    brave(
+        &fx,
+        Arc::new(move |_| {
+            if let Some((store, user)) = once.lock().unwrap().take() {
+                rebind(&store, user, true);
+            }
+            brave_answer(0, 20, false)
+        }),
+    );
+    let f = refused(fx.search_as(&fx.agent("agent-a"), "q", "brave", 5, None));
+    assert_eq!(
+        (f.code, target(&f).as_str()),
+        (DomainErrorCode::PermissionDenied, "authority_changed")
+    );
+    assert!(
+        fx.records("web.search")
+            .iter()
+            .all(|r| r.code != "searched"),
+        "no success was recorded for the revoked principal"
+    );
+}
+
+#[test]
+fn a_page_size_that_does_not_divide_the_provider_page_skips_nothing() {
+    let fx = Fx::new();
+    configure_search(&fx);
+    brave(
+        &fx,
+        Arc::new(|path| {
+            let page: usize = path
+                .split("offset=")
+                .nth(1)
+                .and_then(|s| s.split('&').next())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            brave_answer(page, 20, page < 3)
+        }),
+    );
+    // Results 0..14, then 15..29 across the provider's first and second page (19 and 39 have
+    // unusable URLs and are left out), then 30..44.
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..3 {
+        let page = results(fx.search("rust", 15, cursor.as_deref()));
+        seen.extend(page.items.0.iter().map(|r| r.title.0.clone()));
+        cursor = page.next_cursor.map(|c| c.0);
+    }
+    let expected: Vec<String> = (0..45)
+        .filter(|k| k % 20 != 19)
+        .map(|k| format!("Result {k}"))
+        .collect();
+    assert_eq!(seen, expected);
+}
+
+/// A provider that answers at most three results per request while it has more, recording the
+/// offsets asked for.
+#[derive(Default)]
+struct Short(Mutex<Vec<u32>>);
+impl SearchProvider for Short {
+    fn id(&self) -> &'static str {
+        "brave"
+    }
+    fn requires_credential(&self) -> bool {
+        false
+    }
+    fn page_max(&self) -> u32 {
+        20
+    }
+    fn offset_max(&self) -> u32 {
+        199
+    }
+    fn search(
+        &self,
+        r: &devworks_core::ports::web::SearchRequest<'_>,
+    ) -> Result<devworks_core::ports::web::SearchPage, devworks_core::ports::web::SearchFault> {
+        self.0.lock().unwrap().push(r.offset);
+        Ok(devworks_core::ports::web::SearchPage {
+            hits: (r.offset..r.offset + 3)
+                .map(|k| devworks_core::ports::web::SearchHit {
+                    title: format!("Result {k}"),
+                    url: format!("https://r{k}.example/"),
+                    snippet: String::new(),
+                })
+                .collect(),
+            more: true,
+        })
+    }
+}
+
+#[test]
+fn the_cursor_steps_over_exactly_what_the_provider_consumed() {
+    let short = Arc::new(Short::default());
+    let fx = Fx::with_provider(Some(short.clone()));
+    fx.set("web.searchProvider", json!("brave"));
+    let first = results(fx.search("rust", 10, None));
+    assert_eq!(first.items.0.len(), 3);
+    let second = results(fx.search("rust", 10, Some(&first.next_cursor.unwrap().0)));
+    assert_eq!(second.items.0[0].title.0, "Result 3", "nothing was skipped");
+    assert_eq!(*short.0.lock().unwrap(), vec![0, 3]);
+}
+
+#[test]
+fn connecting_is_cancellable_and_classified() {
+    use devworks_core::ports::storage::Cancellation;
+    use devworks_core::ports::web::{Scheme, ServerName};
+    use std::io::{Error, ErrorKind};
+    let name = ServerName::Dns("docs.test".into());
+    let addr: SocketAddr = "93.184.216.34:80".parse().unwrap();
+    let get = |t: &NativeTransport, deadline: Instant, cancel: Vec<Cancellation>| {
+        t.get(&HopRequest {
+            scheme: Scheme::Http,
+            host_header: "docs.test",
+            server_name: &name,
+            target: "/",
+            addr,
+            deadline,
+            cancel,
+            user_agent: "test",
+            accept: "*/*",
+            headers: &[],
+        })
+        .map(|_| ())
+    };
+    // A blackholed network: the system connect would wait out its whole bound.
+    let blackhole = NativeTransport::new().with_connector(Arc::new(|_, wait| {
+        std::thread::sleep(wait);
+        Err(Error::new(ErrorKind::TimedOut, "connect timed out"))
+    }));
+    let cancel = Cancellation::new();
+    let c = cancel.clone();
+    let canceller = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        c.cancel();
+    });
+    let started = Instant::now();
+    let out = get(
+        &blackhole,
+        Instant::now() + Duration::from_secs(30),
+        vec![cancel],
+    );
+    canceller.join().unwrap();
+    assert_eq!(out.unwrap_err(), NetFault::Cancelled { sent: false });
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "cancellation interrupts the connect, took {:?}",
+        started.elapsed()
+    );
+    // The deadline still bounds it, as a timeout that sent nothing.
+    let started = Instant::now();
+    let err = get(
+        &blackhole,
+        Instant::now() + Duration::from_millis(500),
+        Vec::new(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            NetFault::NotSent {
+                timed_out: true,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+    // Refused (ECONNREFUSED / WSAECONNREFUSED) is unreachable, not a timeout, on every OS.
+    let refusing = NativeTransport::new().with_connector(Arc::new(|_, _| {
+        Err(Error::new(
+            ErrorKind::ConnectionRefused,
+            "connection refused",
+        ))
+    }));
+    let err = get(
+        &refusing,
+        Instant::now() + Duration::from_secs(5),
+        Vec::new(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            NetFault::NotSent {
+                timed_out: false,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    // A system-reported timeout (ETIMEDOUT / WSAETIMEDOUT) is a timeout.
+    let timing_out = NativeTransport::new().with_connector(Arc::new(|_, _| {
+        Err(Error::new(ErrorKind::TimedOut, "connection timed out"))
+    }));
+    let err = get(
+        &timing_out,
+        Instant::now() + Duration::from_secs(5),
+        Vec::new(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            NetFault::NotSent {
+                timed_out: true,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

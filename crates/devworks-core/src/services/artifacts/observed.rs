@@ -6,8 +6,15 @@
 //! immutable version, origin links, tags, history and the caller's own records (`then`), and
 //! completes the staging operation. A refusal or failure of that write resolves the staging
 //! operation at once (or at the next recovery), so observed content is either fully recorded or
-//! invisible and collectible. The scope is resolved from current authority inside that write,
-//! so a principal whose binding changed meanwhile publishes nothing.
+//! invisible and collectible.
+//!
+//! That write is the publication's linearization point. It first re-checks the invocation's
+//! authorization (store and restore epoch, every authority fence — the principal's binding
+//! revision and activity, the access policy digest — and every grant), so a principal revoked
+//! or re-bound, or a policy narrowed, while the content was being produced publishes nothing
+//! (`PermissionDenied`, [`AUTHORITY_CHANGED`]). The scope is resolved from current authority
+//! there too. Everything it records sits behind one savepoint, rolled back before a typed
+//! refusal (the file or storage limit) is returned, so a refusal commits nothing.
 use super::{
     ArtifactService, Failure, Refusal, StagedFile, check_quota, complete_operation, event,
     named_scope, new_version, not_found, origin_links, put_staged_blob, quota_refusal, setting_i64,
@@ -20,7 +27,7 @@ use crate::ports::storage::{
     ApplicationStore, ArtifactRetention, ArtifactScope, ArtifactState, BlobState, StorageError,
     StoredArtifact, SubjectKey, WriteOptions, WriteTransaction, run_write,
 };
-use crate::ports::{IdKind, Preparation};
+use crate::ports::{Authorization, IdKind, Preparation};
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::{DomainErrorCode, Id, ProjectId};
 use crate::settings::catalog::{ARTIFACT_MAX_FILE_KEY, ARTIFACT_QUOTA_KEY};
@@ -59,6 +66,10 @@ impl From<Failure> for ObservedFailure {
     }
 }
 
+/// Fault target kind of a publication refused because the invocation's authority changed while
+/// its content was being produced (nothing was recorded).
+pub const AUTHORITY_CHANGED: &str = "authority_changed";
+
 /// What the recording write established, or why it did not.
 enum Recorded<T> {
     Done(ArtifactRef, T),
@@ -73,6 +84,7 @@ impl ArtifactService {
         &self,
         store: &dyn ApplicationStore,
         ctx: &InvocationContext,
+        authorization: &Authorization,
         observed: Observed,
         bytes: &[u8],
         then: F,
@@ -140,19 +152,38 @@ impl ArtifactService {
             fence: staging.fence.clone(),
         };
         let files = self.files.clone();
-        let (owned_ctx, owned) = (ctx.clone(), staged.clone());
-        let outcome = run_write(
-            store,
-            WriteOptions::default(),
-            move |tx| match record_observed(tx, &*files, &owned_ctx, &observed, &owned) {
+        let (owned_ctx, owned, authorization) =
+            (ctx.clone(), staged.clone(), authorization.clone());
+        let outcome = run_write(store, WriteOptions::default(), move |tx| {
+            // Everything the recording writes sits behind one savepoint: a typed refusal found
+            // part-way (the storage limit is only known once the bytes are counted) rolls it back
+            // before the refusal is returned, so nothing of a refused publication commits.
+            let savepoint = tx.savepoint()?;
+            // The invocation's authority is re-checked here, at the write's linearization point:
+            // a principal revoked or re-bound, or a policy narrowed, while the content was being
+            // fetched publishes nothing.
+            let recorded =
+                if crate::authority::authorization_holds_in(tx, &owned_ctx, &authorization)? {
+                    record_observed(tx, &*files, &owned_ctx, &observed, &owned)
+                } else {
+                    Err(
+                        Refusal::new(DomainErrorCode::PermissionDenied, AUTHORITY_CHANGED, None)
+                            .into(),
+                    )
+                };
+            match recorded {
                 Ok(reference) => {
                     let value = then(tx, &reference)?;
+                    tx.release(savepoint)?;
                     Ok(Recorded::Done(reference, value))
                 }
-                Err(Failure::Refused(r)) => Ok(Recorded::Refused(r)),
+                Err(Failure::Refused(r)) => {
+                    tx.rollback_to(savepoint)?;
+                    Ok(Recorded::Refused(r))
+                }
                 Err(Failure::Storage(e)) => Err(e),
-            },
-        );
+            }
+        });
         match outcome {
             Ok(Recorded::Done(reference, value)) => {
                 // A concurrent save kept its own generation: ours is an orphan of a now resolved

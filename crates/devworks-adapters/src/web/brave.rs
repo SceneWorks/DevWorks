@@ -3,8 +3,9 @@
 //! `GET {endpoint}?q=&count=&offset=` with the API key in `X-Subscription-Token`, sent only to
 //! the configured endpoint over TLS (the same native transport as fetches; no redirect is
 //! followed, so the key never reaches another origin). The API pages by page index (`offset`
-//! 0..=9) of up to 20 results; result offsets that do not fall on a page boundary are served
-//! from the page that contains them. The answer body is bounded to [`BODY_LIMIT`] bytes.
+//! 0..=9) of up to 20 results; a request is served from the page holding its offset and, when it
+//! runs past that page, the next one, so no result is skipped. Each answer body is bounded to
+//! [`BODY_LIMIT`] bytes.
 use devworks_core::ports::web::{
     HopRequest, HttpTransport, NetFault, Resolver, SearchFault, SearchHit, SearchPage,
     SearchProvider, SearchRequest,
@@ -66,18 +67,46 @@ impl SearchProvider for BraveSearch {
         LAST_PAGE * PAGE + PAGE - 1
     }
 
+    /// Serves `count` results from `offset`: the API page holding the offset, and the next page
+    /// too when the request runs past the end of the first, so a page size that does not divide
+    /// the API page never leaves results behind.
     fn search(&self, request: &SearchRequest<'_>) -> Result<SearchPage, SearchFault> {
         let Some(key) = request.credential else {
             return Err(SearchFault::CredentialRejected);
         };
-        let page = request.offset / PAGE;
-        let skip = (request.offset % PAGE) as usize;
-        if page > LAST_PAGE {
-            return Ok(SearchPage {
-                hits: Vec::new(),
-                more: false,
-            });
+        let count = request.count as usize;
+        let mut page = request.offset / PAGE;
+        let mut skip = (request.offset % PAGE) as usize;
+        let mut hits: Vec<SearchHit> = Vec::with_capacity(count);
+        loop {
+            if page > LAST_PAGE {
+                return Ok(SearchPage { hits, more: false });
+            }
+            let answer = self.page(request, key.expose(), page)?;
+            let available = answer.hits.len();
+            let want = count - hits.len();
+            hits.extend(answer.hits.into_iter().skip(skip).take(want));
+            let left_on_page = available > skip + want;
+            if hits.len() >= count || left_on_page || !answer.more {
+                return Ok(SearchPage {
+                    hits,
+                    more: left_on_page || (answer.more && page < LAST_PAGE),
+                });
+            }
+            page += 1;
+            skip = 0;
         }
+    }
+}
+
+impl BraveSearch {
+    /// One API page: every result it holds and whether the provider has more after it.
+    fn page(
+        &self,
+        request: &SearchRequest<'_>,
+        key: &str,
+        page: u32,
+    ) -> Result<SearchPage, SearchFault> {
         let mut url = self.endpoint.clone();
         url.query_pairs_mut()
             .append_pair("q", request.query)
@@ -96,7 +125,7 @@ impl SearchProvider for BraveSearch {
             egress::server_name(&url),
             egress::request_target(&url),
         );
-        let headers = [("X-Subscription-Token", key.expose())];
+        let headers = [("X-Subscription-Token", key)];
         let mut last = NetFault::NotSent {
             reason: "no address".into(),
             timed_out: false,
@@ -154,7 +183,7 @@ impl SearchProvider for BraveSearch {
                 }
             }
         }
-        parse(&body, skip, request.count as usize)
+        parse(&body, 0, PAGE as usize)
     }
 }
 

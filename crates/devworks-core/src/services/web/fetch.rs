@@ -6,8 +6,8 @@ use crate::authority::redact::{REDACTED, Redactor};
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
 use crate::operations::web::FetchInput;
-use crate::ports::Preparation;
 use crate::ports::web::{HopRequest, HopResponse, NetFault};
+use crate::ports::{Authorization, Preparation};
 use crate::protocol::provider::Digest;
 use crate::protocol::records::{
     DiagnosticErrorClass, DiagnosticOutcome, Severity, TrustLevel, WebDocument, WebRedirect,
@@ -16,7 +16,7 @@ use crate::protocol::support::{BoundedList, BoundedText, Url};
 use crate::protocol::{
     CorrelationId, Counter, DomainErrorCode, DomainFault, Id, ProjectId, RetryAdvice,
 };
-use crate::services::artifacts::observed::{Observed, ObservedFailure};
+use crate::services::artifacts::observed::{AUTHORITY_CHANGED, Observed, ObservedFailure};
 use crate::services::diagnostics::LogEntry;
 use serde_json::{Value, json};
 use std::io::{ErrorKind, Read};
@@ -122,6 +122,7 @@ struct Fetched {
 }
 
 impl WebService {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn fetch(
         &self,
         ctx: &InvocationContext,
@@ -130,6 +131,7 @@ impl WebService {
         policy: &WebPolicy,
         project: Option<ProjectId>,
         correlation: &CorrelationId,
+        authorization: &Authorization,
     ) -> Result<WebDocument, DomainFault> {
         let started = self.clock.now_ms().get();
         let redactor = Redactor::new();
@@ -260,6 +262,7 @@ impl WebService {
         let published = self.artifacts.publish_observed(
             &*self.store,
             ctx,
+            authorization,
             Observed {
                 project: project.clone(),
                 title,
@@ -283,12 +286,19 @@ impl WebService {
             },
         );
         let content = match published {
-            Ok((reference, ())) => reference,
+            Ok((reference, ())) => {
+                self.diagnostics.committed();
+                reference
+            }
             Err(ObservedFailure::Refused(r)) => {
                 let stop = Stop::new(
                     r.code,
                     r.target_kind,
-                    DiagnosticErrorClass::ResourceExhausted,
+                    if r.target_kind == AUTHORITY_CHANGED {
+                        DiagnosticErrorClass::Permission
+                    } else {
+                        DiagnosticErrorClass::ResourceExhausted
+                    },
                     format!(
                         "Fetched {final_shown} but its content was not kept ({})",
                         r.target_kind

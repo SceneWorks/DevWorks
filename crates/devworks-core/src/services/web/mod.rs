@@ -351,11 +351,27 @@ impl QueryHandler for WebService {
         }
         let answer = match input {
             ops::Input::Fetch(i) => {
-                let doc = self.fetch(ctx, env, i, &policy, project, &correlation)?;
+                let doc = self.fetch(
+                    ctx,
+                    env,
+                    i,
+                    &policy,
+                    project,
+                    &correlation,
+                    query.authorization(),
+                )?;
                 Answer::Fetched(doc, policy.revision)
             }
             ops::Input::Search(i) => {
-                let page = self.search(ctx, env, i, &policy, project, &correlation)?;
+                let page = self.search(
+                    ctx,
+                    env,
+                    i,
+                    &policy,
+                    project,
+                    &correlation,
+                    query.authorization(),
+                )?;
                 Answer::Searched(page, policy.revision)
             }
         };

@@ -19,7 +19,7 @@ use devworks_core::ports::web::{
 use rustls::pki_types::{IpAddr as TlsIp, ServerName as TlsName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io::{self, Cursor, ErrorKind, Read, Write};
-use std::net::{Shutdown, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -38,7 +38,12 @@ const INTERIM_LIMIT: usize = 8;
 #[derive(Clone)]
 pub struct NativeTransport {
     tls: Arc<ClientConfig>,
+    connector: Connector,
 }
+
+/// Opens a TCP connection to an address within a bound (the system's `connect_timeout`; a test
+/// seam can stand in for an unreachable or slow network).
+pub type Connector = Arc<dyn Fn(SocketAddr, Duration) -> io::Result<TcpStream> + Send + Sync>;
 
 impl Default for NativeTransport {
     fn default() -> Self {
@@ -66,7 +71,15 @@ impl NativeTransport {
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
         Self {
             tls: Arc::new(config),
+            connector: Arc::new(|addr, wait| TcpStream::connect_timeout(&addr, wait)),
         }
+    }
+
+    /// The transport with another way to open connections (tests simulate refused, blackholed
+    /// and slow networks with it; production uses the system connect).
+    pub fn with_connector(mut self, connector: Connector) -> Self {
+        self.connector = connector;
+        self
     }
 }
 
@@ -150,15 +163,7 @@ impl HttpTransport for NativeTransport {
         if !fields_ok {
             return Err(not_sent("the request has an invalid field".into(), false));
         }
-        let Some(wait) = left(request.deadline) else {
-            return Err(not_sent("the time limit passed".into(), true));
-        };
-        let tcp = TcpStream::connect_timeout(&request.addr, wait).map_err(|e| {
-            not_sent(
-                format!("connection to {} failed: {e}", request.addr),
-                timed_out(e.kind()),
-            )
-        })?;
+        let tcp = self.connect(request)?;
         // The connection must be to the checked address, never anything a proxy chose.
         match tcp.peer_addr() {
             Ok(peer) if peer == request.addr => {}
@@ -203,6 +208,56 @@ impl HttpTransport for NativeTransport {
 }
 
 impl NativeTransport {
+    /// Connects to the checked address without blocking the caller past cancellation: the
+    /// system connect runs on a helper thread bounded by the hop deadline, and the caller waits
+    /// in slices of at most [`WAIT`]. Cancelled or timed out, the caller returns at once and the
+    /// helper's late connection (if any) is closed unused, so nothing is ever sent on it.
+    ///
+    /// A refused connection (`ECONNREFUSED`, `WSAECONNREFUSED`: the peer answered with a reset)
+    /// is not sent and not a timeout; a connection that runs out the deadline (`ETIMEDOUT`,
+    /// `WSAETIMEDOUT`, or the deadline passing first) is a timeout. On Windows a refused
+    /// connection is reported only after the stack's SYN retries (about two seconds), so it is
+    /// classified as refused when that happens within the deadline and as a timeout otherwise.
+    fn connect(&self, request: &HopRequest<'_>) -> Result<TcpStream, NetFault> {
+        let not_sent = |reason: String, timed_out: bool| NetFault::NotSent { reason, timed_out };
+        let Some(wait) = left(request.deadline) else {
+            return Err(not_sent("the time limit passed".into(), true));
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (connector, addr) = (self.connector.clone(), request.addr);
+        std::thread::Builder::new()
+            .name("devworks-web-connect".into())
+            .spawn(move || {
+                // A send after the caller gave up fails and drops (closes) the stream.
+                let _ = tx.send(connector(addr, wait));
+            })
+            .map_err(|e| not_sent(format!("the connection could not start: {e}"), false))?;
+        loop {
+            if cancelled(&request.cancel) {
+                return Err(NetFault::Cancelled { sent: false });
+            }
+            let Some(slice) = left(request.deadline) else {
+                return Err(not_sent(
+                    format!("connection to {addr} did not finish in time"),
+                    true,
+                ));
+            };
+            match rx.recv_timeout(slice.min(WAIT)) {
+                Ok(Ok(tcp)) => return Ok(tcp),
+                Ok(Err(e)) => {
+                    return Err(not_sent(
+                        format!("connection to {addr} failed: {e}"),
+                        timed_out(e.kind()),
+                    ));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(not_sent(format!("connection to {addr} failed"), false));
+                }
+            }
+        }
+    }
+
     fn handshake(&self, tcp: TcpStream, request: &HopRequest<'_>) -> Result<Conn, NetFault> {
         let not_sent = |reason: String, timed_out: bool| NetFault::NotSent { reason, timed_out };
         let name = match request.server_name {
