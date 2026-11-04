@@ -441,6 +441,11 @@ impl Client {
         operation: &'static str,
         frame: Vec<u8>,
     ) -> bool {
+        // A slot holding an unresolved command keeps it until `resubmit_unresolved` settles
+        // that exact frame: a new request would replace it, and could commit a second time.
+        if self.unresolved.iter().any(|u| u.slot == slot) {
+            return false;
+        }
         let kept = frame.clone();
         let job: Job = Box::new(move |b| Reply::Command(resolve_command(b, operation, &frame)));
         if self

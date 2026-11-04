@@ -1867,6 +1867,22 @@ impl KnowledgeRead for Unsupported {
     ) -> Result<Vec<StoredEntity>, StorageError> {
         nope()
     }
+    fn knowledge_source_deletion(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredSourceDeletion>, StorageError> {
+        nope()
+    }
+    fn knowledge_running_source_deletion(
+        &self,
+        _: &KnowledgeScope,
+        _: &str,
+    ) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
+    fn knowledge_relations_touching(&self, _: &[Id]) -> Result<Vec<StoredRelation>, StorageError> {
+        nope()
+    }
     fn knowledge_entity_used_beyond(
         &self,
         _: &Id,
@@ -1926,6 +1942,29 @@ impl KnowledgeRepository for Unsupported {
         nope()
     }
     fn put_knowledge_write(&mut self, _: &StoredWrite) -> Result<(), StorageError> {
+        nope()
+    }
+    fn extend_knowledge_write(
+        &mut self,
+        _: &Id,
+        _: &[Id],
+        _: &[Id],
+        _: i64,
+        _: &[serde_json::Value],
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_knowledge_source_deletion(
+        &mut self,
+        _: &StoredSourceDeletion,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn rescope_knowledge_relation(
+        &mut self,
+        _: &Id,
+        _: &KnowledgeScope,
+    ) -> Result<(), StorageError> {
         nope()
     }
     fn add_knowledge_lesson_event(&mut self, _: &StoredLessonEvent) -> Result<bool, StorageError> {

@@ -174,6 +174,15 @@ async fn compose(
     });
     // The Home coordinator agent is bound by the Home chat item (DW-16); until it exists a
     // human's Home session is conducted by its creator, and no reply is ever fabricated.
+    // Unified Knowledge. Retrieval is lexical until an embedding route exists (vector search is
+    // never reported as run); imports read their saved artifact version. A large delete by
+    // source continues through its durable consumer, registered with the dispatcher below.
+    let knowledge = Arc::new(KnowledgeService::new(
+        id_source.clone(),
+        clock.clone(),
+        Some(artifact_files),
+        Arc::new(NoVectorIndex),
+    ));
     let use_cases = UseCases::new()
         .with_queue()
         .with_settings(settings)
@@ -189,14 +198,7 @@ async fn compose(
             clock.clone(),
             config.connections.clone(),
         )))
-        // Unified Knowledge. Retrieval is lexical until an embedding route exists (vector
-        // search is never reported as run); imports read their saved artifact version.
-        .with_knowledge(Arc::new(KnowledgeService::new(
-            id_source.clone(),
-            clock.clone(),
-            Some(artifact_files),
-            Arc::new(NoVectorIndex),
-        )));
+        .with_knowledge(knowledge.clone());
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),
         clock: clock.clone(),
@@ -233,7 +235,9 @@ async fn compose(
         power: Arc::new(NativePower),
         diagnostics,
         use_cases,
-        consumers: Vec::new(),
+        consumers: vec![devworks_engine::knowledge::source_deletion_consumer(
+            knowledge,
+        )],
         config: runtime_config,
     };
     // Recovery and every required consumer start here, before any request below is admitted.

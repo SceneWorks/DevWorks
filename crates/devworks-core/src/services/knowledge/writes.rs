@@ -6,19 +6,20 @@
 use super::import::{self, Candidate, Outcome};
 use super::model::{self, fold, fold_tags, wire};
 use super::{
-    CHALLENGE, CLAIM, ENTITY, EVIDENCE, LESSON, LIFECYCLE, MAX_CHALLENGES, MAX_LIST,
-    MAX_SOURCE_DELETE, PREVIEW, Reach, SCOPE, Scoped, WRITE_AGGREGATE, WRITE_EVENT, claim_wire,
-    diagnostic, entity_wire, nests, no_applicability, reach, receipt_of, thresholds, writable,
+    CHALLENGE, CLAIM, ENTITY, EVIDENCE, LESSON, LIFECYCLE, MAX_CHALLENGES, MAX_LIST, PREVIEW,
+    Reach, SCOPE, Scoped, WRITE_AGGREGATE, WRITE_EVENT, claim_wire, diagnostic, entity_wire, nests,
+    no_applicability, reach, receipt_of, thresholds, writable,
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::AdmittedCommand;
 use crate::operations::knowledge as ops;
 use crate::ports::IdKind;
 use crate::ports::storage::{
-    ArtifactRead, AuthorityRead, ClaimBody, ClaimQuery, DeletedClaims, KNOWLEDGE_PAGE_MAX,
-    KnowledgeRead, KnowledgeScope, NewEvent, StorageError, StoredAddress, StoredChallenge,
+    ArtifactRead, AuthorityRead, ClaimBody, ClaimQuery, DeletedClaims, KnowledgeRead,
+    KnowledgeScope, NewEvent, NewQueueEntry, StorageError, StoredAddress, StoredChallenge,
     StoredClaim, StoredEntity, StoredEvidence, StoredHistory, StoredLesson, StoredLessonEvent,
-    StoredRelation, StoredVersion, StoredWrite, WriteChange, WriteTransaction,
+    StoredRelation, StoredSourceDeletion, StoredVersion, StoredWrite, WriteChange,
+    WriteTransaction,
 };
 use crate::protocol::provider::{ArtifactRef, SchemaRef};
 use crate::protocol::records::{
@@ -91,6 +92,8 @@ pub(super) struct Writer<'a> {
     pub diagnostics: Vec<Diagnostic>,
     touched: BTreeMap<String, KnowledgeScope>,
     th: BTreeMap<String, i64>,
+    /// The fenced `(scope key, source)` this write may change: a deletion job's own batch.
+    exempt: Option<(String, String)>,
 }
 impl<'a> Writer<'a> {
     fn new(
@@ -99,8 +102,17 @@ impl<'a> Writer<'a> {
         op: &'static str,
     ) -> Result<Self, Failure> {
         let write_id = tx.new_id(IdKind::KnowledgeWrite);
+        Ok(Self::with_id(tx, ctx, op, write_id))
+    }
+    /// A later batch of the committed write `write_id` (a delete-by-source job's).
+    fn with_id(
+        tx: &'a mut dyn WriteTransaction,
+        ctx: &'a InvocationContext,
+        op: &'static str,
+        write_id: Id,
+    ) -> Self {
         let now = tx.now_ms();
-        Ok(Self {
+        Self {
             tx,
             ctx,
             op,
@@ -112,7 +124,26 @@ impl<'a> Writer<'a> {
             diagnostics: Vec::new(),
             touched: BTreeMap::new(),
             th: BTreeMap::new(),
-        })
+            exempt: None,
+        }
+    }
+    /// A source of a scope is read-only while a deletion job removes it: any other write that
+    /// would change one of its records is refused (`Conflict`, naming the job's write).
+    fn unfenced(&mut self, scope: &KnowledgeScope, source: Option<&str>) -> Result<(), Failure> {
+        let Some(source) = source else {
+            return Ok(());
+        };
+        if self
+            .exempt
+            .as_ref()
+            .is_some_and(|(k, s)| *k == scope.key() && s == source)
+        {
+            return Ok(());
+        }
+        match self.k().knowledge_running_source_deletion(scope, source)? {
+            Some(job) => Err(conflict(super::DELETION, &job)),
+            None => Ok(()),
+        }
     }
     fn k(&mut self) -> &mut dyn crate::ports::storage::KnowledgeRepository {
         self.tx.knowledge()
@@ -172,6 +203,12 @@ impl<'a> Writer<'a> {
                 Some(&claim.id),
             ));
         }
+        self.unfenced(&claim.scope, claim.source.as_deref())?;
+        if expected.is_some()
+            && let Some(prior) = self.k().knowledge_claim(&claim.id)?
+        {
+            self.unfenced(&prior.scope, prior.source.as_deref())?;
+        }
         claim.updated_at_ms = self.now.max(claim.created_at_ms);
         let stored = self.k().put_knowledge_claim(&claim, expected)?;
         let scope = stored.scope.clone();
@@ -222,6 +259,12 @@ impl<'a> Writer<'a> {
                 "list_bound",
                 Some(&entity.id),
             ));
+        }
+        self.unfenced(&entity.scope, entity.source.as_deref())?;
+        if expected.is_some()
+            && let Some(prior) = self.k().knowledge_entity(&entity.id)?
+        {
+            self.unfenced(&prior.scope, prior.source.as_deref())?;
         }
         entity.updated_at_ms = self.now.max(entity.created_at_ms);
         let stored = self.k().put_knowledge_entity(&entity, expected)?;
@@ -330,6 +373,62 @@ impl<'a> Writer<'a> {
         })?;
         Ok(receipt_of(self.ctx, &write, 0))
     }
+    /// Commits a later batch of the existing write `write_id`: appends its IDs, replaces its
+    /// notes, advances the touched scopes and records its history event.
+    fn finish_batch(mut self, primary: &KnowledgeScope, batch: i64) -> Result<(), Failure> {
+        for s in self.touched.clone().into_values() {
+            self.k().bump_scope(&s)?;
+        }
+        let scope_revision = self.k().knowledge_scope_revision(primary)?.max(1);
+        let diagnostics: Vec<Value> = self
+            .diagnostics
+            .iter()
+            .filter_map(|d| serde_json::to_value(d).ok())
+            .collect();
+        let (write_id, claims, entities) = (
+            self.write_id.clone(),
+            self.claim_ids.clone(),
+            self.entity_ids.clone(),
+        );
+        self.k().extend_knowledge_write(
+            &write_id,
+            &claims,
+            &entities,
+            scope_revision,
+            &diagnostics,
+        )?;
+        let counts = |kind: &str| {
+            self.changes
+                .iter()
+                .filter(|c| c.target_kind == kind)
+                .count()
+        };
+        let payload = json!({
+            "writeId": write_id.as_str(),
+            "operation": self.op,
+            "scope": primary.key(),
+            "scopeRevision": scope_revision,
+            "batch": batch,
+            "claimIds": claims.iter().map(Id::as_str).collect::<Vec<_>>(),
+            "entityIds": entities.iter().map(Id::as_str).collect::<Vec<_>>(),
+            "changed": {"claims": counts("Claim"), "entities": counts("Entity"),
+                "evidence": counts("Evidence"), "relations": counts("Relation")},
+        });
+        let event = EventId(self.tx.new_id(IdKind::Event));
+        self.tx.history().append(NewEvent {
+            id: event,
+            actor: self.ctx.principal().clone(),
+            project_id: primary.project().cloned(),
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: WRITE_AGGREGATE.into(),
+            aggregate_id: write_id.as_str().to_owned(),
+            aggregate_revision: batch,
+            kind: WRITE_EVENT.into(),
+            payload,
+        })?;
+        Ok(())
+    }
 }
 
 /// The decision of a write: applied when it changed something, otherwise no change.
@@ -362,7 +461,7 @@ pub(super) fn decide(
         ops::Input::Verify(i) => verify(tx, ctx, i),
         ops::Input::Retract(i) => retract(tx, ctx, i),
         ops::Input::Scope(i) => move_scope(tx, ctx, i),
-        ops::Input::DeleteBySource(i) => delete_by_source(tx, ctx, i),
+        ops::Input::DeleteBySource(i) => delete_by_source(tx, ctx, command, i),
         ops::Input::DeleteSelected(i) => delete_selected(tx, ctx, i),
         ops::Input::ImportUserData(i) => import_user_data(tx, ctx, command, i),
         ops::Input::Promote(i) => promote(tx, ctx, i),
@@ -1200,6 +1299,16 @@ fn relate(
                     added.push(e.clone());
                 }
             }
+            // The source-revision baselines come with the citations, so a later observation
+            // of a merged source marks the target stale; only those the target lacked are the
+            // merge's (an unmerge removes exactly these).
+            let mut added_basis = Vec::new();
+            for (source_ref, revision) in &from.basis {
+                if !target.basis.iter().any(|(r, _)| r == source_ref) {
+                    target.basis.push((source_ref.clone(), revision.clone()));
+                    added_basis.push((source_ref.clone(), revision.clone()));
+                }
+            }
             let stored = w.put_claim(target, Some(into.revision), "MergedInto")?;
             store_relation(
                 &mut w,
@@ -1208,7 +1317,7 @@ fn relate(
                 model::SAME_AS,
                 &into.id,
                 &evidence,
-                &added,
+                (&added, &added_basis),
             )?;
             let message = format!(
                 "Lesson {} merged into {}: {moved} source events moved.",
@@ -1241,7 +1350,7 @@ fn relate(
                 &into.id,
                 now,
             )?;
-            let added = match &merge {
+            let (added, added_basis) = match &merge {
                 Some(r) => {
                     w.changes.push(WriteChange {
                         target_kind: "Relation".into(),
@@ -1249,9 +1358,9 @@ fn relate(
                         before: None,
                         after: None,
                     });
-                    r.added_evidence_ids.clone()
+                    (r.added_evidence_ids.clone(), r.added_basis.clone())
                 }
-                None => Vec::new(),
+                None => (Vec::new(), Vec::new()),
             };
             // A rule that took effect only by the merged events returns to candidate evidence.
             let events = w.k().knowledge_lesson_event_count(&into.id)?;
@@ -1262,6 +1371,8 @@ fn relate(
                 .body
                 .evidence_ids
                 .retain(|e| !added.contains(e) || evidence.contains(e));
+            // ... and the baselines it added (one the target re-verified since is its own).
+            target.basis.retain(|b| !added_basis.contains(b));
             if into.body.lesson_effect.as_deref() == Some("Recurrence")
                 && events < threshold
                 && let Some(l) = target.lesson.as_mut()
@@ -1294,7 +1405,7 @@ fn relate(
                 model::CONTRADICTS,
                 &b.id,
                 &evidence,
-                &[],
+                (&[], &[]),
             )? {
                 let message = format!(
                     "Claims {} and {} contradict each other; both are kept, with the conflict shown.",
@@ -1312,7 +1423,7 @@ fn relate(
                 &i.predicate.0,
                 object.id(),
                 &evidence,
-                &[],
+                (&[], &[]),
             )?;
         }
     }
@@ -1330,7 +1441,8 @@ fn store_relation(
     predicate: &str,
     object: &Id,
     evidence: &[Id],
-    added: &[Id],
+    // A same_as merge's bookkeeping: the citations and baselines it added to the object.
+    (added, added_basis): (&[Id], &[(String, String)]),
 ) -> Result<bool, Failure> {
     // The store decides duplicates within this scope, over every live relation (not a page):
     // another project's identical relation is its own record and never suppresses this one.
@@ -1346,6 +1458,7 @@ fn store_relation(
         removed_at_ms: None,
         write_id: w.write_id.clone(),
         added_evidence_ids: added.to_vec(),
+        added_basis: added_basis.to_vec(),
     };
     match w.k().put_knowledge_relation(&relation) {
         Ok(()) => {}
@@ -1506,23 +1619,24 @@ fn relocate(
     claims: Vec<StoredClaim>,
     dest: &KnowledgeScope,
 ) -> Result<Vec<StoredClaim>, Failure> {
-    let moving: HashSet<Id> = claims
+    let moving_ids: Vec<Id> = claims
         .iter()
         .filter(|c| c.scope != *dest)
         .map(|c| c.id.clone())
         .collect();
+    let moving: HashSet<Id> = moving_ids.iter().cloned().collect();
+    // "Used beyond the moving claims" counts every reference (claims, relations, challenges),
+    // over every row: a record something else still needs where it is cannot follow.
+    let beyond = DeletedClaims::Ids(&moving_ids);
     let mut entities: BTreeMap<String, StoredEntity> = BTreeMap::new();
-    let mut evidence: BTreeMap<String, StoredEvidence> = BTreeMap::new();
+    let mut cited: Vec<Id> = Vec::new();
     for c in claims.iter().filter(|c| moving.contains(&c.id)) {
         for id in std::iter::once(&c.subject_id).chain(c.object_id.iter()) {
             if let Some(e) = w.k().knowledge_entity(id)? {
                 if nests(&e.scope, dest) || entities.contains_key(e.id.as_str()) {
                     continue;
                 }
-                let users = w.k().knowledge_entity_users(&e.id, KNOWLEDGE_PAGE_MAX)?;
-                if users.len() >= KNOWLEDGE_PAGE_MAX as usize
-                    || users.iter().any(|u| !moving.contains(&u.id))
-                {
+                if w.k().knowledge_entity_used_beyond(&e.id, &beyond)? {
                     return Err(conflict(ENTITY, &e.id));
                 }
                 if let Some(other) = w.k().knowledge_entity_by_key(dest, &e.canonical_key)? {
@@ -1536,21 +1650,61 @@ fn relocate(
                 return Err(conflict(CLAIM, &o.id));
             }
         }
-        for id in c.body.evidence_ids.clone() {
-            let Some(e) = w.k().knowledge_evidence(&id)? else {
-                continue;
-            };
-            if nests(&e.scope, dest) || evidence.contains_key(e.id.as_str()) {
-                continue;
-            }
-            let users = w.k().knowledge_evidence_users(&e.id, KNOWLEDGE_PAGE_MAX)?;
-            if users.len() >= KNOWLEDGE_PAGE_MAX as usize
-                || users.iter().any(|u| !moving.contains(u))
-            {
-                return Err(conflict(EVIDENCE, &e.id));
-            }
-            evidence.insert(e.id.as_str().to_owned(), e);
+        cited.extend(c.body.evidence_ids.iter().cloned());
+        // A moving claim's challenges move with it, and so does the evidence they cite.
+        for ch in w.k().knowledge_challenges(&c.id, MAX_CHALLENGES as u16)? {
+            cited.extend(ch.evidence_ids);
         }
+    }
+    // Relations among moving records move with them (a merge's bookkeeping among them); one
+    // whose scope would no longer see a moved endpoint cannot stay behind (`Conflict`).
+    let mut endpoints: Vec<Id> = moving_ids.clone();
+    endpoints.extend(entities.values().map(|e| e.id.clone()));
+    let mut relations = Vec::new();
+    for r in w.k().knowledge_relations_touching(&endpoints)? {
+        let (s, o) = (
+            endpoints.contains(&r.subject_id),
+            endpoints.contains(&r.object_id),
+        );
+        if s && o {
+            if r.scope != *dest {
+                cited.extend(r.evidence_ids.iter().cloned());
+                cited.extend(r.added_evidence_ids.iter().cloned());
+                relations.push(r);
+            }
+        } else if !nests(dest, &r.scope) {
+            return Err(conflict("knowledge_relation", &r.id));
+        }
+    }
+    let mut evidence: BTreeMap<String, StoredEvidence> = BTreeMap::new();
+    for id in cited {
+        let Some(e) = w.k().knowledge_evidence(&id)? else {
+            continue;
+        };
+        if nests(&e.scope, dest) || evidence.contains_key(e.id.as_str()) {
+            continue;
+        }
+        if w.k().knowledge_evidence_cited_beyond(&e.id, &beyond)? {
+            return Err(conflict(EVIDENCE, &e.id));
+        }
+        evidence.insert(e.id.as_str().to_owned(), e);
+    }
+    for r in &relations {
+        w.touch(&r.scope);
+        w.touch(dest);
+        match w.k().rescope_knowledge_relation(&r.id, dest) {
+            Ok(()) => {}
+            Err(StorageError::Duplicate { .. }) => {
+                return Err(conflict("knowledge_relation", &r.id));
+            }
+            Err(e) => return Err(e.into()),
+        }
+        w.changes.push(WriteChange {
+            target_kind: "Relation".into(),
+            id: r.id.clone(),
+            before: None,
+            after: None,
+        });
     }
     for (_, e) in entities {
         let mut next = e.clone();
@@ -1908,16 +2062,25 @@ fn purge_evidence(w: &mut Writer<'_>, e: &StoredEvidence) -> Result<(), Failure>
 }
 
 /// What deleting a source of a scope removes, and its exact preview digest.
+#[derive(Clone, Debug)]
 pub(super) struct DeletionPlan {
-    pub claims: Vec<StoredClaim>,
-    pub entities: Vec<StoredEntity>,
-    pub evidence: Vec<StoredEvidence>,
+    pub claims: usize,
+    pub entities: usize,
+    pub evidence: usize,
     pub digest: String,
 }
 
-/// Evidence cited only by the deleted `claims` (independent surviving evidence stays). The
-/// store decides "cited by a surviving claim" over every claim, so evidence with many users is
-/// neither kept by a bounded listing nor purged while still cited.
+/// A deletion plan read before the unit of work (a large source's plan is a long read, which
+/// never runs inside the write transaction); `decide` uses it only at the same scope revision.
+pub(super) struct PreparedDeletion {
+    pub scope_key: String,
+    pub source: String,
+    pub scope_revision: i64,
+    pub plan: DeletionPlan,
+}
+
+/// Evidence cited only by claims the deletion removes (independent surviving evidence stays).
+/// The store decides "still referenced" over every claim, relation and challenge.
 fn orphaned_evidence(
     k: &dyn KnowledgeRead,
     claims: &[StoredClaim],
@@ -1946,76 +2109,244 @@ fn orphaned_evidence(
 }
 
 /// Plans a delete by source: every non-deleted claim of exactly `scope` with that source, the
-/// entities of that source no surviving claim uses, and the evidence only deleted claims cite.
+/// entities of that source nothing surviving uses, and the evidence nothing surviving cites.
+/// It reads page by page and keeps only the digest's parts, so any size of source plans.
 pub(super) fn deletion_plan(
     k: &dyn KnowledgeRead,
     scope: &KnowledgeScope,
     source: &str,
     scope_revision: i64,
 ) -> Result<DeletionPlan, StorageError> {
-    let mut claims: Vec<StoredClaim> = Vec::new();
-    loop {
-        let after = claims.last().map(|c| c.id.as_str().to_owned());
-        let page = k.knowledge_source_claims(scope, source, after.as_deref(), 500)?;
-        let full = page.len() == 500;
-        claims.extend(page);
-        if !full || claims.len() > MAX_SOURCE_DELETE {
-            break;
-        }
-    }
     let gone = DeletedClaims::Source { scope, source };
-    let mut entities: Vec<StoredEntity> = Vec::new();
-    let mut after: Option<String> = None;
-    loop {
-        let page = k.knowledge_source_entities(scope, source, after.as_deref(), 500)?;
-        let full = page.len() == 500;
-        after = page.last().map(|e| e.id.as_str().to_owned());
-        for e in page {
-            // An entity another source's claims still use is kept (decided over every claim).
-            if !k.knowledge_entity_used_beyond(&e.id, &gone)? {
-                entities.push(e);
-            }
-        }
-        if !full {
-            break;
-        }
-    }
-    let evidence = orphaned_evidence(k, &claims, &gone)?;
     let mut parts = vec![
         "knowledge.delete_by_source".to_owned(),
         scope.key(),
         source.to_owned(),
         scope_revision.to_string(),
     ];
-    parts.extend(
-        claims
-            .iter()
-            .map(|c| format!("c:{}@{}", c.id.as_str(), c.revision)),
-    );
-    parts.extend(
-        entities
-            .iter()
-            .map(|e| format!("e:{}@{}", e.id.as_str(), e.revision)),
-    );
-    parts.extend(evidence.iter().map(|e| format!("v:{}", e.id.as_str())));
+    let page_size = super::DELETION_BATCH as u16;
+    let mut claims = 0;
+    let mut orphans: BTreeMap<String, ()> = BTreeMap::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = k.knowledge_source_claims(scope, source, after.as_deref(), page_size)?;
+        after = page.last().map(|c| c.id.as_str().to_owned());
+        claims += page.len();
+        parts.extend(
+            page.iter()
+                .map(|c| format!("c:{}@{}", c.id.as_str(), c.revision)),
+        );
+        for e in orphaned_evidence(k, &page, &gone)? {
+            orphans.insert(e.id.as_str().to_owned(), ());
+        }
+        if page.len() < page_size as usize {
+            break;
+        }
+    }
+    let mut entities = 0;
+    let mut after: Option<String> = None;
+    loop {
+        let page = k.knowledge_source_entities(scope, source, after.as_deref(), page_size)?;
+        after = page.last().map(|e| e.id.as_str().to_owned());
+        for e in &page {
+            // An entity something surviving still uses is kept (decided over every reference).
+            if !k.knowledge_entity_used_beyond(&e.id, &gone)? {
+                entities += 1;
+                parts.push(format!("e:{}@{}", e.id.as_str(), e.revision));
+            }
+        }
+        if page.len() < page_size as usize {
+            break;
+        }
+    }
+    parts.extend(orphans.keys().map(|id| format!("v:{id}")));
     Ok(DeletionPlan {
         digest: model::preview_digest(&parts),
         claims,
         entities,
-        evidence,
+        evidence: orphans.len(),
     })
+}
+
+/// What one deletion batch removed.
+#[derive(Default)]
+struct DeletionBatch {
+    claims: i64,
+    entities: i64,
+    evidence: i64,
+    entity_cursor: Option<String>,
+    done: bool,
+}
+
+/// One bounded batch of a delete by source: up to `DELETION_BATCH` claims (with the evidence
+/// only they cite), then, once no claim is left, up to the rest of the batch of the source's
+/// entities that nothing surviving uses, after `entity_cursor`.
+fn deletion_batch(
+    w: &mut Writer<'_>,
+    scope: &KnowledgeScope,
+    source: &str,
+    entity_cursor: Option<String>,
+) -> Result<DeletionBatch, Failure> {
+    let gone = DeletedClaims::Source { scope, source };
+    let size = super::DELETION_BATCH;
+    let mut out = DeletionBatch {
+        entity_cursor,
+        ..DeletionBatch::default()
+    };
+    let claims = w
+        .k()
+        .knowledge_source_claims(scope, source, None, size as u16)?;
+    let evidence = orphaned_evidence(w.tx.knowledge(), &claims, &gone)?;
+    for c in &claims {
+        tombstone_claim(w, c)?;
+        out.claims += 1;
+    }
+    for e in &evidence {
+        purge_evidence(w, e)?;
+        out.evidence += 1;
+    }
+    let budget = size - claims.len();
+    if budget == 0 {
+        return Ok(out);
+    }
+    let entities = w.k().knowledge_source_entities(
+        scope,
+        source,
+        out.entity_cursor.as_deref(),
+        budget as u16,
+    )?;
+    for e in &entities {
+        out.entity_cursor = Some(e.id.as_str().to_owned());
+        if !w.k().knowledge_entity_used_beyond(&e.id, &gone)? {
+            tombstone_entity(w, e)?;
+            out.entities += 1;
+        }
+    }
+    out.done = entities.len() < budget;
+    Ok(out)
+}
+
+fn principal_kind_of(s: &str) -> PrincipalKind {
+    match s {
+        "Human" => PrincipalKind::Human,
+        "Agent" => PrincipalKind::Agent,
+        "Package" => PrincipalKind::Package,
+        "McpClient" => PrincipalKind::McpClient,
+        "Schedule" => PrincipalKind::Schedule,
+        _ => PrincipalKind::Host,
+    }
+}
+
+/// The confirming invocation, rebuilt for a later batch: the job is the user's committed
+/// decision, so each batch is attributed to them (it grants nothing new).
+fn job_context(
+    tx: &dyn WriteTransaction,
+    job: &StoredSourceDeletion,
+) -> Result<InvocationContext, StorageError> {
+    let bad = |what: &str| StorageError::InvalidRecord(format!("source deletion {what}"));
+    let mut ctx = InvocationContext::new(
+        job.actor.clone(),
+        principal_kind_of(&job.principal_kind),
+        job.write_id.clone(),
+        Id::new("knowledge-source-deletion").map_err(|_| bad("ingress"))?,
+        tx.store().store_id.clone(),
+        crate::protocol::Counter::new(job.restore_epoch).map_err(|_| bad("restore epoch"))?,
+        Revision::new(job.policy_revision).map_err(|_| bad("policy revision"))?,
+    )
+    .with_lineage(job.invocation_project.clone(), None, None);
+    if let Some(s) = &job.session_id {
+        ctx = ctx.with_session(s.clone());
+    }
+    Ok(ctx)
+}
+
+/// The note a running or finished deletion carries (it replaces the previous one).
+fn deletion_note(job: &StoredSourceDeletion) -> Diagnostic {
+    let message = if job.state == "Complete" {
+        format!(
+            "Deleted source {}: {} claims, {} entities and {} evidence records tombstoned in {} \
+             batches.",
+            job.source, job.deleted_claims, job.deleted_entities, job.purged_evidence, job.batches
+        )
+    } else {
+        format!(
+            "Deleting source {}: {} of {} claims, {} of {} entities and {} of {} evidence records \
+             tombstoned so far ({} batches). The source is read-only until it finishes.",
+            job.source,
+            job.deleted_claims,
+            job.planned_claims,
+            job.deleted_entities,
+            job.planned_entities,
+            job.purged_evidence,
+            job.planned_evidence,
+            job.batches
+        )
+    };
+    diagnostic(
+        &format!("{}-deletion", job.write_id.as_str()),
+        Severity::Info,
+        super::WRITES_COMPONENT,
+        if job.state == "Complete" {
+            "deleted"
+        } else {
+            "deleting"
+        },
+        &message,
+    )
+}
+
+/// Queues the job's next batch (durable: a restart resumes it at boot).
+fn continue_later(
+    tx: &mut dyn WriteTransaction,
+    job: &StoredSourceDeletion,
+) -> Result<(), StorageError> {
+    let event = EventId(tx.new_id(IdKind::Event));
+    tx.history().append(NewEvent {
+        id: event.clone(),
+        actor: job.actor.clone(),
+        project_id: job.scope.project().cloned(),
+        root_id: None,
+        operation_id: None,
+        aggregate_kind: super::DELETION_AGGREGATE.into(),
+        aggregate_id: job.write_id.as_str().to_owned(),
+        aggregate_revision: job.batches,
+        kind: "KnowledgeSourceDeletionContinued".into(),
+        payload: json!({"writeId": job.write_id.as_str(), "batches": job.batches}),
+    })?;
+    let entry = tx.new_id(IdKind::QueueEntry);
+    let now = tx.now_ms();
+    tx.queue().enqueue(NewQueueEntry {
+        id: entry,
+        consumer: super::SOURCE_DELETION_CONSUMER.into(),
+        event_id: event,
+        root_id: None,
+        operation_id: None,
+        partition: Some(format!(
+            "{}:{}",
+            super::DELETION_AGGREGATE,
+            job.write_id.as_str()
+        )),
+        priority: 0,
+        ready_at_ms: now,
+        payload: json!({"writeId": job.write_id.as_str()}),
+    })?;
+    Ok(())
 }
 
 fn delete_by_source(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
+    command: &AdmittedCommand,
     i: &ops::DeleteBySourceInput,
 ) -> Result<DomainDecision, Failure> {
     require_user(ctx, "deletion")?;
     no_proposal(&i.proposal_id)?;
     let (scoped, _) = scope_for(tx, ctx, &i.scope, true)?;
-    let mut w = Writer::new(tx, ctx, "knowledge.delete_by_source")?;
-    let current = w.k().knowledge_scope_revision(&scoped.exact)?.max(1);
+    let source = i.source_id.as_str();
+    let current = tx
+        .knowledge()
+        .knowledge_scope_revision(&scoped.exact)?
+        .max(1);
     if current != i.expected_scope_revision.get() {
         return Err(Failure::Storage(StorageError::conflict(
             RevisionDimension::Scope,
@@ -2025,52 +2356,62 @@ fn delete_by_source(
             rev(current),
         )));
     }
-    let plan = deletion_plan(
-        w.tx.knowledge(),
-        &scoped.exact,
-        i.source_id.as_str(),
-        current,
-    )?;
-    if plan.claims.len() > MAX_SOURCE_DELETE {
-        return Err(refuse(
-            DomainErrorCode::InvalidArgument,
-            "delete_bound",
-            Some(&i.source_id),
-        ));
+    if let Some(job) = tx
+        .knowledge()
+        .knowledge_running_source_deletion(&scoped.exact, source)?
+    {
+        return Err(conflict(super::DELETION, &job));
     }
+    // The plan read before the unit of work stands for the whole set when it was read at this
+    // scope revision (any change to the scope's claims or entities advances it).
+    let plan = match command.prepared::<PreparedDeletion>() {
+        Some(p)
+            if p.scope_key == scoped.exact.key()
+                && p.source == source
+                && p.scope_revision == current =>
+        {
+            p.plan.clone()
+        }
+        _ => deletion_plan(tx.knowledge(), &scoped.exact, source, current)?,
+    };
     if plan.digest != i.preview_digest.as_str() {
         return Err(conflict(PREVIEW, &i.source_id));
     }
-    for c in &plan.claims {
-        tombstone_claim(&mut w, c)?;
-    }
-    for e in &plan.entities {
-        tombstone_entity(&mut w, e)?;
-    }
-    for e in &plan.evidence {
-        purge_evidence(&mut w, e)?;
-    }
-    let message = format!(
-        "Deleted source {}: {} claims, {} entities and {} evidence records tombstoned.",
-        i.source_id.as_str(),
-        plan.claims.len(),
-        plan.entities.len(),
-        plan.evidence.len()
-    );
-    w.note(Severity::Info, "deleted", &message);
+    let mut w = Writer::new(tx, ctx, "knowledge.delete_by_source")?;
+    let first = deletion_batch(&mut w, &scoped.exact, source, None)?;
+    let job = StoredSourceDeletion {
+        write_id: w.write_id.clone(),
+        scope: scoped.exact.clone(),
+        source: source.to_owned(),
+        digest: plan.digest.clone(),
+        state: if first.done { "Complete" } else { "Running" }.into(),
+        actor: ctx.principal().clone(),
+        principal_kind: format!("{:?}", ctx.principal_kind()),
+        session_id: ctx.session_id().cloned(),
+        invocation_project: ctx.project_id().cloned(),
+        restore_epoch: ctx.restore_epoch().get(),
+        policy_revision: ctx.policy_revision().get(),
+        planned_claims: plan.claims as i64,
+        planned_entities: plan.entities as i64,
+        planned_evidence: plan.evidence as i64,
+        deleted_claims: first.claims,
+        deleted_entities: first.entities,
+        purged_evidence: first.evidence,
+        entity_cursor: first.entity_cursor.clone(),
+        batches: 1,
+        started_at_ms: w.now,
+        finished_at_ms: first.done.then_some(w.now),
+    };
+    w.diagnostics.push(deletion_note(&job));
     let changed = w.changed();
     let primary = scoped.exact.clone();
-    let receipt = w_finish_summary(w, &primary, changed)?;
-    Ok(receipt)
-}
-
-fn w_finish_summary(
-    w: Writer<'_>,
-    primary: &KnowledgeScope,
-    changed: bool,
-) -> Result<DomainDecision, Failure> {
     let id = w.write_id.clone();
-    let receipt = w.finish(primary)?;
+    let receipt = w.finish(&primary)?;
+    if !first.done {
+        // The rest continues as a durable job: the source stays fenced until its last batch.
+        tx.knowledge().put_knowledge_source_deletion(&job)?;
+        continue_later(tx, &job)?;
+    }
     let result = OperationResult::KnowledgeDeleteBySource {
         value: MutationSummary {
             id,
@@ -2083,6 +2424,42 @@ fn w_finish_summary(
     } else {
         DomainDecision::NoChange { result }
     })
+}
+
+/// Runs the next batch of a delete-by-source job (its durable consumer's delivery), returning
+/// whether another follows. A finished or unknown job is a no-op, so a repeated delivery after
+/// a restart is harmless.
+pub(super) fn continue_source_deletion(
+    tx: &mut dyn WriteTransaction,
+    write_id: &Id,
+) -> Result<bool, Failure> {
+    let Some(mut job) = tx.knowledge().knowledge_source_deletion(write_id)? else {
+        return Ok(false);
+    };
+    if job.state != "Running" {
+        return Ok(false);
+    }
+    let ctx = job_context(tx, &job)?;
+    let mut w = Writer::with_id(tx, &ctx, "knowledge.delete_by_source", write_id.clone());
+    w.exempt = Some((job.scope.key(), job.source.clone()));
+    let batch = deletion_batch(&mut w, &job.scope, &job.source, job.entity_cursor.clone())?;
+    job.deleted_claims += batch.claims;
+    job.deleted_entities += batch.entities;
+    job.purged_evidence += batch.evidence;
+    job.entity_cursor = batch.entity_cursor;
+    job.batches += 1;
+    if batch.done {
+        job.state = "Complete".into();
+        job.finished_at_ms = Some(w.now);
+    }
+    w.diagnostics = vec![deletion_note(&job)];
+    let scope = job.scope.clone();
+    w.finish_batch(&scope, job.batches)?;
+    tx.knowledge().put_knowledge_source_deletion(&job)?;
+    if !batch.done {
+        continue_later(tx, &job)?;
+    }
+    Ok(!batch.done)
 }
 
 fn delete_selected(

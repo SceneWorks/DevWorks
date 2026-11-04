@@ -305,23 +305,54 @@ fn placeholders(n: usize, p: &mut Vec<Sql>, values: impl IntoIterator<Item = Str
 
 /// A condition true for a claim row `c` outside `deleted` (its values appended to `p`).
 fn outside_of(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>) -> String {
+    outside_as(deleted, p, "c")
+}
+/// A condition true for the claim row aliased `c` when it is outside `deleted`.
+fn outside_as(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, c: &str) -> String {
     match deleted {
         DeletedClaims::Ids([]) => "1".into(),
         DeletedClaims::Ids(ids) => {
             let list = placeholders(ids.len(), p, ids.iter().map(|i| i.as_str().to_owned()));
-            format!("c.id NOT IN ({list})")
+            format!("{c}.id NOT IN ({list})")
         }
         DeletedClaims::Source { scope, source } => {
             p.push(Sql::Text(scope.key()));
             p.push(Sql::Text((*source).to_owned()));
             // `IS`, not `=`: a claim without a source is outside the source, never unknown.
             format!(
-                "NOT (c.scope_key IS ?{} AND c.source IS ?{})",
+                "NOT ({c}.scope_key IS ?{} AND {c}.source IS ?{})",
                 p.len() - 1,
                 p.len()
             )
         }
     }
+}
+/// A condition true for the entity row aliased `e` when the deletion removes it (only a
+/// delete by source removes entities: its source's).
+fn entity_inside(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, e: &str) -> String {
+    match deleted {
+        DeletedClaims::Ids(_) => "0".into(),
+        DeletedClaims::Source { scope, source } => {
+            p.push(Sql::Text(scope.key()));
+            p.push(Sql::Text((*source).to_owned()));
+            format!(
+                "({e}.scope_key IS ?{} AND {e}.source IS ?{})",
+                p.len() - 1,
+                p.len()
+            )
+        }
+    }
+}
+/// A condition true when the node `id_sql` (a claim or entity ID expression) survives the
+/// deletion: a live claim outside it, or a live entity it does not remove.
+fn survives(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, id_sql: &str) -> String {
+    let claim = outside_as(deleted, p, "sx");
+    let entity = entity_inside(deleted, p, "se");
+    format!(
+        "(EXISTS(SELECT 1 FROM knowledge_claims sx WHERE sx.id={id_sql} AND \
+         sx.lifecycle<>'Deleted' AND {claim}) OR EXISTS(SELECT 1 FROM knowledge_entities se \
+         WHERE se.id={id_sql} AND se.deleted_at IS NULL AND NOT {entity}))"
+    )
 }
 
 /// The rule state of a lesson row as read: an inferred lesson whose distinct events reach its
@@ -543,9 +574,10 @@ type RawRelation = (
     Option<i64>,
     String,
     String,
+    String,
 );
 const RELATION_COLUMNS: &str = "id,scope_key,project_id,subject_id,predicate,object_id,\
-     evidence_json,author_id,created_at,removed_at,write_id,added_evidence_json";
+     evidence_json,author_id,created_at,removed_at,write_id,added_evidence_json,added_basis_json";
 fn relation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawRelation> {
     Ok((
         r.get(0)?,
@@ -560,6 +592,7 @@ fn relation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawRelation> {
         r.get(9)?,
         r.get(10)?,
         r.get(11)?,
+        r.get(12)?,
     ))
 }
 fn relation_of(r: RawRelation) -> Result<StoredRelation, StorageError> {
@@ -575,6 +608,7 @@ fn relation_of(r: RawRelation) -> Result<StoredRelation, StorageError> {
         removed_at_ms: r.9,
         write_id: id_of(r.10)?,
         added_evidence_ids: ids_of(&r.11)?,
+        added_basis: serde_json::from_str(&r.12).map_err(|_| corrupt("relation basis"))?,
     })
 }
 
@@ -662,6 +696,56 @@ fn write_of(r: RawWrite) -> Result<StoredWrite, StorageError> {
         changes: serde_json::from_str(&r.9).map_err(|_| corrupt("stored write changes"))?,
         diagnostics: serde_json::from_str(&r.10)
             .map_err(|_| corrupt("stored write diagnostics"))?,
+    })
+}
+
+const DELETION_COLUMNS: &str = "write_id,scope_key,project_id,source,digest,state,actor_id,\
+     principal_kind,session_id,invocation_project_id,restore_epoch,policy_revision,\
+     planned_claims,planned_entities,planned_evidence,deleted_claims,deleted_entities,\
+     purged_evidence,entity_cursor,batches,started_at,finished_at";
+fn deletion_row(r: &Row<'_>) -> rusqlite::Result<Vec<Sql>> {
+    (0..22).map(|i| r.get::<_, Sql>(i)).collect()
+}
+fn deletion_of(r: Vec<Sql>) -> Result<StoredSourceDeletion, StorageError> {
+    let text = |i: usize| match &r[i] {
+        Sql::Text(s) => Ok(s.clone()),
+        _ => Err(corrupt("source deletion")),
+    };
+    let opt = |i: usize| match &r[i] {
+        Sql::Null => Ok(None),
+        Sql::Text(s) => Ok(Some(s.clone())),
+        _ => Err(corrupt("source deletion")),
+    };
+    let int = |i: usize| match &r[i] {
+        Sql::Integer(n) => Ok(*n),
+        _ => Err(corrupt("source deletion")),
+    };
+    Ok(StoredSourceDeletion {
+        write_id: id_of(text(0)?)?,
+        scope: scope_of(&text(1)?, opt(2)?)?,
+        source: text(3)?,
+        digest: text(4)?,
+        state: text(5)?,
+        actor: ActorId(id_of(text(6)?)?),
+        principal_kind: text(7)?,
+        session_id: opt_id(opt(8)?)?,
+        invocation_project: opt(9)?.map(|p| id_of(p).map(ProjectId)).transpose()?,
+        restore_epoch: int(10)?,
+        policy_revision: int(11)?,
+        planned_claims: int(12)?,
+        planned_entities: int(13)?,
+        planned_evidence: int(14)?,
+        deleted_claims: int(15)?,
+        deleted_entities: int(16)?,
+        purged_evidence: int(17)?,
+        entity_cursor: opt(18)?,
+        batches: int(19)?,
+        started_at_ms: int(20)?,
+        finished_at_ms: match &r[21] {
+            Sql::Null => None,
+            Sql::Integer(n) => Some(*n),
+            _ => return Err(corrupt("source deletion")),
+        },
     })
 }
 
@@ -923,7 +1007,7 @@ macro_rules! knowledge_reads {
                 .transpose()
             }
             fn knowledge_write(&self, id: &Id) -> Result<Option<StoredWrite>, StorageError> {
-                db(self
+                let Some(mut w) = db(self
                     .conn
                     .query_row(
                         &format!("SELECT {WRITE_COLUMNS} FROM knowledge_writes WHERE write_id=?1"),
@@ -932,6 +1016,85 @@ macro_rules! knowledge_reads {
                     )
                     .optional())?
                 .map(write_of)
+                .transpose()?
+                else {
+                    return Ok(None);
+                };
+                // A batched write's later IDs, after those of its first transaction.
+                for (kind, out) in [("claim", &mut w.claim_ids), ("entity", &mut w.entity_ids)] {
+                    let more = rows(
+                        self.conn,
+                        "SELECT target_id FROM knowledge_write_targets WHERE write_id=?1 AND \
+                         kind=?2 ORDER BY seq",
+                        vec![Sql::Text(id.as_str().into()), Sql::Text(kind.into())],
+                        |r| r.get::<_, String>(0),
+                    )?;
+                    for t in more {
+                        out.push(id_of(t)?);
+                    }
+                }
+                Ok(Some(w))
+            }
+            fn knowledge_source_deletion(
+                &self,
+                write_id: &Id,
+            ) -> Result<Option<StoredSourceDeletion>, StorageError> {
+                db(self
+                    .conn
+                    .query_row(
+                        &format!(
+                            "SELECT {DELETION_COLUMNS} FROM knowledge_source_deletions \
+                             WHERE write_id=?1"
+                        ),
+                        params![write_id.as_str()],
+                        deletion_row,
+                    )
+                    .optional())?
+                .map(deletion_of)
+                .transpose()
+            }
+            fn knowledge_relations_touching(
+                &self,
+                endpoints: &[Id],
+            ) -> Result<Vec<StoredRelation>, StorageError> {
+                if endpoints.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let mut p = Vec::new();
+                let list = placeholders(
+                    endpoints.len(),
+                    &mut p,
+                    endpoints.iter().map(|i| i.as_str().to_owned()),
+                );
+                rows(
+                    self.conn,
+                    &format!(
+                        "SELECT {RELATION_COLUMNS} FROM knowledge_relations WHERE \
+                         removed_at IS NULL AND (subject_id IN ({list}) OR object_id IN ({list})) \
+                         ORDER BY id"
+                    ),
+                    p,
+                    relation_row,
+                )?
+                .into_iter()
+                .map(relation_of)
+                .collect()
+            }
+            fn knowledge_running_source_deletion(
+                &self,
+                scope: &KnowledgeScope,
+                source: &str,
+            ) -> Result<Option<Id>, StorageError> {
+                db(self
+                    .conn
+                    .query_row(
+                        "SELECT write_id FROM knowledge_source_deletions WHERE scope_key=?1 AND \
+                         source=?2 AND state='Running'",
+                        params![scope.key(), source],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional())?
+                .map(id_of)
                 .transpose()
             }
             fn knowledge_recent_writes(
@@ -1149,13 +1312,21 @@ macro_rules! knowledge_reads {
                 entity: &Id,
                 deleted: &DeletedClaims<'_>,
             ) -> Result<bool, StorageError> {
+                // Every reference to an entity: a surviving claim naming it, or a live relation
+                // between it and a surviving node (a relation to a removed node goes with it).
                 let mut p = vec![Sql::Text(entity.as_str().into())];
                 let outside = outside_of(deleted, &mut p);
+                let other = survives(
+                    deleted,
+                    &mut p,
+                    "CASE WHEN r.subject_id=?1 THEN r.object_id ELSE r.subject_id END",
+                );
                 db(self.conn.query_row(
                     &format!(
                         "SELECT EXISTS(SELECT 1 FROM knowledge_claims c WHERE \
                          (c.subject_id=?1 OR c.object_id=?1) AND c.lifecycle<>'Deleted' AND \
-                         {outside})"
+                         {outside}) OR EXISTS(SELECT 1 FROM knowledge_relations r WHERE \
+                         (r.subject_id=?1 OR r.object_id=?1) AND r.removed_at IS NULL AND {other})"
                     ),
                     params_from_iter(p),
                     |r| r.get(0),
@@ -1166,13 +1337,26 @@ macro_rules! knowledge_reads {
                 evidence: &Id,
                 deleted: &DeletedClaims<'_>,
             ) -> Result<bool, StorageError> {
+                // Every reference to evidence: a surviving claim's citation, a challenge of a
+                // surviving claim, and a live relation's evidence or the citations its merge
+                // added, while both its endpoints survive (addresses cite no evidence).
                 let mut p = vec![Sql::Text(evidence.as_str().into())];
-                let outside = outside_of(deleted, &mut p);
+                let cited = outside_of(deleted, &mut p);
+                let challenged = outside_of(deleted, &mut p);
+                let subject = survives(deleted, &mut p, "r.subject_id");
+                let object = survives(deleted, &mut p, "r.object_id");
                 db(self.conn.query_row(
                     &format!(
                         "SELECT EXISTS(SELECT 1 FROM knowledge_claim_evidence ce JOIN \
                          knowledge_claims c ON c.id=ce.claim_id WHERE ce.evidence_id=?1 AND \
-                         c.lifecycle<>'Deleted' AND {outside})"
+                         c.lifecycle<>'Deleted' AND {cited}) \
+                         OR EXISTS(SELECT 1 FROM knowledge_challenges ch JOIN knowledge_claims c \
+                         ON c.id=ch.claim_id WHERE c.lifecycle<>'Deleted' AND {challenged} AND \
+                         EXISTS(SELECT 1 FROM json_each(ch.evidence_json) j WHERE j.value=?1)) \
+                         OR EXISTS(SELECT 1 FROM knowledge_relations r WHERE r.removed_at IS NULL \
+                         AND (EXISTS(SELECT 1 FROM json_each(r.evidence_json) j WHERE j.value=?1) \
+                         OR EXISTS(SELECT 1 FROM json_each(r.added_evidence_json) j \
+                         WHERE j.value=?1)) AND {subject} AND {object})"
                     ),
                     params_from_iter(p),
                     |r| r.get(0),
@@ -1574,7 +1758,7 @@ impl KnowledgeRepository for Unit<'_> {
         db(self.conn.execute(
             &format!(
                 "INSERT INTO knowledge_relations({RELATION_COLUMNS}) \
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)"
             ),
             params![
                 r.id.as_str(),
@@ -1589,6 +1773,7 @@ impl KnowledgeRepository for Unit<'_> {
                 r.removed_at_ms,
                 r.write_id.as_str(),
                 ids_json(&r.added_evidence_ids),
+                serde_json::to_string(&r.added_basis).map_err(|x| invalid(x.to_string()))?,
             ],
         ))?;
         Ok(())
@@ -1651,6 +1836,116 @@ impl KnowledgeRepository for Unit<'_> {
                 ],
             ))?;
         }
+        Ok(())
+    }
+
+    fn extend_knowledge_write(
+        &mut self,
+        write_id: &Id,
+        claim_ids: &[Id],
+        entity_ids: &[Id],
+        scope_revision: i64,
+        diagnostics: &[Value],
+    ) -> Result<(), StorageError> {
+        let diagnostics = serde_json::to_string(diagnostics).map_err(|x| invalid(x.to_string()))?;
+        let updated = db(self.conn.execute(
+            "UPDATE knowledge_writes SET scope_revision=?2, diagnostics_json=?3 WHERE write_id=?1",
+            params![write_id.as_str(), scope_revision, diagnostics],
+        ))?;
+        if updated != 1 {
+            return Err(StorageError::NotFound {
+                kind: "knowledge_write",
+                id: write_id.as_str().to_owned(),
+            });
+        }
+        for (kind, ids) in [("claim", claim_ids), ("entity", entity_ids)] {
+            // After the IDs it already names: its row's, then earlier appended batches'.
+            let column = if kind == "claim" {
+                "claim_ids_json"
+            } else {
+                "entity_ids_json"
+            };
+            let first: i64 = db(self.conn.query_row(
+                &format!(
+                    "SELECT json_array_length({column}) + (SELECT count(*) FROM \
+                     knowledge_write_targets WHERE write_id=?1 AND kind=?2) FROM knowledge_writes \
+                     WHERE write_id=?1"
+                ),
+                params![write_id.as_str(), kind],
+                |r| r.get(0),
+            ))?;
+            for (seq, id) in (first..).zip(ids) {
+                db(self.conn.execute(
+                    "INSERT INTO knowledge_write_targets(write_id,kind,seq,target_id) \
+                     VALUES(?1,?2,?3,?4)",
+                    params![write_id.as_str(), kind, seq, id.as_str()],
+                ))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn put_knowledge_source_deletion(
+        &mut self,
+        j: &StoredSourceDeletion,
+    ) -> Result<(), StorageError> {
+        db(self.conn.execute(
+            &format!(
+                "INSERT OR REPLACE INTO knowledge_source_deletions({DELETION_COLUMNS}) VALUES(\
+                 ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)"
+            ),
+            params![
+                j.write_id.as_str(),
+                j.scope.key(),
+                project_col(&j.scope),
+                j.source,
+                j.digest,
+                j.state,
+                j.actor.0.as_str(),
+                j.principal_kind,
+                j.session_id.as_ref().map(Id::as_str),
+                j.invocation_project.as_ref().map(|p| p.0.as_str()),
+                j.restore_epoch,
+                j.policy_revision,
+                j.planned_claims,
+                j.planned_entities,
+                j.planned_evidence,
+                j.deleted_claims,
+                j.deleted_entities,
+                j.purged_evidence,
+                j.entity_cursor,
+                j.batches,
+                j.started_at_ms,
+                j.finished_at_ms,
+            ],
+        ))?;
+        Ok(())
+    }
+
+    fn rescope_knowledge_relation(
+        &mut self,
+        id: &Id,
+        to: &KnowledgeScope,
+    ) -> Result<(), StorageError> {
+        let taken: bool = db(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM knowledge_relations o JOIN knowledge_relations r ON \
+             r.id=?1 WHERE o.scope_key=?2 AND o.subject_id=r.subject_id AND \
+             o.predicate=r.predicate AND o.object_id=r.object_id AND o.removed_at IS NULL AND \
+             o.id<>r.id)",
+            params![id.as_str(), to.key()],
+            |r| r.get(0),
+        ))?;
+        if taken {
+            return Err(StorageError::Duplicate {
+                kind: "knowledge_relation",
+                id: id.as_str().to_owned(),
+            });
+        }
+        db(self.conn.execute(
+            "UPDATE knowledge_relations SET scope_key=?2, project_id=?3 WHERE id=?1 AND \
+             removed_at IS NULL",
+            params![id.as_str(), to.key(), project_col(to)],
+        ))?;
         Ok(())
     }
 

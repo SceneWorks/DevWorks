@@ -6673,7 +6673,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Exact preview match; tombstone selected source contributions, preserve independent surviving evidence and journal count.",
+          "semanticRules": "Exact preview match; tombstone selected source contributions, preserve independent surviving evidence and journal count. Any size of source is deleted whole: past one batch it continues as a durable job (each batch its own transaction, resumed at boot), the source of the scope is read-only until it finishes, and knowledge.write_status of the summary id reports Dispatching, then ObservedComplete with every ID.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

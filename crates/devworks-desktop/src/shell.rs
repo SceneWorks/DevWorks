@@ -475,6 +475,20 @@ impl Shell {
         if self.online().is_err() {
             return false;
         }
+        // A slot whose earlier command has no definite outcome keeps it until Confirm outcomes
+        // settles that exact frame: a new request there would replace it (and could commit a
+        // second time under a fresh request key).
+        if self
+            .client
+            .as_ref()
+            .is_some_and(|c| c.unresolved().iter().any(|u| u.slot == slot))
+        {
+            self.announce(format!(
+                "{label}: an earlier request here is not confirmed yet. Use Confirm outcomes \
+                 first; nothing is applied twice."
+            ));
+            return false;
+        }
         let Some(b) = self.backend() else {
             return false;
         };
@@ -649,11 +663,25 @@ impl Shell {
         if !self.command(Slot::KnowledgeWrite, label, op, move |b| {
             knowledge_screen::command(b, op, body)
         }) {
-            self.knowledge.writing = None;
+            // Refused because an earlier write is unresolved: that one stays the write in
+            // flight until Confirm outcomes settles it.
+            let held = self.client.as_ref().and_then(|c| {
+                c.unresolved()
+                    .iter()
+                    .find(|u| u.slot == Slot::KnowledgeWrite)
+                    .map(|u| u.label.clone())
+            });
             self.knowledge.message = Some((
                 widgets::Tone::Attention,
-                format!("{label} was not sent: DevWorks is offline or closing."),
+                match &held {
+                    Some(earlier) => format!(
+                        "{earlier}: the outcome is not confirmed yet. Use Confirm outcomes \
+                         first; Knowledge changes wait until it is known."
+                    ),
+                    None => format!("{label} was not sent: DevWorks is offline or closing."),
+                },
             ));
+            self.knowledge.writing = held;
         }
     }
     fn knowledge_actions(&mut self, actions: Vec<KnowledgeAction>) {
@@ -2321,6 +2349,10 @@ impl Shell {
                 }
                 Slot::RoutePin(id) => {
                     self.chat.routing.pin_in_flight.insert(id.clone());
+                }
+                // Knowledge changes stay blocked until the earlier write's outcome is known.
+                Slot::KnowledgeWrite => {
+                    self.knowledge.writing = Some(u.label.clone());
                 }
                 _ => {}
             }

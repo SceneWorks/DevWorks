@@ -174,6 +174,11 @@ CREATE TABLE knowledge_relations (
     added_evidence_json TEXT NOT NULL DEFAULT '[]' CHECK (
         json_valid(added_evidence_json) AND json_type(added_evidence_json) = 'array'
     ),
+    -- ... and the source-revision baselines (`[[sourceRef, revision], ...]`) it added to the
+    -- object's basis with those citations, so staleness follows them and unmerge removes them.
+    added_basis_json TEXT NOT NULL DEFAULT '[]' CHECK (
+        json_valid(added_basis_json) AND json_type(added_basis_json) = 'array'
+    ),
     CHECK (
         (scope_key = 'workspace' AND project_id IS NULL)
         OR (project_id IS NOT NULL AND scope_key = 'project:' || project_id)
@@ -218,6 +223,50 @@ CREATE TABLE knowledge_writes (
     diagnostics_json TEXT NOT NULL CHECK (json_valid(diagnostics_json))
 ) STRICT;
 CREATE INDEX knowledge_writes_recent ON knowledge_writes(scope_key, at DESC, write_id DESC);
+-- The IDs a write names past its own row, in order: a delete by source too large for one short
+-- write transaction appends each batch's claims and entities here as it commits.
+CREATE TABLE knowledge_write_targets (
+    write_id TEXT NOT NULL REFERENCES knowledge_writes(write_id),
+    kind TEXT NOT NULL CHECK (kind IN ('claim', 'entity')),
+    seq INTEGER NOT NULL CHECK (seq >= 0),
+    target_id TEXT NOT NULL CHECK (length(target_id) BETWEEN 1 AND 128),
+    PRIMARY KEY (write_id, kind, seq)
+) STRICT, WITHOUT ROWID;
+-- A delete by source that continues as a durable job (one bounded batch per transaction, each
+-- a checkpoint). While it runs, the source of its scope is fenced read-only; the job's queued
+-- continuation survives a restart, so an interrupted job resumes at boot.
+CREATE TABLE knowledge_source_deletions (
+    write_id TEXT PRIMARY KEY REFERENCES knowledge_writes(write_id),
+    scope_key TEXT NOT NULL,
+    project_id TEXT REFERENCES projects(id),
+    source TEXT NOT NULL CHECK (length(source) BETWEEN 1 AND 4096),
+    digest TEXT NOT NULL CHECK (length(digest) = 64),
+    state TEXT NOT NULL CHECK (state IN ('Running', 'Complete')),
+    actor_id TEXT NOT NULL REFERENCES actors(id),
+    principal_kind TEXT NOT NULL CHECK (length(principal_kind) BETWEEN 1 AND 32),
+    session_id TEXT,
+    invocation_project_id TEXT,
+    restore_epoch INTEGER NOT NULL CHECK (restore_epoch >= 0),
+    policy_revision INTEGER NOT NULL CHECK (policy_revision >= 1),
+    planned_claims INTEGER NOT NULL CHECK (planned_claims >= 0),
+    planned_entities INTEGER NOT NULL CHECK (planned_entities >= 0),
+    planned_evidence INTEGER NOT NULL CHECK (planned_evidence >= 0),
+    deleted_claims INTEGER NOT NULL CHECK (deleted_claims >= 0),
+    deleted_entities INTEGER NOT NULL CHECK (deleted_entities >= 0),
+    purged_evidence INTEGER NOT NULL CHECK (purged_evidence >= 0),
+    entity_cursor TEXT,
+    batches INTEGER NOT NULL CHECK (batches >= 1),
+    started_at INTEGER NOT NULL CHECK (started_at >= 0),
+    finished_at INTEGER CHECK (finished_at IS NULL OR finished_at >= started_at),
+    CHECK ((state = 'Complete') = (finished_at IS NOT NULL)),
+    CHECK (
+        (scope_key = 'workspace' AND project_id IS NULL)
+        OR (project_id IS NOT NULL AND scope_key = 'project:' || project_id)
+    )
+) STRICT;
+-- One running deletion per source of a scope: its fence.
+CREATE UNIQUE INDEX knowledge_source_deletions_running
+    ON knowledge_source_deletions(scope_key, source) WHERE state = 'Running';
 
 -- Distinct source events a lesson recurred in (a repeat of one event is one recurrence).
 CREATE TABLE knowledge_lesson_events (

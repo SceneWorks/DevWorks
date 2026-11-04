@@ -198,6 +198,39 @@ pub struct StoredRelation {
     /// For a `same_as` lesson merge: the evidence the merge added to the object's citations,
     /// which an unmerge takes back (and nothing else).
     pub added_evidence_ids: Vec<Id>,
+    /// ... and the source-revision baselines `(source_ref, revision)` it added to the object's
+    /// basis with them (staleness follows a merged citation; unmerge removes exactly these).
+    pub added_basis: Vec<(String, String)>,
+}
+
+/// A delete by source that continues past its first transaction as a durable job: one bounded
+/// batch per transaction, each a checkpoint, the source of its scope fenced while it runs. The
+/// invocation fields rebuild the confirming user's context for each batch's attribution.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredSourceDeletion {
+    pub write_id: Id,
+    pub scope: KnowledgeScope,
+    pub source: String,
+    pub digest: String,
+    /// `Running` or `Complete`.
+    pub state: String,
+    pub actor: ActorId,
+    pub principal_kind: String,
+    pub session_id: Option<Id>,
+    pub invocation_project: Option<ProjectId>,
+    pub restore_epoch: i64,
+    pub policy_revision: i64,
+    pub planned_claims: i64,
+    pub planned_entities: i64,
+    pub planned_evidence: i64,
+    pub deleted_claims: i64,
+    pub deleted_entities: i64,
+    pub purged_evidence: i64,
+    /// The last source entity examined (entities a surviving claim uses are kept and skipped).
+    pub entity_cursor: Option<String>,
+    pub batches: i64,
+    pub started_at_ms: i64,
+    pub finished_at_ms: Option<i64>,
 }
 
 /// The claims a deletion removes, as the store can test membership in them.
@@ -421,7 +454,24 @@ pub trait KnowledgeRead {
         target: &Id,
         revision: i64,
     ) -> Result<Option<StoredHistory>, StorageError>;
+    /// A write record with every ID it names (its row's and its appended targets', in order).
     fn knowledge_write(&self, id: &Id) -> Result<Option<StoredWrite>, StorageError>;
+    /// The delete-by-source job a write started, if it continues as one.
+    fn knowledge_source_deletion(
+        &self,
+        write_id: &Id,
+    ) -> Result<Option<StoredSourceDeletion>, StorageError>;
+    /// Every live relation whose subject or object is one of `endpoints`, in any scope.
+    fn knowledge_relations_touching(
+        &self,
+        endpoints: &[Id],
+    ) -> Result<Vec<StoredRelation>, StorageError>;
+    /// The running deletion that fences `source` of exactly `scope`, if any.
+    fn knowledge_running_source_deletion(
+        &self,
+        scope: &KnowledgeScope,
+        source: &str,
+    ) -> Result<Option<Id>, StorageError>;
     /// The newest writes of `scope`, at most `limit`.
     fn knowledge_recent_writes(
         &self,
@@ -546,6 +596,28 @@ pub trait KnowledgeRepository: KnowledgeRead {
         retained: &dyn Fn(&Value) -> Value,
     ) -> Result<(), StorageError>;
     fn put_knowledge_write(&mut self, write: &StoredWrite) -> Result<(), StorageError>;
+    /// Appends a batch to a committed write: its claim and entity IDs (after those it names
+    /// already), its new scope revision and its diagnostics (replacing the earlier ones).
+    fn extend_knowledge_write(
+        &mut self,
+        write_id: &Id,
+        claim_ids: &[Id],
+        entity_ids: &[Id],
+        scope_revision: i64,
+        diagnostics: &[Value],
+    ) -> Result<(), StorageError>;
+    /// Inserts or replaces a delete-by-source job.
+    fn put_knowledge_source_deletion(
+        &mut self,
+        job: &StoredSourceDeletion,
+    ) -> Result<(), StorageError>;
+    /// Moves a live relation to `to` (a merge's bookkeeping travels with its lessons). An
+    /// identical live relation already in `to` is [`StorageError::Duplicate`].
+    fn rescope_knowledge_relation(
+        &mut self,
+        id: &Id,
+        to: &KnowledgeScope,
+    ) -> Result<(), StorageError>;
     /// Records a lesson event; `false` when the lesson already has that event.
     fn add_knowledge_lesson_event(
         &mut self,

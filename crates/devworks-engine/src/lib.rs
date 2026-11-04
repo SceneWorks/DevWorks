@@ -175,6 +175,7 @@
 //! clocks and scripted handlers, without inference, network or containers.
 pub mod diagnostics;
 pub mod dispatch;
+pub mod knowledge;
 pub mod package;
 pub mod replies;
 pub mod resources;

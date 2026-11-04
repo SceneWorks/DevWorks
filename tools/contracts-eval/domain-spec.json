@@ -4427,7 +4427,7 @@
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact preview match; tombstone selected source contributions, preserve independent surviving evidence and journal count."
+      "rules": "Exact preview match; tombstone selected source contributions, preserve independent surviving evidence and journal count. Any size of source is deleted whole: past one batch it continues as a durable job (each batch its own transaction, resumed at boot), the source of the scope is read-only until it finishes, and knowledge.write_status of the summary id reports Dispatching, then ObservedComplete with every ID."
     },
     "knowledge.delete_selected": {
       "operation": "knowledge.delete_selected",

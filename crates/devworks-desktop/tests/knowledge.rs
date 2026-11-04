@@ -9,7 +9,7 @@ use devworks_desktop::knowledge_screen::{self, Change};
 use devworks_desktop::ops;
 use devworks_desktop::route::Route;
 use eframe::egui::accesskit::Role;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 fn type_into(
@@ -285,4 +285,108 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     click(&mut h, Role::Button, "Delete previewed entries");
     assert!(has_text(&h, "Delete by source recorded."));
     assert!(h.state().knowledge.source_preview.is_none());
+}
+
+#[test]
+fn an_unknown_write_blocks_new_saves_and_is_confirmed_once_at_the_next_launch() {
+    let root = Root::new("knowledge-unknown");
+    let engine = start(&root);
+    let real = engine.backend();
+    // More losses than automatic resubmissions: the outcome stays unknown.
+    let lossy = LoseAcks::over(real.clone(), "knowledge.record", 4);
+    let mut h = harness(
+        shell_with(Ok(lossy.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New entry");
+    type_into(&mut h, "Entry subject", "Storage");
+    type_into(&mut h, "Entry text", "Keep the unknown write");
+    click(&mut h, Role::Button, "Save entry");
+    assert!(
+        has_text(&h, "the outcome is not confirmed yet"),
+        "{:?}",
+        h.state().knowledge.message
+    );
+    // Saves stay blocked: a new request (a fresh key) would replace the unknown one.
+    assert!(h.state().knowledge.writing.is_some());
+    let sent = lossy.request_keys().len();
+    let save = h.query_by_role_and_label(Role::Button, "Save entry");
+    assert!(save.is_none_or(|n| n.accesskit_node().is_disabled()));
+    // Even if the screen's lock were lost, the slot itself refuses a replacement.
+    h.state_mut().knowledge.writing = None;
+    settle(&mut h);
+    click(&mut h, Role::Button, "Save entry");
+    assert!(
+        has_text(&h, "Use Confirm outcomes first"),
+        "{:?}",
+        h.state().knowledge.message
+    );
+    assert!(h.state().knowledge.writing.is_some());
+    assert_eq!(lossy.request_keys().len(), sent, "nothing new was sent");
+    h.state_mut().on_exit();
+    drop(h);
+    // Relaunched offline (nothing can be confirmed): the lock is restored from memory.
+    let mut h = harness(
+        shell_with(Err("offline".into()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    assert!(
+        h.state().knowledge.writing.is_some(),
+        "saves stay blocked after an offline relaunch"
+    );
+    drop(h);
+    // Relaunched while it still cannot be confirmed: the lock stays.
+    let still = LoseAcks::over(real.clone(), "knowledge.record", 4);
+    let mut h = harness(
+        shell_with(Ok(still.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    assert!(
+        h.state().knowledge.writing.is_some(),
+        "saves stay blocked after a relaunch"
+    );
+    // Relaunched again: the exact frame is confirmed, and recorded once.
+    let again = LoseAcks::over(real.clone(), "knowledge.record", 0);
+    h.state_mut().on_exit();
+    drop(h);
+    let mut h = harness(
+        shell_with(Ok(again.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let mut keys = lossy.request_keys();
+    keys.extend(still.request_keys());
+    keys.extend(again.request_keys());
+    assert!(keys.windows(2).all(|w| w[0] == w[1]), "{keys:?}");
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    assert!(
+        h.state().knowledge.writing.is_none(),
+        "known now: saves resume"
+    );
+    let page = ops::query_result(real.query(
+        "knowledge.search",
+        &knowledge_screen::query(
+            &*real,
+            "knowledge.search",
+            json!({"scope": {"kind": "Workspace"}, "text": "unknown write", "tags": [],
+                "kinds": [], "page": {"limit": 10}, "entityLimit": 10, "claimLimit": 10}),
+        ),
+    ))
+    .unwrap();
+    match page.0 {
+        devworks_core::protocol::results::OperationResult::KnowledgeSearch { value } => {
+            assert_eq!(value.items.0.len(), 1, "recorded exactly once");
+        }
+        other => panic!("{other:?}"),
+    }
 }

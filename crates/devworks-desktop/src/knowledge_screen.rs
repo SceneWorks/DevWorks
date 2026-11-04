@@ -835,9 +835,8 @@ impl KnowledgeScreen {
             });
         }
     }
-    /// Applies the import's outcome; `true` when it was recorded. A refusal or an unknown
-    /// outcome returns to the preview (a resubmission can never import twice: imported
-    /// candidates no longer match the preview).
+    /// Applies the import's outcome; `true` when it was recorded. A refusal returns to the
+    /// preview; an unknown outcome stays importing until Confirm outcomes settles its frame.
     pub fn import_done(&mut self, outcome: CommandOutcome) -> bool {
         let Some(ImportStage::Importing {
             name,
@@ -877,13 +876,21 @@ impl KnowledgeScreen {
                 });
                 true
             }
+            Err(Failure::Unknown) => {
+                // Still importing: Confirm outcomes resubmits this exact frame; until then no
+                // other import replaces it.
+                self.message = Some((
+                    Tone::Attention,
+                    "The import's outcome is not confirmed yet. Use Confirm outcomes to check \
+                     again; it is never imported twice."
+                        .into(),
+                ));
+                false
+            }
             other => {
                 let error = match other {
                     Err(Failure::Refused(f)) if f.code == DomainErrorCode::Conflict => {
                         "Knowledge changed since the preview; preview the file again.".to_owned()
-                    }
-                    Err(Failure::Unknown) => {
-                        "The import's outcome is not confirmed yet.".to_owned()
                     }
                     Err(e) => e.describe(),
                     Ok(r) => format!("Unexpected {}", r.operation()),
@@ -1008,10 +1015,16 @@ impl KnowledgeScreen {
                 true
             }
             Err(Failure::Unknown) => {
+                // Still the write in flight: Knowledge changes stay blocked until Confirm
+                // outcomes resubmits its exact frame and a definite outcome arrives, so a new
+                // save never replaces it (or commits twice).
+                self.writing = Some(label.clone());
                 self.message = Some((
                     Tone::Attention,
                     format!(
-                        "{label}: the outcome is not confirmed yet; it is resolved from its receipt."
+                        "{label}: the outcome is not confirmed yet. Use Confirm outcomes to check \
+                         again; Knowledge changes wait until it is known, and it is never \
+                         recorded twice."
                     ),
                 ));
                 false

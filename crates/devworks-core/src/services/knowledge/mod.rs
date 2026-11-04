@@ -142,8 +142,20 @@ pub const COUNTS_COMPONENT: &str = "knowledge.counts";
 pub const WRITES_COMPONENT: &str = "knowledge.writes";
 pub const PREVIEW_COMPONENT: &str = "knowledge.preview";
 pub const IMPORT_COMPONENT: &str = "knowledge.import";
-/// Most claims one delete by source tombstones (a larger source is refused, never truncated).
-pub const MAX_SOURCE_DELETE: usize = 10_000;
+/// Most claims (then entities) one delete-by-source transaction tombstones. A larger source is
+/// deleted whole, as a durable job of such batches (each one checkpoint, the source fenced
+/// read-only meanwhile), because one transaction for it would hold the single writer too long:
+/// measured on the development machine (release build, load average ~35), 5,000 claims took
+/// 1.7 s and 50,000 took 39 s, past the dispatcher's 30 s delivery lease and the 5 s busy
+/// timeout and shutdown grace. In batches of 500 (load average ~47) the same 50,000 claims and
+/// 5,000 entities took 111 transactions, the longest 0.29 s.
+pub const DELETION_BATCH: usize = 500;
+/// The durable consumer that continues a delete-by-source job, one batch per delivery.
+pub const SOURCE_DELETION_CONSUMER: &str = "knowledge-source-deletion";
+/// History aggregate of a delete-by-source job's continuations.
+pub const DELETION_AGGREGATE: &str = "knowledge_source_deletion";
+/// Fault target kind naming a running deletion's write (a fenced source).
+pub const DELETION: &str = "knowledge_source_deletion";
 /// Most challenges, addresses, tags, cited evidence records and aliases one record carries:
 /// the record's own wire lists' capacity. A write that would exceed one is refused, so no list
 /// is ever cut short. (A receipt is not bound by it: it pages, see `receipt_of`.)
@@ -885,12 +897,14 @@ impl KnowledgeService {
                 window
             }
         };
-        Ok((
-            OperationResult::KnowledgeWriteStatus {
-                value: receipt_of(ctx, &write, window),
-            },
-            revision,
-        ))
+        let mut value = receipt_of(ctx, &write, window);
+        // A delete by source still running as a job: its receipt names what is done so far.
+        if k.knowledge_source_deletion(&write.write_id)?
+            .is_some_and(|j| j.state == "Running")
+        {
+            value.state = OperationState::Dispatching;
+        }
+        Ok((OperationResult::KnowledgeWriteStatus { value }, revision))
     }
 
     fn diagnostics(
@@ -1000,11 +1014,12 @@ impl KnowledgeService {
                      {} entities and {} evidence records{}. Confirm with this diagnostic's id as \
                      previewDigest.",
                     source.as_str(),
-                    plan.claims.len(),
-                    plan.entities.len(),
-                    plan.evidence.len(),
-                    if plan.claims.len() > MAX_SOURCE_DELETE {
-                        " (more than one deletion may remove; it will be refused)"
+                    plan.claims,
+                    plan.entities,
+                    plan.evidence,
+                    if plan.claims > DELETION_BATCH {
+                        " in batches (the source is read-only until the last one; \
+                         knowledge.write_status reports progress)"
                     } else {
                         ""
                     }
@@ -1104,7 +1119,26 @@ impl KnowledgeService {
     }
 
     // -----------------------------------------------------------------------------------------
-    // Host pipeline API (context assembly, indexing)
+    // Host pipeline API (context assembly, indexing, durable jobs)
+
+    /// Runs the next batch of the delete-by-source job of `write_id` (the delivery of its
+    /// durable consumer, [`SOURCE_DELETION_CONSUMER`]) and queues the one after, returning
+    /// whether another follows. A finished or unknown job is a no-op, so a repeated delivery
+    /// after a restart is harmless. A batch cannot be refused by its own fence; any refusal is
+    /// reported as an invalid record (a defect, never a partial batch: the unit rolls back).
+    pub fn continue_source_deletion(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        write_id: &Id,
+    ) -> Result<bool, StorageError> {
+        writes::continue_source_deletion(tx, write_id).map_err(|f| match f {
+            Failure::Storage(e) => e,
+            Failure::Refused(r) => StorageError::InvalidRecord(format!(
+                "source deletion batch refused: {:?} {}",
+                r.code, r.target_kind
+            )),
+        })
+    }
 
     /// Records that `session` was supplied `rules` (claim and revision) in the same unit of
     /// work as the context that carried them (KNOW-06). Unknown sessions or claims are refused.
@@ -1528,6 +1562,27 @@ impl CommandHandler for KnowledgeService {
         command: &AdmittedCommand,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, StorageError> {
+        // A delete by source plans its whole set before the unit of work: for a large source
+        // that is a long read, which never runs inside the write transaction. It is used only
+        // at the same scope revision, after the unit of work authorizes the request.
+        if let OperationInput::Knowledge(ops::Input::DeleteBySource(i)) = command.input() {
+            let scope = match &i.scope {
+                DataScope::Workspace => KnowledgeScope::Workspace,
+                DataScope::Project { project_id } => KnowledgeScope::Project(project_id.clone()),
+            };
+            let prepared = env.read(|snapshot| {
+                let k = knowledge_read(snapshot);
+                let scope_revision = k.knowledge_scope_revision(&scope)?.max(1);
+                let plan = writes::deletion_plan(k, &scope, i.source_id.as_str(), scope_revision)?;
+                Ok(writes::PreparedDeletion {
+                    scope_key: scope.key(),
+                    source: i.source_id.as_str().to_owned(),
+                    scope_revision,
+                    plan,
+                })
+            })?;
+            return Ok(Some(Prepared::new(prepared)));
+        }
         let OperationInput::Knowledge(ops::Input::ImportUserData(i)) = command.input() else {
             return Ok(None);
         };
