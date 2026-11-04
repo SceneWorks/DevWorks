@@ -5954,7 +5954,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<WebResult>",
         result_schema: schema_of::<Page<WebResult>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "web.fetch",
@@ -5976,7 +5976,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "WebDocument",
         result_schema: schema_of::<WebDocument>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "containers.capabilities",

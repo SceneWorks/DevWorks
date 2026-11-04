@@ -6,3 +6,4 @@ pub mod paths;
 pub mod power;
 pub mod process;
 pub mod storage;
+pub mod web;

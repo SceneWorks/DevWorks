@@ -22,6 +22,7 @@ use devworks_adapters::paths::FsPathProbe;
 use devworks_adapters::power::NativePower;
 use devworks_adapters::process::NativeProcessHost;
 use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
+use devworks_adapters::web::native_ports;
 use devworks_core::authority::HostRoles;
 use devworks_core::authority::destructive::ProtectedRoots;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
@@ -29,6 +30,7 @@ use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::ports::diagnostics::StorageHealthProbe;
 use devworks_core::ports::packages::{HostPlatform, RuntimeCache};
 use devworks_core::ports::router::{ConnectionDirectory, NoConnections};
+use devworks_core::ports::secrets::NoSecretStore;
 use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions, run_write};
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
@@ -42,6 +44,7 @@ use devworks_core::services::resources::ResourceService;
 use devworks_core::services::router::InferenceRouter;
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::sessions::SessionService;
+use devworks_core::services::web::{WebPorts, WebService};
 use devworks_core::settings::service::SettingsService;
 use devworks_core::settings::view::Health;
 use devworks_engine::package_host::{HostConfig, IndexPorts, LaunchPorts, RuntimePorts};
@@ -79,6 +82,11 @@ pub struct DesktopConfig {
     /// sign-in exist (DW-18) nothing is connected ([`NoConnections`]), so every route reports
     /// `NoConnection` truthfully.
     pub connections: Arc<dyn ConnectionDirectory>,
+    /// The web tools' network ports: the system resolver, the rustls transport and the search
+    /// providers. Their credentials resolve through the native secret store, which arrives with
+    /// DW-18; until then [`NoSecretStore`] answers, so a search provider reports
+    /// `CredentialsRequired` instead of reading a key from anywhere else.
+    pub web: WebPorts,
 }
 impl std::fmt::Debug for DesktopConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -98,6 +106,7 @@ impl DesktopConfig {
             app_build: concat!("devworks-desktop/", env!("CARGO_PKG_VERSION")).to_owned(),
             shutdown_bound: Duration::from_secs(30),
             connections: Arc::new(NoConnections),
+            web: native_ports(Arc::new(NoSecretStore)),
         }
     }
 }
@@ -136,6 +145,8 @@ pub struct Host {
     waker: Arc<Mutex<Option<Waker>>>,
     /// The same authority the runtime admits with (stream handles are re-authorized by it).
     authority: Arc<StoreAuthority>,
+    /// The web tools, stopped first at shutdown so no fetch holds a request thread.
+    web: Arc<WebService>,
 }
 impl Host {
     pub fn runtime(&self) -> &Arc<Runtime> {
@@ -230,6 +241,17 @@ async fn compose(
         diagnostics.clone(),
         Arc::new(JsonSchemaValidator),
     ));
+    // The shared web tools: fetched pages become artifacts through the one artifact service and
+    // every search and fetch is recorded through the one diagnostics service.
+    let web = Arc::new(WebService::new(
+        store.clone(),
+        artifacts.clone(),
+        diagnostics.clone(),
+        clock.clone(),
+        id_source.clone(),
+        config.web.clone(),
+    ));
+    let use_cases = use_cases.with_web(web.clone());
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
     // The run-control quiesce (live work held for Continue) gets this cooperative period; it
@@ -307,6 +329,7 @@ async fn compose(
         ids,
         waker: Arc::new(Mutex::new(None)),
         authority,
+        web,
     })
 }
 
@@ -430,6 +453,8 @@ impl Engine {
     /// Starts the bounded shutdown (stop delivery, collection and housekeeping, wait for
     /// in-flight deliveries, stop owned trees, release keep-awake) without blocking the caller.
     pub fn begin_shutdown(&mut self) {
+        // Web requests in flight stop at their next bounded wait; new ones are refused.
+        self.host.web.shutdown();
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
