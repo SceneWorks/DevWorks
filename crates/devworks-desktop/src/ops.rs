@@ -302,6 +302,24 @@ pub fn save_workspace_artifact(
     .to_string()
     .into_bytes()
 }
+/// An `artifacts.save` frame storing an upload into `project` (ticket from
+/// `mint_project_upload`).
+pub fn save_project_artifact(
+    backend: &dyn Backend,
+    project: &str,
+    ticket: &str,
+    title: &str,
+    media_type: &str,
+    digest: &str,
+    bytes: u64,
+) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
+        "command": {"kind": "Save", "projectId": project, "title": title,
+            "mediaType": media_type, "source": {"kind": "Upload", "ticketId": ticket},
+            "expectedDigest": digest, "expectedBytes": bytes.to_string()}})
+    .to_string()
+    .into_bytes()
+}
 pub fn saved_artifact(outcome: CommandOutcome) -> Result<ArtifactRecord, Failure> {
     match command_result(outcome)? {
         OperationResult::ArtifactsSave { value } => Ok(value),

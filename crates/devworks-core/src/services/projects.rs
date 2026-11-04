@@ -654,6 +654,20 @@ impl ProjectService {
         // The initial plan's features, cards and links are created in this same unit of work:
         // a refused plan creates no project either.
         if let (Some(plan), Some(work)) = (&i.initial_plan, &self.work) {
+            // Its plan content predates the project: what the creator names is shared with the
+            // new project, so the project's agents can read it (the plan checks it is visible).
+            for f in &plan.features.0 {
+                let named = std::iter::once(&f.plan.content).chain(
+                    f.plan
+                        .requirements
+                        .0
+                        .iter()
+                        .filter_map(|r| r.drop_decision.as_ref()),
+                );
+                for a in named {
+                    crate::services::artifacts::share_named_in(tx, ctx, a, &p.id)?;
+                }
+            }
             work.apply_atomic(tx, ctx, &p.id, plan, false)?;
         }
         Ok(DomainDecision::Applied {

@@ -292,6 +292,13 @@ impl Backend for Gated {
     fn mint_workspace_upload(&self, file: &Path) -> Result<devworks_core::protocol::Id, String> {
         self.inner.mint_workspace_upload(file)
     }
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_project_upload(project, file)
+    }
     fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
         self.inner.keep_awake_health()
     }
@@ -393,6 +400,13 @@ impl Backend for LoseAcks {
     }
     fn mint_workspace_upload(&self, file: &Path) -> Result<devworks_core::protocol::Id, String> {
         self.inner.mint_workspace_upload(file)
+    }
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_project_upload(project, file)
     }
     fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
         self.inner.keep_awake_health()

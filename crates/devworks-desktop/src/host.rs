@@ -477,6 +477,24 @@ impl Backend for DesktopBackend {
                 other => format!("{other:?}"),
             })
     }
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &Path,
+    ) -> Result<Id, String> {
+        let ctx = self
+            .host
+            .ctx
+            .clone()
+            .with_lineage(Some(project.clone()), None, None);
+        self.host
+            .sources
+            .mint_upload(&ctx, file, UPLOAD_TICKET_MS)
+            .map_err(|e| match e {
+                IssueRefusal::NotAFile => "only regular files can be attached".to_owned(),
+                other => format!("{other:?}"),
+            })
+    }
     fn keep_awake_health(&self) -> Health {
         self.host.runtime.keep_awake_health()
     }

@@ -241,8 +241,9 @@ pub fn record(
     let workflow_revision = read.queue_revision(&w.project_id, WORKFLOW_QUEUE)?;
     let mut repository_ids = read.work_repositories(&w.id)?;
     repository_ids.truncate(128);
+    // Complete: no writer stores more than the bound (a replacement starts from this list).
     let mut dependency_ids = read.prerequisites(&w.id)?;
-    dependency_ids.truncate(128);
+    dependency_ids.truncate(super::deps::MAX_PREREQUISITES);
     let mut dependent_ids = read.dependents(&w.id)?;
     dependent_ids.truncate(128);
     let (mut plan, mut approval, mut pending_plan) = (None, None, None);

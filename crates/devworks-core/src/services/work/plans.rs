@@ -77,7 +77,8 @@ fn slot(tx: &mut dyn WriteTransaction, feature: &Id) -> R<StoredFeaturePlan> {
 }
 
 /// Validates a plan draft for `feature` of `project`: its content and drop decisions resolve,
-/// its repositories are project members, its requirement and criterion IDs are unique, the
+/// its repositories are project members, its requirement IDs are unique and its criterion and
+/// test IDs are unique across both lists, the
 /// tasks it says cover a requirement are the feature's, and every live requirement of the active
 /// plan is still present (dropping one needs an explicit `Dropped` decision).
 fn check_draft(
@@ -95,6 +96,8 @@ fn check_draft(
     id_set(&acc, "acceptance")?;
     let tests: Vec<Id> = d.acceptance_tests.0.iter().map(|c| c.id.clone()).collect();
     id_set(&tests, "acceptance_tests")?;
+    // Criteria and tests share one ID namespace: a recorded result names exactly one of them.
+    id_set(&[acc, tests].concat(), "acceptance_tests")?;
     for r in &d.requirements.0 {
         if let Some(a) = &r.drop_decision {
             check_artifact(tx, ctx, project, a)?;
@@ -1110,6 +1113,14 @@ fn resolve(
     k: &Id,
 ) -> R<Id> {
     if let Some(id) = keys.get(k.as_str()) {
+        // A plan key and an existing item's ID share one namespace in a reference: a key that
+        // is another item's ID would silently retarget a link meant for that item.
+        if let Some(w) = tx.work().work(k)?
+            && &w.project_id == project
+            && &w.id != id
+        {
+            return Err(conflict("ambiguous_reference", k));
+        }
         return Ok(id.clone());
     }
     match tx.work().work(k)? {

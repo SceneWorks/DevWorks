@@ -352,21 +352,31 @@ impl Fx {
         self.artifact_bytes(p, &bytes, n)
     }
     fn artifact_bytes(&self, p: &ProjectId, bytes: &[u8], n: u32) -> ArtifactRef {
+        self.artifact_in(ArtifactScope::Project(p.clone()), None, bytes, n)
+    }
+    fn artifact_in(
+        &self,
+        scope: ArtifactScope,
+        owner: Option<ActorId>,
+        bytes: &[u8],
+        n: u32,
+    ) -> ArtifactRef {
+        let p = scope.project().cloned();
         let digest = devworks_core::fingerprint::sha256_hex(bytes);
         let len = bytes.len() as i64;
         let (aid, vid) = (id(&format!("art-{n}")), id(&format!("ver-{n}")));
-        let (p2, a2, v2, d2) = (p.clone(), aid.clone(), vid.clone(), digest.clone());
+        let (a2, v2, d2) = (aid.clone(), vid.clone(), digest.clone());
         self.write(move |tx| {
             tx.artifacts()
                 .put_blob(&d2, len, "gen-1", &format!("blobs/{d2}.gen-1"))?;
             let mut a = StoredArtifact {
                 id: a2.clone(),
-                origin_project_id: Some(p2.clone()),
+                origin_project_id: p,
                 origin_work_id: None,
                 title: "plan".into(),
                 revision: 1,
-                scope: ArtifactScope::Project(p2.clone()),
-                owner: None,
+                scope,
+                owner,
                 retention: ArtifactRetention::Explicit,
                 scope_revision: 1,
                 reference_revision: 1,
@@ -1106,7 +1116,7 @@ fn readiness_is_bound_to_the_plan_and_invalidates_only_changed_units() {
     let f = fx.feature(&p, "Checkout", &[]);
     let doc = fx.artifact(&p, 1);
     let f = fx.plan(&f, &doc, &[("E1", "pay"), ("E2", "refund")]);
-    fx.task(&fx.user(), &p, Some(&f), "Refund API", 0);
+    let card = fx.task(&fx.user(), &p, Some(&f), "Refund API", 0);
     let f = fx.fresh(&f);
     let pending = f.pending_plan.clone().unwrap();
     let finding = |fid: &str, scope: &str, evidence: Vec<ArtifactRef>| {
@@ -1226,7 +1236,10 @@ fn readiness_is_bound_to_the_plan_and_invalidates_only_changed_units() {
     settled["closureNote"] = json!("done");
     let mut weaker = finding("F1", "E2", vec![]);
     weaker["blocking"] = json!(false);
-    for restated in [settled, weaker] {
+    // Naming work narrows a scope-wide blocker to that work: the scope gate would lift.
+    let mut narrowed = finding("F1", "E2", vec![]);
+    narrowed["affectedWorkIds"] = json!([card.id.as_str()]);
+    for restated in [settled, weaker, narrowed] {
         let fault = refused(assess(
             &f,
             active.plan_revision.as_str(),
@@ -2317,7 +2330,28 @@ fn a_finding_that_names_its_work_gates_only_that_work() {
             .any(|r| r.contains("gates this work"))
     };
     assert!(gated(ga));
-    assert!(!gated(gb));
+    assert!(!gated(gb.clone()));
+    // Widening a work-specific finding (more work named) is accepted.
+    let f = fx.fresh(&f);
+    let r = fx
+        .get_at("features.get", &f.id, Some(2))
+        .unwrap()
+        .readiness
+        .unwrap();
+    let mut wider = investigation("I1", Some("E1"));
+    wider["affectedWorkIds"] = json!([a.id.as_str(), b.id.as_str()]);
+    applied(fx.command_at(
+        &fx.agent(),
+        "features.edit",
+        json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "changes": {"readiness": {"kind": "Assess",
+                "planRevision": active.plan_revision.as_str(),
+                "planDigest": String::from(active.plan_digest.clone()), "summary": "wider",
+                "expectedAssessmentRevision": r.revision.as_str(),
+                "findings": [wider]}}}),
+        Some(2),
+    ));
+    assert!(gated(gb));
 }
 
 #[test]
@@ -2431,5 +2465,133 @@ fn an_issue_linked_while_running_keeps_its_activation_to_finish_and_archival_sto
     assert!(
         control.stop_operation_id.is_some(),
         "the archival stopped it"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Round 4: one criterion namespace, bounded prerequisites, project-visible plan artifacts
+
+#[test]
+fn a_plan_draft_refuses_an_id_shared_by_a_criterion_and_a_test() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let f = fx.feature(&p, "Checkout", &[]);
+    let doc = fx.artifact(&p, 1);
+    let mut plan = draft(&doc, &[("E1", "pay")], &[]);
+    plan["acceptance"] =
+        json!([{"id": "A1", "text": "works", "evidenceIds": [], "state": "Unmet"}]);
+    plan["acceptanceTests"] =
+        json!([{"id": "A1", "text": "checkout e2e", "evidenceIds": [], "state": "Unmet"}]);
+    let fault = refused(fx.command(
+        &fx.user(),
+        "features.edit_plan",
+        json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "plan": plan.clone()}),
+    ));
+    assert_eq!(kind_of(&fault), "acceptance_tests");
+    plan["acceptanceTests"][0]["id"] = json!("T1");
+    applied(fx.command(
+        &fx.user(),
+        "features.edit_plan",
+        json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "plan": plan}),
+    ));
+}
+
+#[test]
+fn an_item_has_at_most_the_prerequisites_its_record_shows() {
+    use devworks_core::services::work::deps::MAX_PREREQUISITES;
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let target = fx.task(&fx.user(), &p, None, "Target", 0);
+    let blockers: Vec<WorkRecord> = (0..=MAX_PREREQUISITES)
+        .map(|n| fx.task(&fx.user(), &p, None, &format!("Blocker {n}"), 0))
+        .collect();
+    let edges = |n: usize| {
+        blockers[..n]
+            .iter()
+            .map(|b| json!({"predecessor": b.id.as_str(), "successor": target.id.as_str()}))
+            .collect::<Vec<_>>()
+    };
+    // One more than the bound is refused (the record could not show it all): through an atomic
+    // plan, whose edges go through the same writer.
+    let doc = fx.artifact(&p, 1);
+    let plan = json!({"callerRef": "plan-1", "features": [{
+        "callerRef": "feat-1", "title": "Feature", "description": "", "repositoryIds": [],
+        "plan": draft(&doc, &[("E1", "x")], &[]),
+        "tasks": [{"clientKey": "t1", "title": "T1", "description": "", "repositoryIds": [],
+            "dependencyKeys": [], "acceptance": []}]}],
+        "dependencyEdges": edges(MAX_PREREQUISITES + 1)});
+    let fault = refused(fx.command(
+        &fx.agent(),
+        "features.create",
+        json!({"projectId": p.0.as_str(), "creation": {"kind": "AtomicPlan", "plan": plan}}),
+    ));
+    assert_eq!(kind_of(&fault), "too_many_prerequisites");
+    assert!(fx.fresh(&target).dependency_ids.0.is_empty());
+    // At the bound, the record shows every prerequisite.
+    let w = work_of(applied(fx.command(
+        &fx.user(),
+        "tasks.dependency_links",
+        json!({"taskId": target.id.as_str(), "expectedRevision": target.revision.as_str(),
+            "replacement": {"edges": edges(MAX_PREREQUISITES)}}),
+    )));
+    assert_eq!(w.dependency_ids.0.len(), MAX_PREREQUISITES);
+}
+
+#[test]
+fn a_plan_names_only_artifacts_its_project_can_read() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let f = fx.feature(&p, "Checkout", &[]);
+    // A workspace artifact of the user: they see it, the project's agents do not.
+    let doc = fx.artifact_in(
+        ArtifactScope::Workspace,
+        Some(actor("user-a")),
+        b"plan text 1",
+        1,
+    );
+    let edit = |f: &WorkRecord| {
+        fx.command(
+            &fx.user(),
+            "features.edit_plan",
+            json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+                "plan": draft(&doc, &[("E1", "pay")], &[])}),
+        )
+    };
+    let fault = refused(edit(&f));
+    assert_eq!(fault.code, DomainErrorCode::NotFound);
+    // Shared with the project, it is readable there and accepted.
+    let (aid, pid) = (doc.artifact_id.clone(), p.clone());
+    fx.write(move |tx| tx.artifacts().add_share(&aid, &pid).map(|_| ()));
+    applied(edit(&f));
+}
+
+#[test]
+fn a_plan_key_that_is_another_items_id_is_refused_as_ambiguous() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let existing = fx.task(&fx.user(), &p, None, "Existing", 0);
+    let doc = fx.artifact(&p, 1);
+    let key = existing.id.as_str();
+    let plan = json!({"callerRef": "plan-1", "features": [{
+        "callerRef": "feat-1", "title": "Feature", "description": "", "repositoryIds": [],
+        "plan": draft(&doc, &[("E1", "x")], &[]),
+        "tasks": [
+            {"clientKey": key, "title": "T1", "description": "", "repositoryIds": [],
+             "dependencyKeys": [], "acceptance": []},
+            {"clientKey": "t2", "title": "T2", "description": "", "repositoryIds": [],
+             "dependencyKeys": [key], "acceptance": []}]}],
+        "dependencyEdges": []});
+    let before = fx.list("tasks.list", &p, 50, None, None).unwrap().0.len();
+    let fault = refused(fx.command(
+        &fx.agent(),
+        "features.create",
+        json!({"projectId": p.0.as_str(), "creation": {"kind": "AtomicPlan", "plan": plan}}),
+    ));
+    assert_eq!(kind_of(&fault), "ambiguous_reference");
+    assert_eq!(
+        fx.list("tasks.list", &p, 50, None, None).unwrap().0.len(),
+        before
     );
 }

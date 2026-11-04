@@ -26,6 +26,7 @@ use devworks_core::protocol::records::{
     WorkKind, WorkRecord,
 };
 use devworks_core::protocol::{DomainErrorCode, Event, EventSubject, Id, ProjectId};
+use devworks_core::services::work::deps::MAX_PREREQUISITES;
 use devworks_core::services::work::fold;
 use devworks_core::services::work::workflow::{DEFAULT_STATUSES, default_status_id};
 use eframe::egui::{self, RichText, Ui};
@@ -136,6 +137,65 @@ pub fn next_id(entries: &[Entry], prefix: &str) -> String {
         .map(|n| format!("{prefix}{n}"))
         .find(|c| !entries.iter().any(|e| &e.id == c))
         .expect("a free identifier")
+}
+
+/// The item editor after the save of `saved` was applied (`current` is the saved record):
+/// closed when it holds nothing beyond what was saved; otherwise its later edits stay open on
+/// the saved revision. An editor of another item is unchanged.
+pub fn edit_after_save(
+    live: Option<EditForm>,
+    saved: &EditForm,
+    current: Option<WorkRecord>,
+) -> Option<EditForm> {
+    match live {
+        Some(l) if l.snapshot.id == saved.snapshot.id => {
+            let same = l.title == saved.title
+                && l.description == saved.description
+                && l.priority == saved.priority;
+            match current {
+                Some(c) if !same => Some(EditForm { snapshot: c, ..l }),
+                _ => None,
+            }
+        }
+        other => other,
+    }
+}
+
+/// Whether two plan forms hold the same edits (what a save submits).
+pub fn same_plan_edits(a: &PlanForm, b: &PlanForm) -> bool {
+    a.text == b.text
+        && a.requirements == b.requirements
+        && a.acceptance == b.acceptance
+        && a.acceptance_tests == b.acceptance_tests
+        && a.goals == b.goals
+        && a.repositories == b.repositories
+}
+
+/// The plan editor after the save of `saved` was applied as `record`: closed when it holds
+/// nothing beyond what was saved; otherwise its later edits stay open as a draft on the saved
+/// revision (what the form does not show now comes from the saved draft). An editor of another
+/// feature is unchanged.
+pub fn plan_after_save(
+    live: Option<PlanForm>,
+    saved: &PlanForm,
+    record: &WorkRecord,
+) -> Option<PlanForm> {
+    match live {
+        Some(l) if l.snapshot.id == saved.snapshot.id => {
+            if same_plan_edits(&l, saved) {
+                return None;
+            }
+            let fresh = open_plan_form(record);
+            Some(PlanForm {
+                snapshot: fresh.snapshot,
+                base: fresh.base,
+                content: fresh.content,
+                original: saved.text.clone(),
+                ..l
+            })
+        }
+        other => other,
+    }
 }
 
 /// The requirements and criteria a plan form started from.
@@ -309,6 +369,11 @@ pub struct WorkUi {
     pub create: Option<CreateForm>,
     pub edit: Option<EditForm>,
     pub plan: Option<PlanForm>,
+    /// The exact plan form a save submitted, while that save runs: its upload and its command
+    /// use this snapshot, never the editor, which stays open for later edits.
+    pub plan_saving: Option<PlanForm>,
+    /// The exact edit form a save submitted, while it runs (the editor stays open).
+    pub edit_saving: Option<EditForm>,
     /// A card whose removal from its feature waits for confirmation.
     pub unlink: Option<WorkRecord>,
     /// Cards whose move was submitted and is not confirmed yet, with the target status.
@@ -655,6 +720,7 @@ impl Shell {
                     };
                     let body = json!({"workId": w.id, "expectedRevision": w.revision,
                         "changes": changes});
+                    self.work.edit_saving = Some(form);
                     self.command(
                         Slot::WorkCommand(w.id.as_str().to_owned()),
                         "Saving work",
@@ -751,16 +817,21 @@ impl Shell {
         }
     }
 
-    /// Saves a plan draft: a changed (or first) plan text is stored as an artifact first, then
-    /// the draft is submitted at the revision its form was opened on.
+    /// Saves a plan draft: a changed (or first) plan text is stored as an artifact of the
+    /// feature's project first (so its agents can read it), then the draft is submitted at the
+    /// revision its form was opened on. The save is bound to `form` exactly as submitted; the
+    /// editor stays open, and edits made meanwhile are kept as a draft (lock-free: the user
+    /// never waits on an upload to keep writing, and nothing they write is lost or mixed in).
     fn save_plan(&mut self, form: PlanForm) {
         let unchanged = form.content.is_some() && form.text == form.original;
         if unchanged {
             let content = form.content.clone().expect("checked");
+            self.work.plan_saving = Some(form.clone());
             self.submit_plan(&form, &content);
             return;
         }
         let id = form.snapshot.id.as_str().to_owned();
+        let project = form.snapshot.project_id.clone();
         let text = form.text.clone();
         let started = self.client.as_mut().is_some_and(|c| {
             c.task(
@@ -768,19 +839,21 @@ impl Shell {
                 "Storing the plan text",
                 move |b| {
                     let dir = b.scratch_dir();
+                    std::fs::create_dir_all(&dir)
+                        .map_err(|e| format!("could not write the plan text: {e}"))?;
                     let path = dir.join(format!("plan-{}.md", b.token("p")));
                     std::fs::write(&path, text.as_bytes())
                         .map_err(|e| format!("could not write the plan text: {e}"))?;
                     let digest = devworks_core::fingerprint::sha256_hex(text.as_bytes());
-                    let ticket = b.mint_workspace_upload(&path)?;
-                    let frame = ops::save_workspace_artifact(
+                    let ticket = b.mint_project_upload(&project, &path)?;
+                    let frame = ops::save_project_artifact(
                         b,
+                        project.0.as_str(),
                         ticket.as_str(),
                         "Feature plan",
                         "text/markdown",
                         &digest,
                         text.len() as u64,
-                        &[],
                     );
                     let outcome = resolve_command(b, "artifacts.save", &frame);
                     if ops::saved_artifact(outcome.clone()).is_ok() {
@@ -791,7 +864,7 @@ impl Shell {
             )
         });
         if started {
-            self.work.plan = Some(form);
+            self.work.plan_saving = Some(form);
         }
     }
     fn submit_plan(&mut self, form: &PlanForm, content: &ArtifactRef) {
@@ -801,7 +874,7 @@ impl Shell {
         let body = json!({"featureId": w.id, "expectedRevision": w.revision,
             "plan": plan_body(form, content)});
         self.command(
-            Slot::WorkCommand(w.id.as_str().to_owned()),
+            Slot::WorkPlan(w.id.as_str().to_owned()),
             "Saving the plan draft",
             "features.edit_plan",
             move |be| wops::work_command(be, "features.edit_plan", body),
@@ -1018,22 +1091,16 @@ impl Shell {
                 match outcome {
                     Ok(text) => {
                         self.work.mutations += 1;
-                        // Only this item's forms are settled; a draft of other work is kept.
-                        if self
+                        // Only this item's saved edit is settled: an editor holding later edits
+                        // stays open on the saved revision; a draft of other work is kept.
+                        if let Some(saved) = self
                             .work
-                            .edit
-                            .as_ref()
-                            .is_some_and(|e| e.snapshot.id.as_str() == id)
+                            .edit_saving
+                            .take_if(|e| e.snapshot.id.as_str() == id)
                         {
-                            self.work.edit = None;
-                        }
-                        if self
-                            .work
-                            .plan
-                            .as_ref()
-                            .is_some_and(|p| p.snapshot.id.as_str() == id)
-                        {
-                            self.work.plan = None;
+                            let current = self.work.detail.get(&id).cloned();
+                            self.work.edit =
+                                edit_after_save(self.work.edit.take(), &saved, current);
                         }
                         if self
                             .work
@@ -1050,7 +1117,13 @@ impl Shell {
                             self.load_detail(&w);
                         }
                     }
-                    Err(e) => self.work_failure("The change", e),
+                    Err(e) => {
+                        // The editor keeps its draft.
+                        self.work
+                            .edit_saving
+                            .take_if(|e| e.snapshot.id.as_str() == id);
+                        self.work_failure("The change", e)
+                    }
                 }
             }
             (Slot::WorkOrder(_), Reply::Command(c)) => match wops::work_ordered(c) {
@@ -1067,12 +1140,37 @@ impl Shell {
                     Ok(_) => Err(Failure::Other("unexpected reply".into())),
                     Err(e) => Err(Failure::Other(e)),
                 };
-                match (stored, self.work.plan.clone()) {
-                    (Ok(record), Some(form)) if form.snapshot.id.as_str() == id => {
+                // The draft submitted is the form the save started from, never the editor.
+                match (stored, self.work.plan_saving.take()) {
+                    (Ok(record), Some(mut form)) if form.snapshot.id.as_str() == id => {
+                        form.content = Some(record.artifact.clone());
+                        form.original = form.text.clone();
+                        self.work.plan_saving = Some(form.clone());
                         self.submit_plan(&form, &record.artifact);
                     }
-                    (Ok(_), _) => {}
+                    (Ok(_), other) => self.work.plan_saving = other,
                     (Err(e), _) => self.work_failure("Storing the plan text", e),
+                }
+            }
+            (Slot::WorkPlan(id), Reply::Command(c)) => {
+                let saved = self
+                    .work
+                    .plan_saving
+                    .take_if(|p| p.snapshot.id.as_str() == id);
+                match wops::work_changed(c) {
+                    Ok(w) => {
+                        self.work.mutations += 1;
+                        self.work.detail.insert(id.clone(), w.clone());
+                        if let Some(saved) = &saved {
+                            self.work.plan = plan_after_save(self.work.plan.take(), saved, &w);
+                        }
+                        let text = format!("The plan draft of {} is saved.", w.title.0);
+                        self.work.message = Some((Tone::Good, text.clone()));
+                        self.announce(text);
+                        self.load_work();
+                        self.load_detail(&w);
+                    }
+                    Err(e) => self.work_failure("Saving the plan draft", e),
                 }
             }
             (Slot::WorkRun(id), Reply::Command(c)) => {
@@ -1300,7 +1398,11 @@ impl Shell {
             .iter()
             .chain(&self.work.cards.items)
             .map(|w| w.id.as_str().to_owned())
-            .filter(|id| self.waiting(&Slot::WorkCommand(id.clone())))
+            .filter(|id| {
+                self.waiting(&Slot::WorkCommand(id.clone()))
+                    || self.waiting(&Slot::WorkPlanText(id.clone()))
+                    || self.waiting(&Slot::WorkPlan(id.clone()))
+            })
             .collect();
         let creating = project
             .as_ref()
@@ -1809,6 +1911,11 @@ fn create_form(ui: &mut Ui, work: &mut WorkUi, busy: bool, actions: &mut Vec<Act
         .corner_radius(theme::radius())
         .inner_margin(theme::margin(12, 10))
         .show(ui, |ui| {
+            // A creation consumes the form: it is locked while it runs, so nothing typed
+            // meanwhile is dropped by its reply.
+            if busy {
+                ui.disable();
+            }
             ui.label(RichText::new(format!("New {}", form.kind)).strong());
             let r = ui.add(egui::TextEdit::singleline(&mut form.title).hint_text("Title"));
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Title"));
@@ -2599,6 +2706,31 @@ fn plan_form(
     }
 }
 
+/// One change to a card's blockers.
+#[derive(Clone, Copy, Debug)]
+pub enum BlockerEdit<'a> {
+    Add(&'a str),
+    Remove(&'a str),
+}
+
+/// The `tasks.dependency_links` body applying one blocker change to `w`, at its revision. The
+/// operation replaces the whole incoming list, so the change is applied to the record's
+/// `dependencyIds`, which is complete: no writer stores more than [`MAX_PREREQUISITES`], the
+/// projection's own bound. `None` when the change changes nothing or would exceed the bound.
+pub fn blocker_change(w: &WorkRecord, edit: BlockerEdit<'_>) -> Option<Value> {
+    let mut ids: Vec<&str> = w.dependency_ids.0.iter().map(|d| d.as_str()).collect();
+    match edit {
+        BlockerEdit::Add(a) if !ids.contains(&a) && ids.len() < MAX_PREREQUISITES => ids.push(a),
+        BlockerEdit::Remove(r) if ids.contains(&r) => ids.retain(|d| *d != r),
+        _ => return None,
+    }
+    let edges: Vec<Value> = ids
+        .iter()
+        .map(|p| json!({"predecessor": p, "successor": w.id}))
+        .collect();
+    Some(json!({"taskId": w.id, "expectedRevision": w.revision, "replacement": {"edges": edges}}))
+}
+
 /// An editable list of entries, one ID field and one multi-line text field each, with add and
 /// remove controls.
 fn entry_list(ui: &mut Ui, what: &str, prefix: &str, entries: &mut Vec<Entry>) {
@@ -2742,23 +2874,18 @@ fn card_detail(
             let (t, s) = titles.get(d.as_str()).cloned().unwrap_or((d.as_str().to_owned(), String::new()));
             ui.horizontal(|ui| {
                 ui.label(format!("{t} ({})", status_name(cols, &s)));
-                if ui.add_enabled(enabled, egui::Button::new(format!("Remove blocker {}", short(&t, 16))).small()).clicked() {
-                    let edges: Vec<Value> = w
-                        .dependency_ids
-                        .0
-                        .iter()
-                        .filter(|x| *x != d)
-                        .map(|p| json!({"predecessor": p, "successor": w.id}))
-                        .collect();
-                    actions.push(Action::Command(
-                        w.id.as_str().to_owned(),
-                        "tasks.dependency_links",
-                        json!({"taskId": w.id, "expectedRevision": w.revision, "replacement": {"edges": edges}}),
-                    ));
+                if ui.add_enabled(enabled, egui::Button::new(format!("Remove blocker {}", short(&t, 16))).small()).clicked()
+                    && let Some(body) = blocker_change(w, BlockerEdit::Remove(d.as_str()))
+                {
+                    actions.push(Action::Command(w.id.as_str().to_owned(), "tasks.dependency_links", body));
                 }
             });
         }
         let mut add: Option<String> = None;
+        let full = w.dependency_ids.0.len() >= MAX_PREREQUISITES;
+        if full {
+            widgets::caption(ui, "It has the most blockers an item can have; remove one to add another.");
+        }
         egui::ComboBox::from_id_salt(("add-blocker", w.id.as_str()))
             .selected_text("Add a blocker…")
             .show_ui(ui, |ui| {
@@ -2769,22 +2896,12 @@ fn card_detail(
                 }
             })
             .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, "Add a blocker"));
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled && !full, "Add a blocker"));
         if let Some(a) = add
             && enabled
+            && let Some(body) = blocker_change(w, BlockerEdit::Add(&a))
         {
-            let mut edges: Vec<Value> = w
-                .dependency_ids
-                .0
-                .iter()
-                .map(|p| json!({"predecessor": p, "successor": w.id}))
-                .collect();
-            edges.push(json!({"predecessor": a, "successor": w.id}));
-            actions.push(Action::Command(
-                w.id.as_str().to_owned(),
-                "tasks.dependency_links",
-                json!({"taskId": w.id, "expectedRevision": w.revision, "replacement": {"edges": edges}}),
-            ));
+            actions.push(Action::Command(w.id.as_str().to_owned(), "tasks.dependency_links", body));
         }
         ui.label(RichText::new("Blocks").strong());
         if w.dependent_ids.0.is_empty() {

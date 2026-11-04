@@ -312,7 +312,9 @@ fn same_finding(a: &ReadinessFinding, b: &ReadinessFinding) -> bool {
 
 /// A re-assessment cannot settle or weaken a finding that is still open: it stays open (closing
 /// is `CloseFinding`, with its note and evidence, or a human's risk acceptance), stays blocking
-/// and a prerequisite when it was, and keeps gating at least the scope and work it gated.
+/// and a prerequisite when it was, and keeps gating at least the scope and work it gated. An
+/// empty `affectedWorkIds` gates the whole scope, so naming work narrows it (refused); widening
+/// (more work, or no work named) is allowed.
 fn keeps_gate(stored: &ReadinessFinding, given: &ReadinessFinding) -> R<()> {
     if !matches!(stored.state, FindingState::Open) {
         return Ok(());
@@ -324,6 +326,7 @@ fn keeps_gate(stored: &ReadinessFinding, given: &ReadinessFinding) -> R<()> {
             && given.scope_key.is_some()
             && stored.scope_key != given.scope_key)
         || (stored.scope_key.is_none() && given.scope_key.is_some())
+        || (stored.affected_work_ids.0.is_empty() && !given.affected_work_ids.0.is_empty())
         || !stored
             .affected_work_ids
             .0

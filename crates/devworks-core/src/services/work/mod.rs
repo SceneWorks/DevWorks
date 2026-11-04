@@ -301,9 +301,9 @@ pub(crate) fn member_repositories(
     }
     Ok(set)
 }
-/// Whether an artifact reference resolves for this invocation in `project` (a workspace
-/// invocation may also name an artifact it sees at workspace level, such as a plan text it
-/// uploaded before the project's work existed).
+/// Whether an artifact reference resolves for this invocation in `project`: the project's own
+/// artifact or one shared with it. A workspace artifact the project cannot see is refused,
+/// even for a workspace invocation that sees it, since the project's agents read it there.
 pub(crate) fn check_artifact(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -311,9 +311,9 @@ pub(crate) fn check_artifact(
     a: &ArtifactRef,
 ) -> R<()> {
     use crate::services::sessions::transcript::reference_resolves;
-    if reference_resolves(tx, ctx, Some(project), a)?
-        || (ctx.project_id().is_none() && reference_resolves(tx, ctx, None, a)?)
-    {
+    // Visible in the work's project (its own artifact or one shared with it), whatever scope
+    // the caller works in: the project's agents read it there.
+    if reference_resolves(tx, ctx, Some(project), a)? {
         return Ok(());
     }
     Err(not_found("artifact", &a.artifact_id).into())

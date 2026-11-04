@@ -24,6 +24,11 @@ use crate::services::sessions::Refusal;
 use serde_json::json;
 use std::collections::BTreeSet;
 
+/// Most prerequisites (incoming blocking links) one item has: every writer refuses more, so
+/// the record's `dependencyIds` projection, bounded the same, is always the complete list a
+/// replacement starts from.
+pub const MAX_PREREQUISITES: usize = 128;
+
 /// Most items a cycle search visits before it refuses the change.
 pub const SEARCH_BOUND: usize = 20_000;
 
@@ -78,6 +83,9 @@ pub(crate) fn set_links(
         return Err(conflict("self_link", target));
     }
     let prereqs = id_set(prerequisites, "duplicate_link")?;
+    if prereqs.len() > MAX_PREREQUISITES {
+        return Err(conflict("too_many_prerequisites", target));
+    }
     for p in &prereqs {
         match tx.work().work(p)? {
             Some(w) if &w.project_id == project && (w.kind == FEATURE) == (t.kind == FEATURE) => {}

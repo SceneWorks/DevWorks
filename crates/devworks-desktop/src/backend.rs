@@ -32,6 +32,14 @@ pub trait Backend: Send + Sync {
     /// Mints a workspace upload ticket for a file the user picked, dropped or pasted (user
     /// ingress only; the artifact service resolves and verifies it at `artifacts.save`).
     fn mint_workspace_upload(&self, file: &Path) -> Result<Id, String>;
+    /// Mints an upload ticket bound to `project` for a file the app wrote for the user (a
+    /// feature's plan text): it resolves only for an `artifacts.save` into that project, so
+    /// the project's agents can read the artifact.
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &Path,
+    ) -> Result<Id, String>;
     /// Keep-awake runtime health, distinct from the configured value (SET-02).
     fn keep_awake_health(&self) -> Health;
     /// "Queue state may have changed" hints.
@@ -113,6 +121,8 @@ pub enum Slot {
     WorkOrder(String),
     /// A plan text stored as an artifact for a feature's pending plan.
     WorkPlanText(String),
+    /// A feature's plan draft save (`features.edit_plan`).
+    WorkPlan(String),
     /// A root's run controls (inspect) and one Start/Pause/Continue.
     WorkInspect(String),
     WorkRun(String),
