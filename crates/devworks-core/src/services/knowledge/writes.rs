@@ -2525,6 +2525,11 @@ fn challenge(
         }
         (None, Some("Retire")) => {
             require_user(ctx, CHALLENGE)?;
+            // A retirement that resolves no challenge has nowhere to keep citations: refused
+            // rather than accepted and dropped.
+            if !evidence.is_empty() {
+                return Err(invalid("evidence_ids"));
+            }
             retire(&mut w, &c, &i.reason.0)?;
         }
         (Some(id), Some(o)) => {
@@ -2541,6 +2546,19 @@ fn challenge(
             resolved.resolved_at_ms = Some(w.now);
             resolved.resolved_by = Some(ctx.principal().clone());
             resolved.resolution = Some(i.reason.0.clone());
+            // The resolution's citations join the challenge's (the record keeps one list).
+            for e in evidence {
+                if !resolved.evidence_ids.contains(&e) {
+                    resolved.evidence_ids.push(e);
+                }
+            }
+            if resolved.evidence_ids.len() > MAX_LIST {
+                return Err(refuse(
+                    DomainErrorCode::InvalidArgument,
+                    "list_bound",
+                    Some(id),
+                ));
+            }
             w.k().put_knowledge_challenge(&resolved)?;
             if o == "Retire" {
                 retire(&mut w, &c, &i.reason.0)?;

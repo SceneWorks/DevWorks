@@ -2318,9 +2318,9 @@ impl KnowledgeRepository for Unit<'_> {
             &format!(
                 "INSERT INTO knowledge_challenges({CHALLENGE_COLUMNS}) \
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET \
-                 state=excluded.state, resolved_at=excluded.resolved_at, \
-                 resolved_by=excluded.resolved_by, resolution=excluded.resolution \
-                 WHERE knowledge_challenges.state='Open'"
+                 state=excluded.state, evidence_json=excluded.evidence_json, \
+                 resolved_at=excluded.resolved_at, resolved_by=excluded.resolved_by, \
+                 resolution=excluded.resolution WHERE knowledge_challenges.state='Open'"
             ),
             params![
                 c.id.as_str(),

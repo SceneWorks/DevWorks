@@ -692,7 +692,8 @@ pub trait KnowledgeRepository: KnowledgeRead {
         into: &Id,
         below: &[Vec<Id>],
     ) -> Result<i64, StorageError>;
-    /// Inserts a challenge, or replaces one that is `Open` (a resolution); a resolved one is
+    /// Inserts a challenge, or replaces one that is `Open` (a resolution: its state, citations
+    /// and resolution; its reason, author and opening are fixed); a resolved one is
     /// [`StorageError::InvalidRecord`].
     fn put_knowledge_challenge(&mut self, challenge: &StoredChallenge) -> Result<(), StorageError>;
     /// Inserts or updates the address of the same claim, kind and name.

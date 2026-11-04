@@ -4503,3 +4503,68 @@ fn relations_of_entity(fx: &Fx, entity: &Id) -> Vec<StoredRelation> {
             .knowledge_relations_touching(std::slice::from_ref(&e))
     })
 }
+
+#[test]
+fn a_challenge_resolution_keeps_the_evidence_it_cites() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let r = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": "Rules", "entityType": "t", "aliases": []}],
+        "evidence": [
+            {"id": "o", "source": {"kind": "Observation", "sourceRef": "log:o"},
+                "snippet": "why it is doubted"},
+            {"id": "u", "source": {"kind": "Observation", "sourceRef": "log:u"},
+                "snippet": "why it stands"},
+            {"id": "t", "source": {"kind": "Observation", "sourceRef": "log:t"},
+                "snippet": "why it goes"}],
+        "claims": [
+            with(draft("Lesson", "rule one"), json!({"evidenceIds": ["o", "u", "t"],
+                "lesson": lesson_draft("Prompt", Some("p1"), None)})),
+            with(draft("Lesson", "rule two"),
+                json!({"lesson": lesson_draft("Prompt", Some("p2"), None)}))]}),
+    ));
+    let (one, two) = (r.claim_ids.0[0].clone(), r.claim_ids.0[1].clone());
+    let ev: HashMap<String, Id> = fx
+        .read_claim(&user, proj("project-a"), &one)
+        .evidence
+        .0
+        .iter()
+        .map(|e| (e.snippet.0.clone(), e.id.clone()))
+        .collect();
+    let (o, u, t) = (
+        ev["why it is doubted"].clone(),
+        ev["why it stands"].clone(),
+        ev["why it goes"].clone(),
+    );
+    let challenge = |claim: &Id, extra: Value| {
+        let mut body = json!({"scope": proj("project-a"), "claimId": claim,
+            "expectedRevision": fx.revision(claim).to_string(), "reason": "doubt",
+            "evidenceIds": [o]});
+        if let (Value::Object(b), Value::Object(e)) = (&mut body, extra) {
+            b.extend(e);
+        }
+        fx.cmd(&user, "knowledge.challenge", body)
+    };
+    let opened = |claim: &Id| {
+        let c = claim.clone();
+        fx.read(move |s| s.knowledge().knowledge_challenges(&c, 10))
+    };
+    // Upheld with its own citation, and retired with another: both kept with the challenge.
+    for (claim, outcome, cited) in [(&one, "Uphold", &u), (&two, "Retire", &t)] {
+        receipt(challenge(claim, json!({})));
+        let id = opened(claim)[0].id.clone();
+        receipt(challenge(
+            claim,
+            json!({"evidenceIds": [cited], "resolveChallengeId": id, "outcome": outcome}),
+        ));
+        let resolved = &opened(claim)[0];
+        assert_ne!(resolved.state, "Open");
+        assert_eq!(resolved.evidence_ids, vec![o.clone(), cited.clone()]);
+    }
+    // A retirement that resolves no challenge has nowhere to keep citations: refused.
+    let f = refused(challenge(&one, json!({"outcome": "Retire"})));
+    assert_eq!(f.code, DomainErrorCode::InvalidArgument);
+}
