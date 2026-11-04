@@ -7,8 +7,24 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-/// Most buffered events; older ones are dropped (and counted) beyond it.
+/// Most buffered events. Beyond it the oldest evidence-only event is dropped (and counted); a
+/// lifecycle event (see [`lifecycle`]) is dropped only when nothing else is buffered, and that
+/// loss is reported through [`Cdp::take_lifecycle_lost`].
 pub const EVENT_LIMIT: usize = 10_000;
+
+/// Whether an event carries target, frame or document lifecycle: attachment, detachment,
+/// creation, destruction and crashes of targets, frame attachment, detachment and navigation,
+/// document replacement and load. The live state advances document revisions (which fence
+/// every reference) from these, so losing one is never only a gap in the evidence.
+pub fn lifecycle(method: &str) -> bool {
+    method.starts_with("Target.")
+        || method.starts_with("Inspector.")
+        || method.starts_with("Page.frame")
+        || matches!(
+            method,
+            "Page.navigatedWithinDocument" | "Page.lifecycleEvent" | "DOM.documentUpdated"
+        )
+}
 /// Largest message this client accepts (a full-page screenshot can be large).
 pub const MESSAGE_LIMIT: usize = 64 * 1024 * 1024;
 
@@ -78,6 +94,8 @@ pub struct Cdp {
     events: VecDeque<CdpEvent>,
     /// Events dropped because the buffer was full (reported as truncation).
     pub dropped: u64,
+    /// A lifecycle event was dropped since [`Self::take_lifecycle_lost`] last reported it.
+    lifecycle_lost: bool,
     closed: bool,
     served: VecDeque<ServedPage>,
 }
@@ -89,6 +107,7 @@ impl Cdp {
             next_id: 0,
             events: VecDeque::new(),
             dropped: 0,
+            lifecycle_lost: false,
             closed: false,
             served: VecDeque::new(),
         }
@@ -113,12 +132,28 @@ impl Cdp {
         self.closed
     }
 
+    /// Buffers `event`. A full buffer gives up its oldest evidence-only event; only when every
+    /// buffered event carries lifecycle is the oldest of those given up, and the loss recorded.
     fn push(&mut self, event: CdpEvent) {
         if self.events.len() >= EVENT_LIMIT {
-            self.events.pop_front();
+            match self.events.iter().position(|e| !lifecycle(&e.method)) {
+                Some(k) => {
+                    self.events.remove(k);
+                }
+                None => {
+                    self.events.pop_front();
+                    self.lifecycle_lost = true;
+                }
+            }
             self.dropped += 1;
         }
         self.events.push_back(event);
+    }
+
+    /// Whether a lifecycle event was lost since the last call: the live state then no longer
+    /// follows the browser, so every reference taken before must be refused.
+    pub fn take_lifecycle_lost(&mut self) -> bool {
+        std::mem::take(&mut self.lifecycle_lost)
     }
 
     fn read(&mut self, timeout: Duration) -> Result<Option<Value>, CdpError> {
@@ -498,5 +533,57 @@ mod tests {
         let events = c.take_events();
         assert_eq!(events.len(), EVENT_LIMIT);
         assert_eq!(events[0].method, "E.5");
+        assert!(!c.take_lifecycle_lost(), "only evidence was dropped");
+    }
+
+    #[test]
+    fn a_full_buffer_gives_up_evidence_before_lifecycle_and_reports_lifecycle_loss() {
+        let event = |method: &str| CdpEvent {
+            session: Some("S1".into()),
+            method: method.into(),
+            params: Value::Null,
+        };
+        let (mut c, _) = cdp(|_| vec![]);
+        c.push(event("Page.frameNavigated"));
+        for _ in 0..EVENT_LIMIT {
+            c.push(event("Runtime.consoleAPICalled"));
+        }
+        c.push(event("Target.detachedFromTarget"));
+        let events = c.take_events();
+        assert_eq!(events.len(), EVENT_LIMIT);
+        assert_eq!(c.dropped, 2);
+        assert_eq!(events[0].method, "Page.frameNavigated");
+        assert_eq!(events[EVENT_LIMIT - 1].method, "Target.detachedFromTarget");
+        assert!(!c.take_lifecycle_lost());
+        // Nothing evidence-only left to give up: the oldest lifecycle event goes, and the loss
+        // is reported once.
+        for _ in 0..=EVENT_LIMIT {
+            c.push(event("DOM.documentUpdated"));
+        }
+        assert!(c.take_lifecycle_lost());
+        assert!(!c.take_lifecycle_lost());
+        for m in [
+            "Target.attachedToTarget",
+            "Target.targetCrashed",
+            "Inspector.targetCrashed",
+            "Page.frameAttached",
+            "Page.frameDetached",
+            "Page.frameNavigated",
+            "Page.navigatedWithinDocument",
+            "Page.lifecycleEvent",
+            "DOM.documentUpdated",
+        ] {
+            assert!(lifecycle(m), "{m}");
+        }
+        for m in [
+            "Runtime.consoleAPICalled",
+            "Runtime.exceptionThrown",
+            "Log.entryAdded",
+            "Network.requestWillBeSent",
+            "Network.responseReceived",
+            "Network.loadingFailed",
+        ] {
+            assert!(!lifecycle(m), "{m}");
+        }
     }
 }

@@ -792,10 +792,22 @@ impl Live {
         t.invalidate();
     }
 
-    /// Applies buffered events to the live state.
+    /// Applies buffered events to the live state. When lifecycle events were lost (the event
+    /// buffer overflowed with nothing evidence-only left to give up), the state may no longer
+    /// show a navigation, document replacement or detachment: every target's document revision
+    /// advances, so every reference taken before is refused as stale.
     pub fn absorb_events(&mut self) {
+        let lost = self.cdp.take_lifecycle_lost();
         for e in self.cdp.take_events() {
             self.apply(e);
+        }
+        if lost {
+            for t in &mut self.targets {
+                t.invalidate();
+            }
+            let at = self.at();
+            self.console
+                .push(json!({"at": at, "kind": "protocolEventsLost"}));
         }
     }
 
@@ -2714,5 +2726,120 @@ mod tests {
             seen += b.entries.len();
         }
         assert_eq!(seen, 1000);
+    }
+
+    /// A fake DevTools stream: the queued messages arrive in order, then nothing.
+    struct Stream(VecDeque<String>);
+    impl crate::ports::browser::CdpTransport for Stream {
+        fn send(&mut self, _: &str) -> Result<(), crate::ports::browser::BrowserFault> {
+            Ok(())
+        }
+        fn recv(
+            &mut self,
+            _: Duration,
+        ) -> Result<Option<String>, crate::ports::browser::BrowserFault> {
+            Ok(self.0.pop_front())
+        }
+        fn close(&mut self) {}
+    }
+
+    /// A live session with one page target (`t1`, CDP target `T1` on session `S1`) whose
+    /// browser then sends `messages`; returns it with the reference taken before they arrived.
+    fn live_after(messages: Vec<Value>) -> (Live, BrowserTarget) {
+        let session = Id::new("bs1").unwrap();
+        let profile = Profile {
+            session_id: session.clone(),
+            root: std::path::PathBuf::from("/nonexistent/profile"),
+            user_data: std::path::PathBuf::from("/nonexistent/profile/data"),
+        };
+        let process = OwnedProcess {
+            id: Id::new("p1").unwrap(),
+            identity: crate::ports::process::NativeIdentity {
+                pid: 1,
+                birth: "b".into(),
+                group: None,
+            },
+            lease: None,
+        };
+        let stream = Stream(messages.iter().map(Value::to_string).collect());
+        let mut live = Live::new(session, profile, process, Cdp::new(Box::new(stream)));
+        live.targets.push(Target::new(
+            "t1".into(),
+            "T1".into(),
+            "S1".into(),
+            "initial",
+        ));
+        let before = live.targets[0].wire(&live.session, "t1-f0");
+        assert!(live.resolve(&before).is_ok());
+        live.cdp
+            .pump(Duration::from_secs(30), Duration::from_secs(1))
+            .unwrap();
+        live.absorb_events();
+        (live, before)
+    }
+
+    fn console_flood(n: usize) -> impl Iterator<Item = Value> {
+        (0..n).map(|i| {
+            json!({"method": "Runtime.consoleAPICalled", "sessionId": "S1",
+                "params": {"type": "log", "args": [{"type": "string", "value": i.to_string()}]}})
+        })
+    }
+
+    #[test]
+    fn a_lifecycle_event_outlives_an_overflowing_evidence_flood() {
+        let cases = [
+            json!({"method": "Page.frameNavigated", "sessionId": "S1",
+                "params": {"frame": {"id": "T1", "url": "https://next.test/", "loaderId": "L2"}}}),
+            json!({"method": "DOM.documentUpdated", "sessionId": "S1", "params": {}}),
+            json!({"method": "Target.detachedFromTarget",
+                "params": {"sessionId": "S1", "targetId": "T1"}}),
+        ];
+        for lifecycle in cases {
+            let method = lifecycle["method"].clone();
+            let messages: Vec<Value> = std::iter::once(lifecycle)
+                .chain(console_flood(super::super::cdp::EVENT_LIMIT + 50))
+                .collect();
+            let (live, before) = live_after(messages);
+            // The evidence flood overflowed the buffer, the lifecycle event did not leave it.
+            assert!(live.cdp.dropped > 0, "{method}: the flood overflowed");
+            assert!(
+                matches!(live.resolve(&before), Err(ActionError::Stale { .. })),
+                "{method}: a reference into the replaced document is refused"
+            );
+        }
+    }
+
+    #[test]
+    fn lost_lifecycle_events_invalidate_every_reference() {
+        // More lifecycle events than the buffer holds: the navigation at their head is lost, and
+        // nothing that follows it changes the document. The loss itself refuses the reference.
+        let messages: Vec<Value> = std::iter::once(json!({"method": "Page.frameNavigated",
+                "sessionId": "S1",
+                "params": {"frame": {"id": "T1", "url": "https://next.test/", "loaderId": "L2"}}}))
+        .chain((0..super::super::cdp::EVENT_LIMIT + 5).map(|i| {
+            json!({"method": "Page.lifecycleEvent", "sessionId": "S1",
+                "params": {"name": "networkIdle", "loaderId": format!("L{i}"), "frameId": "T1"}})
+        }))
+        .collect();
+        let (live, before) = live_after(messages);
+        assert!(
+            matches!(
+                live.resolve(&before),
+                Err(ActionError::Stale {
+                    kind: "browser_document",
+                    ..
+                })
+            ),
+            "a reference taken before lost lifecycle events is refused"
+        );
+        // A reference taken now is current again, and the loss is reported as a notice.
+        let now = live.targets[0].wire(&live.session, "t1-f0");
+        assert!(live.resolve(&now).is_ok());
+        assert!(
+            live.console
+                .pending
+                .iter()
+                .any(|e| e["kind"] == "protocolEventsLost")
+        );
     }
 }
