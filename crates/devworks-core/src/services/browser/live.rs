@@ -15,7 +15,7 @@
 //! captured, and no network interception or page script is used.
 use super::cdp::{Cdp, CdpError, CdpEvent, decode_base64, dialog_accepted};
 use crate::authority::redact::Redactor;
-use crate::ports::browser::Profile;
+use crate::ports::browser::{MAX_TARGETS, Profile};
 use crate::protocol::records::{
     BrowserInput, BrowserNode, BrowserTarget, KeyModifier, MouseButton,
 };
@@ -31,6 +31,9 @@ pub const NOTICE_LIMIT: usize = 2_000;
 pub const TEXT_LIMIT: usize = 2_048;
 /// Most accessibility nodes one snapshot records.
 pub const NODE_LIMIT: usize = 5_000;
+/// Most frames (and out-of-process frames) one target registers; a page with more keeps the
+/// first ones addressable and its snapshots say the list was cut.
+pub const MAX_FRAMES: usize = 256;
 /// Snapshots retained per target (older node references stop resolving).
 pub const SNAPSHOTS_KEPT: usize = 8;
 /// Largest evidence document one observation publishes.
@@ -115,6 +118,8 @@ pub struct Target {
     pub frames: Vec<Frame>,
     /// Out-of-process frames attached under the target.
     pub children: Vec<Child>,
+    /// More frames attached than [`MAX_FRAMES`] (the rest are not addressable).
+    pub frames_cut: bool,
     next_frame: u64,
     pub document_revision: i64,
     pub snapshots: VecDeque<Snapshot>,
@@ -135,6 +140,7 @@ impl Target {
                 session: cdp_session.clone(),
             }],
             children: Vec::new(),
+            frames_cut: false,
             id,
             cdp_target,
             cdp_session,
@@ -471,6 +477,10 @@ impl Live {
             .unwrap_or_default()
         {
             if info.get("type").and_then(Value::as_str) == Some("page") {
+                if self.open_count() >= MAX_TARGETS {
+                    self.refuse_target(&info, bounds);
+                    continue;
+                }
                 self.attach(&info, "initial", bounds)?;
             }
         }
@@ -600,6 +610,7 @@ impl Live {
             .to_owned();
         match t.frame_of_cdp(cdp_frame) {
             Some(k) => t.frames[k].session = hosted,
+            None if t.frames.len() >= MAX_FRAMES => t.frames_cut = true,
             None => {
                 let id = format!("{}-f{}", t.id, t.next_frame);
                 t.next_frame += 1;
@@ -696,7 +707,9 @@ impl Live {
                                 frame: frame.to_owned(),
                                 parent,
                             };
-                            if self.targets[i].child_of_session(child).is_none() {
+                            if self.targets[i].child_of_session(child).is_none()
+                                && self.targets[i].children.len() < MAX_FRAMES
+                            {
                                 self.targets[i].children.push(c.clone());
                                 self.pending_children.push((i, c));
                             }
@@ -797,6 +810,7 @@ impl Live {
                         let t = &mut self.targets[i];
                         t.frames.truncate(1);
                         t.children.clear();
+                        t.frames_cut = false;
                         t.frames[0].cdp = id.to_owned();
                         t.url = safe_url(url);
                     } else if let Some(s) = e.session.as_deref() {
@@ -933,6 +947,15 @@ impl Live {
             }
             for p in std::mem::take(&mut self.pending_attach) {
                 let info = p.get("info").cloned().unwrap_or(Value::Null);
+                let known = info
+                    .get("targetId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| self.registered(t));
+                if !known && self.open_count() >= MAX_TARGETS {
+                    // More targets than a session records: the new one is closed, not kept.
+                    self.refuse_target(&info, bounds);
+                    continue;
+                }
                 let r = match p.get("sessionId").and_then(Value::as_str) {
                     Some(s) => self.register(&info, s, "popup", bounds).map(Some),
                     None => self.attach(&info, "popup", bounds),
@@ -955,6 +978,38 @@ impl Live {
         self.absorb_events();
         r?;
         self.settle_pending(bounds)
+    }
+
+    fn open_count(&self) -> usize {
+        self.targets.iter().filter(|t| !t.closed).count()
+    }
+
+    /// Closes a page target the session will not register (it is at [`MAX_TARGETS`]) and
+    /// records why with the session's notifications.
+    fn refuse_target(&mut self, info: &Value, bounds: &Bounds) {
+        let cdp = info.get("targetId").and_then(Value::as_str).unwrap_or("");
+        let closed = self
+            .call(
+                None,
+                "Target.closeTarget",
+                json!({"targetId": cdp}),
+                bounds.call,
+            )
+            .is_ok();
+        let at = self.at();
+        self.console.push(json!({
+            "at": at, "kind": "targetRefused", "reason": "targetLimit",
+            "limit": MAX_TARGETS, "closed": closed,
+            "url": info.get("url").and_then(Value::as_str).map(safe_url),
+        }));
+    }
+
+    /// Forgets closed targets (their references are stale already). Called only between
+    /// actions, when no target index is held and no frame awaits configuration.
+    pub fn prune_closed(&mut self) {
+        if self.pending_children.is_empty() {
+            self.targets.retain(|t| !t.closed);
+        }
     }
 
     /// The open (not closed) targets, in registration order.
@@ -1227,11 +1282,13 @@ impl Live {
             "url": url,
             "title": title,
             "frames": frames,
+            "framesTruncated": t.frames_cut,
             "nodes": list,
             "truncated": truncated,
         });
         let mut bytes = doc.to_string().into_bytes();
-        while bytes.len() > EVIDENCE_LIMIT * 8 {
+        while bytes.len() > EVIDENCE_LIMIT * 8 && !doc["nodes"].as_array().is_none_or(Vec::is_empty)
+        {
             // Bound the document: keep the first half of the nodes until it fits.
             let nodes = doc["nodes"].as_array_mut().expect("nodes");
             let keep = nodes.len() / 2;
@@ -1308,6 +1365,14 @@ impl Live {
 
     /// Opens a new page target and registers it explicitly.
     pub fn open_target(&mut self, bounds: &Bounds) -> Result<usize, ActionError> {
+        if self.open_count() >= MAX_TARGETS {
+            return Err(ActionError::Refused {
+                kind: "browser_target_limit",
+                detail: format!(
+                    "the session has {MAX_TARGETS} open targets; navigate one of them or close one"
+                ),
+            });
+        }
         let created = self
             .call(
                 None,
@@ -1537,9 +1602,9 @@ impl Live {
     }
 
     /// The out-of-process frames between `session` and its target's page, nearest first: each
-    /// hop's own session, owner element and owner content quad (in the embedding document's
-    /// local-root viewport). `reveal` scrolls each owner into view first (a click); a scroll reveals
-    /// nothing it was not asked to move.
+    /// hop's own session, owner element, owner content quad and the map from the frame's own
+    /// viewport into the embedding document's local-root viewport. `reveal` scrolls each owner
+    /// into view first (a click); a scroll reveals nothing it was not asked to move.
     fn hops(
         &mut self,
         i: usize,
@@ -1559,11 +1624,13 @@ impl Live {
                     detail: "the node's out-of-process frame is no longer attached".into(),
                 });
             };
-            let (owner, content) = self.owner_box(&child.parent, &child.frame, reveal, bounds)?;
+            let (owner, content, map) =
+                self.owner_box(&child.parent, &child.frame, reveal, bounds)?;
             out.push(Hop {
                 session: current,
                 owner,
                 content,
+                map,
             });
             current = child.parent;
         }
@@ -1573,14 +1640,16 @@ impl Live {
         })
     }
 
-    /// The owner element of `frame` in the document hosted by `session`, and its content quad.
+    /// The owner element of `frame` in the document hosted by `session`, its content quad, and
+    /// the map from the frame's viewport into that document's local-root viewport (the owner's
+    /// full transform: translation, scale, rotation and skew).
     fn owner_box(
         &mut self,
         session: &str,
         frame: &str,
         reveal: bool,
         bounds: &Bounds,
-    ) -> Result<(i64, Vec<f64>), ActionError> {
+    ) -> Result<(i64, Vec<f64>, Affine), ActionError> {
         // Reading moves nothing: only a revealing scroll makes a lost answer an unknown outcome.
         let err = if reveal {
             before_or_after
@@ -1618,18 +1687,31 @@ impl Live {
                 bounds.call,
             )
             .map_err(err)?;
-        let content: Vec<f64> = model
-            .pointer("/model/content")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_f64).collect())
-            .unwrap_or_default();
-        if content.len() != 8 {
-            return Err(ActionError::Refused {
-                kind: "browser_frame",
-                detail: "the frame owner has no box".into(),
-            });
+        let quad = |k: &str| -> Vec<f64> {
+            model
+                .pointer(&format!("/model/{k}"))
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_f64).collect())
+                .unwrap_or_default()
+        };
+        let (content, border) = (quad("content"), quad("border"));
+        let size = |k: &str| {
+            model
+                .pointer(&format!("/model/{k}"))
+                .and_then(Value::as_f64)
+        };
+        let no_box = || ActionError::Refused {
+            kind: "browser_frame",
+            detail: "the frame owner has no box".into(),
+        };
+        if content.len() != 8 || border.len() != 8 {
+            return Err(no_box());
         }
-        Ok((owner, content))
+        let (Some(width), Some(height)) = (size("width"), size("height")) else {
+            return Err(no_box());
+        };
+        let map = Affine::of_owner(&content, &border, width, height)?;
+        Ok((owner, content, map))
     }
 
     /// A top-level viewport point at which a wheel event reaches `frame`: inside the visible
@@ -1665,13 +1747,12 @@ impl Live {
         let mut hops = self.hops(i, &frame.session, false, bounds)?;
         hops.reverse();
         let mut visible = (0.0, 0.0, w, h);
-        let mut roots = vec![(page, (0.0, 0.0), None::<i64>)];
+        let mut roots = vec![(page, Affine::IDENTITY, None::<i64>)];
         for hop in hops {
-            let (ox, oy) = roots.last().map(|r| r.1).unwrap_or((0.0, 0.0));
-            let r = rect(&hop.content, ox, oy);
-            visible = intersect(visible, r);
+            let parent = roots.last().map_or(Affine::IDENTITY, |r| r.1);
+            visible = intersect(visible, rect(&parent.quad(&hop.content)));
             roots.last_mut().expect("a root").2 = Some(hop.owner);
-            roots.push((hop.session, (r.0, r.1), None));
+            roots.push((hop.session, parent.then(&hop.map), None));
         }
         // A frame inside its local root's document (not the root's own frame) has an owner there.
         let root_frame = match self.targets[i].child_of_session(&frame.session) {
@@ -1679,9 +1760,9 @@ impl Live {
             None => self.targets[i].frames[0].cdp.clone(),
         };
         if frame.cdp != root_frame {
-            let (_, content) = self.owner_box(&frame.session, &frame.cdp, false, bounds)?;
-            let (ox, oy) = roots.last().map(|r| r.1).unwrap_or((0.0, 0.0));
-            visible = intersect(visible, rect(&content, ox, oy));
+            let (_, content, _) = self.owner_box(&frame.session, &frame.cdp, false, bounds)?;
+            let root = roots.last().map_or(Affine::IDENTITY, |r| r.1);
+            visible = intersect(visible, rect(&root.quad(&content)));
         }
         let (x0, y0, x1, y1) = visible;
         if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
@@ -1713,21 +1794,25 @@ impl Live {
         })
     }
 
-    /// Whether a top-level point hits through each local root's next owner into `frame`.
+    /// Whether a top-level point hits through each local root's next owner into `frame` (each
+    /// root is hit-tested at the point mapped back into its own viewport).
     fn reaches(
         &mut self,
-        roots: &[(String, (f64, f64), Option<i64>)],
+        roots: &[(String, Affine, Option<i64>)],
         frame: &str,
         x: f64,
         y: f64,
         bounds: &Bounds,
     ) -> Result<bool, ActionError> {
-        for (session, (ox, oy), next) in roots {
+        for (session, map, next) in roots {
+            let Some((lx, ly)) = map.invert(x, y) else {
+                return Ok(false);
+            };
             let hit = self
                 .call(
                     Some(session),
                     "DOM.getNodeForLocation",
-                    json!({"x": (x - ox).floor(), "y": (y - oy).floor(), "includeUserAgentShadowDOM": false, "ignorePointerEventsNone": true}),
+                    json!({"x": lx.floor(), "y": ly.floor(), "includeUserAgentShadowDOM": false, "ignorePointerEventsNone": true}),
                     bounds.call,
                 )
                 .map_err(ActionError::Before)?;
@@ -1742,19 +1827,20 @@ impl Live {
         Ok(true)
     }
 
-    /// The offset of a document hosted by `session` within its target's top-level viewport: the
-    /// content-box origin of each out-of-process frame's owner element, up to the page. A
-    /// rotated or skewed frame owner is not supported (its quad's first corner is used).
-    fn frame_offset(
+    /// The map from the viewport of the document hosted by `session` into its target's
+    /// top-level viewport: each out-of-process frame owner's full transform, composed up to the
+    /// page.
+    fn frame_map(
         &mut self,
         i: usize,
         session: &str,
         bounds: &Bounds,
-    ) -> Result<(f64, f64), ActionError> {
+    ) -> Result<Affine, ActionError> {
         let hops = self.hops(i, session, true, bounds)?;
         Ok(hops
             .iter()
-            .fold((0.0, 0.0), |(x, y), h| (x + h.content[0], y + h.content[1])))
+            .rev()
+            .fold(Affine::IDENTITY, |top, h| top.then(&h.map)))
     }
 
     /// Scrolls a node into view and computes its click point in the top-level viewport.
@@ -1785,9 +1871,9 @@ impl Live {
                 "the node lost its box after scrolling".into(),
             ))
         })?;
-        let (dx, dy) = self.frame_offset(i, &n.session, bounds)?;
+        let to_top = self.frame_map(i, &n.session, bounds)?;
         self.resolve_node(node)?;
-        Ok((x + dx, y + dy))
+        Ok(to_top.apply(x, y))
     }
 
     /// Sets the files of a file input after re-checking that the node is still exactly that
@@ -1922,15 +2008,114 @@ struct Hop {
     owner: i64,
     /// The owner's content quad in the parent's local-root viewport.
     content: Vec<f64>,
+    /// From the frame's viewport into the parent's local-root viewport.
+    map: Affine,
 }
 
-/// The bounding rectangle `(x0, y0, x1, y1)` of a quad, offset by `(ox, oy)`.
-fn rect(quad: &[f64], ox: f64, oy: f64) -> (f64, f64, f64, f64) {
+/// An affine map of viewport points: `origin + x * u + y * v`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Affine {
+    origin: (f64, f64),
+    u: (f64, f64),
+    v: (f64, f64),
+}
+impl Affine {
+    pub const IDENTITY: Affine = Affine {
+        origin: (0.0, 0.0),
+        u: (1.0, 0.0),
+        v: (0.0, 1.0),
+    };
+
+    /// The map from a frame's viewport into its owner's document: the owner's content quad is
+    /// the image of the frame's viewport, whose size is the content box's untransformed size
+    /// (the border box's `width` and `height` scaled by the content-to-border edge ratio, which
+    /// any linear transform preserves). A perspective transform (a quad that is not a
+    /// parallelogram) has no such map and is refused.
+    pub fn of_owner(
+        content: &[f64],
+        border: &[f64],
+        width: f64,
+        height: f64,
+    ) -> Result<Affine, ActionError> {
+        let p = |q: &[f64], k: usize| (q[2 * k], q[2 * k + 1]);
+        let len = |a: (f64, f64), b: (f64, f64)| (b.0 - a.0).hypot(b.1 - a.1);
+        let (c0, c1, c2, c3) = (p(content, 0), p(content, 1), p(content, 2), p(content, 3));
+        let (b0, b1, b3) = (p(border, 0), p(border, 1), p(border, 3));
+        let (bw, bh, cw, ch) = (len(b0, b1), len(b0, b3), len(c0, c1), len(c0, c3));
+        if [bw, bh, cw, ch, width, height].iter().any(|d| *d < 1e-6) {
+            return Err(ActionError::Refused {
+                kind: "browser_frame",
+                detail: "the frame owner has no box".into(),
+            });
+        }
+        let fourth = (c1.0 + c3.0 - c0.0, c1.1 + c3.1 - c0.1);
+        if len(fourth, c2) > 1.0 {
+            return Err(ActionError::Refused {
+                kind: "browser_frame",
+                detail: "the frame owner has a perspective transform".into(),
+            });
+        }
+        let (lw, lh) = (cw / bw * width, ch / bh * height);
+        Ok(Affine {
+            origin: c0,
+            u: ((c1.0 - c0.0) / lw, (c1.1 - c0.1) / lw),
+            v: ((c3.0 - c0.0) / lh, (c3.1 - c0.1) / lh),
+        })
+    }
+
+    pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
+        (
+            self.origin.0 + x * self.u.0 + y * self.v.0,
+            self.origin.1 + x * self.u.1 + y * self.v.1,
+        )
+    }
+
+    /// `self` after `inner`: a point of `inner`'s source mapped through both.
+    pub fn then(&self, inner: &Affine) -> Affine {
+        let lin = |d: (f64, f64)| {
+            (
+                d.0 * self.u.0 + d.1 * self.v.0,
+                d.0 * self.u.1 + d.1 * self.v.1,
+            )
+        };
+        Affine {
+            origin: self.apply(inner.origin.0, inner.origin.1),
+            u: lin(inner.u),
+            v: lin(inner.v),
+        }
+    }
+
+    /// The source point mapped to `(x, y)`, if the map is invertible.
+    pub fn invert(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let det = self.u.0 * self.v.1 - self.u.1 * self.v.0;
+        if det.abs() < 1e-12 {
+            return None;
+        }
+        let (dx, dy) = (x - self.origin.0, y - self.origin.1);
+        Some((
+            (dx * self.v.1 - dy * self.v.0) / det,
+            (self.u.0 * dy - self.u.1 * dx) / det,
+        ))
+    }
+
+    /// A quad mapped point by point.
+    fn quad(&self, q: &[f64]) -> Vec<f64> {
+        (0..4)
+            .flat_map(|k| {
+                let (x, y) = self.apply(q[2 * k], q[2 * k + 1]);
+                [x, y]
+            })
+            .collect()
+    }
+}
+
+/// The bounding rectangle `(x0, y0, x1, y1)` of a quad.
+fn rect(quad: &[f64]) -> (f64, f64, f64, f64) {
     let xs = [quad[0], quad[2], quad[4], quad[6]];
     let ys = [quad[1], quad[3], quad[5], quad[7]];
     let min = |v: [f64; 4]| v.into_iter().fold(f64::INFINITY, f64::min);
     let max = |v: [f64; 4]| v.into_iter().fold(f64::NEG_INFINITY, f64::max);
-    (min(xs) + ox, min(ys) + oy, max(xs) + ox, max(ys) + oy)
+    (min(xs), min(ys), max(xs), max(ys))
 }
 
 fn intersect(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
@@ -2044,6 +2229,62 @@ pub fn key_of(name: &str) -> Option<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A frame owner's content and border quads (5 px border, 3 px padding, 316 x 216 border
+    /// box) as Chrome 156 reports them under `scale(0.5)` and `rotate(30deg)` with origin `0 0`;
+    /// the frame-local point (120, 50) is where Chrome's own hit-testing found the frame's button.
+    #[test]
+    fn a_frame_owner_transform_maps_frame_points_into_its_document() {
+        let cases = [
+            (
+                [204.0, 104.0, 354.0, 104.0, 354.0, 204.0, 204.0, 204.0],
+                [200.0, 100.0, 358.0, 100.0, 358.0, 208.0, 200.0, 208.0],
+                (264.0, 129.0),
+            ),
+            (
+                [
+                    202.928_207,
+                    110.928_2,
+                    462.735_809,
+                    260.928_192,
+                    362.735_809,
+                    434.133_270,
+                    102.928_2,
+                    284.133_270,
+                ],
+                [
+                    200.0,
+                    100.0,
+                    473.664_032,
+                    258.0,
+                    365.664_032,
+                    445.061_493,
+                    92.0,
+                    287.061_493,
+                ],
+                (281.851_246, 214.229_464),
+            ),
+        ];
+        for (content, border, (ex, ey)) in cases {
+            let m = Affine::of_owner(&content, &border, 316.0, 216.0).unwrap();
+            let (x, y) = m.apply(120.0, 50.0);
+            assert!((x - ex).abs() < 0.01 && (y - ey).abs() < 0.01, "({x}, {y})");
+            let (lx, ly) = m.invert(x, y).unwrap();
+            assert!((lx - 120.0).abs() < 1e-6 && (ly - 50.0).abs() < 1e-6);
+            // Composition: the same frame nested in an untransformed frame at (10, 20).
+            let outer = Affine {
+                origin: (10.0, 20.0),
+                ..Affine::IDENTITY
+            };
+            assert_eq!(outer.then(&m).apply(120.0, 50.0), (x + 10.0, y + 20.0));
+        }
+        // A perspective transform has no affine map: it is refused, never approximated.
+        let skewed = [0.0, 0.0, 100.0, 10.0, 90.0, 60.0, 0.0, 50.0];
+        assert!(matches!(
+            Affine::of_owner(&skewed, &skewed, 100.0, 50.0),
+            Err(ActionError::Refused { .. })
+        ));
+    }
 
     #[test]
     fn evidence_urls_drop_credentials_fragments_and_secret_parameters() {

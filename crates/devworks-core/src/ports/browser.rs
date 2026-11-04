@@ -140,6 +140,9 @@ pub trait BrowserPlatform: Send + Sync {
     fn remove_staged(&self, profile: &Profile, batch: &str) -> Result<(), BrowserFault>;
 }
 
+/// Most open targets one session keeps (live and recorded alike).
+pub const MAX_TARGETS: usize = 128;
+
 /// The longest staged file or batch name a platform accepts, in UTF-8 bytes.
 pub const STAGED_NAME_MAX_BYTES: usize = 128;
 

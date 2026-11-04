@@ -33,8 +33,8 @@ fn lost(id: &Id) -> StorageError {
 
 /// Owner kinds a session may record (`PrincipalKind` names).
 const OWNER_KINDS: [&str; 6] = ["Human", "Agent", "Package", "McpClient", "Schedule", "Host"];
-/// Most registered targets one session keeps.
-pub const MAX_TARGETS: usize = 128;
+/// Most registered targets one session keeps (the browser service's live bound).
+pub use devworks_core::ports::browser::MAX_TARGETS;
 
 const COLUMNS: &str = "id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,create_operation_id,uncertain_operation_id,targets,detail,last_action_operation_id,observation_seq,created_at,updated_at,revision";
 type Raw = (Vec<Option<String>>, [i64; 4]);

@@ -1115,10 +1115,20 @@ impl BrowserService {
         }
     }
 
-    /// A crashed or exited browser: settle the session `Failed` and release what it owned.
+    /// A crashed or exited browser: settle the session `Failed` and release what it owned. A
+    /// session whose Close is under way (its stop may be what ended the connection) settles
+    /// `Closed`, whichever path observes the loss first.
     fn crashed(&self, id: &Id, live: Live, why: &str) {
         let process = live.process.clone();
-        self.teardown(id, &process, Some(live), why, BrowserPhase::Failed);
+        let closing = self
+            .existing_slot(id)
+            .is_some_and(|s| s.closing.load(Ordering::SeqCst));
+        let (why, then) = if closing {
+            ("closed", BrowserPhase::Closed)
+        } else {
+            (why, BrowserPhase::Failed)
+        };
+        self.teardown(id, &process, Some(live), why, then);
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1258,6 +1268,7 @@ impl BrowserService {
                 "the browser is no longer running",
             );
         }
+        live.prune_closed();
         let closing = || slot.closing.load(Ordering::SeqCst);
         let outcome = match op.capability.as_str() {
             NAVIGATE => self.navigate(live, op, &bounds, &closing),
@@ -1698,6 +1709,7 @@ impl BrowserService {
                 self.crashed(&id, l, why);
                 continue;
             }
+            live.prune_closed();
             self.publish_view(live);
             let changed = std::mem::take(&mut live.targets_changed);
             let targets = live.open_targets();
@@ -2611,6 +2623,7 @@ impl BrowserService {
             self.crashed(id, l, "the browser connection was lost");
             return Err(not_running().into());
         }
+        live.prune_closed();
         let r = work(live);
         self.publish_view(live);
         let changed = std::mem::take(&mut live.targets_changed);

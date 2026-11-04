@@ -19,6 +19,7 @@ use devworks_adapters::process::NativeProcessHost;
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service::bind_principal;
 use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::ports::browser::MAX_TARGETS;
 use devworks_core::ports::browser::{
     BrowserAsset, BrowserFault, BrowserPlatform, CdpTransport, Profile, Qualification,
 };
@@ -41,7 +42,8 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::evidence::Evidence;
 use devworks_core::services::browser::cdp::encode_base64;
-use devworks_core::services::browser::{BrowserConfig, BrowserService};
+use devworks_core::services::browser::live::MAX_FRAMES;
+use devworks_core::services::browser::{BrowserConfig, BrowserService, EFFECT_CONSUMER};
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::browser::BrowserComposition;
 use devworks_engine::{Composition, Runtime, RuntimeConfig, boot};
@@ -147,6 +149,8 @@ struct FakeBrowser {
     frame_covered: bool,
     /// Out-of-process frame owners are laid out below the viewport.
     frame_hidden: bool,
+    /// A CSS scale of out-of-process frame owners (around their top-left corner).
+    frame_scale: Option<f64>,
     /// Reads wait (past their timeout) while set; `reads_stalled` records that one waited.
     stall_reads: bool,
     reads_stalled: bool,
@@ -343,14 +347,25 @@ impl FakeBrowser {
     fn centre(k: usize) -> (f64, f64) {
         (50.0, 100.0 * (k as f64 + 1.0) + 25.0)
     }
-    /// The boxed node of page `i` under a viewport point (each is 100 x 50 at its centre).
-    fn hit(&self, i: usize, x: f64, y: f64) -> Option<i64> {
-        self.pages[i].nodes.iter().enumerate().find_map(|(k, n)| {
-            let (cx, mut cy) = Self::centre(k);
-            if n.backend == 20 && self.frame_hidden {
+    /// The viewport box `(x0, y0, x1, y1)` of the `k`th node (100 x 50 at its centre; a frame
+    /// owner moved below the viewport or scaled when asked).
+    fn owner_rect(&self, k: usize, backend: i64) -> (f64, f64, f64, f64) {
+        let (cx, mut cy) = Self::centre(k);
+        let mut s = 1.0;
+        if backend == 20 {
+            if self.frame_hidden {
                 cy += 1000.0;
             }
-            (n.boxed && (x - cx).abs() < 50.0 && (y - cy).abs() < 25.0).then_some(n.backend)
+            s = self.frame_scale.unwrap_or(1.0);
+        }
+        let (x0, y0) = (cx - 50.0, cy - 25.0);
+        (x0, y0, x0 + 100.0 * s, y0 + 50.0 * s)
+    }
+    /// The boxed node of page `i` under a viewport point.
+    fn hit(&self, i: usize, x: f64, y: f64) -> Option<i64> {
+        self.pages[i].nodes.iter().enumerate().find_map(|(k, n)| {
+            let (x0, y0, x1, y1) = self.owner_rect(k, n.backend);
+            (n.boxed && (x0..x1).contains(&x) && (y0..y1).contains(&y)).then_some(n.backend)
         })
     }
     fn handle(&mut self, raw: &str) {
@@ -504,12 +519,11 @@ impl FakeBrowser {
                         self.reply(&id, json!({}))
                     }
                     "DOM.getBoxModel" => {
-                        let (x, mut y) = Self::centre(k);
-                        if b == 20 && self.frame_hidden {
-                            y += 1000.0;
-                        }
-                        let content = [x - 50.0, y - 25.0, x + 50.0, y - 25.0, x + 50.0, y + 25.0, x - 50.0, y + 25.0];
-                        self.reply(&id, json!({"model": {"content": content}}))
+                        // Untransformed 100 x 50 boxes without border or padding; a frame
+                        // owner's quad carries its scale.
+                        let (x0, y0, x1, y1) = self.owner_rect(k, b);
+                        let quad = [x0, y0, x1, y0, x1, y1, x0, y1];
+                        self.reply(&id, json!({"model": {"content": quad, "border": quad, "width": 100, "height": 50}}))
                     }
                     "DOM.getContentQuads" => {
                         if node.boxed {
@@ -573,9 +587,13 @@ impl FakeBrowser {
             "Input.dispatchMouseEvent" if p["type"] == "mouseReleased" => {
                 let i = page.unwrap();
                 let y = p["y"].as_f64().unwrap();
-                let k = ((y - 25.0) / 100.0).round() as usize - 1;
                 let s = self.pages[i].session.clone();
-                let hit = self.pages[i].nodes.get(k).map(|n| n.backend);
+                let hit = self.hit(i, p["x"].as_f64().unwrap(), y);
+                let k = self.pages[i]
+                    .nodes
+                    .iter()
+                    .position(|n| Some(n.backend) == hit)
+                    .unwrap_or(0);
                 match hit {
                     Some(11) => {
                         let name = self.pages[i].values.get(&10).cloned().unwrap_or_default();
@@ -598,9 +616,10 @@ impl FakeBrowser {
                         return;
                     }
                     Some(20) => {
-                        // Inside the partner frame: translate into its document.
+                        // Inside the partner frame: map into its document (its owner's scale).
                         let (ox, oy) = (0.0, 100.0 * (k as f64 + 1.0));
-                        let (fx, fy) = (p["x"].as_f64().unwrap() - ox, y - oy);
+                        let scale = self.frame_scale.unwrap_or(1.0);
+                        let (fx, fy) = ((p["x"].as_f64().unwrap() - ox) / scale, (y - oy) / scale);
                         if (20.0..=40.0).contains(&fx) && (10.0..=30.0).contains(&fy)
                             && let Some(c) = self.children.iter_mut().find(|c| c.page == i)
                         {
@@ -2560,25 +2579,33 @@ fn actions_waiting_on_a_predecessor_hold_no_dispatch_capacity_so_close_is_never_
     let h = Harness::new();
     let platform = Arc::new(FakePlatform::new(&h.root));
     let real: Arc<dyn BrowserPlatform> = platform.clone();
-    // A navigation that never finishes loading runs for the whole (long) navigation bound.
+    // The predecessor's call is never answered within the test: only Close's stop ends it; and
+    // a successor would wait for it (the production order bound) far longer than the test.
     let fx = Fx::boot_with(
         h,
         platform,
         real,
         BrowserConfig {
-            navigation_timeout: Duration::from_secs(8),
-            order_bound: Duration::from_secs(30),
+            call_timeout: Duration::from_secs(60),
+            order_bound: Duration::from_secs(120),
             ..config()
         },
     );
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
     let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    fx.platform
+        .browser(&session)
+        .lock()
+        .unwrap()
+        .hang
+        .insert("Input.insertText".into());
     let rev = fx.session(&session).revision.to_string();
     fx.accepted(
         &user,
-        "browser.navigate",
-        json!({"sessionId": session.as_str(), "expectedRevision": rev, "targetId": "t1", "location": {"kind": "Remote", "url": "https://app.test/slow"}}),
+        "browser.input",
+        json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": {"kind": "Text", "node": node(&snap, &ax, "Name"), "text": "a"}}),
     );
     // As many actions queued behind it as the dispatcher has workers.
     let key = json!({"kind": "Key", "target": target_json(&snap), "key": "Tab", "modifiers": []});
@@ -2589,16 +2616,21 @@ fn actions_waiting_on_a_predecessor_hold_no_dispatch_capacity_so_close_is_never_
             json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": key}),
         );
     }
-    fx.drive(300);
-    // Close is dispatched at once and ends the running navigation; nothing waits it out.
-    let started = std::time::Instant::now();
+    // The predecessor and the successors behind it are claimed: were waiting to hold a worker,
+    // every worker would now be taken until the predecessor's call ends.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while read(&**fx.app().store(), |s| {
+        s.queue().status(EFFECT_CONSUMER).map(Some)
+    })
+    .is_none_or(|q| q.claimed < 4)
+    {
+        assert!(Instant::now() < deadline, "the actions were never claimed");
+        fx.drive(10);
+    }
+    // Close is dispatched at once and ends the running action (its completion is awaited far
+    // shorter than that action's call bound).
     let closed = fx.close(&user, &session);
     assert_eq!(closed.phase, BrowserPhase::Closed);
-    assert!(
-        started.elapsed() < Duration::from_secs(4),
-        "close waited {:?} behind actions holding every worker",
-        started.elapsed()
-    );
 }
 
 #[test]
@@ -2821,13 +2853,13 @@ fn close_ends_an_action_waiting_on_an_unanswered_call_without_waiting_for_it() {
     let h = Harness::new();
     let platform = Arc::new(FakePlatform::new(&h.root));
     let real: Arc<dyn BrowserPlatform> = platform.clone();
-    // A call the browser never answers holds the connection for the whole (long) call bound.
+    // The call is never answered within the test: only Close's stop of the tree ends it.
     let fx = Fx::boot_with(
         h,
         platform,
         real,
         BrowserConfig {
-            call_timeout: Duration::from_secs(8),
+            call_timeout: Duration::from_secs(60),
             ..config()
         },
     );
@@ -2836,29 +2868,147 @@ fn close_ends_an_action_waiting_on_an_unanswered_call_without_waiting_for_it() {
     let identity = fx.identity(&session);
     let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
     let ax = fx.json(&snap.accessibility);
-    fx.platform
-        .browser(&session)
-        .lock()
-        .unwrap()
-        .hang
-        .insert("Input.insertText".into());
+    let b = fx.platform.browser(&session);
+    b.lock().unwrap().hang.insert("Input.insertText".into());
     let rev = fx.session(&session).revision.to_string();
     fx.accepted(
         &user,
         "browser.input",
         json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": {"kind": "Text", "node": node(&snap, &ax, "Name"), "text": "a"}}),
     );
-    fx.drive(300);
-    // Close stops the tree through the process owner, which ends the call; it waits for nothing.
-    let started = Instant::now();
+    // The action is inside its unanswered call, holding the connection.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while requests(&b, "Input.insertText") == 0 {
+        assert!(Instant::now() < deadline, "the action never sent its call");
+        fx.drive(10);
+    }
+    // Close stops the tree through the process owner, which ends the call: it completes within
+    // the fixture's completion bound, far shorter than the call's.
     let closed = fx.close(&user, &session);
     assert_eq!(closed.phase, BrowserPhase::Closed);
-    assert!(
-        started.elapsed() < Duration::from_secs(4),
-        "close waited {:?} for the unanswered call",
-        started.elapsed()
-    );
     assert_eq!(NativeProcessHost.probe(&identity), Probe::Gone);
+}
+
+#[test]
+fn input_into_a_frame_follows_its_owners_css_transform() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let (_, frame) = oopif_targets(&fx, &user, &session);
+    let b = fx.platform.browser(&session);
+    // The partner frame's owner is scaled to half its size (around its top-left corner).
+    b.lock().unwrap().frame_scale = Some(0.5);
+    let inner = fx.inspect(&user, &frame);
+    let inner_ax = fx.json(&inner.accessibility);
+    fx.observation(fx.input(
+        &user,
+        &session,
+        json!({"kind": "Click", "node": node(&inner, &inner_ax, "Inside"), "button": "Primary"}),
+    ));
+    fx.observation(fx.input(
+        &user,
+        &session,
+        json!({"kind": "Scroll", "target": frame, "x": 0, "y": 120}),
+    ));
+    let br = b.lock().unwrap();
+    assert_eq!(
+        br.children[0].clicked, 1,
+        "the click landed in the scaled frame"
+    );
+    assert_eq!(
+        (br.children[0].scrolled, br.pages[0].scrolled),
+        (120.0, 0.0)
+    );
+}
+
+#[test]
+fn a_session_never_holds_more_targets_than_it_can_record() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let b = fx.platform.browser(&session);
+    // The page opens more popups than a session records.
+    {
+        let mut br = b.lock().unwrap();
+        let opener = br.pages[0].target.clone();
+        for _ in 0..MAX_TARGETS + 6 {
+            br.open_page("https://app.test/popup", Some(&opener));
+        }
+    }
+    fx.svc().tick();
+    let s = fx.session(&session);
+    assert_eq!(
+        s.targets.len(),
+        MAX_TARGETS,
+        "the recorded targets are the live ones"
+    );
+    assert_eq!(
+        requests(&b, "Target.closeTarget"),
+        7,
+        "each excess popup is closed"
+    );
+    let console = match fx.result(
+        &user,
+        "browser.console",
+        json!({"sessionId": session.as_str(), "afterSequence": "0", "page": {"limit": 50}}),
+    ) {
+        OperationResult::BrowserConsole { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let text = console
+        .items
+        .0
+        .iter()
+        .map(|o| fx.json(&o.evidence).to_string())
+        .collect::<String>();
+    assert!(text.contains("targetLimit"), "{text}");
+    // A navigation that would open another target is refused before anything is sent.
+    let created = requests(&b, "Target.createTarget");
+    match fx.navigate(&user, &session, None, "https://app.test/form") {
+        OperationCompletion::Failed { fault, .. } => {
+            assert_eq!(fault.target_kind.unwrap().0, "browser_target_limit")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(requests(&b, "Target.createTarget"), created);
+}
+
+#[test]
+fn a_page_with_more_frames_than_registered_is_snapshotted_with_its_list_cut() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let b = fx.platform.browser(&session);
+    let extra = 300;
+    {
+        let mut br = b.lock().unwrap();
+        let (s, main) = (br.pages[0].session.clone(), br.pages[0].frame.clone());
+        for k in 0..extra {
+            br.emit(
+                Some(&s),
+                "Page.frameAttached",
+                json!({"frameId": format!("F{k}"), "parentFrameId": main}),
+            );
+        }
+    }
+    fx.svc().tick();
+    // Every attachment changed the document; the cut list is said to be cut.
+    let mut target = target_json(&snap);
+    let revision = target["documentRevision"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap()
+        + extra;
+    target["documentRevision"] = json!(revision.to_string());
+    let page = fx.inspect(&user, &target);
+    let ax = fx.json(&page.accessibility);
+    assert_eq!(ax["frames"].as_array().unwrap().len(), MAX_FRAMES);
+    assert_eq!(ax["framesTruncated"], true);
 }
 
 #[test]
