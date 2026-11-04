@@ -1613,7 +1613,7 @@
         "req",
         "KNOW-03",
         "Proposed",
-        "Knowledge must support goals, decisions, constraints, facts, gotchas, attempts, architecture notes, and lessons, with active, superseded, or retracted lifecycle states as appropriate. Verification must record the evidence and source revision used, and later source changes must be able to mark entries stale."
+        "Knowledge must support goals, decisions, constraints, facts, gotchas, attempts, architecture notes, and lessons, with active, superseded, or retracted lifecycle states as appropriate. Verification must record the evidence and source revision used, and later source changes must be able to mark entries stale. Each decision records who made it. A decision the user made or approved, including one approved in chat and recorded by an agent, names the user as its origin; only a decision an agent made on its own is marked autonomous. Autonomous decisions stay visible for reading and never ask the user to acknowledge them; the review queue under REVIEW-01 holds only conflicts an agent cannot resolve."
       ],
       [
         "req",
@@ -1624,8 +1624,8 @@
       [
         "req",
         "KNOW-05",
-        "Proposed",
-        "The lesson lifecycle must distinguish candidate evidence, proposed rules, effective rules, and rejected proposals. Human instructions, review-derived lessons, and repeated corrections must retain their distinct provenance; recurrence alone must not be treated as proof of effectiveness. Eval evidence under EVAL-08 may show whether a lesson rule is effective."
+        "Confirmed",
+        "The lesson lifecycle must distinguish candidate evidence, proposed rules, effective rules, and rejected proposals. Human instructions, review-derived lessons, and repeated corrections must retain their distinct provenance; recurrence alone must not be treated as proof of effectiveness. A rule\u2019s origin decides how it takes effect. A rule from the user\u2019s own instruction or review, given directly or relayed by an agent with the user\u2019s words attached, takes effect immediately without approval; it is the user\u2019s own edit under EVAL-05 and is monitored under EVAL-07. A lesson inferred by an agent, subagent or automated reviewer stays candidate evidence until it recurs across a configured number of distinct source events, then takes effect automatically without approval and is monitored under EVAL-07 like any other change that takes effect without approval under EVAL-05. No rule asks the user for approval; the user may promote a candidate early, or challenge or retire any rule, at any time. Taking effect is not proof that a rule works. Eval evidence under EVAL-08 may show whether a lesson rule is effective."
       ],
       [
         "req",

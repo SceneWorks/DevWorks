@@ -171,9 +171,26 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0012_diagnostics.sql"),
         rebuilds_tables: false,
     },
+    // Additive: the router catalog (seeded once), tier cursors, session pins, cooldowns and
+    // request bindings (five tables and their indexes), independent of every table of
+    // migrations 11-12.
+    // The writer floor stays at 11 (the highest so far): applying a migration overwrites the
+    // store's floors, so a lower value would re-admit the build-10 writers migration 11 refuses.
+    // It need not rise: no earlier build writes these tables, so it cannot break their cursor
+    // and pin compare-and-set rules, and every record it writes is unchanged here. The reader
+    // floor stays at 8: no earlier build reads these tables, and every query an earlier reader
+    // makes is unchanged.
+    Migration {
+        version: 13,
+        minimum_reader: 8,
+        minimum_writer: 11,
+        sql: include_str!("migrations/0013_router.sql"),
+        rebuilds_tables: false,
+    },
     // Additive: the package registry head, package records, verified versions, approval
-    // proposals and retained state generations (five tables and an index), independent of every
-    // table of migrations 11 and 12 (it references only its own tables). The floors stay 8/11,
+    // proposals, retained state generations, index sources and availability observations (seven
+    // tables and an index), independent of every table of migrations 11-13 (it references only
+    // its own tables). The floors stay 8/11,
     // the highest so far: applying a migration overwrites both floors, so a lower writer floor
     // would re-admit the build-10 writers migration 11 refuses. They need not rise: no earlier
     // build reads or writes these tables, and the package handler state rows (migration 1) a
@@ -186,6 +203,9 @@ pub const MIGRATIONS: &[Migration] = &[
         rebuilds_tables: false,
     },
 ];
+/// Recorded checksum of migration 13; a test fails if the shipped text changes.
+pub const MIGRATION_0013_SHA256: &str =
+    "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";
 /// Recorded checksum of migration 15; a test fails if the shipped text changes.
 pub const MIGRATION_0015_SHA256: &str =
     "7868e9c5f7d93ba390ec2b552af5a2c398748b7fdf7f1487e66ef185f3086502";

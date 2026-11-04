@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod files;
 pub mod packages;
 pub mod process;
+pub mod router;
 pub mod storage;
 
 use crate::context::InvocationContext;
@@ -54,6 +55,8 @@ pub enum IdKind {
     Lease,
     Process,
     Diagnostic,
+    /// Router session pins.
+    RoutePin,
     /// Exact-version package approval proposals.
     Proposal,
     /// Package process sessions (the protocol nonce of one helper instance).

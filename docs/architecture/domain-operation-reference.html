@@ -1863,7 +1863,7 @@
 </tr>
 <tr>
 <td><code>router.availability</code></td>
-<td><strong>Query</strong><br><code>intent</code>: <code>RouteIntent</code><br><code>effort</code>: <code>EffortName</code><br><code>requiredCapabilities</code>: <code>Items&lt;Label&gt;</code></td>
+<td><strong>Query</strong><br><code>intent</code>: <code>RouteIntent</code><br><code>effort</code>: <code>EffortName</code><br><code>requiredCapabilities</code>: <code>Items&lt;Label&gt;</code><br><code>sessionId</code>: <code>?Id</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>RouteAvailability</code></td>
 </tr>
 <tr>
@@ -5754,6 +5754,18 @@
 <tr>
 <td><code>retryAtMs</code></td>
 <td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>pin</code></td>
+<td><code>?RouteChoice</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>pinEligible</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>pinReason</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="usageitem">UsageItem</h3>

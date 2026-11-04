@@ -29436,6 +29436,143 @@
       "normalized": null,
       "passed": true,
       "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-router.availability",
+      "normalized": {
+        "body": {
+          "effort": "Default",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "kind": "router.availability",
+          "requiredCapabilities": [],
+          "sessionId": "session-a"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-router.availability-plain",
+      "normalized": {
+        "body": {
+          "effort": "Default",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "kind": "router.availability",
+          "requiredCapabilities": []
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-availability-session",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "a revision-gated member is omitted, never null",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-availability-null-session",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-router.availability",
+      "normalized": {
+        "kind": "router.availability",
+        "value": {
+          "available": false,
+          "blockedReasonCodes": [],
+          "eligibleModelIds": [],
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "pin": {
+            "connectionId": "id-a",
+            "effectiveEffort": "High",
+            "intent": {
+              "kind": "Tier",
+              "tier": "Max"
+            },
+            "modelId": "id-a",
+            "pinId": "id-a",
+            "pinRevision": "1",
+            "requestedEffort": "High"
+          },
+          "pinEligible": true,
+          "pinReason": "Failover"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-router.availability-no-pin",
+      "normalized": {
+        "kind": "router.availability",
+        "value": {
+          "available": false,
+          "blockedReasonCodes": [],
+          "eligibleModelIds": [],
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          }
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-result-availability-pin",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "explicit effort cannot silently change",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-result-availability-pin-effort",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
     }
   ],
   "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"

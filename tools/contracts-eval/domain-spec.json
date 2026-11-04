@@ -1602,7 +1602,15 @@
         "available": "bool",
         "eligible_model_ids": "Items<Id>",
         "blocked_reason_codes": "Items<Label>",
-        "retry_at_ms": "?Counter"
+        "retry_at_ms": "?Counter",
+        "pin": "?RouteChoice",
+        "pin_eligible": "?bool",
+        "pin_reason": "?Label"
+      },
+      "since": {
+        "pin": 2,
+        "pin_eligible": 2,
+        "pin_reason": 2
       }
     },
     "UsageItem": {
@@ -5887,12 +5895,16 @@
       "fields": {
         "intent": "RouteIntent",
         "effort": "EffortName",
-        "required_capabilities": "Items<Label>"
+        "required_capabilities": "Items<Label>",
+        "session_id": "?Id"
       },
       "result": "RouteAvailability",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read-only truthful availability of an intent for an effort and required capabilities: eligible pool members, the distinct reason codes of the others (EmptyPool for an empty pool) and, when nothing is eligible and a cooldown is the only obstacle of some member, the earliest such cooldown expiry. Schema revision 2: with sessionId (a session the caller may see), the session's current pin, whether it is eligible for this intent, effort and capabilities, and why it was last set (Initial, Failover, SelectionChanged, EffortChanged or ConnectionChanged).",
+      "since": {
+        "session_id": 2
+      }
     },
     "router.usage": {
       "operation": "router.usage",
@@ -6932,6 +6944,10 @@
       2
     ],
     "addons.uninstall": [
+      1,
+      2
+    ],
+    "router.availability": [
       1,
       2
     ]

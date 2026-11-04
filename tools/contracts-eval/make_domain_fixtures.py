@@ -477,5 +477,17 @@ case('reject-r2-result-package-unknown-prerequisite-state','operation-result.r2'
 case('reject-r2-result-package-offer-missing-digest','operation-result.r2',{'kind':'addons.catalog','value':{'items':[{**package_r2,'available':[{k:v for k,v in offer.items() if k!='manifestDigest'}]}],'hasMore':False}},False,False)
 case('reject-r2-result-package-unknown-wait','operation-result.r2',{'kind':'addons.update','value':{**package_r2,'pendingWaits':['Coffee']}},False,False)
 case('reject-r2-result-package-prerequisite-missing-satisfied','operation-result.r2',{'kind':'addons.install','value':{**package_r2,'prerequisites':[{k:v for k,v in prereq.items() if k!='satisfied'}]}},False,False)
+# Schema revision 2 (router availability): with sessionId, the session's current pin, whether
+# it is eligible for the asked intent/effort/capabilities and why it was last set.
+case('r2-input-router.availability','domain-request.r2',domain('router.availability',sessionId='session-a'))
+case('r2-input-router.availability-plain','domain-request.r2',domain('router.availability'))
+case('reject-r1-availability-session','domain-request',domain('router.availability',None,sessionId='session-a'),False,False)
+case('reject-r2-availability-null-session','domain-request.r2',domain('router.availability',sessionId=None),False,False)
+pin_choice={**sample('RouteChoice'),'requestedEffort':'High','effectiveEffort':'High'}
+availability_r2={**sample('RouteAvailability'),'pin':pin_choice,'pinEligible':True,'pinReason':'Failover'}
+case('r2-result-router.availability','operation-result.r2',{'kind':'router.availability','value':availability_r2})
+case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
+case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
+case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

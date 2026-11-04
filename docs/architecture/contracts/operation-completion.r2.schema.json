@@ -14732,6 +14732,18 @@
         "intent": {
           "$ref": "#/$defs/RouteIntent"
         },
+        "pin": {
+          "$ref": "#/$defs/RouteChoice",
+          "x-since": 2
+        },
+        "pinEligible": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "pinReason": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
         "retryAtMs": {
           "anyOf": [
             {

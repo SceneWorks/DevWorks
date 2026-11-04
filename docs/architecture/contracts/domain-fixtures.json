@@ -6718,5 +6718,61 @@
     "raw": "{\"kind\":\"addons.install\",\"value\":{\"id\":\"id-a\",\"version\":\"fixture\",\"digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"revision\":\"1\",\"enabled\":false,\"trustState\":\"fixture\",\"contributionIds\":[],\"registryRevision\":\"4\",\"availability\":\"MissingDependency\",\"availabilityReason\":\"Required package dotnet-runtime-pack is not installed\",\"packageKind\":\"LanguagePack\",\"contributions\":[\"dotnet-pack/indexer\",\"dotnet-pack/settings\"],\"languages\":[\"csharp\"],\"targets\":[\"aarch64-apple-darwin\",\"x86_64-pc-windows-msvc\"],\"hostTargetSupported\":true,\"prerequisites\":[{\"kind\":\"package\",\"id\":\"dotnet-runtime-pack\",\"requirement\":\"^1.2\",\"required\":true,\"state\":\"Missing\"}],\"available\":[{\"version\":\"1.4.0\",\"manifestDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"bundleDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"bundleBytes\":\"1048576\",\"publisherId\":\"acme\",\"source\":\"https://packs.example/devworks-index.json\",\"hostTargetSupported\":true,\"newer\":true}],\"requestedAccess\":[\"worktree.read\",\"process:dotnet\"],\"effectiveAccess\":[\"worktree.read\"],\"configurationRevision\":\"2\",\"configurationSchema\":{\"schemaId\":\"dotnet-pack/config\",\"revision\":\"1\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"stateGeneration\":\"3\",\"pendingVersion\":\"1.3.0\",\"pendingDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"pendingWaits\":[\"ExactVersionApproval\",\"Quiescence\"],\"pendingBundle\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"pendingProposalId\":\"proposal-a\",\"predecessorVersion\":\"1.1.0\",\"predecessorDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"publisherTrusted\":false,\"signerKey\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"failureCode\":\"StartupTimeout\"}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r2-input-router.availability",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.availability\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[],\"sessionId\":\"session-a\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-router.availability-plain",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.availability\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[]},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-availability-session",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.availability\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[],\"sessionId\":\"session-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-availability-null-session",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.availability\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[],\"sessionId\":null},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-router.availability",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[],\"pin\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\"},\"pinEligible\":true,\"pinReason\":\"Failover\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-router.availability-no-pin",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-availability-pin",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[],\"pin\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\"},\"pinEligible\":true,\"pinReason\":\"Failover\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-availability-pin-effort",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[],\"pin\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"Low\",\"pinId\":\"id-a\",\"pinRevision\":\"1\"},\"pinEligible\":true,\"pinReason\":\"Failover\"}}",
+    "typedValid": false,
+    "schemaValid": true
   }
 ]

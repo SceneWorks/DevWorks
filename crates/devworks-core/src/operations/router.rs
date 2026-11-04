@@ -104,17 +104,29 @@ pub struct AvailabilityInput {
     pub intent: RouteIntent,
     pub effort: EffortName,
     pub required_capabilities: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub session_id: Option<Id>,
 }
 impl Check for AvailabilityInput {
     fn check(&self) -> Result<(), String> {
         self.intent.check()?;
         self.effort.check()?;
         self.required_capabilities.check()?;
+        self.session_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for AvailabilityInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.session_id = None;
+        }
+    }
 }
 
 /// `router.usage` Query input.

@@ -375,6 +375,9 @@ impl ReadSnapshot for MemSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead {
         &self.unsupported
     }
+    fn router(&self) -> &dyn RouterRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -446,6 +449,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
+        &mut self.unsupported
+    }
+    fn router(&mut self) -> &mut dyn RouterRepository {
         &mut self.unsupported
     }
 }
@@ -1487,6 +1493,58 @@ impl ResourceRead for Unsupported {
         _: Option<&Id>,
         _: u16,
     ) -> Result<Vec<StoredProcess>, StorageError> {
+        nope()
+    }
+}
+impl RouterRead for Unsupported {
+    fn route_model(&self, _: &Id) -> Result<Option<StoredRouteModel>, StorageError> {
+        nope()
+    }
+    fn route_models(
+        &self,
+        _: Option<(i64, &str)>,
+        _: u16,
+    ) -> Result<Vec<StoredRouteModel>, StorageError> {
+        nope()
+    }
+    fn tier_cursor(&self, _: &str) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn session_pin(&self, _: &Id) -> Result<Option<StoredPin>, StorageError> {
+        nope()
+    }
+    fn cooldowns(&self) -> Result<Vec<StoredCooldown>, StorageError> {
+        nope()
+    }
+    fn route_request(&self, _: &Id) -> Result<Option<StoredRouteRequest>, StorageError> {
+        nope()
+    }
+}
+impl RouterRepository for Unsupported {
+    fn put_route_model(
+        &mut self,
+        _: &StoredRouteModel,
+        _: Option<i64>,
+    ) -> Result<StoredRouteModel, StorageError> {
+        nope()
+    }
+    fn advance_tier_cursor(&mut self, _: &str, _: i64) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn put_session_pin(
+        &mut self,
+        _: &StoredPin,
+        _: Option<i64>,
+    ) -> Result<StoredPin, StorageError> {
+        nope()
+    }
+    fn record_cooldown(&mut self, _: &StoredCooldown) -> Result<StoredCooldown, StorageError> {
+        nope()
+    }
+    fn clear_cooldown(&mut self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn record_route_request(&mut self, _: &StoredRouteRequest) -> Result<(), StorageError> {
         nope()
     }
 }

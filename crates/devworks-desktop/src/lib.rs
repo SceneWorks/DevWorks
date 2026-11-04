@@ -20,8 +20,10 @@
 //! * **Honest states.** Screens whose content belongs to later items keep their route, pane
 //!   binding, integrated header, subviews and inner sidebars, and show designed unavailable,
 //!   offline, loading, failed, stale and partial states ([`widgets::ViewState`]) — never
-//!   fabricated values (UI-06). The coordinator (DW-16) and router (DW-17) are not part of this
-//!   build, and the composer says so instead of pretending to send to a model.
+//!   fabricated values (UI-06). The coordinator (DW-16) is not part of this build, and the composer
+//!   says so instead of pretending to send to a model. The composer's route and effort selectors
+//!   are bound to the router ([`routing`]); with no provider connection (DW-18) they report that
+//!   no model is eligible rather than pretending one is.
 //!
 //! The approved UI reference is `docs/planning/ui-reference.md`; the HTML prototype is a design
 //! reference only (ARCH-06: the shipped UI is egui, with no WebView).
@@ -41,6 +43,7 @@ pub mod notifications;
 pub mod ops;
 pub mod platform;
 pub mod route;
+pub mod routing;
 pub mod settings_screen;
 pub mod shell;
 pub mod theme;
