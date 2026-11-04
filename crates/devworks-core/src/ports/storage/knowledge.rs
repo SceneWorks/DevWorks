@@ -256,7 +256,8 @@ pub struct StoredSourceDeletion {
 /// The claims a deletion removes, as the store can test membership in them.
 #[derive(Clone, Copy, Debug)]
 pub enum DeletedClaims<'a> {
-    /// Exactly these claims (a selected deletion).
+    /// Exactly these claims and entities (a selected deletion names claims only; a scope move
+    /// names its claims and the entities that follow them).
     Ids(&'a [Id]),
     /// Every live claim of exactly `scope` whose source is `source` (a delete by source).
     Source {

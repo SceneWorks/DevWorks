@@ -335,11 +335,15 @@ fn outside_as(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, c: &str) -> String 
         }
     }
 }
-/// A condition true for the entity row aliased `e` when the deletion removes it (only a
-/// delete by source removes entities: its source's).
+/// A condition true for the entity row aliased `e` when the set removes it: a delete by
+/// source removes its source's entities, a list the entities it names (a scope move's).
 fn entity_inside(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, e: &str) -> String {
     match deleted {
-        DeletedClaims::Ids(_) => "0".into(),
+        DeletedClaims::Ids([]) => "0".into(),
+        DeletedClaims::Ids(ids) => {
+            let list = placeholders(ids.len(), p, ids.iter().map(|i| i.as_str().to_owned()));
+            format!("{e}.id IN ({list})")
+        }
         DeletedClaims::Source { scope, source } => {
             p.push(Sql::Text(scope.key()));
             p.push(Sql::Text((*source).to_owned()));

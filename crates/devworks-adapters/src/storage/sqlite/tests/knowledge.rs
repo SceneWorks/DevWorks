@@ -4405,3 +4405,101 @@ fn an_imported_lessons_first_revision_reads_with_its_first_event() {
     assert_eq!(recurrence_at(&fx, &user, &lesson, 1), 1);
     assert_eq!(rule(&fx, &user, &lesson).2, 2);
 }
+
+/// Claims X and Y of project A about entities E1 and E2 (one each), E1 related to E2, and a
+/// third claim Z about entity E3. Returns (X, Y, Z, E1, E2, E3).
+fn related_entities(fx: &Fx, user: &InvocationContext) -> (Id, Id, Id, Id, Id, Id) {
+    let r = receipt(fx.record(
+        user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "e1", "label": "Parser", "entityType": "module", "aliases": []},
+            {"clientId": "e2", "label": "Lexer", "entityType": "module", "aliases": []},
+            {"clientId": "e3", "label": "Printer", "entityType": "module", "aliases": []}],
+        "evidence": [],
+        "claims": [
+            with(draft("Fact", "x"), json!({"subjectId": "e1"})),
+            with(draft("Fact", "y"), json!({"subjectId": "e2"})),
+            with(draft("Fact", "z"), json!({"subjectId": "e3"}))]}),
+    ));
+    let c = &r.claim_ids.0;
+    let e = &r.entity_ids.0;
+    relate_in_a(fx, user, &e[0], "depends_on", &e[1]);
+    (
+        c[0].clone(),
+        c[1].clone(),
+        c[2].clone(),
+        e[0].clone(),
+        e[1].clone(),
+        e[2].clone(),
+    )
+}
+
+fn move_to(fx: &Fx, ctx: &InvocationContext, claims: &[&Id], to: Value) -> DomainCommandReply {
+    let refs: Vec<Value> = claims
+        .iter()
+        .map(|c| json!({"id": c, "revision": fx.revision(c).to_string()}))
+        .collect();
+    fx.cmd(
+        ctx,
+        "knowledge.scope",
+        json!({"claimIds": refs, "destination": to}),
+    )
+}
+
+#[test]
+fn a_relation_between_entities_that_all_move_moves_with_them() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let (x, y, _, e1, e2, _) = related_entities(&fx, &user);
+    // X and Y are the only users of E1 and E2: both entities and their relation move.
+    receipt(move_to(&fx, &user, &[&x, &y], ws()));
+    for e in [&e1, &e2] {
+        let id = e.clone();
+        let stored = fx
+            .read(move |s| s.knowledge().knowledge_entity(&id))
+            .unwrap();
+        assert_eq!(stored.scope, KnowledgeScope::Workspace);
+    }
+    let rel = relations_of_entity(&fx, &e1);
+    assert_eq!(rel.len(), 1);
+    assert_eq!(rel[0].scope, KnowledgeScope::Workspace);
+}
+
+#[test]
+fn a_relation_to_an_entity_that_stays_still_refuses_the_move() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let (x, _, _, _, _, _) = related_entities(&fx, &user);
+    // E1 would follow X, but it is related to E2, which stays with Y.
+    let f = refused(move_to(&fx, &user, &[&x], ws()));
+    assert_eq!(f.code, DomainErrorCode::Conflict);
+    assert_eq!(f.target_kind.unwrap().0, "knowledge_entity");
+    // A relation from a scope the mover cannot read still refuses, even between records that
+    // all move (the round-6 rule); a readable one between moving entities does not.
+    let fx = Fx::new();
+    let user = fx.user();
+    let (x, y, _, _, _, _) = related_entities(&fx, &user);
+    let b = fx.agent("agent-b", Some("project-b"));
+    let w1 = fx.claim_id(&user, ws(), "W1", draft("Fact", "w1"));
+    let w2 = fx.claim_id(&user, ws(), "W2", draft("Fact", "w2"));
+    receipt(fx.cmd(
+        &b,
+        "knowledge.relate",
+        json!({"scope": proj("project-b"), "subjectId": w1,
+        "predicate": "depends_on", "objectId": w2, "evidenceIds": []}),
+    ));
+    let f = refused(move_to(&fx, &user, &[&w1, &w2], proj("project-a")));
+    assert_eq!(f.code, DomainErrorCode::Conflict);
+    assert_eq!(f.target_id, None);
+    receipt(move_to(&fx, &user, &[&x, &y], ws()));
+}
+
+fn relations_of_entity(fx: &Fx, entity: &Id) -> Vec<StoredRelation> {
+    let e = entity.clone();
+    fx.read(move |s| {
+        s.knowledge()
+            .knowledge_relations_touching(std::slice::from_ref(&e))
+    })
+}

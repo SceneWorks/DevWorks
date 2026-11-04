@@ -2145,28 +2145,43 @@ fn relocate(
         .map(|c| c.id.clone())
         .collect();
     let moving: HashSet<Id> = moving_ids.iter().cloned().collect();
-    // "Used beyond the moving claims" counts every reference (claims, relations, challenges),
-    // over every row: a record something else still needs where it is cannot follow.
-    let beyond = DeletedClaims::Ids(&moving_ids);
+    // The entities that follow them: each one a moving claim names that the destination does
+    // not already see. The complete set comes first, so "used beyond" is decided with all of
+    // them moving (a relation between two of them moves with them, never blocks the move).
     let mut entities: BTreeMap<String, StoredEntity> = BTreeMap::new();
-    let mut cited: Vec<Id> = Vec::new();
     for c in claims.iter().filter(|c| moving.contains(&c.id)) {
         for id in std::iter::once(&c.subject_id).chain(c.object_id.iter()) {
-            if let Some(e) = w.k().knowledge_entity(id)? {
-                if nests(&e.scope, dest) || entities.contains_key(e.id.as_str()) {
-                    continue;
-                }
+            if let Some(e) = w.k().knowledge_entity(id)?
+                && !nests(&e.scope, dest)
+                && !entities.contains_key(e.id.as_str())
+            {
                 if !visible.contains(&e.scope) {
                     return Err(blocked(&visible, ENTITY, &e.scope, &e.id));
                 }
-                if w.k().knowledge_entity_used_beyond(&e.id, &beyond)? {
-                    return Err(conflict(ENTITY, &e.id));
-                }
-                if let Some(other) = w.k().knowledge_entity_by_key(dest, &e.canonical_key)? {
-                    return Err(conflict(ENTITY, &other.id));
-                }
                 entities.insert(e.id.as_str().to_owned(), e);
-            } else if let Some(o) = w.k().knowledge_claim(id)?
+            }
+        }
+    }
+    // "Used beyond the moving records" counts every reference (claims, relations, challenges),
+    // over every row: a record something else still needs where it is cannot follow.
+    let mut moving_nodes = moving_ids.clone();
+    moving_nodes.extend(entities.values().map(|e| e.id.clone()));
+    let beyond = DeletedClaims::Ids(&moving_nodes);
+    for e in entities.values() {
+        if w.k().knowledge_entity_used_beyond(&e.id, &beyond)? {
+            return Err(conflict(ENTITY, &e.id));
+        }
+        if let Some(other) = w.k().knowledge_entity_by_key(dest, &e.canonical_key)? {
+            return Err(conflict(ENTITY, &other.id));
+        }
+    }
+    let mut cited: Vec<Id> = Vec::new();
+    for c in claims.iter().filter(|c| moving.contains(&c.id)) {
+        for id in std::iter::once(&c.subject_id).chain(c.object_id.iter()) {
+            if w.k().knowledge_entity(id)?.is_some() {
+                continue;
+            }
+            if let Some(o) = w.k().knowledge_claim(id)?
                 && !nests(&o.scope, dest)
                 && !moving.contains(&o.id)
             {
