@@ -25,9 +25,17 @@ use serde_json::{Value, json};
 pub const TABS: [&str; 2] = ["Schedules", "Runs"];
 const SCHEDULE_KINDS: [&str; 3] = ["Manual", "Interval", "Calendar (cron)"];
 const TIERS: [&str; 4] = ["Max", "High", "Mid", "Low"];
+/// How an inference task is routed: a tier's pool, one named model, or OpenRouter's own route.
+pub const ROUTES: [&str; 3] = ["Tier", "Named model", "OpenRouter Auto"];
+/// Effort levels (`Default` lets the provider choose).
+pub const EFFORTS: [&str; 7] = [
+    "Default", "Minimal", "Low", "Medium", "High", "XHigh", "Max",
+];
 
 /// A job being written: a new one, or an edit of the record it was opened on (submitted at that
-/// revision, so a concurrent change is a revision conflict, never silently overwritten).
+/// revision, so a concurrent change is a revision conflict, never silently overwritten). Every
+/// member of the definition is either shown in the form or kept from the record exactly: an edit
+/// never resets the route, effort, target, pinned prompt version or capability it does not show.
 #[derive(Clone, Debug)]
 pub struct JobForm {
     pub editing: Option<JobRecord>,
@@ -38,12 +46,22 @@ pub struct JobForm {
     pub timezone: String,
     /// 0: a native maintenance capability; 1: a scheduled inference task.
     pub definition_kind: usize,
-    pub capability: usize,
+    /// The chosen capability (its ID); `None` until one is chosen.
+    pub capability: Option<String>,
     /// The capability's arguments (its input body, JSON).
     pub arguments: String,
-    /// The saved prompt (an artifact's ID) and routing tier of an inference task.
+    /// The saved prompt (an artifact's ID). An edit keeps the exact version it pinned unless
+    /// another artifact is chosen.
     pub prompt: Option<String>,
+    /// Index into [`ROUTES`], with the tier or named model it uses.
+    pub route_kind: usize,
     pub tier: usize,
+    pub model: String,
+    /// Index into [`EFFORTS`].
+    pub effort: usize,
+    /// An app-level task's target project and an optional feature (IDs, empty for none).
+    pub target_project: String,
+    pub feature: String,
     pub enabled: bool,
 }
 impl Default for JobForm {
@@ -59,17 +77,22 @@ impl Default for JobForm {
                 .unwrap_or("UTC")
                 .to_owned(),
             definition_kind: 1,
-            capability: 0,
+            capability: None,
             arguments: "{}".into(),
             prompt: None,
+            route_kind: 0,
             tier: 1,
+            model: String::new(),
+            effort: 0,
+            target_project: String::new(),
+            feature: String::new(),
             enabled: true,
         }
     }
 }
 impl JobForm {
-    /// A form opened on an existing job.
-    pub fn edit(job: &JobRecord, caps: &[NativeCapability]) -> Self {
+    /// A form opened on an existing job, every definition member carried over.
+    pub fn edit(job: &JobRecord) -> Self {
         let mut f = Self {
             editing: Some(job.clone()),
             title: job.title.0.clone(),
@@ -97,29 +120,56 @@ impl JobForm {
                 arguments,
             } => {
                 f.definition_kind = 0;
-                f.capability = caps
-                    .iter()
-                    .position(|c| &c.capability_id == capability_id)
-                    .unwrap_or(0);
+                f.capability = Some(capability_id.as_str().to_owned());
                 f.arguments = serde_json::to_string_pretty(&arguments.value.0).unwrap_or_default();
             }
-            JobDefinition::Inference { prompt, route, .. } => {
+            JobDefinition::Inference {
+                prompt,
+                route,
+                effort,
+                project_id,
+                feature_id,
+            } => {
                 f.definition_kind = 1;
                 f.prompt = Some(prompt.artifact_id.as_str().to_owned());
                 let r = serde_json::to_value(route).unwrap_or_default();
-                f.tier = TIERS
-                    .iter()
-                    .position(|t| r["tier"] == json!(t))
-                    .unwrap_or(1);
+                match r["kind"].as_str() {
+                    Some("Model") => {
+                        f.route_kind = 1;
+                        f.model = r["modelId"].as_str().unwrap_or_default().to_owned();
+                    }
+                    Some("OpenRouterAuto") => f.route_kind = 2,
+                    _ => {
+                        f.route_kind = 0;
+                        f.tier = TIERS
+                            .iter()
+                            .position(|t| r["tier"] == json!(t))
+                            .unwrap_or(1);
+                    }
+                }
+                let e = serde_json::to_value(effort).unwrap_or_default();
+                f.effort = EFFORTS.iter().position(|x| e == json!(x)).unwrap_or(0);
+                f.target_project = project_id
+                    .as_ref()
+                    .map(|p| p.0.as_str().to_owned())
+                    .unwrap_or_default();
+                f.feature = feature_id
+                    .as_ref()
+                    .map(|r| r.0.as_str().to_owned())
+                    .unwrap_or_default();
             }
         }
         f
     }
+    /// The definition the form was opened on, if any.
+    fn original(&self) -> Option<&JobDefinition> {
+        self.editing.as_ref().map(|j| &j.definition)
+    }
 }
 
 /// The wire schedule and definition a form describes, or why it is incomplete. Values the job
-/// service validates (the expression, the zone, the arguments) are passed through as written:
-/// its refusal is shown, never second-guessed here.
+/// service validates (the expression, the zone, the arguments, the targets) are passed through
+/// as written: its refusal is shown, never second-guessed here.
 pub fn form_values(
     form: &JobForm,
     caps: &[NativeCapability],
@@ -140,28 +190,79 @@ pub fn form_values(
         _ => json!({"kind": "Calendar", "expression": form.expression.trim(),
             "timezone": form.timezone.trim()}),
     };
+    let value: Value = if form.definition_kind == 0 {
+        serde_json::from_str(&form.arguments)
+            .map_err(|e| format!("The arguments are not valid JSON: {e}."))?
+    } else {
+        Value::Null
+    };
     let definition = if form.definition_kind == 0 {
-        let Some(cap) = caps.get(form.capability) else {
-            return Err("No maintenance capability is available in this build.".into());
-        };
-        let value: Value = serde_json::from_str(&form.arguments)
-            .map_err(|e| format!("The arguments are not valid JSON: {e}."))?;
         if !value.is_object() {
             return Err("The arguments are a JSON object.".into());
         }
-        json!({"kind": "Native", "capabilityId": cap.capability_id, "arguments": {
-            "schema": cap.schema, "value": value}})
+        let Some(chosen) = &form.capability else {
+            return Err(if caps.is_empty() {
+                "No maintenance capability is available in this build.".into()
+            } else {
+                "Choose the maintenance capability the job runs.".into()
+            });
+        };
+        // The capability as this build offers it; one the build no longer offers keeps the
+        // schema it was saved with (the job service decides whether it still runs).
+        let schema = match caps.iter().find(|c| c.capability_id.as_str() == chosen) {
+            Some(cap) => serde_json::to_value(&cap.schema).unwrap_or_default(),
+            None => match form.original() {
+                Some(JobDefinition::Native {
+                    capability_id,
+                    arguments,
+                }) if capability_id.as_str() == chosen => {
+                    serde_json::to_value(&arguments.schema).unwrap_or_default()
+                }
+                _ => return Err("No maintenance capability is available in this build.".into()),
+            },
+        };
+        json!({"kind": "Native", "capabilityId": chosen, "arguments": {
+            "schema": schema, "value": value}})
     } else {
-        let Some(artifact) = form.prompt.as_ref().and_then(|p| {
-            artifacts
-                .iter()
-                .find(|a| a.artifact.artifact_id.as_str() == p)
-        }) else {
+        let Some(chosen) = &form.prompt else {
             return Err("Choose the saved prompt (an artifact) the task runs.".into());
         };
-        json!({"kind": "Inference", "prompt": artifact.artifact,
-            "route": {"kind": "Tier", "tier": TIERS[form.tier.min(TIERS.len() - 1)]},
-            "effort": "Default"})
+        // The prompt the job was saved with keeps its exact (pinned) version; another artifact
+        // is taken at its current version.
+        let prompt = match form.original() {
+            Some(JobDefinition::Inference { prompt, .. })
+                if prompt.artifact_id.as_str() == chosen =>
+            {
+                serde_json::to_value(prompt).unwrap_or_default()
+            }
+            _ => match artifacts
+                .iter()
+                .find(|a| a.artifact.artifact_id.as_str() == chosen)
+            {
+                Some(a) => serde_json::to_value(&a.artifact).unwrap_or_default(),
+                None => return Err("Choose the saved prompt (an artifact) the task runs.".into()),
+            },
+        };
+        let route = match form.route_kind {
+            1 => {
+                let m = form.model.trim();
+                if m.is_empty() {
+                    return Err("Name the model the task is routed to.".into());
+                }
+                json!({"kind": "Model", "modelId": m})
+            }
+            2 => json!({"kind": "OpenRouterAuto"}),
+            _ => json!({"kind": "Tier", "tier": TIERS[form.tier.min(TIERS.len() - 1)]}),
+        };
+        let mut d = json!({"kind": "Inference", "prompt": prompt, "route": route,
+            "effort": EFFORTS[form.effort.min(EFFORTS.len() - 1)]});
+        if !form.target_project.trim().is_empty() {
+            d["projectId"] = json!(form.target_project.trim());
+        }
+        if !form.feature.trim().is_empty() {
+            d["featureId"] = json!(form.feature.trim());
+        }
+        d
     };
     Ok((schedule, definition))
 }
@@ -388,7 +489,7 @@ impl Shell {
                         .backend()
                         .map(|b| b.native_job_capabilities())
                         .unwrap_or_default();
-                    self.jobs.form = Some(JobForm::edit(&job, &self.jobs.capabilities));
+                    self.jobs.form = Some(JobForm::edit(&job));
                     self.jobs.form_error = None;
                     if !self.artifacts.loaded {
                         self.load_artifacts();
@@ -1026,17 +1127,33 @@ fn form_ui(
         ui.selectable_value(&mut form.definition_kind, 0, "Maintenance");
     });
     if form.definition_kind == 0 {
-        if caps.is_empty() {
+        if caps.is_empty() && form.capability.is_none() {
             widgets::caption(
                 ui,
                 "No maintenance capability is available in this build; the items that deliver them add them here.",
             );
         } else {
+            // A saved capability this build no longer offers is still shown (by its ID), never
+            // silently replaced by the first one offered.
+            let current = form
+                .capability
+                .as_deref()
+                .map_or("Choose a capability", |id| {
+                    caps.iter()
+                        .find(|c| c.capability_id.as_str() == id)
+                        .map_or(id, |c| c.operation)
+                });
             egui::ComboBox::from_label("Capability")
-                .selected_text(caps.get(form.capability).map_or("", |c| c.operation))
+                .selected_text(current)
                 .show_ui(ui, |ui| {
-                    for (i, c) in caps.iter().enumerate() {
-                        ui.selectable_value(&mut form.capability, i, c.operation);
+                    for c in caps {
+                        let id = c.capability_id.as_str().to_owned();
+                        if ui
+                            .selectable_label(form.capability.as_deref() == Some(&id), c.operation)
+                            .clicked()
+                        {
+                            form.capability = Some(id);
+                        }
                     }
                 });
             field(ui, &mut form.arguments, "Arguments (JSON)", true);
@@ -1050,7 +1167,10 @@ fn form_ui(
                     .iter()
                     .find(|a| a.artifact.artifact_id.as_str() == p)
             })
-            .map_or("Choose an artifact", |a| a.name.0.as_str());
+            .map_or(
+                form.prompt.as_deref().unwrap_or("Choose an artifact"),
+                |a| a.name.0.as_str(),
+            );
         egui::ComboBox::from_label("Saved prompt")
             .selected_text(current)
             .show_ui(ui, |ui| {
@@ -1064,13 +1184,58 @@ fn form_ui(
                     }
                 }
             });
-        egui::ComboBox::from_label("Routing tier")
-            .selected_text(TIERS[form.tier.min(3)])
+        if let Some(JobDefinition::Inference { prompt, .. }) = form.original()
+            && form.prompt.as_deref() == Some(prompt.artifact_id.as_str())
+        {
+            widgets::caption(
+                ui,
+                format!(
+                    "Runs the version it was saved with ({}); choose another prompt to take a current version.",
+                    prompt.version_id.as_str()
+                ),
+            );
+        }
+        egui::ComboBox::from_label("Routing")
+            .selected_text(ROUTES[form.route_kind.min(ROUTES.len() - 1)])
             .show_ui(ui, |ui| {
-                for (i, t) in TIERS.iter().enumerate() {
-                    ui.selectable_value(&mut form.tier, i, *t);
+                for (i, r) in ROUTES.iter().enumerate() {
+                    ui.selectable_value(&mut form.route_kind, i, *r);
                 }
             });
+        match form.route_kind {
+            0 => {
+                egui::ComboBox::from_label("Routing tier")
+                    .selected_text(TIERS[form.tier.min(TIERS.len() - 1)])
+                    .show_ui(ui, |ui| {
+                        for (i, t) in TIERS.iter().enumerate() {
+                            ui.selectable_value(&mut form.tier, i, *t);
+                        }
+                    });
+            }
+            1 => {
+                field(ui, &mut form.model, "Model (its ID)", false);
+            }
+            _ => {}
+        }
+        egui::ComboBox::from_label("Effort")
+            .selected_text(EFFORTS[form.effort.min(EFFORTS.len() - 1)])
+            .show_ui(ui, |ui| {
+                for (i, e) in EFFORTS.iter().enumerate() {
+                    ui.selectable_value(&mut form.effort, i, *e);
+                }
+            });
+        field(
+            ui,
+            &mut form.target_project,
+            "Target project (its ID; empty for none)",
+            false,
+        );
+        field(
+            ui,
+            &mut form.feature,
+            "Target feature (its ID; empty for none)",
+            false,
+        );
         widgets::caption(
             ui,
             "The task runs as a scheduled agent with your configured tools and approvals; usage is reported per run with no job spending cap.",

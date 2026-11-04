@@ -8,7 +8,7 @@ mod common;
 
 use common::*;
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::records::JobRecord;
+use devworks_core::protocol::records::{ArtifactRecord, JobRecord};
 use devworks_core::protocol::{ActorId, Id};
 use devworks_desktop::backend::Backend;
 use devworks_desktop::ops;
@@ -216,4 +216,106 @@ fn the_project_sidebar_shows_its_scheduled_jobs() {
     );
     click(&mut h, Role::Button, "Open scheduled jobs");
     assert!(has_text(&h, "Nightly docs"));
+}
+
+fn record(definition: Value) -> JobRecord {
+    serde_json::from_value(
+        json!({"id": "job-1", "revision": "3", "title": "Nightly triage",
+        "schedule": {"kind": "Calendar", "expression": "0 3 * * *", "timezone": "Europe/Paris"},
+        "definition": definition, "enabled": true}),
+    )
+    .unwrap()
+}
+
+/// The prompt as the artifact list now shows it: a newer version than the job pinned.
+fn newer_prompt() -> ArtifactRecord {
+    serde_json::from_value(
+        json!({"artifact": {"artifactId": "prompt-1", "versionId": "prompt-v2",
+        "sha256": "b".repeat(64), "byteLength": "20", "mediaType": "text/markdown"},
+        "name": "Triage new issues", "createdAtMs": "2", "scope": {"kind": "Workspace"},
+        "referenceCount": "1"}),
+    )
+    .unwrap()
+}
+
+#[test]
+fn editing_an_inference_job_keeps_every_member_the_user_did_not_change() {
+    let mut original = inference();
+    original["route"] = json!({"kind": "Model", "modelId": "anthropic-claude-opus"});
+    original["effort"] = json!("XHigh");
+    original["projectId"] = json!("project-1");
+    original["featureId"] = json!("feature-1");
+    let job = record(original.clone());
+    let artifacts = [newer_prompt()];
+    let form = JobForm::edit(&job);
+    let (schedule, definition) = form_values(&form, &[], &artifacts).unwrap();
+    assert_eq!(
+        definition, original,
+        "an untouched edit submits the definition unchanged"
+    );
+    assert_eq!(
+        schedule,
+        json!({"kind": "Calendar", "expression": "0 3 * * *", "timezone": "Europe/Paris"})
+    );
+
+    for route in [
+        json!({"kind": "OpenRouterAuto"}),
+        json!({"kind": "Tier", "tier": "Low"}),
+    ] {
+        let mut o = original.clone();
+        o["route"] = route;
+        o["effort"] = json!("Minimal");
+        let (_, d) = form_values(&JobForm::edit(&record(o.clone())), &[], &artifacts).unwrap();
+        assert_eq!(d, o, "every route and effort round-trips");
+    }
+
+    // Changing one member changes only that member.
+    let mut changed = JobForm::edit(&job);
+    changed.effort = 0;
+    let (_, d) = form_values(&changed, &[], &artifacts).unwrap();
+    let mut expected = original.clone();
+    expected["effort"] = json!("Default");
+    assert_eq!(d, expected);
+
+    // Clearing the target removes it; another prompt is taken at its current version.
+    let mut cleared = JobForm::edit(&job);
+    cleared.target_project.clear();
+    cleared.feature.clear();
+    cleared.prompt = Some("prompt-1".into());
+    let (_, d) = form_values(&cleared, &[], &artifacts).unwrap();
+    assert!(d.get("projectId").is_none() && d.get("featureId").is_none());
+    assert_eq!(
+        d["prompt"]["versionId"], "prompt-v1",
+        "the pinned version is kept"
+    );
+    let mut fresh = JobForm {
+        title: "New".into(),
+        prompt: Some("prompt-1".into()),
+        ..JobForm::default()
+    };
+    let (_, d) = form_values(&fresh, &[], &artifacts).unwrap();
+    assert_eq!(
+        d["prompt"]["versionId"], "prompt-v2",
+        "a new job takes the current version"
+    );
+    assert_eq!(d["route"], json!({"kind": "Tier", "tier": "High"}));
+    fresh.route_kind = 1;
+    assert!(
+        form_values(&fresh, &[], &artifacts)
+            .unwrap_err()
+            .contains("model")
+    );
+}
+
+#[test]
+fn editing_a_native_job_keeps_its_capability_when_the_build_no_longer_offers_it() {
+    let original = json!({"kind": "Native", "capabilityId": "retired-capability",
+        "arguments": {"schema": {"schemaId": "devworks.retired/args", "revision": "2",
+            "sha256": "c".repeat(64)}, "value": {"days": 7}}});
+    let form = JobForm::edit(&record(original.clone()));
+    let (_, d) = form_values(&form, &[], &[]).unwrap();
+    assert_eq!(
+        d, original,
+        "never replaced by another (or the first) capability"
+    );
 }

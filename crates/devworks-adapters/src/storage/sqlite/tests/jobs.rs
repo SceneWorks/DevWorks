@@ -1744,3 +1744,30 @@ fn a_schedule_whose_zone_left_the_platform_stops_visibly_without_blocking_claims
     let fx = fx.restart();
     assert_eq!(fx.stored(&s(&gone, "id")).next_at_ms, None);
 }
+
+#[test]
+fn listing_pages_through_titles_that_contain_newlines() {
+    let fx = Fx::new();
+    let user = fx.user();
+    for t in ["a\nb", "a\nc", "a", "b\n"] {
+        fx.job(&user, body(t, every(3600), native(), false));
+    }
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..10 {
+        let mut b = json!({"scope": {"kind": "Workspace"}, "page": {"limit": 1}});
+        if let Some(c) = &cursor {
+            b["page"]["cursor"] = json!(c);
+        }
+        let page = result_value(fx.query_at(&user, "jobs.list", b, 2));
+        for j in page["items"].as_array().unwrap() {
+            seen.push(j["title"].as_str().unwrap().to_owned());
+        }
+        cursor = page["nextCursor"].as_str().map(str::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert!(cursor.is_none(), "the listing ends: {seen:?}");
+    assert_eq!(seen, ["a", "a\nb", "a\nc", "b"]);
+}

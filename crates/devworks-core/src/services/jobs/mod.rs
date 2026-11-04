@@ -1205,8 +1205,8 @@ impl JobService {
             None => None,
             Some(c) => {
                 let at = binding.decode(&c.0)?;
-                let (title, id) = at.split_once('\n').ok_or(StorageError::CursorExpired)?;
-                Some((title.to_owned(), id.to_owned()))
+                let (title, id) = parse_list_position(&at).ok_or(StorageError::CursorExpired)?;
+                Some((title, id))
             }
         };
         let limit = i.page.limit.get() as u16;
@@ -1227,11 +1227,7 @@ impl JobService {
             items.push(build_job(j, job_facts(s.jobs(), j)?)?);
         }
         let next_cursor = match (more, rows.last()) {
-            (true, Some(l)) => Some(BoundedText(binding.encode(&format!(
-                "{}\n{}",
-                l.title,
-                l.id.as_str()
-            )))),
+            (true, Some(l)) => Some(BoundedText(binding.encode(&list_position(&l.title, &l.id)))),
             _ => None,
         };
         Ok(OperationResult::JobsList {
@@ -1307,6 +1303,17 @@ impl JobService {
             },
         })
     }
+}
+
+/// The position a job listing continues after: the last job's ID, then its title. An ID never
+/// contains a newline, so the first newline always ends it, whatever the title holds.
+fn list_position(title: &str, id: &Id) -> String {
+    format!("{}\n{title}", id.as_str())
+}
+fn parse_list_position(at: &str) -> Option<(String, String)> {
+    let (id, title) = at.split_once('\n')?;
+    Id::new(id).ok()?;
+    Some((title.to_owned(), id.to_owned()))
 }
 
 /// The sequence a page continues after (`None`: the first page).
@@ -1424,4 +1431,24 @@ pub(crate) fn undispatched(
             .operation(op)?
             .is_none_or(|o| cancellable_before_dispatch(o.state)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_list_position_round_trips_any_title() {
+        for title in ["Docs", "two\nlines", "\n", "trailing\n", "a\nb\nc"] {
+            let id = Id::new("job-1").unwrap();
+            let at = list_position(title, &id);
+            assert_eq!(
+                parse_list_position(&at),
+                Some((title.to_owned(), "job-1".to_owned())),
+                "{title:?}"
+            );
+        }
+        assert_eq!(parse_list_position("no newline"), None);
+        assert_eq!(parse_list_position("bad id\ntitle"), None);
+    }
 }
