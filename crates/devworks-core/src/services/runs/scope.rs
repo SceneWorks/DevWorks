@@ -7,10 +7,14 @@
 //! revision). A pending plan revision is reported only so it can be shown; it never authorizes
 //! anything.
 //!
-//! * [`RecordedScope`] is the production default until those items land: it reads the stored
-//!   feature plan slot (`feature_plans`) for approval and reports **no** recorded readiness
-//!   evidence, so feature implementation dispatch is closed while planning and assessment stay
-//!   open (fail closed, never manufactured readiness).
+//! * [`RecordedScope`] is the production port: it reads the stored feature plan slot
+//!   (`feature_plans`). For an active plan the planning service wrote, the approved scope units
+//!   (the feature-wide unit and one per requirement) and each unit's readiness come from the
+//!   feature's recorded assessment ([`crate::services::work::readiness::scope_plan`]): `Missing`
+//!   without one, `Stale` for a unit whose digest changed since it was reviewed, `Blocked` by an
+//!   open blocking finding of the unit (or a feature-wide one), `Current` otherwise. Any other
+//!   approved slot reports the feature-wide unit with no readiness evidence (fail closed, never
+//!   manufactured readiness).
 //! * [`ScriptedScope`] is the deterministic double tests and later items' fixtures script.
 use crate::ports::storage::{RunRead, StorageError, WorkRoot};
 use crate::protocol::RootId;
@@ -125,8 +129,8 @@ pub fn is_feature(root: &WorkRoot) -> bool {
     root.kind == "feature"
 }
 
-/// The production default: approval from the stored feature plan slot, and no recorded
-/// readiness evidence (the readiness records belong to DW-015).
+/// The production port: approval and scope units from the stored feature plan slot, readiness
+/// from the feature's recorded assessment.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RecordedScope;
 impl ExecutionScope for RecordedScope {
@@ -135,6 +139,18 @@ impl ExecutionScope for RecordedScope {
             return Ok(PlanState::NotRequired);
         }
         Ok(match runs.feature_plan(&root.id)? {
+            // The planning service's active plan: its scope units and their recorded readiness.
+            Some(p)
+                if let Some(state) = p.approved_plan.as_ref().and_then(|a| {
+                    crate::services::work::readiness::scope_plan(
+                        a,
+                        p.pending_revision,
+                        p.readiness.as_ref(),
+                    )
+                }) =>
+            {
+                state
+            }
             Some(p) if p.approved => PlanState::Approved {
                 revision: p.revision,
                 pending_revision: p.pending_revision,

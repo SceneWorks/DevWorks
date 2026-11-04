@@ -39,7 +39,16 @@ class SchemaRevisionRules(unittest.TestCase):
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
             'router.connections', 'router.configure', 'jobs.list', 'jobs.create', 'jobs.edit',
             'jobs.enable', 'jobs.run_now', 'jobs.inspect', 'jobs.cancel', 'jobs.delete',
-            'jobs.disable', 'web.search', 'web.fetch'})
+            'jobs.disable', 'web.search', 'web.fetch',
+            # Feature readiness and queue/workflow revisions on every work record result.
+            'features.list', 'features.get', 'features.create', 'features.edit_plan',
+            'features.dependencies', 'features.edit', 'issues.list', 'issues.get',
+            'issues.create', 'issues.edit', 'tasks.list', 'tasks.get', 'tasks.create',
+            'tasks.edit', 'tasks.move', 'tasks.assign', 'tasks.dependency_links',
+            'tasks.acceptance_evidence', 'tasks.sync_plan', 'tasks.set_feature',
+            # A prioritization's bounded placement (one move, any bucket size).
+            'features.prioritize', 'issues.prioritize', 'tasks.prioritize'})
+        self.assertEqual(carried['features.edit'], {2})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
         self.assertEqual(carried['router.connections'], {2})

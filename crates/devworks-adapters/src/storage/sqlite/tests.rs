@@ -118,6 +118,7 @@ mod runs;
 mod sessions;
 mod settings;
 mod web;
+mod work;
 
 mod contract {
     devworks_core::store_contract_tests!(super::Harness::new());

@@ -1059,6 +1059,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn jobs(&self) -> &dyn JobRead {
         self
     }
+    fn work(&self) -> &dyn WorkRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1276,6 +1279,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn jobs(&mut self) -> &mut dyn JobRepository {
+        self
+    }
+    fn work(&mut self) -> &mut dyn WorkRepository {
         self
     }
 }
