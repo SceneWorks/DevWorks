@@ -816,6 +816,20 @@ fn baseline_indexes_the_exact_commit_with_spans_relationships_coverage_and_texts
     assert_eq!(cross.payload["resolution"], json!("Inferred"), "{cross:?}");
     assert_eq!(cross.payload["targetUnit"], json!("src/util.rs"));
     assert!(resolves);
+    // Its receiver (`util::`) names no type of the index: bound by its name alone, which the
+    // edge says (CODE-02), at the unresolved-receiver confidence.
+    assert_eq!(cross.payload["resolutionBasis"], json!("name"), "{cross:?}");
+    assert_eq!(cross.payload["confidence"], json!(0.45));
+    assert_eq!(cross.payload["extractedConfidence"], json!(0.65));
+    // A bare cross-file call is an ordinary unique-name binding.
+    let v = view.clone();
+    let run_py = fx.read(move |s| views::unit_edges(s.indexing(), &v, "tools/run.py"));
+    let bare = run_py
+        .iter()
+        .find(|(e, _)| e.kind == "CALLS" && e.payload["targetName"] == json!("shared_helper"))
+        .unwrap_or_else(|| panic!("no call of shared_helper: {run_py:?}"));
+    assert_eq!(bare.0.payload["resolution"], json!("Inferred"), "{bare:?}");
+    assert!(bare.0.payload.get("resolutionBasis").is_none(), "{bare:?}");
     // Python: an absolute import of a repository module resolves; `os` stays unresolved.
     let v = view.clone();
     let py = fx.read(move |s| views::unit_edges(s.indexing(), &v, "tools/run.py"));
@@ -2366,4 +2380,163 @@ fn run_listings_filter_by_state_and_kind_and_page_within_the_filter() {
         None,
     );
     assert!(matches!(r1, DomainQueryReply::Rejected { .. }), "{r1:?}");
+}
+
+#[test]
+fn swift_extensions_module_scopes_and_call_families_link_by_the_retained_rules() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("mixed");
+    repo(
+        &dir,
+        &[
+            (
+                "Package.swift",
+                "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(\n    name: \"Demo\",\n    targets: [\n        .target(name: \"App\"),\n        .target(name: \"Core\"),\n        .target(name: \"Lib\", dependencies: [\"Core\"]),\n    ]\n)\n",
+            ),
+            (
+                "Sources/App/Thing.swift",
+                "struct Thing {\n    func a() {}\n}\n",
+            ),
+            (
+                "Sources/App/Ext.swift",
+                "extension Thing: Codable {\n    func y() {}\n}\nextension String {\n    func z() {}\n}\n",
+            ),
+            (
+                "Sources/App/main.swift",
+                "func start() {\n    helper()\n}\n",
+            ),
+            ("Sources/App/A.swift", "func helper() {}\n"),
+            ("Sources/App/S.swift", "func shared() {}\n"),
+            (
+                "Sources/App/Box.swift",
+                "struct Box {\n    func open() {}\n}\n",
+            ),
+            (
+                "Sources/Core/Box.swift",
+                "struct Box {\n    func open() {}\n}\n",
+            ),
+            (
+                "Sources/App/use.swift",
+                "func go() {\n    let b = Box()\n    b.open()\n}\n",
+            ),
+            (
+                "Sources/Core/C.swift",
+                "func helper() {}\nfunc shared() {}\n",
+            ),
+            (
+                "Sources/Lib/L.swift",
+                "import Core\nfunc run() {\n    shared()\n}\n",
+            ),
+            (
+                "src/ffi.rs",
+                "pub fn run() {\n    cpp_only();\n    cpp_c();\n    py_fn();\n}\n",
+            ),
+            (
+                "native/lib.cpp",
+                "void cpp_only() {}\nextern \"C\" void cpp_c() {}\n",
+            ),
+            ("tools/x.py", "def py_fn():\n    pass\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let view = fx.published(&repo_id);
+    let edges = |key: &str| {
+        let (v, k) = (view.clone(), key.to_owned());
+        fx.read(move |s| views::unit_edges(s.indexing(), &v, &k))
+    };
+    let node = |key: &str, name: &str| {
+        fx.nodes(&view, key)
+            .into_iter()
+            .find(|n| n.name == name)
+            .unwrap_or_else(|| panic!("no {name} in {key}"))
+    };
+
+    // Swift extension members (and the extension's conformance) attach to the extended type
+    // once its path names one type; an external type's stay under the extension's file.
+    let thing = node("Sources/App/Thing.swift", "Thing");
+    let ext = edges("Sources/App/Ext.swift");
+    let defines = |member: &str| {
+        let m = node("Sources/App/Ext.swift", member);
+        ext.iter()
+            .find(|(e, _)| e.kind == "DEFINES_METHOD" && e.target_node_id == m.node_id)
+            .unwrap_or_else(|| panic!("no DEFINES_METHOD of {member}: {ext:?}"))
+            .0
+            .clone()
+    };
+    let y = defines("y");
+    assert_eq!(y.source_node_id, thing.node_id, "{y:?}");
+    assert_eq!(y.payload["sourceUnit"], json!("Sources/App/Thing.swift"));
+    assert_eq!(y.payload["sourceResolution"], json!("Inferred"));
+    let codable = ext
+        .iter()
+        .find(|(e, _)| {
+            e.kind == "IMPLEMENTS" && e.payload["targetName"] == json!("swift-type:Codable")
+        })
+        .unwrap_or_else(|| panic!("no Codable conformance: {ext:?}"))
+        .0
+        .clone();
+    assert_eq!(codable.source_node_id, thing.node_id, "{codable:?}");
+    let z = defines("z");
+    let file = node("Sources/App/Ext.swift", "Ext.swift");
+    assert_eq!(z.source_node_id, file.node_id, "{z:?}");
+    assert_eq!(z.payload["sourceResolution"], json!("Unresolved"));
+    assert_eq!(z.payload["sourceCandidates"], json!(0));
+
+    // A Swift name several modules declare binds to the caller's own module's, else to the
+    // single one of the modules it imports.
+    let call = |key: &str, callee: &str| {
+        edges(key)
+            .into_iter()
+            .find(|(e, _)| e.kind == "CALLS" && e.payload["targetName"] == json!(callee))
+            .unwrap_or_else(|| panic!("no call of {callee} in {key}"))
+            .0
+    };
+    let helper = call("Sources/App/main.swift", "helper");
+    assert_eq!(
+        helper.payload["resolution"],
+        json!("Inferred"),
+        "{helper:?}"
+    );
+    assert_eq!(helper.payload["targetUnit"], json!("Sources/App/A.swift"));
+    let shared = call("Sources/Lib/L.swift", "shared");
+    assert_eq!(
+        shared.payload["resolution"],
+        json!("Inferred"),
+        "{shared:?}"
+    );
+    assert_eq!(shared.payload["targetUnit"], json!("Sources/Core/C.swift"));
+    // A receiver type path two modules declare names the one the caller's module sees, so the
+    // call binds through that type (not by its name alone).
+    let open = call("Sources/App/use.swift", "open");
+    assert_eq!(
+        open.payload["properties"]["receiver_kind"],
+        json!("Resolved"),
+        "{open:?}"
+    );
+    assert_eq!(
+        open.payload["targetUnit"],
+        json!("Sources/App/Box.swift"),
+        "{open:?}"
+    );
+    assert!(open.payload.get("resolutionBasis").is_none(), "{open:?}");
+
+    // Rust reaches C++ only through C linkage, and never another family's function.
+    let cpp_only = call("src/ffi.rs", "cpp_only");
+    assert_eq!(
+        cpp_only.payload["resolution"],
+        json!("Unresolved"),
+        "{cpp_only:?}"
+    );
+    assert_eq!(cpp_only.payload["candidates"], json!(0));
+    let cpp_c = call("src/ffi.rs", "cpp_c");
+    assert_eq!(cpp_c.payload["resolution"], json!("Inferred"), "{cpp_c:?}");
+    assert_eq!(cpp_c.payload["targetUnit"], json!("native/lib.cpp"));
+    let py = call("src/ffi.rs", "py_fn");
+    assert_eq!(py.payload["candidates"], json!(0), "{py:?}");
 }

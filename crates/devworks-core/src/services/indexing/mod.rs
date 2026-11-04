@@ -79,6 +79,7 @@ pub mod config;
 pub mod discover;
 pub mod git;
 pub mod helper;
+pub(crate) mod linking;
 pub mod overlay;
 pub mod paths;
 pub mod status;

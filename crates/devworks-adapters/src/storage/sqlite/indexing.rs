@@ -1271,14 +1271,15 @@ impl IndexRepository for Unit<'_> {
         }
         for u in updates {
             let n = db(db(self.conn.prepare_cached(
-                "UPDATE graph_edges SET target_node_id=?1,payload_json=?2 WHERE generation_id=?3 AND unit_key=?4 AND edge_id=?5",
+                "UPDATE graph_edges SET source_node_id=?6,target_node_id=?1,payload_json=?2 WHERE generation_id=?3 AND unit_key=?4 AND edge_id=?5",
             ))?
             .execute(params![
                 u.target_node_id,
                 text(&u.payload),
                 generation.as_str(),
                 u.unit_key,
-                u.edge_id
+                u.edge_id,
+                u.source_node_id
             ]))?;
             if n != 1 {
                 return Err(StorageError::NotFound {

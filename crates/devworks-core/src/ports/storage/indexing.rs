@@ -275,11 +275,14 @@ pub struct StoredEdge {
     pub payload: Value,
 }
 
-/// A resolved target for one stored edge.
+/// The linked endpoints of one stored edge. The edge keeps its ID and unit (its identity is the
+/// extraction's); the linker sets its target and, for an edge whose source the extraction named
+/// only by reference (a Swift extension's owner type), its source.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EdgeTargetUpdate {
     pub unit_key: String,
     pub edge_id: String,
+    pub source_node_id: String,
     pub target_node_id: String,
     pub payload: Value,
 }
@@ -489,7 +492,7 @@ pub trait IndexRepository: IndexRead {
         to: &Id,
         unit_keys: &[String],
     ) -> Result<u64, StorageError>;
-    /// Sets resolved targets of staged edges.
+    /// Sets the linked endpoints (source, target) and payload of staged edges.
     fn set_edge_targets(
         &mut self,
         generation: &Id,

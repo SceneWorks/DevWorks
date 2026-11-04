@@ -28,6 +28,7 @@
 //! budget.
 use super::config::{EXTRACTOR_VERSION, EffectiveConfig, dependency_directory};
 use super::git::{Change, Git, GitFault, TreeEntry};
+use super::linking::{CallTarget, SwiftImport, SwiftModule, SwiftScopes, call_target_allowed};
 use super::paths::{edge_id, fold, node_id, parent, symbol_id};
 use super::{IndexEnv, RUN_AGGREGATE, digest, effective_config, history};
 use crate::context::InvocationContext;
@@ -2100,10 +2101,15 @@ fn target_kinds(edge: &str) -> Option<&'static [&'static str]> {
             "Function",
             "Method",
             "Constructor",
+            "Delegate",
+            "ExternalSymbol",
             "Class",
             "Struct",
             "Record",
             "Enum",
+            "Component",
+            "Service",
+            "Job",
         ],
         "INHERITS" | "IMPLEMENTS" | "USES_TYPE" => &[
             "Class",
@@ -2307,7 +2313,16 @@ fn import_candidates(from: &str, module: &str) -> Vec<String> {
 /// Links unresolved references of `generation` by name. Candidates come from `generation` and
 /// then from `lower` layers (an overlay's branch and baseline), skipping units a higher layer
 /// replaced or deleted. A unique candidate makes the edge `Inferred`; none or several leave it
-/// `Unresolved` with the candidate count.
+/// `Unresolved` with the candidate count. A call whose resolved receiver names no type of the
+/// index is bound by its name alone: `Inferred` with `resolutionBasis: name` and the retained
+/// unresolved-receiver confidence (CODE-02: such a binding is identifiable).
+///
+/// An edge a Swift extension of a type declared in another file contributes (its members'
+/// `DEFINES`/`DEFINES_METHOD`, its `INHERITS`/`IMPLEMENTS`) starts at the extension's file node
+/// with the extended type's reference in `source_qualified_name`; once that path names exactly
+/// one Swift type, the edge's source is that type (`sourceUnit`, `sourceResolution: Inferred`),
+/// otherwise it stays at the file (`sourceResolution: Unresolved`, `sourceCandidates`). The edge
+/// keeps its ID and unit: only its endpoints are linked, as its target is.
 pub(crate) fn link_generation(
     exec: &mut Exec<'_>,
     generation: &Id,
@@ -2316,6 +2331,9 @@ pub(crate) fn link_generation(
 ) -> Result<(), Stop> {
     let env = exec.w.env.clone();
     let mut after: Option<String> = None;
+    // Loaded on the first Swift call that needs a module tie-break; the modules and imports it
+    // reads are not changed by linking.
+    let mut scopes: Option<SwiftScopes> = None;
     loop {
         if stop() {
             return Err(Stop::Cancelled);
@@ -2323,6 +2341,7 @@ pub(crate) fn link_generation(
         let (g, low) = (generation.clone(), lower.to_vec());
         let repo = exec.run.repository_id.clone();
         let a = after.clone();
+        let scopes = &mut scopes;
         let (updates, last, full) = read_snapshot(&*env.store, &ReadOptions::default(), move |s| {
             let units = s.indexing().units(&g, a.as_deref(), 200)?;
             let full = units.len() == 200;
@@ -2331,137 +2350,36 @@ pub(crate) fn link_generation(
             let mut cache: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
             for u in &units {
                 for e in s.indexing().edges(&g, &u.unit_key)? {
-                    let resolution = e
-                        .payload
-                        .get("resolution")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    if resolution == "Resolved" {
-                        continue;
-                    }
-                    let Some(name) = e.payload.get("targetName").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    // A target named by its exact qualified name (any edge kind, any node kind).
-                    let by_qualified_name = e.payload.get("targetMatch").and_then(Value::as_str)
-                        == Some("qualifiedName");
-                    let kinds = target_kinds(&e.kind).unwrap_or(&[]);
-                    if kinds.is_empty() && !by_qualified_name {
-                        continue;
-                    }
-                    let candidates: Vec<(String, String, String)> = if by_qualified_name {
-                        visible_qualified(s, &g, &low, name)?
-                    } else if e.kind == "IMPORTS" {
-                        let mut found = Vec::new();
-                        for path in import_candidates(&u.unit_key, name) {
-                            let basename = path.rsplit('/').next().unwrap_or(&path).to_owned();
-                            for n in visible_named(s, &g, &low, &basename)? {
-                                if n.1 == "File" && n.0 == path {
-                                    found.push(n.clone());
-                                }
-                            }
-                            if !found.is_empty() {
-                                break;
-                            }
-                        }
-                        found
-                    } else if let Some(path) =
-                        name.strip_prefix(SWIFT_TYPE_REF).filter(|p| !p.is_empty())
-                    {
-                        // A Swift type reference names the type at that path, never a name.
-                        let protocol =
-                            e.payload["properties"]["swift_protocol_target"] == json!(true);
-                        swift_type_nodes(s, &g, &low, path)?
-                            .into_iter()
-                            .filter(|c| {
-                                kinds.contains(&c.kind.as_str())
-                                    && (!protocol || c.kind == "Interface")
-                            })
-                            .map(CallNode::key)
-                            .collect()
-                    } else if e.kind == "CALLS"
-                        && e.payload["properties"].get("receiver_kind").is_some()
-                    {
-                        call_candidates(
-                            s,
-                            &g,
-                            &low,
-                            &u.unit_key,
-                            name,
-                            &e.payload["properties"],
-                            kinds,
-                        )?
-                    } else {
-                        let simple = name
-                            .rsplit(['.', ':'])
-                            .find(|s| !s.is_empty())
-                            .unwrap_or(name)
-                            .to_owned();
-                        let all = match cache.get(&simple) {
-                            Some(c) => c.clone(),
-                            None => {
-                                let c = visible_named(s, &g, &low, &simple)?;
-                                cache.insert(simple.clone(), c.clone());
-                                c
-                            }
-                        };
-                        all.into_iter()
-                            .filter(|c| kinds.contains(&c.1.as_str()))
-                            .collect()
-                    };
                     let mut payload = e.payload.clone();
-                    let mut candidates = candidates;
-                    if e.kind == "HANDLES" {
-                        let mut layers = vec![g.clone()];
-                        layers.extend(low.iter().cloned());
-                        let (scoped, problem) =
-                            handler_scope(s, &layers, &u.unit_key, &e.payload, candidates)?;
-                        candidates = scoped;
-                        if let Some(p) = problem {
-                            payload["resolutionProblem"] = json!(p);
-                            candidates.clear();
-                        }
-                        // One route identity (method and path) registered by several files is
-                        // ambiguous: none of its registrations proves the handler.
-                        if let Some(route) = e.payload["properties"]["routeName"].as_str() {
-                            let mut sources: Vec<String> = visible_named(s, &g, &low, route)?
-                                .into_iter()
-                                .filter(|n| n.1 == "Route")
-                                .map(|n| n.0)
-                                .collect();
-                            sources.sort();
-                            sources.dedup();
-                            if sources.len() > 1 {
-                                payload["registrationAmbiguous"] = json!(true);
-                                payload["registrationSources"] = json!(sources);
-                                candidates.clear();
-                            }
-                        }
-                    }
-                    let (target, unit) = if candidates.len() == 1 {
-                        payload["resolution"] = json!("Inferred");
-                        payload["candidates"] = json!(1);
-                        (candidates[0].2.clone(), Some(candidates[0].0.clone()))
-                    } else {
-                        // None or several: the name stays a symbol, never a guessed target.
-                        payload["resolution"] = json!("Unresolved");
-                        payload["candidates"] = json!(candidates.len());
-                        (symbol_id(repo.as_str(), name), None)
-                    };
-                    match unit {
-                        Some(u) => {
-                            payload["targetUnit"] = json!(u);
-                        }
-                        None => {
-                            if let Some(m) = payload.as_object_mut() {
-                                m.remove("targetUnit");
-                            }
-                        }
-                    }
-                    if payload != e.payload || target != e.target_node_id {
+                    let source = swift_extension_source(
+                        s,
+                        &g,
+                        &low,
+                        repo.as_str(),
+                        &u.unit_key,
+                        &e,
+                        &mut payload,
+                    )?;
+                    let target = link_target(
+                        s,
+                        &g,
+                        &low,
+                        repo.as_str(),
+                        &u.unit_key,
+                        &e,
+                        &mut payload,
+                        &mut cache,
+                        scopes,
+                    )?
+                    .unwrap_or_else(|| e.target_node_id.clone());
+                    if payload != e.payload
+                        || target != e.target_node_id
+                        || source != e.source_node_id
+                    {
                         updates.push(EdgeTargetUpdate {
                             unit_key: e.unit_key.clone(),
                             edge_id: e.edge_id.clone(),
+                            source_node_id: source,
                             target_node_id: target,
                             payload,
                         });
@@ -2482,6 +2400,216 @@ pub(crate) fn link_generation(
         }
         after = last;
     }
+}
+
+/// The retained `SwiftTypeReference` endpoint kinds (`IsSwiftTypeNode`).
+const SWIFT_TYPE_KINDS: [&str; 4] = ["Class", "Interface", "Struct", "Enum"];
+
+/// The source of an edge a Swift extension of a type declared elsewhere contributes (see
+/// [`link_generation`]); any other edge keeps its source.
+fn swift_extension_source(
+    s: &dyn ReadSnapshot,
+    generation: &Id,
+    lower: &[Id],
+    repository: &str,
+    unit: &str,
+    e: &StoredEdge,
+    payload: &mut Value,
+) -> Result<String, StorageError> {
+    let path = e.payload["properties"]["source_qualified_name"]
+        .as_str()
+        .and_then(|q| q.strip_prefix(SWIFT_TYPE_REF))
+        .filter(|p| !p.is_empty() && is_swift_unit(unit));
+    let Some(path) = path else {
+        return Ok(e.source_node_id.clone());
+    };
+    let types: Vec<CallNode> = swift_type_nodes(s, generation, lower, path)?
+        .into_iter()
+        .filter(|t| SWIFT_TYPE_KINDS.contains(&t.kind.as_str()))
+        .collect();
+    let Some(m) = payload.as_object_mut() else {
+        return Ok(e.source_node_id.clone());
+    };
+    if let [t] = types.as_slice() {
+        m.insert("sourceUnit".into(), json!(t.unit));
+        m.insert("sourceResolution".into(), json!("Inferred"));
+        m.remove("sourceCandidates");
+        Ok(t.id.clone())
+    } else {
+        // None (an external type) or several: the members stay under the extension's file.
+        m.remove("sourceUnit");
+        m.insert("sourceResolution".into(), json!("Unresolved"));
+        m.insert("sourceCandidates".into(), json!(types.len()));
+        Ok(file_node_id(repository, unit))
+    }
+}
+
+/// The confidence of a call bound by its name alone although its receiver was resolved (the
+/// retained unresolved-receiver band).
+const NAME_BOUND_CONFIDENCE: f64 = 0.45;
+
+/// Marks (or clears) a call bound by its name alone, keeping the extracted confidence so a later
+/// binding through the receiver restores it.
+fn mark_name_bound(payload: &mut Value, name_bound: bool) {
+    let Some(m) = payload.as_object_mut() else {
+        return;
+    };
+    if name_bound {
+        if !m.contains_key("extractedConfidence") {
+            let c = m.get("confidence").cloned().unwrap_or(Value::Null);
+            m.insert("extractedConfidence".into(), c);
+        }
+        m.insert("confidence".into(), json!(NAME_BOUND_CONFIDENCE));
+        m.insert("resolutionBasis".into(), json!("name"));
+    } else {
+        if let Some(c) = m.remove("extractedConfidence") {
+            m.insert("confidence".into(), c);
+        }
+        m.remove("resolutionBasis");
+    }
+}
+
+/// The linked target of one edge (`None`: the edge is not linked by name), with `payload`
+/// updated to say how it was established.
+#[allow(clippy::too_many_arguments)]
+fn link_target(
+    s: &dyn ReadSnapshot,
+    g: &Id,
+    low: &[Id],
+    repo: &str,
+    unit: &str,
+    e: &StoredEdge,
+    payload: &mut Value,
+    cache: &mut HashMap<String, Vec<(String, String, String)>>,
+    scopes: &mut Option<SwiftScopes>,
+) -> Result<Option<String>, StorageError> {
+    let resolution = e
+        .payload
+        .get("resolution")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if resolution == "Resolved" {
+        return Ok(None);
+    }
+    let Some(name) = e.payload.get("targetName").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    // A target named by its exact qualified name (any edge kind, any node kind).
+    let by_qualified_name =
+        e.payload.get("targetMatch").and_then(Value::as_str) == Some("qualifiedName");
+    let kinds = target_kinds(&e.kind).unwrap_or(&[]);
+    if kinds.is_empty() && !by_qualified_name {
+        return Ok(None);
+    }
+    let mut name_bound = false;
+    let mut candidates: Vec<(String, String, String)> = if by_qualified_name {
+        visible_qualified(s, g, low, name)?
+    } else if e.kind == "IMPORTS" {
+        let mut found = Vec::new();
+        for path in import_candidates(unit, name) {
+            let basename = path.rsplit('/').next().unwrap_or(&path).to_owned();
+            for n in visible_named(s, g, low, &basename)? {
+                if n.1 == "File" && n.0 == path {
+                    found.push(n.clone());
+                }
+            }
+            if !found.is_empty() {
+                break;
+            }
+        }
+        found
+    } else if let Some(path) = name.strip_prefix(SWIFT_TYPE_REF).filter(|p| !p.is_empty()) {
+        // A Swift type reference names the type at that path, never a name.
+        let protocol = e.payload["properties"]["swift_protocol_target"] == json!(true);
+        swift_type_nodes(s, g, low, path)?
+            .into_iter()
+            .filter(|c| kinds.contains(&c.kind.as_str()) && (!protocol || c.kind == "Interface"))
+            .map(CallNode::key)
+            .collect()
+    } else if e.kind == "CALLS" {
+        let (found, by_name) = call_candidates(
+            s,
+            g,
+            low,
+            unit,
+            name,
+            &e.payload["properties"],
+            kinds,
+            scopes,
+        )?;
+        name_bound = by_name;
+        found
+    } else {
+        let simple = simple_name(name);
+        let all = match cache.get(&simple) {
+            Some(c) => c.clone(),
+            None => {
+                let c = visible_named(s, g, low, &simple)?;
+                cache.insert(simple.clone(), c.clone());
+                c
+            }
+        };
+        all.into_iter()
+            .filter(|c| kinds.contains(&c.1.as_str()))
+            .collect()
+    };
+    if e.kind == "HANDLES" {
+        let mut layers = vec![g.clone()];
+        layers.extend(low.iter().cloned());
+        let (scoped, problem) = handler_scope(s, &layers, unit, &e.payload, candidates)?;
+        candidates = scoped;
+        if let Some(p) = problem {
+            payload["resolutionProblem"] = json!(p);
+            candidates.clear();
+        }
+        // One route identity (method and path) registered by several files is ambiguous: none
+        // of its registrations proves the handler.
+        if let Some(route) = e.payload["properties"]["routeName"].as_str() {
+            let mut sources: Vec<String> = visible_named(s, g, low, route)?
+                .into_iter()
+                .filter(|n| n.1 == "Route")
+                .map(|n| n.0)
+                .collect();
+            sources.sort();
+            sources.dedup();
+            if sources.len() > 1 {
+                payload["registrationAmbiguous"] = json!(true);
+                payload["registrationSources"] = json!(sources);
+                candidates.clear();
+            }
+        }
+    }
+    let (target, target_unit) = if candidates.len() == 1 {
+        payload["resolution"] = json!("Inferred");
+        payload["candidates"] = json!(1);
+        (candidates[0].2.clone(), Some(candidates[0].0.clone()))
+    } else {
+        // None or several: the name stays a symbol, never a guessed target.
+        payload["resolution"] = json!("Unresolved");
+        payload["candidates"] = json!(candidates.len());
+        name_bound = false;
+        (symbol_id(repo, name), None)
+    };
+    mark_name_bound(payload, name_bound);
+    match target_unit {
+        Some(u) => {
+            payload["targetUnit"] = json!(u);
+        }
+        None => {
+            if let Some(m) = payload.as_object_mut() {
+                m.remove("targetUnit");
+            }
+        }
+    }
+    Ok(Some(target))
+}
+
+/// The last segment of a dotted or `::` path.
+fn simple_name(name: &str) -> String {
+    name.rsplit(['.', ':'])
+        .find(|s| !s.is_empty())
+        .unwrap_or(name)
+        .to_owned()
 }
 
 /// Nodes whose qualified name is exactly `qualified_name`, visible from `generation` (then
@@ -2564,6 +2692,8 @@ struct CallNode {
     qualified_name: String,
     receiver_owner: Option<String>,
     argument_labels: Option<String>,
+    /// The foreign ABI a function is exported under by name (`abi`).
+    abi: Option<String>,
 }
 impl CallNode {
     fn of(n: &StoredNode) -> Self {
@@ -2579,6 +2709,7 @@ impl CallNode {
                 .to_owned(),
             receiver_owner: p["receiver_owner"].as_str().map(str::to_owned),
             argument_labels: p["argument_labels"].as_str().map(str::to_owned),
+            abi: p["abi"].as_str().map(str::to_owned),
         }
     }
     fn key(self) -> (String, String, String) {
@@ -2797,12 +2928,17 @@ fn receiver_owner(
     Ok(Some((owner, symbolic)))
 }
 
-/// Link candidates of a call the structural extractor classified (`receiver_kind`): none for an
-/// unproven receiver; for a resolved receiver whose type is found, only the members of that type
-/// (a Swift type reference: the type at that path and extensions of that path); then the
-/// declarations whose argument labels accept the call's. A resolved receiver naming no type of
-/// the index (a Rust module path, an external type) keeps the name's candidates; the retained
-/// pipeline left such a call unbound.
+/// Link candidates of a call, with whether only its name chose them. A call the structural
+/// extractor classified (`receiver_kind`) gets none for an unproven receiver; for a resolved
+/// receiver whose type is found, only the members of that type (a Swift type reference: the
+/// type at that path, the one the caller's module sees when several modules declare it, and
+/// extensions of that path). A resolved receiver naming no type of the index (a Rust module
+/// path, an external type) keeps the name's candidates, and the binding is name-bound (the
+/// retained pipeline left such a call unbound; DevWorks binds it, marked inferred by name). A
+/// call the extractor did not classify names its callee by its last segment. Then the call
+/// language families ([`call_target_allowed`]), the declarations whose argument labels accept
+/// the call's, and, for a Swift caller with several candidates, the one its module sees.
+#[allow(clippy::too_many_arguments)]
 fn call_candidates(
     s: &dyn ReadSnapshot,
     generation: &Id,
@@ -2811,25 +2947,42 @@ fn call_candidates(
     callee: &str,
     properties: &Value,
     kinds: &[&str],
-) -> Result<Candidates, StorageError> {
+    scopes: &mut Option<SwiftScopes>,
+) -> Result<(Candidates, bool), StorageError> {
     if call_binding_refused(properties) {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), false));
     }
-    let mut all: Vec<CallNode> = visible_nodes(s, generation, lower, callee, false)?
+    let receiver_kind = properties.get("receiver_kind").and_then(Value::as_str);
+    let name = match receiver_kind {
+        Some(_) => callee.to_owned(),
+        None => simple_name(callee),
+    };
+    let mut all: Vec<CallNode> = visible_nodes(s, generation, lower, &name, false)?
         .iter()
         .filter(|n| kinds.contains(&n.kind.as_str()))
         .map(CallNode::of)
         .collect();
-    if properties.get("receiver_kind").and_then(Value::as_str) == Some("Resolved") {
+    let swift_caller = is_swift_unit(unit);
+    let mut name_bound = false;
+    if receiver_kind == Some("Resolved") {
         let receiver = properties
             .get("receiver_type")
             .and_then(Value::as_str)
             .filter(|r| !r.is_empty());
         if let Some(path) = receiver.and_then(|r| r.strip_prefix(SWIFT_TYPE_REF)) {
-            let types: Vec<CallNode> = swift_type_nodes(s, generation, lower, path)?
+            let mut types: Vec<CallNode> = swift_type_nodes(s, generation, lower, path)?
                 .into_iter()
                 .filter(|t| RECEIVER_OWNER_KINDS.contains(&t.kind.as_str()))
                 .collect();
+            // A type path several modules declare (a vendored copy) names the one the caller
+            // can see.
+            if types.len() > 1
+                && swift_caller
+                && let Some(sc) = swift_scopes(scopes, s, generation, lower)?
+            {
+                let caller_scope = sc.scope_of(unit).map(str::to_owned);
+                types.retain(|t| sc.visible(caller_scope.as_deref(), unit, &t.unit));
+            }
             let owner = (types.len() == 1).then(|| types[0].clone());
             let extended = all.iter().any(|c| owned_by_swift_extension(c, path));
             if owner.is_some() || extended {
@@ -2837,13 +2990,38 @@ fn call_candidates(
                     owner.as_ref().is_some_and(|o| owned_by(c, o, false))
                         || owned_by_swift_extension(c, path)
                 });
+            } else {
+                name_bound = true;
             }
-        } else if let Some(receiver) = receiver
-            && let Some((owner, symbolic)) = receiver_owner(s, generation, lower, unit, receiver)?
-        {
-            all.retain(|c| owned_by(c, &owner, symbolic));
+        } else {
+            match match receiver {
+                Some(r) => receiver_owner(s, generation, lower, unit, r)?,
+                None => None,
+            } {
+                Some((owner, symbolic)) => all.retain(|c| owned_by(c, &owner, symbolic)),
+                None => name_bound = true,
+            }
         }
     }
+    // A bare call: no receiver at the call site (`Bare`, or the previous walk's `none`).
+    let bare = match receiver_kind {
+        Some(k) => k == "Bare",
+        None => properties
+            .get("receiver")
+            .and_then(Value::as_str)
+            .is_none_or(|r| r == "none"),
+    };
+    all.retain(|c| {
+        call_target_allowed(
+            unit,
+            &CallTarget {
+                unit: &c.unit,
+                kind: &c.kind,
+                abi: c.abi.as_deref(),
+            },
+            bare,
+        )
+    });
     if let Some(labels) = properties.get("argument_labels").and_then(Value::as_str) {
         all.retain(|c| {
             c.argument_labels
@@ -2851,7 +3029,105 @@ fn call_candidates(
                 .is_none_or(|declared| labels_accept(declared, labels))
         });
     }
-    Ok(all.into_iter().map(CallNode::key).collect())
+    if swift_caller
+        && all.len() > 1
+        && let Some(sc) = swift_scopes(scopes, s, generation, lower)?
+    {
+        all = sc.prefer(unit, all, |c| c.unit.as_str());
+    }
+    Ok((all.into_iter().map(CallNode::key).collect(), name_bound))
+}
+
+/// The Swift module scopes of the layers (loaded once per link pass), or `None` when the index
+/// declares no Swift module.
+fn swift_scopes<'c>(
+    cache: &'c mut Option<SwiftScopes>,
+    s: &dyn ReadSnapshot,
+    generation: &Id,
+    lower: &[Id],
+) -> Result<Option<&'c SwiftScopes>, StorageError> {
+    if cache.is_none() {
+        let mut layers = vec![generation.clone()];
+        layers.extend(lower.iter().cloned());
+        *cache = Some(load_swift_scopes(s, &layers)?);
+    }
+    Ok(cache.as_ref().filter(|c| !c.is_empty()))
+}
+
+/// Reads the SwiftPM and Xcode targets (from `Package.swift` and `project.pbxproj` units) and
+/// every Swift file's module imports, as the layers compose them.
+fn load_swift_scopes(s: &dyn ReadSnapshot, layers: &[Id]) -> Result<SwiftScopes, StorageError> {
+    // The visible units: the highest layer that mentions a key decides it.
+    let mut visible: BTreeMap<String, Option<Id>> = BTreeMap::new();
+    for g in layers {
+        let mut after: Option<String> = None;
+        loop {
+            let page = s.indexing().units(g, after.as_deref(), 500)?;
+            for u in &page {
+                visible
+                    .entry(u.unit_key.clone())
+                    .or_insert_with(|| (u.action == UNIT_REPLACE).then(|| g.clone()));
+            }
+            if page.len() < 500 {
+                break;
+            }
+            after = page.last().map(|u| u.unit_key.clone());
+        }
+    }
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    let mut modules = Vec::new();
+    for (key, g) in &visible {
+        let Some(g) = g else { continue };
+        let name = key.rsplit('/').next().unwrap_or(key);
+        if name != "Package.swift" && name != "project.pbxproj" {
+            continue;
+        }
+        for n in s.indexing().nodes(g, key)? {
+            let p = &n.payload["properties"];
+            let ecosystem = p["ecosystem"].as_str();
+            if n.kind != "Module" || !matches!(ecosystem, Some("swiftpm" | "xcode")) {
+                continue;
+            }
+            modules.push(SwiftModule {
+                qualified_name: text(&n.payload, "qualifiedName").unwrap_or_default(),
+                module_name: text(p, "module_name").unwrap_or_else(|| n.name.clone()),
+                xcode: ecosystem == Some("xcode"),
+                manifest_path: text(p, "manifest_path").unwrap_or_else(|| key.clone()),
+                project_directory: text(p, "project_directory"),
+                source_path: text(p, "source_path"),
+                source_paths: text(p, "source_paths"),
+                package_key: text(p, "package_key"),
+            });
+        }
+    }
+    if modules.is_empty() {
+        return Ok(SwiftScopes::default());
+    }
+    let mut imports = Vec::new();
+    for (key, g) in &visible {
+        let Some(g) = g else { continue };
+        if !is_swift_unit(key) {
+            continue;
+        }
+        for e in s.indexing().edges(g, key)? {
+            let p = &e.payload["properties"];
+            let module = e.payload["targetName"].as_str().unwrap_or_default();
+            // Module imports only: not a type reference, not the previous walk's written path.
+            if e.kind != "IMPORTS"
+                || module.is_empty()
+                || module.starts_with(SWIFT_TYPE_REF)
+                || p["baseline_extension"] == json!(true)
+            {
+                continue;
+            }
+            imports.push(SwiftImport {
+                file: key.clone(),
+                module: module.to_owned(),
+                exported: p["exported"] == json!(true),
+            });
+        }
+    }
+    Ok(SwiftScopes::new(&modules, &imports))
 }
 
 /// Coverage of a staged generation (languages, modes, gaps) and its unit count.
@@ -3050,6 +3326,7 @@ mod tests {
             qualified_name: qn.into(),
             receiver_owner: owner.map(str::to_owned),
             argument_labels: None,
+            abi: None,
         }
     }
 
