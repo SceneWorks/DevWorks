@@ -468,5 +468,19 @@ case('r2-result-router.availability','operation-result.r2',{'kind':'router.avail
 case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
 case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
 case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
+# Schema revision 2 (web tools): untrusted results with their provider, and a fetched document's
+# trust, final 2xx status, 3xx redirect chain and the digest/length of the bytes received.
+case('r2-input-web.search','domain-request.r2',domain('web.search'))
+case('r2-input-web.fetch','domain-request.r2',domain('web.fetch'))
+web_result_r2={**sample('WebResult'),'trust':'Untrusted','providerId':'brave'}
+case('r2-result-web.search','operation-result.r2',{'kind':'web.search','value':{'items':[web_result_r2],'hasMore':True,'nextCursor':'cursor-a'}})
+case('reject-r1-result-web-result-trust','operation-result',{'kind':'web.search','value':{'items':[web_result_r2],'hasMore':False}},False,False)
+web_doc_r2={**sample('WebDocument'),'trust':'Untrusted','status':200,'redirects':[{'url':'https://fixture.invalid/old','status':301},{'url':'https://fixture.invalid/moved','status':308}],'sourceSha256':'a'*64,'sourceByteLength':'4096'}
+case('r2-result-web.fetch','operation-result.r2',{'kind':'web.fetch','value':web_doc_r2})
+case('r2-result-web.fetch-plain','operation-result.r2',{'kind':'web.fetch','value':sample('WebDocument')})
+case('reject-r1-result-web-document-provenance','operation-result',{'kind':'web.fetch','value':web_doc_r2},False,False)
+case('reject-r2-result-web-document-not-2xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'status':404}},False,True)
+case('reject-r2-result-web-redirect-not-3xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'redirects':[{'url':'https://fixture.invalid/old','status':200}]}},False,True)
+case('reject-r2-result-web-document-unknown-trust','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'trust':'Verified'}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

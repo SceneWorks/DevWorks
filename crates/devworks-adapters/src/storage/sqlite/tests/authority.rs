@@ -370,10 +370,8 @@ fn full_is_the_default_and_role_restrictions_hold_under_it() {
         )),
         Some(DenialReason::ReadOnlyRole)
     );
-    assert_eq!(
-        reason(decide(&fx, &reviewer, "web.fetch", Mode::Query, FETCH)),
-        Some(DenialReason::UnverifiedRead)
-    );
+    // The shared web tools are first-class reviewer reads (TOOL-04/05/08).
+    assert!(decide(&fx, &reviewer, "web.fetch", Mode::Query, FETCH).is_ok());
     assert_eq!(
         reason(decide(
             &fx,
@@ -2376,7 +2374,12 @@ fn a_policy_denial_carries_its_typed_reason_and_a_denied_command_is_recorded() {
     // A refused query carries the typed reason in its fault.
     match fx
         .gateway(&authority)
-        .query(&reviewer, "web.fetch", FETCH.as_bytes(), &*fx.settings)
+        .query(
+            &reviewer,
+            "mcp.servers",
+            MCP_SERVERS.as_bytes(),
+            &*fx.settings,
+        )
         .unwrap()
     {
         DomainQueryReply::Rejected { fault, .. } => {

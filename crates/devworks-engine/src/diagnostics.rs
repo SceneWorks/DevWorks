@@ -399,14 +399,23 @@ pub struct Monitor {
     wake: Notify,
 }
 impl Monitor {
-    /// One pass at once, then every `interval`, until stopped.
-    pub async fn run(&self, service: Arc<DiagnosticService>, interval: Duration) {
+    /// One pass at once, then every `interval`, until stopped. Once stopped, a pass in progress
+    /// starts no further step (retention, each probe, sweep), so none writes after it was
+    /// signalled and shutdown joins it as soon as the step under way returns.
+    pub async fn run(self: Arc<Self>, service: Arc<DiagnosticService>, interval: Duration) {
         while !self.stopping.load(Ordering::SeqCst) {
-            let svc = service.clone();
+            let (svc, me) = (service.clone(), self.clone());
             let _ = tokio::task::spawn_blocking(move || {
-                let _ = svc.prune();
-                svc.refresh_monitor();
-                svc.sweep_exports();
+                let stopped = || me.stopping.load(Ordering::SeqCst);
+                if !stopped() {
+                    let _ = svc.prune();
+                }
+                if !stopped() {
+                    svc.refresh_monitor_unless(&stopped);
+                }
+                if !stopped() {
+                    svc.sweep_exports();
+                }
             })
             .await;
             let _ = dispatch::first(self.wake.notified(), tokio::time::sleep(interval)).await;

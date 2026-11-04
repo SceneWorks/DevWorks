@@ -46,7 +46,7 @@ use devworks_core::services::browser::live::MAX_FRAMES;
 use devworks_core::services::browser::{BrowserConfig, BrowserService, EFFECT_CONSUMER};
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::browser::BrowserComposition;
-use devworks_engine::{Composition, Runtime, RuntimeConfig, boot};
+use devworks_engine::{Composition, Runtime, RuntimeConfig, ShutdownStage, boot};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -784,6 +784,29 @@ struct FakePlatform {
     protocol: Mutex<String>,
     /// Methods the next browsers never answer.
     hang: Mutex<HashSet<String>>,
+    /// When set, profile removal does not return until this gate opens.
+    removal: Mutex<Option<Arc<Gate>>>,
+}
+/// A step that does not return until released.
+#[derive(Default)]
+struct Gate {
+    entered: std::sync::atomic::AtomicBool,
+    open: Mutex<bool>,
+    opened: std::sync::Condvar,
+}
+impl Gate {
+    fn pass(&self) {
+        self.entered
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut open = self.open.lock().unwrap();
+        while !*open {
+            open = self.opened.wait(open).unwrap();
+        }
+    }
+    fn release(&self) {
+        *self.open.lock().unwrap() = true;
+        self.opened.notify_all();
+    }
 }
 impl FakePlatform {
     fn new(root: &Path) -> Self {
@@ -807,6 +830,7 @@ impl FakePlatform {
             launched: Mutex::new(vec![]),
             protocol: Mutex::new("1.3".into()),
             hang: Mutex::new(HashSet::new()),
+            removal: Mutex::new(None),
         }
     }
     fn browser(&self, session: &Id) -> Arc<Mutex<FakeBrowser>> {
@@ -847,6 +871,10 @@ impl BrowserPlatform for FakePlatform {
         self.native.create_profile(session)
     }
     fn remove_profile(&self, session: &Id) -> Result<(), BrowserFault> {
+        let gate = self.removal.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.pass();
+        }
         self.native.remove_profile(session)
     }
     fn profiles(&self) -> Result<Vec<Id>, BrowserFault> {
@@ -2282,6 +2310,76 @@ fn shutdown_closes_sessions_and_boot_recovery_settles_an_earlier_boots_sessions(
     let report = fx.app().report().browser.clone().unwrap();
     assert_eq!(report.settled, 1);
     assert!(report.profiles_removed >= 1);
+}
+
+/// Closing the browser sessions at shutdown waits only after the run-control hold committed and
+/// only within the one shutdown bound: a close that does not return is abandoned at the
+/// deadline, so it can neither delay the hold nor keep shutdown from finishing.
+#[test]
+fn a_blocked_browser_close_never_delays_the_hold_and_is_abandoned_at_the_shutdown_bound() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let h = Harness::new();
+    let platform = Arc::new(FakePlatform::new(&h.root));
+    let rt = runtime();
+    let store = h.open();
+    seed_project(&h);
+    let user = principal(&*store, "user-a", PrincipalKind::Human);
+    let real: Arc<dyn BrowserPlatform> = platform.clone();
+    let mut composition = composition(&h, store, real, config());
+    composition.config.shutdown_bound = Duration::from_millis(500);
+    let app = rt.block_on(boot(composition)).unwrap();
+    let mut fx = Fx {
+        h: Some(h),
+        rt,
+        app: Some(app),
+        platform: platform.clone(),
+        user: user.clone(),
+        keys: Default::default(),
+    };
+    let _session = fx.create(&user, workspace());
+    let gate = Arc::new(Gate::default());
+    *platform.removal.lock().unwrap() = Some(gate.clone());
+    // Opens the gate however the test ends: the runtime waits for its blocking threads.
+    struct Release(Arc<Gate>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+    let _release = Release(gate.clone());
+
+    let app = fx.app.take().unwrap();
+    let (stage_at_close, entered) = std::thread::scope(|scope| {
+        let watcher = scope.spawn(|| {
+            let until = Instant::now() + Duration::from_secs(30);
+            while !gate.entered.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < until
+            {
+                std::thread::yield_now();
+            }
+            app.shutdown_stage()
+        });
+        fx.rt.block_on(within("shutdown", app.shutdown()));
+        (
+            watcher.join().unwrap(),
+            gate.entered.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    });
+    assert!(entered, "shutdown reached the browser close");
+    assert!(
+        stage_at_close >= ShutdownStage::StoppingWork,
+        "the close started only after the hold committed: {stage_at_close:?}"
+    );
+    assert_eq!(app.shutdown_stage(), ShutdownStage::Done);
+    assert!(
+        !*gate.open.lock().unwrap(),
+        "shutdown returned while the close was still blocked"
+    );
+    assert!(
+        app.processes().owned().is_empty(),
+        "the browser tree is stopped"
+    );
+    gate.release();
+    drop(app);
 }
 
 #[test]

@@ -10,7 +10,9 @@ pub mod diagnostics;
 pub mod files;
 pub mod process;
 pub mod router;
+pub mod secrets;
 pub mod storage;
+pub mod web;
 
 use crate::context::InvocationContext;
 use crate::fingerprint::Fingerprint;
@@ -198,6 +200,21 @@ pub struct QueryAnswer {
 /// Read use cases run against one read snapshot. Queries never mint grants, clear blockers,
 /// claim work or consume budget.
 pub trait QueryHandler: Send + Sync {
+    /// Bounded external preparation of an admitted, currently authorized query, outside any read
+    /// snapshot and write transaction: for example a host-native external read (the web tools)
+    /// and the evidence it records. It never mints a receipt, grant or blocker change; what it
+    /// writes (journaled staging, evidence artifacts, host diagnostics) must be complete and
+    /// recoverable on its own, because the query's publication can still be denied. `env`
+    /// carries the caller's cancellation and deadline. An `Err` is the query's typed fault. The
+    /// default prepares nothing.
+    fn prepare(
+        &self,
+        _ctx: &InvocationContext,
+        _query: &AdmittedQuery,
+        _env: &Preparation<'_>,
+    ) -> Result<Option<Prepared>, DomainFault> {
+        Ok(None)
+    }
     fn query(
         &self,
         ctx: &InvocationContext,

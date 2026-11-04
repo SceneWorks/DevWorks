@@ -83,6 +83,12 @@ pub enum Slot {
     RoutePin(String),
     /// The first routed request of a conversation (session ID): its selection becomes its pin.
     RouteFirst(String),
+    /// A page fetch from Settings > Agent tools.
+    WebFetch,
+    /// A search from Settings > Agent tools.
+    WebSearch,
+    /// The recent web activity record.
+    WebActivity,
     /// Active and archived projects.
     ProjectsList,
     /// Deleted projects (their tombstones).

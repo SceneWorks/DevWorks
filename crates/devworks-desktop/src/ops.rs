@@ -5,9 +5,10 @@ use crate::backend::Backend;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
 use devworks_core::protocol::records::{
-    AccessMode, ArtifactRecord, BrowserSession, EffortName, MutationSummary, ProjectRecord,
-    RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability, RouteChoice, RouteIntent,
-    RouteModel, SessionRecord, SettingEntry, ValidationReport,
+    AccessMode, ArtifactRecord, BrowserSession, DiagnosticEntry, EffortName, MutationSummary,
+    ProjectRecord, RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability,
+    RouteChoice, RouteIntent, RouteModel, SessionRecord, SettingEntry, ValidationReport,
+    WebDocument, WebResult,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, DomainFault};
@@ -510,6 +511,75 @@ pub fn pinned(outcome: CommandOutcome) -> Result<RouteChoice, Failure> {
     match command_result(outcome)? {
         OperationResult::RouterPin { value } => Ok(value),
         other => Err(unexpected("router.pin", &other)),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Web search and fetch (DW-51)
+
+/// The web tools' results carry trust and provenance from schema revision 2.
+pub const WEB_REVISION: u64 = 2;
+/// The most a page fetched from the UI keeps (the contract's bound).
+pub const WEB_FETCH_BYTES: u32 = 1_048_576;
+/// The time the UI asks for; the `web.timeoutMs` setting caps it.
+pub const WEB_FETCH_TIMEOUT_MS: u64 = 30_000;
+/// Results one search page asks for.
+pub const WEB_SEARCH_LIMIT: u16 = 10;
+/// Recent web activity records shown.
+pub const WEB_ACTIVITY_LIMIT: u16 = 20;
+
+/// `web.fetch` of `url` into the workspace, as the user.
+pub fn web_fetch(backend: &dyn Backend, url: &str) -> Vec<u8> {
+    at_revision(
+        query_frame(
+            backend,
+            "web.fetch",
+            json!({"scope": {"kind": "Workspace"}, "url": url, "maxBytes": WEB_FETCH_BYTES,
+                "timeoutMs": WEB_FETCH_TIMEOUT_MS.to_string()}),
+        ),
+        WEB_REVISION,
+    )
+}
+pub fn web_document(outcome: QueryOutcome) -> Result<WebDocument, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::WebFetch { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("web.fetch", &other)),
+    }
+}
+/// `web.search` of `query` with the configured `provider`, as the user.
+pub fn web_search(backend: &dyn Backend, query: &str, provider: &str) -> Vec<u8> {
+    at_revision(
+        query_frame(
+            backend,
+            "web.search",
+            json!({"scope": {"kind": "Workspace"}, "query": query, "providerId": provider,
+                "page": {"limit": WEB_SEARCH_LIMIT}}),
+        ),
+        WEB_REVISION,
+    )
+}
+pub fn web_results(outcome: QueryOutcome) -> Result<Vec<WebResult>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::WebSearch { value }, _) => Ok(value.items.0),
+        (other, _) => Err(unexpected("web.search", &other)),
+    }
+}
+/// The newest web activity records (`workspace.logs` of the `web` components).
+pub fn web_activity(backend: &dyn Backend) -> Vec<u8> {
+    at_revision(
+        query_frame(
+            backend,
+            "workspace.logs",
+            json!({"page": {"limit": WEB_ACTIVITY_LIMIT}, "component": "web",
+                "afterSequence": "0", "order": "Descending"}),
+        ),
+        2,
+    )
+}
+pub fn web_entries(outcome: QueryOutcome) -> Result<Vec<DiagnosticEntry>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::WorkspaceLogs { value }, _) => Ok(value.items.0),
+        (other, _) => Err(unexpected("workspace.logs", &other)),
     }
 }
 
