@@ -140,7 +140,10 @@ pub struct Shell {
     pub settings: SettingsScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
+    /// Every listed browser session: the workspace's, then each listed project's.
     pub browser: ListState<BrowserSession>,
+    /// The browser sessions per scope (`None`: the workspace), combined into `browser`.
+    browser_parts: BTreeMap<Option<String>, ListState<BrowserSession>>,
     /// All projects, the project selector and Repositories (DW-11).
     pub projects: projects::ProjectsUi,
     /// The project the navigation selected; its screens follow it.
@@ -280,6 +283,7 @@ impl Shell {
             artifacts: ListState::default(),
             resources: ListState::default(),
             browser: ListState::default(),
+            browser_parts: BTreeMap::new(),
             projects: projects::ProjectsUi::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
@@ -528,13 +532,92 @@ impl Shell {
             ops::workspace_artifacts,
         );
     }
-    fn load_browser(&mut self) {
+    /// The workspace's browser sessions and the selected project's, or every listed project's
+    /// when none is selected: a person may see and interrupt each of them.
+    pub(crate) fn load_browser(&mut self) {
+        let projects: Vec<String> = match &self.selected_project {
+            Some(p) => vec![p.clone()],
+            None => {
+                if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
+                    self.load_projects();
+                }
+                self.projects
+                    .list
+                    .items
+                    .iter()
+                    .map(|p| p.id.0.as_str().to_owned())
+                    .collect()
+            }
+        };
+        self.browser_parts
+            .retain(|scope, _| scope.as_ref().is_none_or(|p| projects.contains(p)));
+        self.combine_browser();
         self.query(
             Slot::BrowserSessions,
             "Loading browser sessions",
             "browser.sessions",
-            ops::browser_sessions_list,
+            |b| ops::browser_sessions_list(b, None),
         );
+        for p in projects {
+            let q = p.clone();
+            self.query(
+                Slot::ProjectBrowserSessions(p),
+                "Loading a project's browser sessions",
+                "browser.sessions",
+                move |b| ops::browser_sessions_list(b, Some(&q)),
+            );
+        }
+    }
+
+    /// Records one scope's page and rebuilds the combined list.
+    fn browser_part(
+        &mut self,
+        scope: Option<String>,
+        page: Result<(Vec<BrowserSession>, bool), Failure>,
+    ) {
+        let part = match page {
+            Ok((items, more)) => ListState {
+                items,
+                loaded: true,
+                error: None,
+                more,
+            },
+            Err(e) => ListState {
+                error: Some(e.describe()),
+                ..ListState::default()
+            },
+        };
+        self.browser_parts.insert(scope, part);
+        self.combine_browser();
+    }
+    fn combine_browser(&mut self) {
+        let parts = &self.browser_parts;
+        self.browser = ListState {
+            items: parts.values().flat_map(|p| p.items.clone()).collect(),
+            loaded: !parts.is_empty() && parts.values().all(|p| p.loaded),
+            error: parts.values().find_map(|p| p.error.clone()),
+            more: parts.values().any(|p| p.more),
+        };
+    }
+    /// The scope a listed browser session belongs to, for its row.
+    fn browser_scope_labels(&self) -> std::collections::HashMap<String, String> {
+        let mut out = std::collections::HashMap::new();
+        for (scope, part) in &self.browser_parts {
+            let label = match scope {
+                None => "Workspace".to_owned(),
+                Some(p) => self
+                    .projects
+                    .list
+                    .items
+                    .iter()
+                    .find(|r| r.id.0.as_str() == p)
+                    .map_or_else(|| p.clone(), |r| r.name.0.clone()),
+            };
+            for s in &part.items {
+                out.insert(s.id.as_str().to_owned(), label.clone());
+            }
+        }
+        out
     }
 
     /// Interrupts a browser session: Close stops its browser through the process owner.
@@ -1544,17 +1627,12 @@ impl Shell {
                 }
                 Err(e) => self.artifacts.error = Some(e.describe()),
             },
-            (Slot::BrowserSessions, Reply::Query(q)) => match ops::browser_sessions(q) {
-                Ok((items, more)) => {
-                    self.browser = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    };
-                }
-                Err(e) => self.browser.error = Some(e.describe()),
-            },
+            (Slot::BrowserSessions, Reply::Query(q)) => {
+                self.browser_part(None, ops::browser_sessions(q));
+            }
+            (Slot::ProjectBrowserSessions(p), Reply::Query(q)) => {
+                self.browser_part(Some(p), ops::browser_sessions(q));
+            }
             (Slot::BrowserClose(_), Reply::Command(c)) => {
                 match ops::browser_closed(c) {
                     Ok(true) => self.announce("The browser session is being closed."),
@@ -3006,6 +3084,7 @@ impl Shell {
         let mut reload = false;
         let mut close: Option<BrowserSession> = None;
         let mut mem = self.routes.remove(&Route::Browser).unwrap_or_default();
+        let scopes = self.browser_scope_labels();
         let list = &self.browser;
         let scrolls = &mut self.scrolls;
         let mut st = (&mut reload, &mut mem, &mut close);
@@ -3066,10 +3145,11 @@ impl Shell {
                             ItemState::Unavailable => "stop not verified",
                             ItemState::Enabled => "enabled",
                         };
+                        let scope = scopes.get(s.id.as_str()).map_or("", String::as_str);
                         ui.selectable_label(
                             selected,
                             format!(
-                                "{}  ·  {state}  ·  {} target(s)  ·  revision {}",
+                                "{}  ·  {scope}  ·  {state}  ·  {} target(s)  ·  revision {}",
                                 s.id.as_str(),
                                 s.target_ids.0.len(),
                                 s.revision.as_str()

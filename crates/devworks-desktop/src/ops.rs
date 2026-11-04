@@ -360,12 +360,16 @@ pub fn resources_list(backend: &dyn Backend) -> Vec<u8> {
         json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
     )
 }
-/// The workspace's owned browser sessions (`browser.sessions`).
-pub fn browser_sessions_list(backend: &dyn Backend) -> Vec<u8> {
+/// The owned browser sessions (`browser.sessions`) of `project`, or of the workspace.
+pub fn browser_sessions_list(backend: &dyn Backend, project: Option<&str>) -> Vec<u8> {
+    let scope = match project {
+        Some(p) => json!({"kind": "Project", "projectId": p}),
+        None => json!({"kind": "Workspace"}),
+    };
     query_frame(
         backend,
         "browser.sessions",
-        json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
+        json!({"scope": scope, "page": {"limit": PAGE_LIMIT}}),
     )
 }
 pub fn browser_sessions(outcome: QueryOutcome) -> Result<(Vec<BrowserSession>, bool), Failure> {

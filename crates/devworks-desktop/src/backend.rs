@@ -67,7 +67,10 @@ pub enum Slot {
     DeleteAttachment(String),
     ArtifactsList,
     ResourcesList,
+    /// The workspace's browser sessions.
     BrowserSessions,
+    /// The browser sessions of one project (its ID).
+    ProjectBrowserSessions(String),
     /// Closing a browser session (its ID).
     BrowserClose(String),
     /// A page of the router catalog for the composer's selectors (its load generation).

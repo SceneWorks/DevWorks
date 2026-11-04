@@ -260,6 +260,9 @@ impl Shell {
         if self.route == Route::Repositories {
             self.load_repositories();
         }
+        if self.route == Route::Browser {
+            self.load_browser();
+        }
     }
 
     fn act(&mut self, actions: Vec<Action>) {
@@ -424,6 +427,10 @@ impl Shell {
                             .any(|p| p.id.0.as_str() == s)
                     {
                         self.select_project(None);
+                    }
+                    // Without a selection the browser sessions of every listed project show.
+                    if self.route == Route::Browser && self.selected_project.is_none() {
+                        self.load_browser();
                     }
                 }
                 Err(e) => self.projects.list.error = Some(e.describe()),

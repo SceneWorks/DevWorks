@@ -2101,6 +2101,19 @@ impl BrowserService {
                     )
                     .into());
                 }
+                // An archived or deleted project starts no work, a browser session included.
+                if tx
+                    .runs()
+                    .project_lifecycle(project_id)?
+                    .is_some_and(|l| crate::services::runs::closed_to_work(&l))
+                {
+                    return Err(Refusal::new(
+                        DomainErrorCode::Conflict,
+                        "archived_project",
+                        Some(project_id.0.clone()),
+                    )
+                    .into());
+                }
                 Some(project_id.clone())
             }
             DataScope::Workspace => {

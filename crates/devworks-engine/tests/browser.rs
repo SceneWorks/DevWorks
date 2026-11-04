@@ -2641,6 +2641,36 @@ fn an_action_never_overtakes_a_predecessor_that_outlasts_the_order_bound() {
 }
 
 #[test]
+fn a_closed_project_starts_no_browser_session() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let c = rusqlite::Connection::open(fx.h().root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute_batch(
+        "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-c','C','Archived',1,1,0),('project-d','D','Deleted',1,1,0);",
+    )
+    .unwrap();
+    drop(c);
+    // An archived project starts no work; a deleted one is gone.
+    for (p, code, kind) in [
+        ("project-c", DomainErrorCode::Conflict, "archived_project"),
+        ("project-d", DomainErrorCode::NotFound, "project"),
+    ] {
+        let fault = fx.refused(
+            &user,
+            "browser.sessions",
+            json!({"action": {"kind": "Create", "scope": {"kind": "Project", "projectId": p}, "browserAssetId": "chrome"}}),
+        );
+        assert_eq!(
+            (fault.code, fault.target_kind.unwrap().0),
+            (code, kind.to_owned()),
+            "{p}"
+        );
+    }
+}
+
+#[test]
 fn a_browser_whose_main_process_exits_is_settled_while_its_helpers_linger() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
