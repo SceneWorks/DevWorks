@@ -1871,11 +1871,14 @@ fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versi
     );
     // Resolution: the shim (PATHEXT on Windows), never a non-command file.
     let path = dir.display().to_string();
-    let node = resolve_command("node", &path, Some(".EXE;.CMD")).unwrap();
-    assert_eq!(
-        node.file_name().unwrap().to_str().unwrap(),
-        if cfg!(windows) { "node.cmd" } else { "node" }
-    );
+    // Whatever the case of the PATHEXT entries, the name reported is the one on disk.
+    for pathext in [".EXE;.CMD", ".exe;.cmd"] {
+        let node = resolve_command("node", &path, Some(pathext)).unwrap();
+        assert_eq!(
+            node.file_name().unwrap().to_str().unwrap(),
+            if cfg!(windows) { "node.cmd" } else { "node" }
+        );
+    }
     assert!(resolve_command("deno", &path, Some(".EXE;.CMD")).is_none());
     // A declared runtime outside the known set is probed with the generic form.
     let needs = |pkg: &str, rt: &str, req: &str| Spec {

@@ -70,11 +70,34 @@ pub fn resolve_command(name: &str, path: &str, pathext: Option<&str>) -> Option<
         let start = usize::from(cfg!(windows));
         for c in candidates.into_iter().skip(start) {
             if is_executable(&c) {
-                return Some(c);
+                return Some(on_disk(&dir, c));
             }
         }
     }
     None
+}
+
+/// `candidate` (in `dir`) with its file name as the directory entry spells it. Windows file
+/// names are case-insensitive (`node.CMD` built from an uppercase PATHEXT opens `node.cmd`), so
+/// the path reported and launched is the one on disk, never the spelling it was found by.
+fn on_disk(dir: &Path, candidate: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return candidate;
+    }
+    let Some(wanted) = candidate.file_name().and_then(|n| n.to_str()) else {
+        return candidate;
+    };
+    std::fs::read_dir(dir)
+        .ok()
+        .and_then(|entries| {
+            entries.flatten().find_map(|e| {
+                let name = e.file_name();
+                name.to_str()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(wanted))
+                    .then(|| dir.join(name))
+            })
+        })
+        .unwrap_or(candidate)
 }
 
 #[cfg(unix)]
