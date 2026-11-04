@@ -52,7 +52,11 @@
 //! No approvals service exists yet (DW-14 owns human decisions). Proposals are stored here with
 //! their decision; the approval of a proposal is the person's own `addons.install`/`.update` of
 //! exactly its contents, and [`PackageService::decide_proposal`] is the seam DW-14's
-//! `approvals.record_human_decision` will call (approve or reject, person only).
+//! `approvals.record_human_decision` will call (approve or reject, person only). An approval
+//! that leaves nothing else to wait for makes the pending version activatable at the host's
+//! next quiescent boundary. Only a person's decision rejects a version: a newer proposal and an
+//! uninstall retire the candidate they replace (its files go, its identity stays), so the same
+//! contents can be installed again through the ordinary approval path.
 //!
 //! # Publication (architecture "Durable package state and atomic activation")
 //!
@@ -70,8 +74,10 @@
 //! invocations to finish (bounded by [`PackageService::quiesce_wait`]); only a quiescent package
 //! is published, so no invocation ever runs against a half-published registry, and an invocation
 //! already admitted keeps its pinned version. A package that is still busy keeps the candidate
-//! staged (`Quiescence`) and the host retries ([`PackageService::retry_pending`]) with backoff;
-//! routine updates never interrupt work.
+//! staged (`Quiescence`) and the host retries ([`PackageService::retry_pending`]) with backoff,
+//! rechecking approval, trust and compatibility in the activation's unit of work (a candidate
+//! that would regress now stays pending for `Compatibility` and is retried); routine updates
+//! never interrupt work.
 //!
 //! **State.** Each activation publishes a new state generation, so a handler pinned to the old
 //! generation is fenced (`broker.commit_event` refuses a generation mismatch). A version with the
@@ -86,7 +92,8 @@
 //! then restores exactly the predecessor generation it was seeded from. Any other downgrade is
 //! refused (`Conflict`, `package_state`): rollback never restores an old snapshot over later work,
 //! and never reverses external effects, approvals or history. The host's automatic rollback after
-//! a failed startup uses the same rule ([`PackageService::startup_failed`]).
+//! a failed startup uses the same rule ([`PackageService::startup_failed`]). Neither restores a
+//! version whose prerequisites are not met now.
 //!
 //! **Disable / uninstall.** Disable commits first (the package leaves the active set, so new
 //! invocations are refused); the host then cancels and drains its invocations and retires the
@@ -142,7 +149,7 @@ use crate::services::artifacts::lifecycle::ExactReadRefusal;
 use crate::services::diagnostics::{DiagnosticService, LogEntry};
 use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -234,6 +241,9 @@ pub struct PackageService {
     validator: Arc<dyn SchemaValidator>,
     /// Consumers that receive every `PackageAvailabilityChanged` delivery.
     consumers: RwLock<Vec<String>>,
+    /// Install directories a command published and has not settled yet: collection never
+    /// removes them (a retired version being installed again is republished, then recorded).
+    publishing: Arc<Mutex<BTreeMap<(String, String), usize>>>,
     /// Bound on waiting for a running package to quiesce inside an update or rollback command.
     pub quiesce_wait: Duration,
 }
@@ -266,6 +276,36 @@ struct BundlePrep {
     provenance: Value,
     bundle: ArtifactRef,
     guard: GuardCell,
+    /// Keeps the published install directory from collection until the command settles.
+    _held: Option<PublishHold>,
+}
+/// An install directory published by a command that has not settled.
+struct PublishHold {
+    set: Arc<Mutex<BTreeMap<(String, String), usize>>>,
+    key: (String, String),
+}
+impl PublishHold {
+    fn new(set: &Arc<Mutex<BTreeMap<(String, String), usize>>>, key: (String, String)) -> Self {
+        *set.lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(key.clone())
+            .or_default() += 1;
+        Self {
+            set: set.clone(),
+            key,
+        }
+    }
+}
+impl Drop for PublishHold {
+    fn drop(&mut self) {
+        let mut m = self.set.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(n) = m.get_mut(&self.key) {
+            *n -= 1;
+            if *n == 0 {
+                m.remove(&self.key);
+            }
+        }
+    }
 }
 /// What preparation established for any lifecycle command.
 enum Prep {
@@ -368,6 +408,7 @@ impl PackageService {
             activity: RwLock::new(Arc::new(crate::ports::packages::Idle)),
             validator,
             consumers: RwLock::new(Vec::new()),
+            publishing: Arc::new(Mutex::new(BTreeMap::new())),
             quiesce_wait: QUIESCE_WAIT,
         }
     }
@@ -477,6 +518,7 @@ impl PackageService {
                     provenance: Value::Null,
                     bundle: bundle.clone(),
                     guard,
+                    _held: None,
                 };
             }
         };
@@ -489,10 +531,15 @@ impl PackageService {
                     provenance,
                     bundle: bundle.clone(),
                     guard,
+                    _held: None,
                 };
             }
         };
         let i = inspected.inspection;
+        let held = PublishHold::new(
+            &self.publishing,
+            (i.package_id.clone(), i.manifest_digest.clone()),
+        );
         if let Err(e) = self.files.publish(
             &i.package_id,
             &i.manifest_digest,
@@ -505,6 +552,7 @@ impl PackageService {
                 provenance,
                 bundle: bundle.clone(),
                 guard,
+                _held: None,
             };
         }
         if let Some(p) = quiesce.filter(|p| *p == i.package_id) {
@@ -517,6 +565,7 @@ impl PackageService {
             provenance,
             bundle: bundle.clone(),
             guard,
+            _held: Some(held),
         }
     }
 
@@ -832,6 +881,34 @@ impl PackageService {
         })
     }
 
+    /// Whether activating `next` in place of `p`'s active version would regress its
+    /// prerequisites or platform support against the current registry and runtimes.
+    fn regresses(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        p: &StoredPackage,
+        next: &Inspection,
+    ) -> Result<Option<String>, StorageError> {
+        let current = match &p.active_digest {
+            Some(a) => tx
+                .packages()
+                .package_version(&p.package_id, a)?
+                .as_ref()
+                .and_then(policy::inspection),
+            None => None,
+        };
+        let Some(c) = current else {
+            return Ok(None);
+        };
+        let reg = self.registry(&*tx.packages())?;
+        let view = policy::Registry {
+            packages: &reg,
+            runtimes: &*self.runtimes,
+            host: &self.platform,
+        };
+        Ok(policy::update_regresses(&view, &c, next))
+    }
+
     /// Publishes `version` as the active version of `p` (see the module documentation,
     /// "Publication"): new state generation, pointer, approval, registry head, history.
     pub(crate) fn activate(
@@ -1040,10 +1117,22 @@ impl PackageService {
         p.predecessor_digest = None;
         p.trust = None;
         p.failure = None;
-        // A staged candidate of an uninstalled package never activates by itself.
+        // A staged candidate of an uninstalled package never activates by itself: it is retired
+        // (its files go, its identity and provenance stay), not rejected, so a later explicit
+        // install of the same contents goes through the ordinary approval path again. A pending
+        // proposal for it expires.
         if let Some(d) = p.pending_digest.take() {
             tx.packages()
-                .update_version(&p.package_id, &d, VersionPhase::Rejected, &[], None)?;
+                .update_version(&p.package_id, &d, VersionPhase::Removed, &[], None)?;
+            if let Some(pr) = tx.packages().proposal_for(&p.package_id, &d)?
+                && pr.state == "Pending"
+            {
+                let mut e = pr.clone();
+                e.state = "Expired".into();
+                e.decided_at_ms = Some(tx.now_ms());
+                e.decision = Some(json!({"expiredBy": "addons.uninstall"}));
+                tx.packages().update_proposal(&e, pr.revision)?;
+            }
         }
         let payload = json!({"digest": removed, "stateGeneration": p.state_generation, "stateRetained": true});
         Self::republish(tx, ctx.principal(), &mut p, "PackageUninstalled", payload)?;
@@ -1096,6 +1185,16 @@ impl PackageService {
             return Err(Refusal::new(
                 DomainErrorCode::UnsupportedTarget,
                 "package_version",
+                Id::new(&p.package_id).ok(),
+            )
+            .into());
+        }
+        // Like an update, a rollback never replaces a working version with one whose
+        // prerequisites are not met now.
+        if self.regresses(tx, &p, &ti)?.is_some() {
+            return Err(Refusal::new(
+                DomainErrorCode::UnsupportedTarget,
+                "package_compatibility",
                 Id::new(&p.package_id).ok(),
             )
             .into());
@@ -1465,8 +1564,9 @@ impl PackageService {
                 updated_at_ms: now,
             })?;
         }
-        // A newer proposal supersedes the package's other pending ones; their contents never
-        // activate.
+        // A newer proposal supersedes the package's other pending ones: their contents never
+        // activate by themselves. They are retired, not rejected (only a person's decision
+        // rejects), so a person can still install those exact contents later.
         if let Some(prev) = p
             .pending_digest
             .clone()
@@ -1479,13 +1579,8 @@ impl PackageService {
             s.decided_at_ms = Some(now);
             s.decision = Some(json!({"supersededBy": id.as_str()}));
             tx.packages().update_proposal(&s, old.revision)?;
-            tx.packages().update_version(
-                &p.package_id,
-                &prev,
-                VersionPhase::Rejected,
-                &[],
-                None,
-            )?;
+            tx.packages()
+                .update_version(&p.package_id, &prev, VersionPhase::Removed, &[], None)?;
         }
         let approved_before = existing.as_ref().and_then(|v| v.approval.clone());
         p.pending_digest = Some(candidate.manifest_digest.clone());
@@ -1592,9 +1687,13 @@ impl PackageService {
     // -----------------------------------------------------------------------------------------
     // Host seams (the package host's own units of work)
 
-    /// Retries a staged version of `package_id` whose only remaining wait is quiescence (or
-    /// that a trusted update admitted), rechecking trust, approval, compatibility and the
-    /// registry immediately before publishing. The caller holds the quiescence guard. Returns
+    /// Retries a staged version of `package_id` whose only remaining waits are quiescence and
+    /// compatibility (or that a trusted update admitted), rechecking approval, trust and
+    /// compatibility against the current registry and runtime observations immediately before
+    /// publishing, in the activation's unit of work: a candidate that would regress stays
+    /// pending (waiting for `Compatibility`) and is retried later. The caller holds the
+    /// quiescence guard; on success the host announces the publication before releasing it.
+    /// A first install (a person approved its proposal) activates as an install. Returns
     /// whether it activated.
     pub fn retry_pending(&self, package_id: &str) -> Result<bool, StorageError> {
         let svc = self.clone_ports();
@@ -1603,13 +1702,17 @@ impl PackageService {
             let Some(mut p) = tx.packages().package(&package_id)? else {
                 return Ok(false);
             };
-            let Some(d) = p.pending_digest.clone().filter(|_| p.installed) else {
+            let Some(d) = p.pending_digest.clone() else {
                 return Ok(false);
             };
             let Some(v) = tx.packages().package_version(&package_id, &d)? else {
                 return Ok(false);
             };
-            if v.phase != VersionPhase::Staged || v.waits.iter().any(|w| w != "Quiescence") {
+            if v.phase != VersionPhase::Staged || !retryable(&v.waits) {
+                return Ok(false);
+            }
+            // A first install activates only with a recorded approval (nothing to trust yet).
+            if !p.installed && v.approval.is_none() {
                 return Ok(false);
             }
             // The approval must still be there (trust may have been revoked since staging).
@@ -1641,11 +1744,55 @@ impl PackageService {
                     )
                 }
             };
+            // Compatibility against the registry and runtimes as they are now.
+            let regression = match policy::inspection(&v) {
+                Some(next) => svc.regresses(tx, &p, &next)?,
+                None => None,
+            };
+            if let Some(why) = regression {
+                if v.waits != ["Compatibility"] {
+                    tx.packages().update_version(
+                        &package_id,
+                        &d,
+                        VersionPhase::Staged,
+                        &["Compatibility".to_owned()],
+                        v.approval.as_ref(),
+                    )?;
+                    let host = tx.store().host_actor.clone();
+                    event(
+                        tx,
+                        &host,
+                        &p,
+                        "PackageStaged",
+                        json!({"digest": d, "version": v.version, "waits": ["Compatibility"], "reason": why}),
+                    )?;
+                    svc.log_in(
+                        tx,
+                        &package_id,
+                        Severity::Info,
+                        "PackageStaged",
+                        &format!(
+                            "Version {} stays pending: activating it now would regress ({why})",
+                            v.version
+                        ),
+                        Some(DiagnosticOutcome::Running),
+                    )?;
+                }
+                return Ok(false);
+            }
             let mut v = v;
             v.approval = approval;
             let host = tx.store().host_actor.clone();
-            svc.activate(tx, &host, &mut p, &v, "QuiescentRetry")?;
-            svc.observe(tx, "QuiescentRetry")?;
+            let cause = if p.installed {
+                "QuiescentRetry"
+            } else {
+                p.installed = true;
+                p.enabled = true;
+                p.failure = None;
+                "ApprovedInstall"
+            };
+            svc.activate(tx, &host, &mut p, &v, cause)?;
+            svc.observe(tx, cause)?;
             Ok(true)
         })
     }
@@ -1684,6 +1831,10 @@ impl PackageService {
                 && let Some(v) = tx.packages().package_version(&package_id, &pred)?
                 && v.phase == VersionPhase::Installed
                 && v.approval.is_some()
+                && policy::inspection(&v).is_some_and(|pi| {
+                    policy::static_incompatibility(&pi, &svc.platform).is_none()
+                        && svc.regresses(tx, &p, &pi).ok().flatten().is_none()
+                })
             {
                 let failed = digest.clone();
                 let sp = tx.savepoint()?;
@@ -1811,7 +1962,15 @@ impl PackageService {
             .installed()
             .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
         let svc = self.clone_ports();
-        let keep = in_use.clone();
+        let mut keep = in_use.clone();
+        // Directories a command published and has not settled are never collected.
+        keep.extend(
+            self.publishing
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .keys()
+                .cloned(),
+        );
         let candidates = on_disk.clone();
         let removable: Vec<(String, String, bool)> =
             run_write(&*self.store, WriteOptions::default(), move |tx| {
@@ -1950,7 +2109,7 @@ impl PackageService {
                     .packages()
                     .package_version(&pr.package_id, &pr.manifest_digest)?
                 {
-                    let waits: Vec<String> = v
+                    let mut waits: Vec<String> = v
                         .waits
                         .iter()
                         .filter(|w| {
@@ -1961,6 +2120,14 @@ impl PackageService {
                         })
                         .cloned()
                         .collect();
+                    // Nothing else to wait for: the host activates the pending version at its
+                    // next quiescent boundary (rechecking compatibility then).
+                    if waits.is_empty()
+                        && v.phase == VersionPhase::Staged
+                        && p.pending_digest.as_deref() == Some(pr.manifest_digest.as_str())
+                    {
+                        waits.push("Quiescence".into());
+                    }
                     tx.packages().update_version(
                         &pr.package_id,
                         &pr.manifest_digest,
@@ -2025,6 +2192,7 @@ impl PackageService {
             activity: RwLock::new(self.activity()),
             validator: self.validator.clone(),
             consumers: RwLock::new(self.consumers()),
+            publishing: self.publishing.clone(),
             quiesce_wait: self.quiesce_wait,
         })
     }
@@ -2051,6 +2219,15 @@ impl PackageService {
         }
         DomainDecision::Refused { fault }
     }
+}
+
+/// Whether a staged version's remaining waits are ones the host clears by itself (quiescence,
+/// and compatibility rechecked at every retry).
+pub fn retryable(waits: &[String]) -> bool {
+    !waits.is_empty()
+        && waits
+            .iter()
+            .all(|w| w == "Quiescence" || w == "Compatibility")
 }
 
 fn update_op(update: bool) -> &'static str {

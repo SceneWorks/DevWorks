@@ -943,7 +943,15 @@ fn resolve(source: &str, location: &str) -> Option<String> {
         let base = &source[..source.rfind('/')? + 1];
         return Some(format!("{base}{location}"));
     }
-    safe_path(location).then(|| Path::new(source).join(location).display().to_string())
+    // Joined component by component, so the result uses the platform's separator throughout
+    // (`safe_path` already refused absolute, drive, backslash and traversal forms).
+    safe_path(location).then(|| {
+        location
+            .split('/')
+            .fold(PathBuf::from(source), |p, c| p.join(c))
+            .display()
+            .to_string()
+    })
 }
 
 /// Fetches index documents and bundles: `https://` with ureq (rustls, bundled roots, a

@@ -18,15 +18,20 @@
 //! `host.initialize` (within [`HostConfig::handshake`], default five seconds) offers protocol
 //! 1.0–1.`minor`, no required features, the 1 MiB frame limit and the expected manifest digest.
 //! The reply must select a version both sides support, echo the expected digest and list
-//! exactly the manifest's contribution inventory. `host.activate` then exposes the committed
-//! registry revision, state generation and configuration revision and must echo them. Only then
-//! is the instance `Ready`. A startup session has no grants: the broker refuses every call from
+//! exactly the manifest's contribution inventory. `host.activate` then delivers the committed
+//! registry revision, state generation, configuration revision and the committed configuration
+//! (value and schema identity, when one was saved) and must echo the revisions. Only then is
+//! the instance `Ready`; a new configuration is a new instance key, so a reconfigured helper
+//! receives it in its own activation before it admits work. A startup session has no grants: the broker refuses every call from
 //! a process before it is ready.
 //!
 //! # Failure, restart and guarded rollback
 //!
 //! A failed startup or a helper that exits while ready is restarted with backoff up to
-//! [`HostConfig::restart_limit`] consecutive times; then the failure is recorded durably
+//! [`HostConfig::restart_limit`] consecutive times. The failure count resets only after
+//! sustained health: the instance stayed ready for [`HostConfig::healthy_after`] or completed an
+//! invocation (a helper that dies right after every activation is not healthy). Then the
+//! failure is recorded durably
 //! (availability `Failed`, only that package affected) and, when no invocation was admitted under
 //! the new generation, the service's guarded automatic rollback restores the predecessor.
 //! Invocations in flight when a process dies end `OutcomeUnknown` (never a fabricated success).
@@ -73,9 +78,9 @@ use devworks_core::services::process::{
     LaunchPolicy, LaunchRequest, OwnedProcess, ProcessSupervisor,
 };
 use devworks_extension_protocol::package::{
-    Activate, BrokerCall, Cancel, HostRequest, Initialize, InvocationOutcome, InvocationScope,
-    Invoke, PackageRequest, RpcErrorClass, RpcResult, RpcVersion, Shutdown, StateAction,
-    WireVersion,
+    Activate, ActivateConfiguration, BrokerCall, Cancel, HostRequest, Initialize,
+    InvocationOutcome, InvocationScope, Invoke, PackageRequest, RpcErrorClass, RpcResult,
+    RpcVersion, Shutdown, StateAction, WireVersion,
 };
 use devworks_extension_protocol::scalars as wire;
 use serde_json::{Value, json};
@@ -113,6 +118,9 @@ pub struct HostConfig {
     pub runtime_interval: Duration,
     /// Time between index refreshes (one runs when the loop starts).
     pub index_interval: Duration,
+    /// How long a ready instance must keep running before its failure count resets (an
+    /// invocation it completes resets it too).
+    pub healthy_after: Duration,
 }
 impl Default for HostConfig {
     fn default() -> Self {
@@ -129,6 +137,7 @@ impl Default for HostConfig {
             runtime_timeout: Duration::from_secs(3),
             runtime_interval: Duration::from_secs(10 * 60),
             index_interval: Duration::from_secs(6 * 60 * 60),
+            healthy_after: Duration::from_secs(30),
         }
     }
 }
@@ -168,6 +177,11 @@ struct Instance {
     in_flight: AtomicU64,
     admitted: AtomicU64,
     stderr: Arc<Mutex<Vec<u8>>>,
+    /// The committed configuration delivered in activation: `(schema, value)`.
+    configuration: Option<(Value, Value)>,
+    /// When the instance became ready, and whether its sustained health was recorded.
+    ready_at: Mutex<Option<Instant>>,
+    healthy: AtomicBool,
 }
 impl Instance {
     fn status(&self) -> InstanceStatus {
@@ -184,6 +198,19 @@ impl Instance {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
+    }
+    /// The owned process (a copy: the lock is never held across a wait or a kill).
+    fn process(&self) -> Option<OwnedProcess> {
+        self.process
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+    fn take_process(&self) -> Option<OwnedProcess> {
+        self.process
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
     }
 }
 
@@ -458,6 +485,10 @@ impl PackageHost {
     pub fn service(&self) -> &Arc<PackageService> {
         &self.service
     }
+    /// How many registry publications this host has announced (the admission epoch).
+    pub fn publications(&self) -> u64 {
+        self.epoch.load(Ordering::SeqCst)
+    }
 
     fn host_ctx(&self) -> InvocationContext {
         let info = self.store.info();
@@ -594,7 +625,7 @@ impl PackageHost {
                                 generation: p.state_generation,
                                 config_revision: p.config_revision,
                             },
-                            i,
+                            (i, committed_configuration(p)),
                         ),
                     );
                 }
@@ -625,7 +656,7 @@ impl PackageHost {
                         _ => {}
                     }
                 }
-                if let Some((k, i)) = want
+                if let Some((k, (i, configuration))) = want
                     && !has_current
                 {
                     let attempts = self
@@ -647,6 +678,9 @@ impl PackageHost {
                             in_flight: AtomicU64::new(0),
                             admitted: AtomicU64::new(0),
                             stderr: Arc::new(Mutex::new(Vec::new())),
+                            configuration: configuration.clone(),
+                            ready_at: Mutex::new(None),
+                            healthy: AtomicBool::new(false),
                         });
                         list.push(inst.clone());
                         to_start.push(inst);
@@ -722,11 +756,7 @@ impl PackageHost {
             }
             s.fail("the helper is retired");
         }
-        let process = inst
-            .process
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take();
+        let process = inst.take_process();
         if let Some(p) = process {
             let exited = self.supervisor.wait(&p, grace).ok().flatten().is_some();
             if !exited {
@@ -754,15 +784,12 @@ impl PackageHost {
         if let Some(s) = inst.session() {
             s.fail(why);
         }
-        if let Some(p) = inst
-            .process
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-        {
+        // The process lock is never held across the kill (abandon and stop need it).
+        let process = inst.process();
+        if let Some(p) = process {
             let _ = self
                 .supervisor
-                .cancel(p, Duration::from_millis(50), self.config.cancel_grace);
+                .cancel(&p, Duration::from_millis(50), self.config.cancel_grace);
         }
         inst.set(InstanceStatus::Failed(why.to_owned()));
         self.poke();
@@ -835,12 +862,8 @@ impl PackageHost {
             if let Some(s) = inst.session() {
                 s.fail("the application stopped");
             }
-            if let Some(p) = inst
-                .process
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .take()
-            {
+            let process = inst.take_process();
+            if let Some(p) = process {
                 let _ = self
                     .supervisor
                     .cancel(&p, Duration::ZERO, Duration::from_millis(500));
@@ -862,17 +885,31 @@ impl PackageHost {
         }
     }
 
+    /// Records an instance's sustained health once: it stayed ready for
+    /// [`HostConfig::healthy_after`] or completed an invocation. Only then does its key's
+    /// failure budget reset.
+    fn healthy(&self, inst: &Instance) {
+        if inst.status() != InstanceStatus::Ready || inst.healthy.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if let Some(a) = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(&(inst.package_id.clone(), inst.key.clone()))
+        {
+            a.failures = 0;
+            a.next_at = None;
+        }
+    }
+
     fn start_failed(&self, inst: &Instance, code: &str, message: &str) {
         inst.set(InstanceStatus::Failed(message.to_owned()));
         if let Some(s) = inst.session() {
             s.fail(message);
         }
-        if let Some(p) = inst
-            .process
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take()
-        {
+        let process = inst.take_process();
+        if let Some(p) = process {
             let _ = self
                 .supervisor
                 .cancel(&p, Duration::from_millis(50), self.config.cancel_grace);
@@ -892,7 +929,7 @@ impl PackageHost {
         );
         drop(attempts);
         if failures >= self.config.restart_limit {
-            let _ = self.service.startup_failed(
+            let changed = self.service.startup_failed(
                 &inst.package_id,
                 &inst.key.digest,
                 code,
@@ -900,6 +937,11 @@ impl PackageHost {
                 i64::from(failures),
                 !admitted,
             );
+            // A recorded failure or a guarded rollback changed the registry: admissions that
+            // read it earlier read it again (no reconciliation here: this may run inside one).
+            if changed.is_ok() {
+                self.epoch.fetch_add(1, Ordering::SeqCst);
+            }
         }
         self.poke();
     }
@@ -994,24 +1036,12 @@ impl PackageHost {
         match self.handshake(inst, &session) {
             Ok(()) => {
                 // Recorded before it admits work, so a ready helper is always attributed.
-                if let Some(p) = inst
-                    .process
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .as_ref()
-                {
+                if let Some(p) = inst.process() {
                     let _ = svc.record_running(&inst.package_id, &inst.key.digest, &p.id);
                 }
                 inst.set(InstanceStatus::Ready);
-                self.attempts
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .entry((inst.package_id.clone(), inst.key.clone()))
-                    .and_modify(|a| {
-                        a.failures = 0;
-                        a.next_at = None;
-                    })
-                    .or_default();
+                // The failure budget resets only after sustained health (see `healthy`).
+                *inst.ready_at.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
                 self.watch(inst.clone(), session);
             }
             Err((code, why)) => self.start_failed(inst, code, &why),
@@ -1101,6 +1131,20 @@ impl PackageHost {
             inst.key.generation,
             inst.key.config_revision,
         );
+        let configuration = match &inst.configuration {
+            Some((schema, value)) => Some(ActivateConfiguration {
+                schema: serde_json::from_value(schema.clone()).map_err(|e| {
+                    (
+                        "ConfigurationInvalid",
+                        format!(
+                            "the committed configuration schema is not a schema reference: {e}"
+                        ),
+                    )
+                })?,
+                value: value.clone(),
+            }),
+            None => None,
+        };
         let reply = s.request(
             |id| HostRequest::Activate {
                 jsonrpc: RpcVersion::V2,
@@ -1110,6 +1154,7 @@ impl PackageHost {
                     registry_revision: rev_w(registry),
                     state_generation: rev_w(generation),
                     configuration_revision: rev_w(config.max(1)),
+                    configuration,
                 },
             },
             self.config.handshake,
@@ -1143,6 +1188,20 @@ impl PackageHost {
                     if session.wait_closed(Duration::from_millis(200)) {
                         break;
                     }
+                    if inst
+                        .ready_at
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .is_some_and(|t| t.elapsed() >= host.config.healthy_after)
+                    {
+                        host.healthy(&inst);
+                    }
+                    // A helper that stopped reading its input is terminated (never waited on).
+                    if inst.status() == InstanceStatus::Ready
+                        && session.write_stalled(host.config.cancel_grace * 2)
+                    {
+                        host.terminate(&inst, "the helper stopped reading its input");
+                    }
                     if !host.running.load(Ordering::SeqCst)
                         && host
                             .barriers
@@ -1170,7 +1229,8 @@ impl PackageHost {
             .expect("spawn package watch");
     }
 
-    /// Retries staged versions waiting only for quiescence, with backoff per package.
+    /// Retries staged versions waiting only for quiescence or compatibility, with backoff per
+    /// package.
     fn retry_staged(&self) {
         let svc = self.service.clone();
         let staged = read_snapshot(&*self.store, &ReadOptions::default(), move |s| {
@@ -1179,8 +1239,7 @@ impl PackageHost {
             for (id, (p, _)) in svc.registry(read)? {
                 if let Some(d) = &p.pending_digest
                     && let Some(v) = read.package_version(&id, d)?
-                    && !v.waits.is_empty()
-                    && v.waits.iter().all(|w| w == "Quiescence")
+                    && devworks_core::services::packages::retryable(&v.waits)
                 {
                     out.push(id);
                 }
@@ -1201,6 +1260,12 @@ impl PackageHost {
             let activated = match self.quiesce(&pkg, self.config.quiesce_attempt) {
                 Some(guard) => {
                     let r = self.service.retry_pending(&pkg).unwrap_or(false);
+                    if r {
+                        // As at a command's settlement: the publication is announced (the
+                        // epoch advances) before the barrier lifts, so an admission that read
+                        // the old registry reads it again instead of entering the old instance.
+                        self.published();
+                    }
                     drop(guard);
                     r
                 }
@@ -1464,6 +1529,7 @@ impl PackageHost {
                 }
                 let ended = match watched.slot.terminal() {
                     Some(Reply::Result(RpcResult::InvocationFinished { outcome, .. })) => {
+                        watched.host.healthy(&watched.instance);
                         serde_json::to_value(&outcome)
                             .ok()
                             .and_then(|o| o["kind"].as_str().map(str::to_owned))
@@ -1540,6 +1606,16 @@ fn run_key(inst: &Instance, package: &str, contribution: &str) -> (String, Value
     )
 }
 
+/// The package's committed configuration `(schema, value)`, when one was saved against its
+/// own schema (host-defined schemas configure the host, not the helper).
+fn committed_configuration(p: &StoredPackage) -> Option<(Value, Value)> {
+    let c = p.config.as_ref()?;
+    match (c.get("schema"), c.get("value")) {
+        (Some(schema), Some(value)) if schema.is_object() => Some((schema.clone(), value.clone())),
+        _ => None,
+    }
+}
+
 fn project_disabled(p: &StoredPackage, project: &str) -> bool {
     p.config
         .as_ref()
@@ -1550,20 +1626,40 @@ fn project_disabled(p: &StoredPackage, project: &str) -> bool {
 /// The environment a helper starts with: no inherited variables except what locates the
 /// system and a temporary directory, so stored credentials in the host's environment never
 /// reach package code.
-fn child_environment() -> Vec<(String, String)> {
-    const KEEP: [&str; 9] = [
+pub(crate) fn child_environment() -> Vec<(String, String)> {
+    // Windows also needs what locates the system, its command interpreter (for `.cmd` shims)
+    // and the per-user program directories runtime launchers live in.
+    const KEEP: [&str; 18] = [
         "PATH",
         "HOME",
         "TMPDIR",
         "TEMP",
         "TMP",
         "SystemRoot",
+        "SystemDrive",
+        "windir",
+        "COMSPEC",
+        "PATHEXT",
         "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramData",
         "LANG",
         "LC_ALL",
     ];
+    // Windows variable names are case-insensitive.
     std::env::vars()
-        .filter(|(k, _)| KEEP.contains(&k.as_str()))
+        .filter(|(k, _)| {
+            KEEP.iter().any(|w| {
+                if cfg!(windows) {
+                    w.eq_ignore_ascii_case(k)
+                } else {
+                    w == k
+                }
+            })
+        })
         .collect()
 }
 

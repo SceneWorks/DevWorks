@@ -242,7 +242,13 @@ impl AddonsScreen {
             });
         widgets::divider(ui);
         if let Some(r) = self.selected().cloned() {
-            self.detail(ui, &r, actions);
+            // The detail scrolls within the remaining height, so every control in it (the
+            // configuration form included) can be brought into view at any window size and
+            // whatever banners sit above it.
+            egui::ScrollArea::vertical()
+                .id_salt("addons-detail")
+                .auto_shrink([false, false])
+                .show(ui, |ui| self.detail(ui, &r, actions));
         } else {
             ui.label(RichText::new("Select an add-on to see its details.").color(theme::MUTED));
         }

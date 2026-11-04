@@ -323,19 +323,35 @@ fn an_index_verifies_only_under_its_sources_key_and_resolves_safe_bundle_locatio
         SigningKey::from_bytes(&[4; 32]),
     );
     let v = BundleIndexVerifier;
-    let dir = source("/srv/devworks", &k);
+    // An absolute directory on this platform (a drive letter on Windows).
+    let base = if cfg!(windows) {
+        PathBuf::from(r"C:\srv\devworks")
+    } else {
+        PathBuf::from("/srv/devworks")
+    };
+    let dir = source(&base.display().to_string(), &k);
     let doc = write_index(&index(vec![index_entry("packs/acme-pack-1.2.0.dwpkg")]), &k);
     let ok = v.verify(&dir, &doc).unwrap();
     assert_eq!((ok.publisher_id.as_str(), ok.generated_at_ms), ("acme", 5));
     assert_eq!(ok.key_fingerprint, key_fingerprint(&k.verifying_key()));
+    // The platform's separator throughout.
     assert_eq!(
         ok.entries[0].bundle,
-        "/srv/devworks/packs/acme-pack-1.2.0.dwpkg"
+        base.join("packs")
+            .join("acme-pack-1.2.0.dwpkg")
+            .display()
+            .to_string()
     );
     assert_eq!(
         v.index_location(&dir).unwrap(),
-        "/srv/devworks/devworks-index.json"
+        base.join("devworks-index.json").display().to_string()
     );
+    // A directory that is not absolute on this platform is refused (`/srv` has no drive on
+    // Windows; `srv` is relative everywhere).
+    assert!(v.index_location(&source("srv/devworks", &k)).is_err());
+    if cfg!(windows) {
+        assert!(v.index_location(&source("/srv/devworks", &k)).is_err());
+    }
 
     // Signed by another (valid) key than the source trusts.
     let foreign = write_index(&index(vec![index_entry("a.dwpkg")]), &other);
@@ -354,7 +370,16 @@ fn an_index_verifies_only_under_its_sources_key_and_resolves_safe_bundle_locatio
             .contains("does not verify")
     );
     // Traversal, absolute paths and other schemes are refused as bundle locations.
-    for bad in ["../x.dwpkg", "/etc/passwd", "http://example.test/x.dwpkg"] {
+    for bad in [
+        "../x.dwpkg",
+        "packs/../../x.dwpkg",
+        "/etc/passwd",
+        r"..\x.dwpkg",
+        r"C:\x.dwpkg",
+        "C:x.dwpkg",
+        r"\\server\share\x.dwpkg",
+        "http://example.test/x.dwpkg",
+    ] {
         let d = write_index(&index(vec![index_entry(bad)]), &k);
         assert!(
             v.verify(&dir, &d)

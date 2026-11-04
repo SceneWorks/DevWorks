@@ -14,8 +14,9 @@
 //! then `CancelledBeforeEffect`), `stubborn` (acknowledges cancellation but never finishes),
 //! `state` (broker.state read then compare-and-set, results as progress), `event` (tries
 //! broker.state compare-and-set and an HTTP broker.call, then broker.commit_event with the
-//! commit read from `devworks-fixture-<package>-commit.json` in the temporary directory) and
-//! `crash` (exits 5 mid-invocation).
+//! commit read from `devworks-fixture-<package>-commit.json` in the temporary directory),
+//! `config` (reports the configuration `host.activate` delivered as progress `config:<json>`,
+//! or `config:none`) and `crash` (exits 5 mid-invocation).
 use devworks_extension_protocol::frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -44,6 +45,8 @@ struct State {
     waiting: Mutex<HashMap<String, mpsc::Sender<Value>>>,
     /// Cancellation signals by invocation ID.
     cancels: Mutex<HashMap<String, mpsc::Sender<()>>>,
+    /// The configuration the host delivered in activation (`null` when none).
+    configuration: Mutex<Value>,
 }
 impl State {
     fn call(&self, method: &str, params: Value) -> Value {
@@ -119,6 +122,21 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
         "stubborn" => {
             let _ = cancel.recv();
             std::thread::sleep(Duration::from_secs(3600));
+        }
+        "config" => {
+            let c = st.configuration.lock().unwrap().clone();
+            let text = if c.is_null() {
+                "config:none".to_owned()
+            } else {
+                format!("config:{c}")
+            };
+            st.progress(&inv, 1, &text);
+            finished(
+                &st,
+                &id,
+                &inv,
+                json!({"kind": "Completed", "artifacts": []}),
+            );
         }
         "crash" => {
             st.progress(&inv, 1, "about to crash");
@@ -250,6 +268,7 @@ fn main() {
         next: AtomicU64::new(0),
         waiting: Mutex::new(HashMap::new()),
         cancels: Mutex::new(HashMap::new()),
+        configuration: Mutex::new(Value::Null),
     });
     eprintln!("fixture helper started in mode {mode}");
     let mut stdin = std::io::stdin();
@@ -295,6 +314,7 @@ fn main() {
                     std::process::exit(3);
                 }
                 let p = &msg["params"];
+                *st.configuration.lock().unwrap() = p["configuration"].clone();
                 st.out.send(&result(&id, json!({"kind": "Activated",
                     "registryRevision": p["registryRevision"], "stateGeneration": p["stateGeneration"]})));
                 if mode == "exit-after-ready" {

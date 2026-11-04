@@ -12,6 +12,12 @@
 //!   its queue is full the reader answers `Busy` at once instead of blocking.
 //! * Progress is bounded per invocation and coalesces with a dropped-count marker; terminal
 //!   results never drop.
+//! * Frames to the helper go through a bounded outbox drained by the session's own writer
+//!   thread: sending never blocks on the helper's input pipe, so a helper that stops reading
+//!   cannot hold a request, a cancellation or shutdown past its own deadline. A full outbox
+//!   (the helper stopped reading) fails the session; a frame the writer could not hand to the
+//!   pipe within a bound is visible through [`Session::write_stalled`], and terminating the
+//!   process (which never needs the writer) unblocks it.
 use devworks_core::framing;
 use devworks_extension_protocol::frame::{self, FrameError, MAX_FRAME_BYTES};
 use devworks_extension_protocol::package::{
@@ -30,6 +36,18 @@ use std::time::{Duration, Instant};
 pub const PROGRESS_KEPT: usize = 64;
 /// Most produced events kept per invocation.
 pub const EVENTS_KEPT: usize = 256;
+/// Most bytes queued for a helper that has not read them yet (the session fails beyond it).
+pub const OUTBOX_BYTES: usize = 4 * MAX_FRAME_BYTES;
+
+/// Frames waiting for the writer thread.
+#[derive(Default)]
+struct Outbox {
+    frames: VecDeque<Vec<u8>>,
+    bytes: usize,
+    closed: bool,
+    /// When the writer started handing the current frame to the pipe (None while idle).
+    writing_since: Option<Instant>,
+}
 
 /// What answered a host request.
 #[derive(Clone, Debug)]
@@ -130,7 +148,8 @@ pub fn rpc_error(class: RpcErrorClass, message: &str) -> RpcError {
 
 pub struct Session {
     pub id: String,
-    writer: Mutex<Box<dyn Write + Send>>,
+    outbox: Mutex<Outbox>,
+    outbox_cv: Condvar,
     pending: Mutex<HashMap<String, mpsc::Sender<Reply>>>,
     slots: Mutex<HashMap<String, Arc<Slot>>>,
     /// Host request ID of each invocation's `host.invoke`, so its response finishes the slot.
@@ -154,7 +173,8 @@ impl Session {
     ) -> Arc<Session> {
         let session = Arc::new(Session {
             id,
-            writer: Mutex::new(output),
+            outbox: Mutex::new(Outbox::default()),
+            outbox_cv: Condvar::new(),
             pending: Mutex::new(HashMap::new()),
             slots: Mutex::new(HashMap::new()),
             invokes: Mutex::new(HashMap::new()),
@@ -176,6 +196,11 @@ impl Session {
             .name(format!("package-reader-{}", reader.id))
             .spawn(move || reader.read_loop(input, tx))
             .expect("spawn session reader");
+        let writer = session.clone();
+        std::thread::Builder::new()
+            .name(format!("package-writer-{}", writer.id))
+            .spawn(move || writer.write_loop(output))
+            .expect("spawn session writer");
         session
     }
 
@@ -220,6 +245,13 @@ impl Session {
 
     fn close(&self, reason: &str) {
         self.closed.store(true, Ordering::SeqCst);
+        {
+            let mut o = self.outbox.lock().unwrap_or_else(|p| p.into_inner());
+            o.closed = true;
+            o.frames.clear();
+            o.bytes = 0;
+        }
+        self.outbox_cv.notify_all();
         let pending: Vec<_> = self
             .pending
             .lock()
@@ -244,10 +276,65 @@ impl Session {
         self.closed_cv.notify_all();
     }
 
+    /// Queues one frame for the writer thread; never blocks on the helper.
     fn write_value(&self, v: &Value) -> Result<(), String> {
         let bytes = serde_json::to_vec(v).map_err(|e| e.to_string())?;
-        let mut w = self.writer.lock().unwrap_or_else(|p| p.into_inner());
-        frame::write_frame(&mut *w, &bytes).map_err(|e| e.to_string())
+        if bytes.len() > self.max_frame {
+            return Err("the frame exceeds the frame limit".into());
+        }
+        let mut o = self.outbox.lock().unwrap_or_else(|p| p.into_inner());
+        if o.closed {
+            return Err(self.failure().unwrap_or_else(|| "session closed".into()));
+        }
+        if o.bytes + bytes.len() > OUTBOX_BYTES {
+            return Err("the helper is not reading its input".into());
+        }
+        o.bytes += bytes.len();
+        o.frames.push_back(bytes);
+        drop(o);
+        self.outbox_cv.notify_all();
+        Ok(())
+    }
+
+    /// Whether the writer has been handing one frame to the helper for longer than `bound`
+    /// (the helper stopped reading its input).
+    pub fn write_stalled(&self, bound: Duration) -> bool {
+        self.outbox
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .writing_since
+            .is_some_and(|t| t.elapsed() > bound)
+    }
+
+    /// The writer thread: hands queued frames to the helper's input in order. Only this thread
+    /// ever blocks on the pipe; closing the session drops the pipe once the current write ends
+    /// (terminating the process ends a blocked write).
+    fn write_loop(self: Arc<Self>, mut output: Box<dyn Write + Send>) {
+        loop {
+            let bytes = {
+                let mut o = self.outbox.lock().unwrap_or_else(|p| p.into_inner());
+                loop {
+                    if o.closed {
+                        return;
+                    }
+                    if let Some(b) = o.frames.pop_front() {
+                        o.bytes -= b.len();
+                        o.writing_since = Some(Instant::now());
+                        break b;
+                    }
+                    o = self.outbox_cv.wait(o).unwrap_or_else(|p| p.into_inner());
+                }
+            };
+            let written = frame::write_frame(&mut output, &bytes);
+            self.outbox
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .writing_since = None;
+            if let Err(e) = written {
+                self.fail(&format!("write failed: {e}"));
+                return;
+            }
+        }
     }
 
     fn next_id(&self) -> String {

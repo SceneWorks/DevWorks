@@ -606,6 +606,12 @@ fn without_exceptions(mut doc: Value) -> Value {
                 if m.get("pattern") == Some(&json!(RELATIVE_PATH)) {
                     m.insert("pattern".into(), json!(RECORDED_RELATIVE_PATH));
                 }
+                // `host.activate` delivers the committed configuration (optional member; DW-43).
+                if let Some(Value::Object(activate)) = m.get_mut("Activate")
+                    && let Some(Value::Object(props)) = activate.get_mut("properties")
+                {
+                    props.remove("configuration");
+                }
                 m.values_mut().for_each(walk);
             }
             Value::Array(a) => a.iter_mut().for_each(walk),
@@ -668,7 +674,8 @@ fn revision_1_documents_are_byte_identical_to_the_recorded_ones_but_the_document
         );
         exceptions.push(*file);
     }
-    // The documents carrying the new operation or a relative path.
+    // The documents carrying the new operation, a relative path or the activation's
+    // configuration.
     assert_eq!(
         exceptions,
         [
@@ -677,6 +684,7 @@ fn revision_1_documents_are_byte_identical_to_the_recorded_ones_but_the_document
             "domain-request.schema.json",
             "operation-completion.schema.json",
             "operation-result.schema.json",
+            "package-host-request.schema.json",
         ]
     );
 }

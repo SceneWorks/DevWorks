@@ -42,6 +42,7 @@ use devworks_core::settings::catalog::AgentRole;
 use devworks_core::settings::catalog::{PACKAGE_INDEX_SOURCES_KEY, descriptor};
 use devworks_core::settings::model;
 use devworks_engine::package::PackageInvocation;
+use devworks_engine::package_host::discovery::resolve_command;
 use devworks_engine::package_host::{
     HostConfig, IndexPorts, InvocationKind, InvokeOutcome, InvokeRefusal, InvokeRequest,
     LaunchPorts, RuntimePorts,
@@ -93,7 +94,7 @@ impl Spec {
             version: version.into(),
             mode: "normal".into(),
             contributions: vec![
-                "echo", "wait", "sleep", "state", "event", "stubborn", "crash",
+                "echo", "wait", "sleep", "state", "event", "stubborn", "crash", "config",
             ],
             permissions: vec![
                 json!({"kind": "StateWrite"}),
@@ -291,6 +292,7 @@ fn config() -> HostConfig {
         runtime_timeout: Duration::from_millis(1500),
         runtime_interval: Duration::from_secs(3600),
         index_interval: Duration::from_secs(3600),
+        healthy_after: Duration::from_secs(5),
     }
 }
 fn seed_project(h: &Harness) {
@@ -703,7 +705,7 @@ fn a_person_installs_a_signed_pack_whose_helper_handshakes_and_serves_invocation
             .collect::<Vec<_>>(),
         vec!["state.write", "worktree.read"]
     );
-    assert_eq!(rec.contributions.as_ref().unwrap().0.len(), 7);
+    assert_eq!(rec.contributions.as_ref().unwrap().0.len(), 8);
     a.ready("fixture-pack");
 
     let h = a
@@ -1699,7 +1701,10 @@ fn entry(spec: &Spec, bundle: &[u8], manifest: &str, location: &str) -> Value {
 fn signed_indexes_offer_packs_that_install_through_the_inspector_and_approval_path() {
     let _s = serial();
     let a = App::new();
-    let dir = "/devworks-test-index";
+    // An absolute directory on this platform; index and bundle paths use its separator.
+    let base = std::env::temp_dir().join(format!("devworks-test-index-{}", std::process::id()));
+    let dir = base.display().to_string();
+    let at = |name: &str| base.join(name).display().to_string();
     let v1 = Spec::new("index-pack", "1.0.0");
     let v2 = Spec {
         version: "1.1.0".into(),
@@ -1710,15 +1715,11 @@ fn signed_indexes_offer_packs_that_install_through_the_inspector_and_approval_pa
     let publisher = key(7);
     let index = json!({"publisherId": "acme", "generatedAtMs": 1, "entries": [
         entry(&v1, &b1, &d1, "index-pack-1.0.0.dwpkg"), entry(&v2, &b2, &d2, "index-pack-1.1.0.dwpkg")]});
-    a.transport.serve(
-        &format!("{dir}/devworks-index.json"),
-        write_index(&index, &publisher),
-    );
     a.transport
-        .serve(&format!("{dir}/index-pack-1.0.0.dwpkg"), b1.clone());
+        .serve(&at("devworks-index.json"), write_index(&index, &publisher));
+    a.transport.serve(&at("index-pack-1.0.0.dwpkg"), b1.clone());
     // 1.1.0 is served with other bytes than the signed digest names.
-    a.transport
-        .serve(&format!("{dir}/index-pack-1.1.0.dwpkg"), b1.clone());
+    a.transport.serve(&at("index-pack-1.1.0.dwpkg"), b1.clone());
     // No source is configured by default: nothing is offered.
     let host = a.app().packages().unwrap().clone();
     assert_eq!(host.refresh_indexes(), 0);
@@ -1786,27 +1787,57 @@ fn signed_indexes_offer_packs_that_install_through_the_inspector_and_approval_pa
     );
 }
 
-#[cfg(unix)]
-fn fake(dir: &std::path::Path, name: &str, script: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    let p = dir.join(name);
-    std::fs::write(&p, format!("#!/bin/sh\n{script}\n")).unwrap();
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+/// A fake runtime command on PATH: an executable shell script on Unix, a `.cmd` shim on
+/// Windows (found through PATHEXT, run through its interpreter).
+fn fake(dir: &std::path::Path, name: &str, unix: &str, windows: &str) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = windows;
+        let p = dir.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{unix}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let _ = unix;
+        std::fs::write(
+            dir.join(format!("{name}.cmd")),
+            format!("@echo off\r\n{windows}\r\n"),
+        )
+        .unwrap();
+    }
 }
 
-#[cfg(unix)]
 #[test]
 fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versions() {
     let _s = serial();
     let dir = std::env::temp_dir().join(format!("devworks-runtimes-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    fake(&dir, "node", "echo v20.11.1");
-    fake(&dir, "dotnet", "echo 8.0.204");
-    fake(&dir, "swift", "exec /bin/sleep 20");
-    fake(&dir, "cargo", "echo 'cargo 1.82.0 (8f40fc59f 2024-08-21)'");
-    fake(&dir, "rustc", "echo broken >&2; exit 1");
-    fake(&dir, "zig", "echo '0.13.0'");
+    fake(&dir, "node", "echo v20.11.1", "echo v20.11.1");
+    fake(&dir, "dotnet", "echo 8.0.204", "echo 8.0.204");
+    fake(
+        &dir,
+        "swift",
+        "exec /bin/sleep 20",
+        "ping -n 30 127.0.0.1 >nul",
+    );
+    fake(
+        &dir,
+        "cargo",
+        "echo 'cargo 1.82.0 (8f40fc59f 2024-08-21)'",
+        "echo cargo 1.82.0 (8f40fc59f 2024-08-21)",
+    );
+    fake(
+        &dir,
+        "rustc",
+        "echo broken >&2; exit 1",
+        "echo broken 1>&2\r\nexit /b 1",
+    );
+    fake(&dir, "zig", "echo '0.13.0'", "echo 0.13.0");
+    // A file that is not a command (no execute bit; no PATHEXT extension) is not resolved.
+    std::fs::write(dir.join("deno"), "not a program").unwrap();
     let a = App::probing(&dir);
     let host = a.app().packages().unwrap().clone();
     // Booting probed already; a refresh probes again (and the declared zig once declared).
@@ -1824,6 +1855,14 @@ fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versi
         "{:?}",
         seen["rustc"]
     );
+    // Resolution: the shim (PATHEXT on Windows), never a non-command file.
+    let path = dir.display().to_string();
+    let node = resolve_command("node", &path, Some(".EXE;.CMD")).unwrap();
+    assert_eq!(
+        node.file_name().unwrap().to_str().unwrap(),
+        if cfg!(windows) { "node.cmd" } else { "node" }
+    );
+    assert!(resolve_command("deno", &path, Some(".EXE;.CMD")).is_none());
     // A declared runtime outside the known set is probed with the generic form.
     let needs = |pkg: &str, rt: &str, req: &str| Spec {
         runtimes: vec![json!({"runtimeId": rt, "versionRequirement": req, "required": true})],
@@ -1868,7 +1907,7 @@ fn declared_runtimes_are_probed_as_owned_processes_and_reported_with_their_versi
             .processes(&ProcessFilter::Unsettled, None, 100)
     });
     assert!(
-        unsettled.iter().all(|p| p.program != "swift"),
+        unsettled.iter().all(|p| !p.program.starts_with("swift")),
         "{unsettled:?}"
     );
     drop(a);
@@ -2057,5 +2096,326 @@ fn availability_and_version_changes_are_announced_atomically_with_the_registry_c
     assert_eq!(
         announcements(&*a.store, "watched-pack").len(),
         after_install
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Publication, compatibility, restart budget, retirement and configuration delivery
+
+#[test]
+fn a_quiescent_retry_announces_its_publication_before_admission_reopens() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("retry-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("retry-pack");
+    let host = a.app().packages().unwrap().clone();
+    let running = a
+        .invoke("retry-pack", "wait", InvocationKind::Ordinary)
+        .unwrap();
+    let rec = package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            ..spec.clone()
+        },
+    ));
+    assert_eq!(waits(&rec), vec!["Quiescence"]);
+    let announced = host.publications();
+    finished(Some(running.cancel()));
+    a.until("retry-pack", "the staged update activates", |r| {
+        r.version.0 == "1.1.0"
+    });
+    // The host's own activation advanced the admission epoch like a command's settlement.
+    assert!(host.publications() > announced);
+    a.ready("retry-pack");
+    let h = a
+        .invoke("retry-pack", "state", InvocationKind::Ordinary)
+        .unwrap();
+    assert!(matches!(
+        finished(h.wait(Duration::from_secs(10))),
+        InvocationOutcome::Completed { .. }
+    ));
+    // It ran against the new generation (its pinned generation is current).
+    let (progress, _) = h.progress();
+    assert!(
+        progress[0].starts_with("read:StateSnapshot"),
+        "{progress:?}"
+    );
+}
+
+#[test]
+fn a_staged_update_that_would_regress_stays_pending_until_it_is_compatible() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("compat-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("compat-pack");
+    let running = a
+        .invoke("compat-pack", "wait", InvocationKind::Ordinary)
+        .unwrap();
+    // Compatible when staged (dotnet 8.0.4 is observed), waiting only for quiescence.
+    let next = Spec {
+        version: "1.1.0".into(),
+        runtimes: vec![
+            json!({"runtimeId": "dotnet", "versionRequirement": ">=8", "required": true}),
+        ],
+        ..spec.clone()
+    };
+    let rec = package(a.update(&a.user, &next));
+    assert_eq!(waits(&rec), vec!["Quiescence"]);
+    // The runtime disappears before the boundary: activating now would regress.
+    a.runtimes.set(std::collections::BTreeMap::new());
+    finished(Some(running.cancel()));
+    let rec = a.until("compat-pack", "the retry keeps it pending", |r| {
+        waits(r) == vec!["Compatibility"]
+    });
+    assert_eq!(rec.version.0, "1.0.0");
+    assert_eq!(rec.pending_version.as_ref().unwrap().0, "1.1.0");
+    assert_eq!(availability(&rec), "Ready");
+    // Once the runtime is back, the next retry activates it.
+    a.runtimes.set(std::collections::BTreeMap::from([(
+        "dotnet".to_owned(),
+        RuntimeObservation::Found("8.0.4".into()),
+    )]));
+    let until = Instant::now() + Duration::from_secs(40);
+    while a.record("compat-pack").version.0 != "1.1.0" {
+        assert!(
+            Instant::now() < until,
+            "the compatible update never activated"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_helper_that_dies_after_every_activation_exhausts_its_restart_budget() {
+    let _s = serial();
+    let a = App::new();
+    // No predecessor: the failure is recorded.
+    let host = a.app().packages().unwrap().clone();
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "exit-after-ready".into(),
+            ..Spec::new("dying-pack", "1.0.0")
+        },
+    ));
+    let announced = host.publications();
+    let rec = a.until("dying-pack", "the failure is recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    assert_eq!(rec.failure_code.unwrap().0, "HelperExited");
+    // Recording the failure is a registry change admissions re-read.
+    assert!(host.publications() > announced);
+    // With a predecessor and nothing admitted: the guarded rollback restores it.
+    let spec = Spec::new("relapse-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("relapse-pack");
+    package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            mode: "exit-after-ready".into(),
+            ..spec.clone()
+        },
+    ));
+    a.until("relapse-pack", "guarded rollback to 1.0.0", |r| {
+        r.version.0 == "1.0.0" && matches!(r.availability, Some(PackageAvailability::Ready))
+    });
+    assert!(
+        a.logs("relapse-pack")
+            .contains(&"PackageRolledBack".to_owned())
+    );
+}
+
+#[test]
+fn uninstall_retires_a_pending_candidate_that_a_person_can_install_again() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("retire-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    let next = Spec {
+        version: "1.1.0".into(),
+        ..spec.clone()
+    };
+    // An agent's bundle waits for the person's exact approval.
+    let rec = package(a.update(&a.agent, &next));
+    assert_eq!(waits(&rec), vec!["ExactVersionApproval"]);
+    let digest = String::from(rec.pending_digest.clone().unwrap());
+    package(a.simple(&a.user, "addons.uninstall", "Uninstall", "retire-pack"));
+    let d = digest.clone();
+    let phase = read(&*a.store, move |s| {
+        s.packages().package_version("retire-pack", &d)
+    })
+    .unwrap()
+    .phase;
+    assert_eq!(phase, VersionPhase::Removed);
+    // A person's explicit install of those contents is not blocked by the uninstall.
+    let rec = package(a.install(&a.user, &next));
+    assert_eq!(digest_of(&rec), digest);
+    assert_eq!(availability(&rec), "Ready");
+    a.ready("retire-pack");
+}
+
+#[test]
+fn the_committed_configuration_reaches_the_helper_in_activation() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec {
+        config_schema: Some(
+            json!({"type": "object", "properties": {"threads": {"type": "integer"}}}),
+        ),
+        ..Spec::new("cfg-pack", "1.0.0")
+    };
+    let rec = package(a.install(&a.user, &spec));
+    a.ready("cfg-pack");
+    let report = || {
+        let h = a
+            .invoke("cfg-pack", "config", InvocationKind::Ordinary)
+            .unwrap();
+        assert!(matches!(
+            finished(h.wait(Duration::from_secs(10))),
+            InvocationOutcome::Completed { .. }
+        ));
+        h.progress().0.join("")
+    };
+    assert_eq!(report(), "config:none");
+    let schema = serde_json::to_value(rec.configuration_schema.clone().unwrap()).unwrap();
+    let body = json!({"kind": "addons.configure", "packageId": "cfg-pack",
+        "expectedRevision": a.record("cfg-pack").revision.get().to_string(),
+        "config": {"schema": schema, "value": {"threads": 4}}});
+    package(a.domain(&a.user, "addons.configure", body));
+    // The reconfigured helper is a new instance that received the value before it was ready.
+    a.until("cfg-pack", "the new configuration is current", |_| true);
+    let seen = {
+        let until = Instant::now() + Duration::from_secs(20);
+        loop {
+            let r = report();
+            if r != "config:none" {
+                break r;
+            }
+            assert!(
+                Instant::now() < until,
+                "the helper never received the configuration"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let delivered: Value = serde_json::from_str(seen.strip_prefix("config:").unwrap()).unwrap();
+    assert_eq!(delivered["value"], json!({"threads": 4}));
+    assert_eq!(delivered["schema"], schema);
+}
+
+fn propose(a: &App, spec: &Spec) -> (ProposalRecord, String, Value) {
+    let (b, d) = bundle(spec);
+    let source = a.save(&a.agent, &b);
+    let body = json!({"kind": "addons.propose", "source": source, "manifestDigest": d, "basePackageId": spec.package});
+    match applied(a.domain(&a.agent, "addons.propose", body)) {
+        OperationResult::AddonsPropose { value } => (value, d, source),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_superseded_proposal_stays_installable_and_an_approved_one_activates_at_the_boundary() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("proposed-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("proposed-pack");
+    let first = Spec {
+        version: "1.1.0".into(),
+        ..spec.clone()
+    };
+    let second = Spec {
+        version: "1.2.0".into(),
+        ..spec.clone()
+    };
+    let (_, d1, _) = propose(&a, &first);
+    let (p2, d2, _) = propose(&a, &second);
+    // The newer proposal superseded the first: retired, not rejected.
+    let d = d1.clone();
+    let phase = read(&*a.store, move |s| {
+        s.packages().package_version("proposed-pack", &d)
+    })
+    .unwrap()
+    .phase;
+    assert_eq!(phase, VersionPhase::Removed);
+    // A person can still install exactly the superseded contents.
+    let rec = package(a.update(&a.user, &first));
+    assert_eq!(digest_of(&rec), d1);
+    a.ready("proposed-pack");
+    // A person's approval of the pending proposal reaches the host: it activates at the next
+    // quiescent boundary (no reinstall needed).
+    let svc = a.app().packages().unwrap().service().clone();
+    let decided = svc
+        .decide_proposal(&a.user, &p2.id, 1, &d2, true, "looks right")
+        .unwrap()
+        .unwrap();
+    assert_eq!(decided.state, "Approved");
+    let rec = a.until("proposed-pack", "the approved proposal activates", |r| {
+        r.version.0 == "1.2.0"
+    });
+    assert_eq!(digest_of(&rec), d2);
+}
+
+#[test]
+fn rollback_paths_never_restore_a_version_whose_prerequisites_are_gone() {
+    let _s = serial();
+    let a = App::new();
+    let needs_dotnet = |pkg: &str| Spec {
+        runtimes: vec![
+            json!({"runtimeId": "dotnet", "versionRequirement": ">=8", "required": true}),
+        ],
+        ..Spec::new(pkg, "1.0.0")
+    };
+    // A person's rollback.
+    let v1 = package(a.install(&a.user, &needs_dotnet("back-pack")));
+    a.ready("back-pack");
+    let v2 = package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            runtimes: vec![],
+            ..needs_dotnet("back-pack")
+        },
+    ));
+    a.ready("back-pack");
+    a.runtimes.set(std::collections::BTreeMap::new());
+    let back = a.lifecycle(&a.user, "addons.rollback", json!({"kind": "Rollback", "packageId": "back-pack", "targetManifestDigest": digest_of(&v1), "expectedRegistryRevision": a.registry().to_string(), "expectedStateGeneration": v2.state_generation.unwrap().get().to_string()}));
+    assert_eq!(
+        refused(back),
+        (
+            DomainErrorCode::UnsupportedTarget,
+            Some("package_compatibility".into())
+        )
+    );
+    assert_eq!(a.record("back-pack").version.0, "1.1.0");
+    // The guarded automatic rollback after a failed start: the predecessor cannot run either,
+    // so the failure is recorded instead of restoring it.
+    a.runtimes.set(std::collections::BTreeMap::from([(
+        "dotnet".to_owned(),
+        RuntimeObservation::Found("8.0.4".into()),
+    )]));
+    package(a.install(&a.user, &needs_dotnet("guard-pack")));
+    a.ready("guard-pack");
+    a.runtimes.set(std::collections::BTreeMap::new());
+    package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            runtimes: vec![],
+            mode: "exit-on-activate".into(),
+            ..needs_dotnet("guard-pack")
+        },
+    ));
+    let rec = a.until("guard-pack", "the failure is recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    assert_eq!(rec.version.0, "1.1.0");
+    assert!(
+        !a.logs("guard-pack")
+            .contains(&"PackageRolledBack".to_owned())
     );
 }

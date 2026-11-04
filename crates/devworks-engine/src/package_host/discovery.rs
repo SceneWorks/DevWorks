@@ -43,6 +43,50 @@ fn command_name(id: &str) -> bool {
         && !id.starts_with(['.', '-'])
 }
 
+/// Resolves a runtime command on `path` (a `PATH`-style list) the way a shell would: the
+/// first directory holding an executable file named `name`, or on Windows `name` plus one of
+/// the `pathext` extensions (`PATHEXT`, default `.COM;.EXE;.BAT;.CMD`), so `node.cmd` and
+/// `dotnet.exe` shims are found. `None` when nothing matches.
+pub fn resolve_command(name: &str, path: &str, pathext: Option<&str>) -> Option<PathBuf> {
+    let extensions: Vec<String> = if cfg!(windows) {
+        pathext
+            .unwrap_or(".COM;.EXE;.BAT;.CMD")
+            .split(';')
+            .map(str::trim)
+            .filter(|e| e.starts_with('.') && e.len() > 1)
+            .map(str::to_owned)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for dir in std::env::split_paths(path) {
+        if dir.as_os_str().is_empty() || !dir.is_absolute() {
+            // A relative PATH entry would resolve against the host's working directory.
+            continue;
+        }
+        let mut candidates = vec![dir.join(name)];
+        candidates.extend(extensions.iter().map(|e| dir.join(format!("{name}{e}"))));
+        // On Windows a bare name without an extension is not runnable.
+        let start = usize::from(cfg!(windows));
+        for c in candidates.into_iter().skip(start) {
+            if is_executable(&c) {
+                return Some(c);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+#[cfg(not(unix))]
+fn is_executable(p: &Path) -> bool {
+    std::fs::metadata(p).is_ok_and(|m| m.is_file())
+}
+
 /// The version a version command printed: the first `[v]N(.N)*` token, normalized to
 /// `major.minor.patch` (`v20.11.1`, `8.0.204`, `cargo 1.82.0 (…)`, `Apple Swift version 6.0.3`).
 pub fn parse_version(output: &str) -> Option<String> {
@@ -91,14 +135,29 @@ impl PackageHost {
     /// Probes one runtime: `<runtime> --version` as an owned process, bounded by
     /// [`super::HostConfig::runtime_timeout`].
     fn probe(&self, runtime: &str, search_path: Option<&str>) -> RuntimeObservation {
-        let mut spec =
-            ProcessSpec::new(&[runtime.to_owned(), "--version".to_owned()]).expect("argv");
-        spec.clear_env = true;
-        spec.env = child_environment();
+        let mut env = child_environment();
+        let var = |env: &[(String, String)], k: &str| {
+            env.iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.clone())
+        };
         if let Some(path) = search_path {
-            spec.env.retain(|(k, _)| k != "PATH");
-            spec.env.push(("PATH".into(), path.to_owned()));
+            env.retain(|(k, _)| !k.eq_ignore_ascii_case("PATH"));
+            env.push(("PATH".into(), path.to_owned()));
         }
+        // Resolved here (PATH, and PATHEXT on Windows): the launch gets the full path, so a
+        // `.cmd` shim runs through its interpreter and nothing depends on the spawner's lookup.
+        let path = var(&env, "PATH").unwrap_or_default();
+        let Some(program) = resolve_command(runtime, &path, var(&env, "PATHEXT").as_deref()) else {
+            return RuntimeObservation::Missing(format!("`{runtime}` was not found on PATH"));
+        };
+        let mut spec = ProcessSpec::new(&[
+            program.to_string_lossy().into_owned(),
+            "--version".to_owned(),
+        ])
+        .expect("argv");
+        spec.clear_env = true;
+        spec.env = env;
         spec.capture_output = true;
         let ctx = self.host_ctx();
         let policy = LaunchPolicy {

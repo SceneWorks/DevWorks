@@ -1237,8 +1237,8 @@ fn the_add_ons_form_shows_configuration_field_errors_from_the_packages_schema() 
     let schema = br#"{"type":"object","properties":{"threads":{"type":"integer","minimum":1}}}"#;
     let bundle = foreign_bundle_with(&root.0.with_extension("bundles"), Some(schema));
     dialogs.files.lock().unwrap().push(vec![bundle]);
-    // Tall enough that the expanded configuration form is laid out in full.
-    let mut h = harness(shell(&engine, &root, dialogs), 1440.0, 1400.0);
+    // The default window size, with the install notice banner above the form.
+    let mut h = harness(shell(&engine, &root, dialogs), 1440.0, 900.0);
     settle(&mut h);
     h.state_mut().navigate(Route::AddOns);
     settle(&mut h);
@@ -1255,6 +1255,10 @@ fn the_add_ons_form_shows_configuration_field_errors_from_the_packages_schema() 
         .addons
         .config_text
         .insert("foreign-pack".into(), r#"{"threads": 0}"#.into());
+    assert!(
+        h.state().addons.notice.is_some(),
+        "a notice banner is shown"
+    );
     click(&mut h, Role::DisclosureTriangle, "Configuration");
     click(&mut h, Role::Button, "Save configuration");
     step_until(&mut h, "the field errors arrive", |s| {

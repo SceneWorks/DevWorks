@@ -11,6 +11,5 @@ publish.workspace = true
 schemars.workspace = true
 semver.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
+# A package's committed configuration is an arbitrary JSON value (host.activate).
 serde_json.workspace = true

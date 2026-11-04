@@ -153,7 +153,7 @@
     },
     {
       "file": "package-host-request.schema.json",
-      "sha256": "190beae90c974720523774ca4cb366033ba74ba104dc46dbcdd780b30811f5b9"
+      "sha256": "166f62f1500f9c014b66b002b79d800e0e9616ef12a8ddf96d5ac5a0be65f0b3"
     },
     {
       "file": "package-manifest.schema.json",
