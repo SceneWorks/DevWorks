@@ -785,3 +785,65 @@ fn show_its_history_opens_overviews_activity_for_that_item() {
     );
     assert!(has_text(&h, "full history"), "Activity is shown");
 }
+
+#[test]
+fn a_plan_stays_savable_after_a_covering_card_leaves_its_feature() {
+    let root = Root::new("plan-after-unlink");
+    let engine = start(&root);
+    let real = engine.backend();
+    let pid = shop(&*real);
+    let mut h = harness(
+        shell_with(Ok(real.clone()), &root, Script::default(), None),
+        1600.0,
+        1000.0,
+    );
+    settle(&mut h);
+    let feature = features_from_screen(&mut h, &*real, &pid, &["Checkout"]).remove(0);
+    save_plan_now(&mut h, "Checkout", "pay");
+    settle(&mut h);
+    // An agent plans a card covering E1, then the card leaves the feature.
+    let status = default_status_id(
+        &devworks_core::protocol::ProjectId(devworks_core::protocol::Id::new(pid.clone()).unwrap()),
+        "backlog",
+    );
+    let card = command(
+        &*real,
+        "tasks.create",
+        json!({"projectId": pid, "title": "Pay button", "description": "",
+            "repositoryIds": [], "statusId": status.as_str(), "priority": 0,
+            "parentId": feature.id.as_str()}),
+    );
+    let get = |id: &str| {
+        wops::work_record(real.query("features.get", &wops::work_get(&*real, "features.get", id)))
+            .unwrap()
+    };
+    let f = get(feature.id.as_str());
+    let mut draft = serde_json::to_value(f.pending_plan.clone().unwrap().draft).unwrap();
+    draft["requirements"][0]["coveredByTaskIds"] = json!([card.id.as_str()]);
+    command(
+        &*real,
+        "features.edit_plan",
+        json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "plan": draft}),
+    );
+    command(
+        &*real,
+        "tasks.set_feature",
+        json!({"taskId": card.id.as_str(), "expectedRevision": card.revision.as_str(),
+            "clearFeature": true}),
+    );
+    // The editor round-trips the stored coverage it does not show; the save still succeeds and
+    // the departed card leaves the requirement's coverage.
+    h.state_mut().work.plan = None;
+    settle(&mut h);
+    save_plan_now(&mut h, "Checkout", "pay by card");
+    settle(&mut h);
+    assert!(
+        h.state().work.plan.is_none(),
+        "the save settled: {:?}",
+        h.state().work.message
+    );
+    let saved = get(feature.id.as_str()).pending_plan.unwrap().draft;
+    assert_eq!(saved.requirements.0[0].statement.0, "pay by card");
+    assert!(saved.requirements.0[0].covered_by_task_ids.0.is_empty());
+}

@@ -24,7 +24,7 @@
 //! but the user, evidence; a human may accept a finding's identified risk through the approvals
 //! item's decision seam ([`accept_finding_risk`]), which never waives a missing prerequisite.
 use super::model::{
-    FEATURE_UNIT, active_of, pending_of, plan_digest as digest_of_draft, plan_units,
+    FEATURE_UNIT, active_of, dropped, pending_of, plan_digest as digest_of_draft, plan_units,
 };
 use super::{R, check_artifact, conflict, invalid, not_found, refuse, stale, visible_feature};
 use crate::context::{InvocationContext, PrincipalKind};
@@ -748,6 +748,127 @@ pub(crate) fn apply_change(
         }
     }
     Ok(())
+}
+
+/// The live requirements of `feature`'s active plan or pending draft that `card` covered and no
+/// other card of the feature still covers (`card` has just left the feature).
+fn uncovered_by(tx: &mut dyn WriteTransaction, feature: &StoredWork, card: &Id) -> R<Vec<Id>> {
+    let Some(slot) = tx.work().feature_plan(&feature.id)? else {
+        return Ok(Vec::new());
+    };
+    let members = feature_work(tx.work(), feature)?;
+    let drafts = [
+        active_of(slot.approved.as_ref()).map(|a| a.draft),
+        pending_of(slot.pending.as_ref()).map(|p| p.draft),
+    ];
+    let mut out: Vec<Id> = Vec::new();
+    for d in drafts.iter().flatten() {
+        for r in d.requirements.0.iter().filter(|r| !dropped(r)) {
+            let covering = &r.covered_by_task_ids.0;
+            if covering.contains(card)
+                && !covering.iter().any(|t| members.contains(t.as_str()))
+                && !out.contains(&r.id)
+            {
+                out.push(r.id.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A card left `feature` (unlinked, or moved to another feature). A requirement it was the
+/// only covering card of has lost its delivery: that is surfaced as an open, blocking readiness
+/// finding of that requirement alone (AGENT-19: a local gap blocks only the affected scope, and
+/// AGENT-20: changed scope is what adds a blocker), never by silently dropping coverage. It is
+/// recorded in every stored assessment generation (active, and a pending draft's), and closes
+/// as any finding does (`CloseFinding`: a card covers the requirement again, or it is dropped
+/// with a decision). Without a stored assessment nothing is ready to begin with and the first
+/// assessment reviews the plan as it is. Returns the uncovered requirements.
+pub(crate) fn coverage_lost(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    feature: &StoredWork,
+    card: &Id,
+) -> R<Vec<Id>> {
+    let uncovered = uncovered_by(tx, feature, card)?;
+    let Some(stored) = tx.work().readiness(&feature.id)? else {
+        return Ok(uncovered);
+    };
+    if uncovered.is_empty() {
+        return Ok(uncovered);
+    }
+    let mut next = Slots::of(&stored.body);
+    let mut added = Vec::new();
+    for r in &uncovered {
+        let id = Id::new(format!(
+            "coverage-{}",
+            &crate::fingerprint::sha256_hex(format!("{}|{}", r.as_str(), card.as_str()).as_bytes())
+                [..32]
+        ))
+        .map_err(|_| invalid("finding_id", None))?;
+        let finding: ReadinessFinding = serde_json::from_value(json!({
+            "id": id.as_str(),
+            "disposition": "NeedsUserDecision",
+            "blocking": true,
+            "prerequisite": false,
+            "state": "Open",
+            "requirementIds": [r.as_str()],
+            "scopeKey": r.as_str(),
+            "affectedWorkIds": [],
+            "summary": format!("Requirement {} has no covering card: {} left the feature", r.as_str(), card.as_str()),
+            "missing": format!("a card of the feature that delivers requirement {}", r.as_str()),
+            "consequence": format!("requirement {} cannot be delivered or verified by the feature's work", r.as_str()),
+            "attempts": [format!("checked the feature's remaining cards: none covers requirement {}", r.as_str())],
+            "insufficiency": "which work delivers the requirement, or whether it is dropped, is a planning decision",
+            "closureCondition": format!("a card of the feature covers requirement {} again, or it is dropped with a recorded decision", r.as_str()),
+            "question": format!("Which card should cover requirement {}, or should it be dropped?", r.as_str()),
+            "recommendation": format!("Link {} back or plan a card covering the requirement", card.as_str()),
+            "evidence": [],
+            "closureEvidence": [],
+        }))
+        .map_err(|_| invalid("finding", Some(&id)))?;
+        // Each generation that reviewed the requirement holds it; one open in the active
+        // generation is open in the pending one too (as [`carry_open`] keeps it).
+        let mut recorded = false;
+        for body in [next.active.as_mut(), next.pending.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            let reviewed = body.units.contains_key(r.as_str()) || recorded;
+            if reviewed
+                && body.findings.len() < 128
+                && !body.findings.iter().any(|f| f.id == finding.id)
+            {
+                body.findings.push(finding.clone());
+                recorded = true;
+            }
+        }
+        if recorded {
+            added.push(id.as_str().to_owned());
+        }
+    }
+    if added.is_empty() {
+        return Ok(uncovered);
+    }
+    let revision = stored.revision + 1;
+    tx.work().put_readiness(
+        &StoredReadiness {
+            feature_id: feature.id.clone(),
+            revision,
+            body: next.value(),
+        },
+        Some(stored.revision),
+    )?;
+    record(
+        tx,
+        ctx,
+        feature,
+        revision,
+        "ReadinessCoverageLost",
+        json!({"workId": card.as_str(), "findingIds": added,
+            "requirementIds": uncovered.iter().map(Id::as_str).collect::<Vec<_>>()}),
+    )?;
+    Ok(uncovered)
 }
 
 /// The cards of `feature` (IDs), for affected-work validation.

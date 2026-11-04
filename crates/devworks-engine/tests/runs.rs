@@ -4957,3 +4957,73 @@ fn a_reapplied_feature_stop_covers_a_card_linked_after_the_feature_continued() {
         vec![(rid("root-f"), OperationState::ObservedComplete)]
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// A linked card never gets an activation of its own, also not a deferred reactivation (DW-12)
+
+/// Starts the standalone issue and launches it (gated, launch slot 0).
+fn running_issue(fx: &Fx, rt: &tokio::runtime::Runtime, sup: &Arc<RunSupervisor>) {
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let launched = rt.block_on(sup.tick()).unwrap().launched;
+    assert_eq!(launched.len(), 1);
+}
+/// Lets the issue's gated launch end and returns what the next pass launched.
+fn end_issue_launch(
+    launcher: &Gated,
+    rt: &tokio::runtime::Runtime,
+    sup: &Arc<RunSupervisor>,
+) -> Vec<Id> {
+    launcher.release(0);
+    rt.block_on(within("the issue's launch ends", async {
+        while sup.launches() > 0 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    rt.block_on(sup.tick()).unwrap().launched
+}
+
+#[test]
+fn continuing_a_linked_card_while_it_stops_arms_no_reactivation() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let (sup, _processes) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
+    let rt = runtime();
+    running_issue(&fx, &rt, &sup);
+    // Linked while its agent runs, paused, and continued before its activation stopped.
+    applied(&fx.set_feature("root-i", Some("root-f")));
+    applied(&fx.pause(&fx.user, "root-i"));
+    assert_eq!(fx.live("root-i").unwrap().phase, ActivationPhase::Stopping);
+    applied(&fx.resume(&fx.user, "root-i"));
+    assert!(!fx.control("root-i").reactivate, "a reactivation was armed");
+    // When the stopping activation ends, no independent agent starts for the card.
+    let launched = end_issue_launch(&launcher, &rt, &sup);
+    assert!(launched.is_empty(), "{launched:?}");
+    assert!(fx.live("root-i").is_none());
+    assert_eq!(fx.control("root-i").generation, 1);
+}
+
+#[test]
+fn a_reactivation_armed_before_a_card_is_linked_is_withdrawn_when_its_activation_stops() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let (sup, _processes) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
+    let rt = runtime();
+    running_issue(&fx, &rt, &sup);
+    // Paused and continued while standalone (the reactivation is armed), then linked before
+    // its stopping activation ended.
+    applied(&fx.pause(&fx.user, "root-i"));
+    applied(&fx.resume(&fx.user, "root-i"));
+    assert!(fx.control("root-i").reactivate);
+    applied(&fx.set_feature("root-i", Some("root-f")));
+    // Membership is checked when the reactivation would be created: it is withdrawn.
+    let launched = end_issue_launch(&launcher, &rt, &sup);
+    assert!(launched.is_empty(), "{launched:?}");
+    assert!(fx.live("root-i").is_none());
+    let control = fx.control("root-i");
+    assert_eq!((control.generation, control.reactivate), (1, false));
+    assert!(
+        fx.events("root-i")
+            .iter()
+            .any(|k| k == "ReactivationWithdrawn")
+    );
+}

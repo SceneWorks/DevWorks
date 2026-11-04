@@ -1310,7 +1310,11 @@ impl ControlService {
         })
     }
 
-    /// Records a new `Pending` activation of the root's next generation.
+    /// Records a new `Pending` activation of the root's next generation. Every path that creates
+    /// an activation comes through here (Start, Continue, and the reactivation a Continue
+    /// deferred until the stopping activation ended), so membership is checked once, as it is
+    /// now: a card linked to a feature never gets an activation of its own (its feature's
+    /// coordinator runs its work); a reactivation still pending for it is withdrawn instead.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_activation(
         &self,
@@ -1321,7 +1325,30 @@ impl ControlService {
         purpose: ActivationPurpose,
         plan_revision: Option<i64>,
         why: &str,
-    ) -> Result<StoredActivation, StorageError> {
+    ) -> Result<Option<StoredActivation>, StorageError> {
+        if !is_run_root(root) {
+            if control.reactivate {
+                let mut after = control.clone();
+                after.reactivate = false;
+                save_control(tx, control, &mut after)?;
+                record(
+                    tx,
+                    actor,
+                    root,
+                    None,
+                    CONTROL_AGGREGATE,
+                    root.id.0.as_str(),
+                    after.revision,
+                    "ReactivationWithdrawn",
+                    json!({
+                        "via": why,
+                        "featureId": root.parent_feature_id.as_ref().map(|f| f.0.as_str()),
+                        "reason": "the work is linked to a feature, whose coordinator runs it",
+                    }),
+                )?;
+            }
+            return Ok(None);
+        }
         let boot = tx
             .store()
             .boot_id
@@ -1371,7 +1398,7 @@ impl ControlService {
                 "via": why,
             }),
         )?;
-        Ok(a)
+        Ok(Some(a))
     }
 
     /// Asks the root's live activation to stop: one never launched stops at once (`Prevented`);
@@ -1660,8 +1687,11 @@ impl ControlService {
         after.desired = DesiredExecution::Enabled;
         after.restart_boot_id = None;
         let live = tx.runs().live_activation(&root.id)?;
+        // A linked card's work is run by its feature's coordinator: Continue clears its own
+        // holds but records (or arms) no activation of its own; [`Self::new_activation`] also
+        // refuses one for it whenever a reactivation would be created.
         let reactivate = match &live {
-            Some(a) if a.phase == ActivationPhase::Stopping => {
+            Some(a) if a.phase == ActivationPhase::Stopping && is_run_root(&root) => {
                 after.reactivate = true;
                 true
             }
@@ -1683,9 +1713,7 @@ impl ControlService {
                 "reactivateAfterStop": reactivate,
             }),
         )?;
-        // A linked card's work is run by its feature's coordinator: Continue clears its own
-        // holds but records no activation of its own.
-        if live.is_none() && is_run_root(&root) {
+        if live.is_none() {
             let plan = self.scope.plan(tx.runs(), &root)?;
             self.new_activation(
                 tx,

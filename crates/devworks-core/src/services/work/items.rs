@@ -1613,6 +1613,11 @@ impl WorkService {
             }),
         )?;
         if let Some(f) = &before.parent_feature_id {
+            // A requirement only this card covered has lost its delivery: an open readiness
+            // finding of that requirement (its coverage is reconciled in the next draft saved).
+            if let Some(feature) = tx.work().work(f)? {
+                super::readiness::coverage_lost(tx, ctx, &feature, &after.id)?;
+            }
             self.notify_feature(tx, ctx, f, &after, "WorkLeftFeature")?;
         }
         if let Some(f) = &target {

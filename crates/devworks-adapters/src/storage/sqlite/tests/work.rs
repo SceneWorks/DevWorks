@@ -1110,6 +1110,113 @@ fn pending_plans_keep_the_active_plan_until_a_human_approves_the_exact_draft() {
 }
 
 #[test]
+fn a_card_leaving_its_feature_keeps_the_next_draft_savable_and_surfaces_lost_coverage() {
+    use devworks_core::protocol::records::FindingState;
+    use devworks_core::services::runs::scope::Readiness;
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let f = fx.feature(&p, "Checkout", &[]);
+    let doc = fx.artifact(&p, 1);
+    let pay = fx.task(&fx.user(), &p, Some(&f), "Pay", 0);
+    let ship = fx.task(&fx.user(), &p, Some(&f), "Ship", 0);
+    let stray = fx.task(&fx.user(), &p, None, "Stray", 0);
+    // E1 is covered by Pay alone, E2 by Pay and Ship.
+    let mut plan = draft(&doc, &[("E1", "pay"), ("E2", "ship")], &[]);
+    plan["requirements"][0]["coveredByTaskIds"] = json!([pay.id.as_str()]);
+    plan["requirements"][1]["coveredByTaskIds"] = json!([pay.id.as_str(), ship.id.as_str()]);
+    let f = fx.fresh(&f);
+    let f = work_of(applied(fx.command(
+        &fx.user(),
+        "features.edit_plan",
+        json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(), "plan": plan}),
+    )));
+    let f = fx.approve(&f);
+    let active = f.approval.clone().unwrap();
+    let f = work_of(applied(fx.command_at(
+        &fx.agent(),
+        "features.edit",
+        json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "changes": {"readiness": {"kind": "Assess",
+                "planRevision": active.plan_revision.as_str(),
+                "planDigest": String::from(active.plan_digest.clone()),
+                "summary": "assessed", "findings": []}}}),
+        Some(2),
+    )));
+    assert!(
+        fx.get_at("features.get", &f.id, Some(2))
+            .unwrap()
+            .readiness
+            .unwrap()
+            .ready
+    );
+    // Pay leaves the feature.
+    let pay = fx.fresh(&pay);
+    applied(fx.command(
+        &fx.user(),
+        "tasks.set_feature",
+        json!({"taskId": pay.id.as_str(), "expectedRevision": pay.revision.as_str(),
+            "clearFeature": true}),
+    ));
+    // E1 lost its only covering card: an open blocking finding of E1 alone. E2 keeps Ship.
+    let r = fx
+        .get_at("features.get", &f.id, Some(2))
+        .unwrap()
+        .readiness
+        .unwrap();
+    let lost: Vec<_> = r
+        .findings
+        .0
+        .iter()
+        .filter(|x| x.blocking && matches!(x.state, FindingState::Open))
+        .collect();
+    assert_eq!(lost.len(), 1, "{:?}", r.findings);
+    assert_eq!(lost[0].requirement_ids.0, vec![id("E1")]);
+    assert_eq!(lost[0].scope_key.as_ref(), Some(&id("E1")));
+    let plan_state = {
+        let (runs, fid) = (fx.runs.clone(), RootId(f.id.clone()));
+        fx.read(move |s| {
+            let w = s.sessions().work_root(&fid)?.unwrap();
+            runs.scope().plan(s.runs(), &w)
+        })
+    };
+    assert!(matches!(
+        plan_state.unit(Some("E1")).unwrap().readiness,
+        Readiness::Blocked { .. }
+    ));
+    assert!(plan_state.unit(Some("E2")).unwrap().readiness.is_current());
+    assert!(plan_state.unit(None).unwrap().readiness.is_current());
+    // The next draft, submitted as an editor round-trips the stored requirements, is savable:
+    // the departed card leaves its coverage; the active plan's history is as recorded.
+    let f = fx.fresh(&f);
+    let resubmit = json!({"content": doc, "acceptance": f.acceptance.0,
+        "repositoryIds": [], "goals": ["ship it"], "requirements": f.requirements.0,
+        "acceptanceTests": []});
+    let saved = work_of(applied(fx.command(
+        &fx.user(),
+        "features.edit_plan",
+        json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "plan": resubmit}),
+    )));
+    let draft_reqs = saved.pending_plan.unwrap().draft.requirements.0;
+    assert!(draft_reqs[0].covered_by_task_ids.0.is_empty());
+    assert_eq!(draft_reqs[1].covered_by_task_ids.0, vec![ship.id.clone()]);
+    assert_eq!(
+        saved.requirements.0[0].covered_by_task_ids.0,
+        vec![pay.id.clone()]
+    );
+    // A card the stored drafts never recorded is still refused.
+    let mut wrong = draft(&doc, &[("E1", "pay"), ("E2", "ship")], &[]);
+    wrong["requirements"][0]["coveredByTaskIds"] = json!([stray.id.as_str()]);
+    let fault = refused(fx.command(
+        &fx.user(),
+        "features.edit_plan",
+        json!({"featureId": saved.id.as_str(), "expectedRevision": saved.revision.as_str(),
+            "plan": wrong}),
+    ));
+    assert_eq!(fault.code, DomainErrorCode::NotFound);
+}
+
+#[test]
 fn readiness_is_bound_to_the_plan_and_invalidates_only_changed_units() {
     let fx = Fx::new();
     let p = fx.project("Alpha", &[]);

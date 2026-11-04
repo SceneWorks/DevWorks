@@ -185,6 +185,43 @@ fn keep_plan_state(tx: &mut dyn WriteTransaction, feature: &Id, given: &PlanDraf
     let mut out = given.clone();
     out.acceptance = BoundedList(keep(&given.acceptance.0, &base.acceptance.0));
     out.acceptance_tests = BoundedList(keep(&given.acceptance_tests.0, &base.acceptance_tests.0));
+    // Coverage a stored draft recorded for a card that has since left the feature is reconciled
+    // here, in the next draft (the stored drafts stay as recorded: changing a pending draft would
+    // supersede its approval request and its reviewed digest). A departure that left a
+    // requirement uncovered is already an open readiness finding (`coverage_lost`); a card the
+    // stored drafts never recorded is still refused by `check_draft`.
+    let recorded: Vec<(Id, Id)> = slot
+        .iter()
+        .flat_map(|s| {
+            [
+                active_of(s.approved.as_ref()).map(|a| a.draft),
+                pending_of(s.pending.as_ref()).map(|p| p.draft),
+            ]
+        })
+        .flatten()
+        .flat_map(|d| {
+            d.requirements.0.into_iter().flat_map(|r| {
+                r.covered_by_task_ids
+                    .0
+                    .into_iter()
+                    .map(move |t| (r.id.clone(), t))
+            })
+        })
+        .collect();
+    for r in &mut out.requirements.0 {
+        let mut kept = Vec::with_capacity(r.covered_by_task_ids.0.len());
+        for t in std::mem::take(&mut r.covered_by_task_ids.0) {
+            let departed = recorded.iter().any(|(q, x)| q == &r.id && x == &t)
+                && !tx
+                    .work()
+                    .work(&t)?
+                    .is_some_and(|w| w.parent_feature_id.as_ref() == Some(feature));
+            if !departed {
+                kept.push(t);
+            }
+        }
+        r.covered_by_task_ids.0 = kept;
+    }
     Ok(out)
 }
 
