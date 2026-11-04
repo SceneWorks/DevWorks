@@ -1297,6 +1297,12 @@ impl ArtifactRead for HandlerTx<'_> {
     fn shares(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError> {
         self.inner.borrow_mut().artifacts().shares(artifact)
     }
+    fn repository_text_readers(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .repository_text_readers(artifact)
+    }
     fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
         self.inner.borrow_mut().artifacts().links(artifact)
     }

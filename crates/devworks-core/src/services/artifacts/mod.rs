@@ -444,7 +444,12 @@ pub(crate) fn visible_in(
         (Some(p), ArtifactScope::Project(owner)) => {
             owner == p || read.shares(&artifact.id)?.contains(p)
         }
-        (Some(p), ArtifactScope::Workspace) => read.shares(&artifact.id)?.contains(p),
+        // A host-published repository text is readable where its repository is: by every
+        // project that has the repository as a member (CODE-07; no share to maintain).
+        (Some(p), ArtifactScope::Workspace) => {
+            read.shares(&artifact.id)?.contains(p)
+                || read.repository_text_readers(&artifact.id)?.contains(p)
+        }
     })
 }
 

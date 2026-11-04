@@ -1101,6 +1101,9 @@ impl ArtifactRead for Unsupported {
     fn shares(&self, _: &Id) -> Result<Vec<ProjectId>, StorageError> {
         nope()
     }
+    fn repository_text_readers(&self, _: &Id) -> Result<Vec<ProjectId>, StorageError> {
+        nope()
+    }
     fn links(&self, _: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
         nope()
     }

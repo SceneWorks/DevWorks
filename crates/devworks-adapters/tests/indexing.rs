@@ -2705,3 +2705,124 @@ fn ended_ref_overlay_records_are_pruned_past_both_limits_in_bounded_passes() {
     assert_eq!(pass(), 2);
     assert!(!exists(8) && !exists(9) && exists(10));
 }
+
+/// `artifacts.read` of `content` under `ctx`.
+fn read_artifact(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    content: &devworks_core::protocol::provider::ArtifactRef,
+) -> DomainQueryReply {
+    let frame = json!({"protocol": "1.0-draft.1", "queryId": "q-read", "limit": 1,
+        "query": {"kind": "Read", "artifactId": content.artifact_id, "versionId": content.version_id}});
+    let authority = fx.gateway_auth();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.ids,
+    };
+    fx.cases
+        .query(
+            &gateway,
+            ctx,
+            "artifacts.read",
+            frame.to_string().as_bytes(),
+        )
+        .expect("addressable")
+}
+
+#[test]
+fn repository_texts_are_readable_wherever_their_repository_is_a_member() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("texts");
+    repo(&dir, &[("README.md", "# Texts\n"), ("a.rs", "fn a() {}\n")]);
+    let other = src.join("other");
+    repo(&other, &[("b.rs", "fn b() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let (repo_id, other_id) = (fx.repository_at(&dir), fx.repository_at(&other));
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let create = |name: &str, member: &Id| match decision(fx.command(
+        "projects.create",
+        json!({"name": name, "description": "", "repositoryIds": [member]}),
+    )) {
+        DomainDecision::Applied {
+            result: OperationResult::ProjectsCreate { value },
+        } => value.id,
+        other => panic!("{other:?}"),
+    };
+    let (member, outsider) = (create("Member", &repo_id), create("Outsider", &other_id));
+    // A human in the member project gets the README through the repository...
+    let human = fx.user().with_lineage(Some(member.clone()), None, None);
+    let text = match result(query_as(
+        &fx,
+        &human,
+        "repositories.readme",
+        json!({"repositoryId": repo_id, "views": {"kind": "Published", "repositoryIds": [repo_id]}}),
+        None,
+    )) {
+        OperationResult::RepositoriesReadme { value } => value,
+        other => panic!("{other:?}"),
+    };
+    // ...and can read the artifact it names, as can an agent bound to that project.
+    assert!(
+        matches!(
+            result(read_artifact(&fx, &human, &text.content)),
+            OperationResult::ArtifactsRead { .. }
+        ),
+        "a project-scoped human reads its member repository's README"
+    );
+    let agent = |who: &str, project: &devworks_core::protocol::ProjectId| {
+        let actor = ActorId(id(who));
+        let (a, p, by) = (actor.clone(), project.clone(), fx.user());
+        fx.write(move |tx| {
+            tx.actors().register(&a, PrincipalKind::Agent, "agent")?;
+            devworks_core::authority::service::bind_principal(
+                tx,
+                &by,
+                NewPrincipalBinding {
+                    actor: a.clone(),
+                    kind: PrincipalKind::Agent,
+                    role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                    project_id: Some(p),
+                    tool_families: None,
+                    bound_by: ActorId(id("user")),
+                },
+                None,
+            )
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        });
+        let info = fx.store.info();
+        HostIngress::new(&*fx.store)
+            .context(
+                actor,
+                PrincipalKind::Agent,
+                id("invocation-1"),
+                id("ui-main"),
+                Counter::new(info.restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_lineage(Some(project.clone()), None, None)
+    };
+    assert!(
+        matches!(
+            result(read_artifact(
+                &fx,
+                &agent("agent-member", &member),
+                &text.content
+            )),
+            OperationResult::ArtifactsRead { .. }
+        ),
+        "an agent of the member project reads it"
+    );
+    // A project without the repository reads neither the repository nor its text.
+    let stranger = fx.user().with_lineage(Some(outsider.clone()), None, None);
+    fault(read_artifact(&fx, &stranger, &text.content));
+    fault(read_artifact(
+        &fx,
+        &agent("agent-outsider", &outsider),
+        &text.content,
+    ));
+}
