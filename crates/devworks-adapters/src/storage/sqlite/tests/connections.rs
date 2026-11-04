@@ -53,6 +53,8 @@ struct FakeHttp {
     during: Mutex<Option<During>>,
 }
 type During = (String, Box<dyn FnOnce() + Send>);
+/// A change to run while one handle is read.
+type HandleHook = (Id, Box<dyn FnOnce() + Send>);
 impl FakeHttp {
     fn during(&self, prefix: &str, f: impl FnOnce() + Send + 'static) {
         *self.during.lock().unwrap() = Some((prefix.to_owned(), Box::new(f)));
@@ -128,6 +130,52 @@ impl HttpTransport for FakeHttp {
     }
 }
 
+/// The session store, with a change that runs once while a `get` of one handle is in flight
+/// (a concurrent rotation or replacement).
+struct Hooked {
+    inner: Arc<SessionSecrets>,
+    during_get: Mutex<Option<HandleHook>>,
+}
+impl Hooked {
+    fn during_get(&self, handle: &Id, f: impl FnOnce() + Send + 'static) {
+        *self.during_get.lock().unwrap() = Some((handle.clone(), Box::new(f)));
+    }
+}
+impl SecretStore for Hooked {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+    fn put(
+        &self,
+        key: &SecretKey,
+        secret: &Secret,
+    ) -> Result<(), devworks_core::ports::secrets::SecretError> {
+        self.inner.put(key, secret)
+    }
+    fn get(
+        &self,
+        key: &SecretKey,
+    ) -> Result<Option<Secret>, devworks_core::ports::secrets::SecretError> {
+        let hook = {
+            let mut during = self.during_get.lock().unwrap();
+            match during.as_ref() {
+                Some((h, _)) if *h == key.handle => during.take(),
+                _ => None,
+            }
+        };
+        if let Some((_, f)) = hook {
+            f();
+        }
+        self.inner.get(key)
+    }
+    fn delete(&self, key: &SecretKey) -> Result<bool, devworks_core::ports::secrets::SecretError> {
+        self.inner.delete(key)
+    }
+    fn list(&self, namespace: &str) -> Result<Vec<Id>, devworks_core::ports::secrets::SecretError> {
+        self.inner.list(namespace)
+    }
+}
+
 /// Deterministic "randomness" (tests only).
 struct Counting(AtomicU8);
 impl Entropy for Counting {
@@ -151,6 +199,7 @@ struct Cx {
     cases: UseCases,
     http: Arc<FakeHttp>,
     secrets: Arc<SessionSecrets>,
+    hooked: Arc<Hooked>,
     n: AtomicU64,
 }
 
@@ -192,13 +241,17 @@ impl Cx {
     }
     fn open(h: Harness, http: Arc<FakeHttp>, secrets: Arc<SessionSecrets>) -> Self {
         let store = Arc::new(h.store());
+        let hooked = Arc::new(Hooked {
+            inner: secrets.clone(),
+            during_get: Mutex::new(None),
+        });
         let svc = Arc::new(
             ConnectionService::new(
                 h.ids.clone(),
                 h.clock.clone(),
                 store.clone(),
                 http.clone(),
-                secrets.clone(),
+                hooked.clone(),
                 Arc::new(Counting(AtomicU8::new(0))),
             )
             .with_endpoints(AuthEndpoints {
@@ -232,6 +285,7 @@ impl Cx {
             cases,
             http,
             secrets,
+            hooked,
             n: AtomicU64::new(0),
         }
     }
@@ -244,9 +298,10 @@ impl Cx {
             cases,
             http,
             secrets,
+            hooked,
             n,
         } = self;
-        drop((cases, svc, store));
+        drop((cases, svc, store, hooked));
         let cx = Self::open(h, http, secrets);
         cx.n.store(n.load(Ordering::SeqCst), Ordering::SeqCst);
         cx
@@ -1918,5 +1973,266 @@ fn a_refresh_records_the_models_listed_with_the_refreshed_token() {
         c.discovered_model_ids.as_ref().map(|i| i.0.len()),
         Some(2),
         "the list made with the refreshed token is recorded for it"
+    );
+}
+
+#[test]
+fn a_replaced_key_forgets_the_model_list_made_with_the_old_one() {
+    let cx = Cx::new();
+    let first = cx.stage("sk-ant-first");
+    cx.add("anthropic", "AnthropicMessages", ANTHROPIC, Some(&first));
+    for (m, up) in [
+        ("opus-api", "claude-opus-5-5"),
+        ("haiku-api", "claude-haiku-5-5"),
+    ] {
+        let model = json!({"id": m, "displayName": m, "endpointProfile": "AnthropicMessages",
+            "upstreamModelId": up, "enabled": true, "tierMemberships": [], "efforts": [],
+            "imageInput": false, "tools": true, "revision": "1"});
+        assert!(summary(cx.configure(json!({"kind": "Model", "model": model}))).2);
+    }
+    // The first key's account lists only Opus.
+    cx.http.on(
+        Method::Get,
+        &format!("{ANTHROPIC}/v1/models"),
+        200,
+        json!({"data": [{"id": "claude-opus-5-5"}], "has_more": false}),
+    );
+    summary(
+        cx.configure(json!({"kind": "SignIn", "connectionId": "anthropic", "action": "Inspect"})),
+    );
+    assert!(codes(&cx.availability("haiku-api")).contains(&"NotDiscovered"));
+
+    // Another key (perhaps another account): nothing learned with the first one is kept.
+    let second = cx.stage("sk-ant-second");
+    assert!(
+        summary(edit_connection(
+            &cx,
+            "anthropic",
+            "AnthropicMessages",
+            ANTHROPIC,
+            json!({"credentialRef": second.as_str()})
+        ))
+        .2
+    );
+    let c = cx.connection("anthropic");
+    assert_eq!(c.credential_revision.as_ref().map(Counter::get), Some(2));
+    assert!(c.discovered_model_count.is_none() && c.discovered_at_ms.is_none());
+    assert!(c.healthy.is_none() && c.checked_at_ms.is_none());
+    let a = cx.availability("haiku-api");
+    assert!(a.available, "{a:?}");
+
+    // Removing the key forgets the list made with it too.
+    summary(
+        cx.configure(json!({"kind": "SignIn", "connectionId": "anthropic", "action": "Inspect"})),
+    );
+    assert!(cx.connection("anthropic").discovered_model_count.is_some());
+    summary(
+        cx.configure(
+            json!({"kind": "SignIn", "connectionId": "anthropic", "action": "Disconnect"}),
+        ),
+    );
+    let c = cx.connection("anthropic");
+    assert!(c.discovered_model_count.is_none() && c.discovered_at_ms.is_none());
+}
+
+#[test]
+fn a_keyless_endpoint_that_refuses_authorization_is_not_routed_through() {
+    let cx = Cx::new();
+    let endpoint = "https://models.example.test/v1";
+    cx.add("vllm", "CompatibleChat", endpoint, None);
+    let model = json!({"id": "qwen-remote", "displayName": "Qwen", "endpointProfile":
+        "CompatibleChat", "upstreamModelId": "qwen3.8-27b", "enabled": true,
+        "tierMemberships": [], "efforts": [], "imageInput": false, "tools": true,
+        "revision": "1", "connectionId": "vllm"});
+    assert!(summary(cx.configure(json!({"kind": "Model", "model": model}))).2);
+    assert!(cx.availability("qwen-remote").available);
+
+    // The endpoint starts demanding a key: unusable for routing, and it says why.
+    cx.http
+        .on(Method::Get, &format!("{endpoint}/models"), 401, json!({}));
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "vllm", "action": "Inspect"})));
+    let c = cx.connection("vllm");
+    assert!(is(lifecycle(&c), "ReauthenticationRequired"), "{c:?}");
+    assert_eq!(c.healthy, Some(false));
+    assert!(
+        c.state_reason
+            .as_ref()
+            .is_some_and(|r| r.0.contains("add its API key"))
+    );
+    assert!(!cx.availability("qwen-remote").available);
+    assert!(matches!(
+        cx.svc.access(&id("vllm"), None),
+        Err(AccessError::ReauthenticationRequired(_))
+    ));
+
+    // It accepts requests again: a test brings it back.
+    cx.http.reset(
+        Method::Get,
+        &format!("{endpoint}/models"),
+        200,
+        json!({"data": [{"id": "qwen3.8-27b"}]}),
+    );
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "vllm", "action": "Inspect"})));
+    assert!(is(lifecycle(&cx.connection("vllm")), "Connected"));
+    assert!(cx.availability("qwen-remote").available);
+    assert!(cx.svc.access(&id("vllm"), None).is_ok());
+}
+
+#[test]
+fn a_credential_replaced_while_it_is_read_is_read_again_not_reported_lost() {
+    let cx = Cx::new();
+    let first = cx.stage("sk-first");
+    cx.add("or", "OpenRouterChat", OPENROUTER, Some(&first));
+    let second = cx.stage("sk-second");
+    let ns = cx.store.info().store_id.0.as_str().to_owned();
+    // While the first key is read, a replacement publishes the second and retires the first.
+    let (store, secrets, ns2) = (cx.store.clone(), cx.secrets.clone(), ns.clone());
+    let (old, new) = (first.clone(), second.clone());
+    cx.hooked.during_get(&first, move || {
+        run_write(&*store, WriteOptions::default(), move |tx| {
+            let mut c = tx.router().connection(&id("or"))?.unwrap();
+            let expected = c.revision;
+            c.credential_ref = Some(new);
+            c.credential_revision += 1;
+            tx.router().put_connection(&c, Some(expected))?;
+            Ok(())
+        })
+        .unwrap();
+        secrets.delete(&SecretKey::new(ns2, old)).unwrap();
+    });
+    let a = cx
+        .svc
+        .access(&id("or"), None)
+        .expect("the replacement is used");
+    assert!(matches!(&a.credential, AccessCredential::ApiKey(k) if k.expose() == "sk-second"));
+    assert_eq!(a.credential_revision, 2);
+    assert!(is(lifecycle(&cx.connection("or")), "Connected"));
+    // A missing credential that is still the connection's own is reported as lost.
+    cx.secrets.delete(&SecretKey::new(ns, second)).unwrap();
+    assert!(matches!(
+        cx.svc.access(&id("or"), None),
+        Err(AccessError::ReauthenticationRequired(_))
+    ));
+    assert!(is(
+        lifecycle(&cx.connection("or")),
+        "ReauthenticationRequired"
+    ));
+}
+
+/// Begins and completes a Claude subscription sign-in whose token expires in `expires_in` s.
+fn claude_sign_in(cx: &Cx, access: &str, expires_in: i64) {
+    summary(
+        cx.configure(json!({"kind": "SignIn", "connectionId": "claude", "action": "BeginSignIn"})),
+    );
+    let flow = cx.connection("claude").sign_in.unwrap();
+    let state = flow
+        .authorize_url
+        .unwrap()
+        .0
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    cx.http.reset(
+        Method::Post,
+        CLAUDE_TOKEN,
+        200,
+        json!({"access_token": access,
+        "refresh_token": format!("rt-{access}"), "expires_in": expires_in}),
+    );
+    cx.svc
+        .submit_authorization_code(
+            &actor("user-a"),
+            &flow.flow_id,
+            Secret::new(format!("c#{state}")),
+        )
+        .unwrap();
+    summary(
+        cx.configure(json!({"kind": "SignIn", "connectionId": "claude",
+        "action": "CompleteSignIn", "flowId": flow.flow_id.as_str()})),
+    );
+}
+
+#[test]
+fn unknown_refresh_outcomes_are_counted_per_credential() {
+    let cx = Cx::new();
+    cx.add("claude", "ClaudeSubscriptionMessages", ANTHROPIC, None);
+    let c = cx.connection("claude");
+    summary(
+        cx.configure(json!({"kind": "SubscriptionRisk", "connectionId": "claude",
+        "expectedRevision": c.revision.get().to_string(), "noticeSha256": risk_notice_sha256(),
+        "accepted": true})),
+    );
+    // Inside the refresh skew, so every use refreshes; the refresh's outcome is unknown.
+    claude_sign_in(&cx, "at-1", 60);
+    cx.http.reset(Method::Post, CLAUDE_TOKEN, 0, json!({}));
+    assert!(matches!(
+        cx.svc.access(&id("claude"), None),
+        Err(AccessError::Unavailable(_))
+    ));
+    // A new sign-in is another credential: its first unknown outcome is its first.
+    claude_sign_in(&cx, "at-2", 60);
+    cx.http.reset(Method::Post, CLAUDE_TOKEN, 0, json!({}));
+    assert!(matches!(
+        cx.svc.access(&id("claude"), None),
+        Err(AccessError::Unavailable(_))
+    ));
+    assert!(is(lifecycle(&cx.connection("claude")), "Connected"));
+    // Its second requires a new sign-in.
+    assert!(matches!(
+        cx.svc.access(&id("claude"), None),
+        Err(AccessError::ReauthenticationRequired(_))
+    ));
+}
+
+#[test]
+fn a_refresh_overtaken_by_a_new_sign_in_uses_the_new_credential() {
+    let cx = Cx::new();
+    cx.add("claude", "ClaudeSubscriptionMessages", ANTHROPIC, None);
+    let c = cx.connection("claude");
+    summary(
+        cx.configure(json!({"kind": "SubscriptionRisk", "connectionId": "claude",
+        "expectedRevision": c.revision.get().to_string(), "noticeSha256": risk_notice_sha256(),
+        "accepted": true})),
+    );
+    claude_sign_in(&cx, "at-old", 60);
+    // A sign-in completes while the old token's refresh is in flight.
+    let fresh = cx
+        .svc
+        .stage_tokens_for_test(
+            &actor("user-a"),
+            Tokens {
+                access: Secret::new("at-new"),
+                refresh: Secret::new("rt-new"),
+                expires_at_ms: cx.now() + 3_600_000,
+                account: None,
+            },
+        )
+        .unwrap();
+    let store = cx.store.clone();
+    cx.http.reset(
+        Method::Post,
+        CLAUDE_TOKEN,
+        200,
+        json!({"access_token": "at-rotated",
+        "refresh_token": "rt-rotated", "expires_in": 3600}),
+    );
+    cx.http.during(CLAUDE_TOKEN, move || {
+        run_write(&*store, WriteOptions::default(), move |tx| {
+            let mut c = tx.router().connection(&id("claude"))?.unwrap();
+            let expected = c.revision;
+            c.credential_ref = Some(fresh);
+            c.credential_revision += 1;
+            tx.router().put_connection(&c, Some(expected))?;
+            Ok(())
+        })
+        .unwrap();
+    });
+    let a = cx
+        .svc
+        .access(&id("claude"), None)
+        .expect("the new sign-in's token is used");
+    assert!(
+        matches!(&a.credential, AccessCredential::Bearer { token, .. } if token.expose() == "at-new")
     );
 }

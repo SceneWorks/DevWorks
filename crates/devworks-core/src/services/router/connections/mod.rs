@@ -102,6 +102,8 @@ pub const MODEL_AGGREGATE: &str = "route_model";
 pub const DECISION_AGGREGATE: &str = "decision_model";
 /// A staged API key not published within this long is deleted by [`ConnectionService::reconcile`].
 pub const STAGED_TTL_MS: i64 = 30 * 60 * 1000;
+/// Reads of a credential that was replaced while it was read before giving up.
+const CREDENTIAL_READ_ATTEMPTS: usize = 3;
 /// Connected connections rediscover their models this often (reference
 /// `ModelListRefreshInterval`).
 pub const DISCOVERY_INTERVAL_MS: i64 = 6 * 60 * 60 * 1000;
@@ -170,7 +172,9 @@ struct Live {
     refreshing: BTreeSet<String>,
     /// The last sign-in or refresh failure per connection, shown until the next attempt.
     failures: BTreeMap<String, String>,
-    ambiguous: BTreeMap<String, u32>,
+    /// Refreshes with an unknown outcome per connection, for the credential revision they were
+    /// made with (another credential starts again from zero).
+    ambiguous: BTreeMap<String, (i64, u32)>,
     ticking: bool,
     last_reconcile_ms: Option<i64>,
     /// Why the secret store last refused (locked, missing, denied); cleared by its next success.
@@ -385,6 +389,16 @@ pub fn risk_effective(c: &StoredConnection, restore_epoch: i64) -> bool {
             && r.binding
                 == profiles::risk_binding(&c.profile, &c.endpoint, c.account_digest.as_deref())
     })
+}
+
+/// Clears what was learned with a credential or account that `next` no longer uses: the model
+/// list (and when it was made), the health and the last test. Another key or account may see
+/// other models; keeping the old list would reject them as undiscovered until the next listing.
+fn forget_credential_facts(next: &mut StoredConnection) {
+    next.discovered = None;
+    next.discovered_at_ms = None;
+    next.healthy = None;
+    next.checked_at_ms = None;
 }
 
 /// The lifecycle a connection is in with no credential.
@@ -1004,7 +1018,10 @@ impl ConnectionService {
     }
 
     /// `testing`: the user's own connection test or refresh of a connection they turned off
-    /// (never a routed request).
+    /// (never a routed request). A credential replaced while it was being read (a rotation or
+    /// a new key retired the handle just read) is read again from the new row, a bounded
+    /// number of times: only a credential that is still referenced is reported as needing a
+    /// new sign-in.
     fn access_with(
         &self,
         connection_id: &Id,
@@ -1012,6 +1029,25 @@ impl ConnectionService {
         force: bool,
         testing: bool,
     ) -> Result<Access, AccessError> {
+        for _ in 0..CREDENTIAL_READ_ATTEMPTS {
+            if let Some(a) = self.access_once(connection_id, rejected, force, testing)? {
+                return Ok(a);
+            }
+        }
+        Err(AccessError::Unavailable(
+            "the connection's credential kept changing while it was read".into(),
+        ))
+    }
+
+    /// One read of the connection and its credential; `None` when the credential was replaced
+    /// meanwhile.
+    fn access_once(
+        &self,
+        connection_id: &Id,
+        rejected: Option<&Secret>,
+        force: bool,
+        testing: bool,
+    ) -> Result<Option<Access>, AccessError> {
         let restore = self.restore_epoch();
         let unavailable = |e: StorageError| AccessError::Unavailable(format!("{e:?}"));
         let c = self
@@ -1037,8 +1073,16 @@ impl ConnectionService {
         let Some(handle) = c.credential_ref.clone() else {
             return if p.needs_credential() {
                 Err(AccessError::Disconnected)
+            } else if c.lifecycle == "ReauthenticationRequired" && !testing {
+                // A keyless endpoint that refused authorization is not routed through until
+                // it accepts a test again or is given a key.
+                Err(AccessError::ReauthenticationRequired(
+                    c.state_reason
+                        .clone()
+                        .unwrap_or_else(|| "the endpoint requires a key".into()),
+                ))
             } else {
-                Ok(base(AccessCredential::None))
+                Ok(Some(base(AccessCredential::None)))
             };
         };
         if c.credential_epoch != Some(restore) {
@@ -1053,17 +1097,19 @@ impl ConnectionService {
                     .unwrap_or_else(|| "sign in again".into()),
             ));
         }
-        let credential = self.load(&c, &handle)?;
+        let Some(credential) = self.load(&c, &handle)? else {
+            return Ok(None);
+        };
         match credential {
-            Credential::ApiKey(k) => Ok(base(AccessCredential::ApiKey(k))),
+            Credential::ApiKey(k) => Ok(Some(base(AccessCredential::ApiKey(k)))),
             Credential::OAuth(t) => {
                 let fresh = t.expires_at_ms > self.now() + auth::REFRESH_SKEW_MS
                     && rejected.is_none_or(|r| r != &t.access);
                 if fresh && !force {
-                    return Ok(base(AccessCredential::Bearer {
+                    return Ok(Some(base(AccessCredential::Bearer {
                         token: t.access,
                         account: t.account,
-                    }));
+                    })));
                 }
                 drop(t);
                 self.refresh_tokens(&c, rejected, force)
@@ -1071,29 +1117,30 @@ impl ConnectionService {
         }
     }
 
-    /// Reads and parses a handle; a missing or unreadable secret requires reauthentication.
-    fn load(&self, c: &StoredConnection, handle: &Id) -> Result<Credential, AccessError> {
-        match self.noted(self.secrets.get(&self.key(handle))) {
-            Ok(Some(s)) => Credential::parse(&s).ok_or_else(|| {
-                self.mark(
-                    c,
-                    "ReauthenticationRequired",
-                    "the stored credential is unreadable",
-                );
-                AccessError::ReauthenticationRequired("the stored credential is unreadable".into())
-            }),
-            Ok(None) => {
-                self.mark(
-                    c,
-                    "ReauthenticationRequired",
-                    "the stored credential is missing",
-                );
-                Err(AccessError::ReauthenticationRequired(
-                    "the stored credential is missing; sign in or enter the key again".into(),
-                ))
-            }
-            Err(e) => Err(AccessError::Unavailable(e.to_string())),
+    /// Reads and parses a handle. `None` when the connection no longer references it (the
+    /// credential was replaced while it was read: read the row again); a missing or unreadable
+    /// secret that is still referenced requires reauthentication.
+    fn load(&self, c: &StoredConnection, handle: &Id) -> Result<Option<Credential>, AccessError> {
+        let why = match self.noted(self.secrets.get(&self.key(handle))) {
+            Ok(Some(s)) => match Credential::parse(&s) {
+                Some(credential) => return Ok(Some(credential)),
+                None => "the stored credential is unreadable",
+            },
+            Ok(None) => "the stored credential is missing; sign in or enter the key again",
+            Err(e) => return Err(AccessError::Unavailable(e.to_string())),
+        };
+        let current = self
+            .read(|s| s.router().connection(&c.id))
+            .map_err(|e| AccessError::Unavailable(format!("{e:?}")))?;
+        let still = current.as_ref().is_some_and(|n| {
+            n.credential_ref.as_ref() == Some(handle)
+                && n.credential_revision == c.credential_revision
+        });
+        if !still {
+            return Ok(None);
         }
+        self.mark(c, "ReauthenticationRequired", why);
+        Err(AccessError::ReauthenticationRequired(why.into()))
     }
 
     /// Records a lifecycle for `c` if its credential is still the one it was decided for.
@@ -1122,12 +1169,13 @@ impl ConnectionService {
         });
     }
 
+    /// `None` when the credential was replaced while it was read (the caller reads again).
     fn refresh_tokens(
         &self,
         seen: &StoredConnection,
         rejected: Option<&Secret>,
         force: bool,
-    ) -> Result<Access, AccessError> {
+    ) -> Result<Option<Access>, AccessError> {
         let lock = self.refresh_lock(&seen.id);
         let _serialized = lock.lock().unwrap_or_else(|p| p.into_inner());
         // Another caller may have refreshed while this one waited.
@@ -1138,10 +1186,14 @@ impl ConnectionService {
         let Some(handle) = c.credential_ref.clone() else {
             return Err(AccessError::Disconnected);
         };
-        let Credential::OAuth(tokens) = self.load(&c, &handle)? else {
-            return Err(AccessError::ReauthenticationRequired(
-                "the stored credential is not a subscription token".into(),
-            ));
+        let tokens = match self.load(&c, &handle)? {
+            None => return Ok(None),
+            Some(Credential::OAuth(tokens)) => tokens,
+            Some(Credential::ApiKey(_)) => {
+                return Err(AccessError::ReauthenticationRequired(
+                    "the stored credential is not a subscription token".into(),
+                ));
+            }
         };
         // Destination and credential come from this one read (`c`): a refreshed token is never
         // sent to an endpoint read elsewhere.
@@ -1158,7 +1210,11 @@ impl ConnectionService {
             && tokens.expires_at_ms > self.now() + auth::REFRESH_SKEW_MS
             && rejected.is_none_or(|r| r != &tokens.access)
         {
-            return Ok(base(tokens.access, tokens.account, c.credential_revision));
+            return Ok(Some(base(
+                tokens.access,
+                tokens.account,
+                c.credential_revision,
+            )));
         }
         struct Refreshing<'a>(&'a ConnectionService, String);
         impl Drop for Refreshing<'_> {
@@ -1191,15 +1247,14 @@ impl ConnectionService {
                     Ok(Some(revision)) => {
                         self.unstage(&new_handle);
                         self.delete_unreferenced(&[handle]);
-                        Ok(base(access, account, revision))
+                        Ok(Some(base(access, account, revision)))
                     }
                     Ok(None) => {
                         // The credential changed meanwhile (a sign-out or a new sign-in): the
-                        // rotation is not published, and its tokens are not used.
+                        // rotation is not published and its tokens are not used; the caller
+                        // reads the new credential instead.
                         self.discard(&new_handle);
-                        Err(AccessError::Unavailable(
-                            "the connection's credential changed during the refresh".into(),
-                        ))
+                        Ok(None)
                     }
                     Err(e) => {
                         // Not published: the old refresh token may already be spent, so the
@@ -1224,9 +1279,15 @@ impl ConnectionService {
                 // a bounded number of such outcomes, then require a new sign-in.
                 let n = {
                     let mut live = self.live();
-                    let n = live.ambiguous.entry(c.id.as_str().to_owned()).or_insert(0);
-                    *n += 1;
-                    *n
+                    let seen = live
+                        .ambiguous
+                        .entry(c.id.as_str().to_owned())
+                        .or_insert((c.credential_revision, 0));
+                    if seen.0 != c.credential_revision {
+                        *seen = (c.credential_revision, 0);
+                    }
+                    seen.1 += 1;
+                    seen.1
                 };
                 if n >= AMBIGUOUS_REFRESH_LIMIT {
                     let why = "the token refresh outcome is unknown; sign in again";
@@ -1272,14 +1333,19 @@ impl ConnectionService {
             c.lifecycle = "Connected".into();
             c.state_reason = None;
             c.access_expires_at_ms = Some(expires_at_ms);
-            if account_digest.is_some() && account_digest != c.account_digest {
+            let account_changed = account_digest.is_some() && account_digest != c.account_digest;
+            if account_changed {
                 // A refresh never changes the account; if the provider says otherwise, the risk
-                // acceptance no longer covers it.
+                // acceptance and what was learned with the old account no longer cover it.
                 c.risk = None;
                 c.account_digest = account_digest;
+                forget_credential_facts(&mut c);
             }
             c.updated_at_ms = tx.now_ms();
             let saved = tx.router().put_connection(&c, Some(expected))?;
+            if account_changed {
+                clear_profile_cooldowns(tx, &saved)?;
+            }
             event(
                 tx,
                 &host,
@@ -1940,7 +2006,7 @@ impl ConnectionService {
             next.lifecycle = "Connected".into();
             next.state_reason = None;
             next.access_expires_at_ms = None;
-            next.healthy = None;
+            forget_credential_facts(&mut next);
             credential_changed = true;
         } else if (profile_changed || origin_changed) && next.credential_ref.is_some() {
             // Never forward one profile's or origin's credential to another.
@@ -1950,9 +2016,12 @@ impl ConnectionService {
             next.lifecycle = without_credential(p).into();
             next.state_reason = None;
             next.access_expires_at_ms = None;
+            forget_credential_facts(&mut next);
             credential_changed = true;
-        } else if profile_changed {
+        } else if profile_changed || (endpoint_changed && next.credential_ref.is_none()) {
+            // Another endpoint answers for itself.
             next.lifecycle = without_credential(p).into();
+            next.state_reason = None;
         }
         if let Some(c) = &current {
             let same = c.name == next.name
@@ -2142,7 +2211,7 @@ impl ConnectionService {
                 next.lifecycle = without_credential(p).into();
                 next.state_reason = None;
                 next.access_expires_at_ms = None;
-                next.healthy = None;
+                forget_credential_facts(&mut next);
                 next.updated_at_ms = tx.now_ms();
                 let saved = tx.router().put_connection(&next, Some(c.revision))?;
                 self.cancel_flows(&saved.id);
@@ -2610,16 +2679,15 @@ fn publish_tokens(
             }
             next.account_digest = Some(new.clone());
         }
-        // Another account: the acceptance (and the last model list) belonged to the old one.
+        // Another account: the acceptance belonged to the old one.
         (Some(old_account), Some(new)) if old_account != new => {
             next.risk = None;
             next.account_digest = Some(new.clone());
-            next.discovered = None;
-            next.discovered_at_ms = None;
         }
         _ => {}
     }
-    next.healthy = None;
+    // A new sign-in is a new credential (perhaps another account or plan): list again.
+    forget_credential_facts(&mut next);
     next.updated_at_ms = tx.now_ms();
     let saved = tx.router().put_connection(&next, Some(c.revision))?;
     // A new sign-in starts clean: earlier cooldowns of the profile's models belonged to the
@@ -2692,11 +2760,17 @@ fn apply_check(
             }
         }
         Err(ListFailure::Unauthorized(status)) => {
+            // Refused authorization makes the connection unusable for routing whether or not a
+            // key is stored: a keyless endpoint that now demands one needs its key.
             next.healthy = Some(false);
-            next.state_reason = Some(ListFailure::Unauthorized(*status).reason());
-            if next.credential_ref.is_some() {
-                next.lifecycle = "ReauthenticationRequired".into();
-            }
+            next.lifecycle = "ReauthenticationRequired".into();
+            next.state_reason = Some(if next.credential_ref.is_some() {
+                ListFailure::Unauthorized(*status).reason()
+            } else {
+                format!(
+                    "the endpoint refused a request without a key (HTTP {status}); add its API key"
+                )
+            });
         }
         Err(e) => {
             // An availability event, not a revocation: the last good list is kept.

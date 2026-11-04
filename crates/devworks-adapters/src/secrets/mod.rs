@@ -10,6 +10,8 @@
 //! real user facility.
 use devworks_core::ports::secrets::SecretStore;
 
+#[cfg(any(windows, test))]
+mod chunked;
 #[cfg(target_os = "macos")]
 mod keychain;
 #[cfg(all(unix, not(target_os = "macos")))]
