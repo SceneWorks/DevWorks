@@ -85,7 +85,7 @@ use crate::protocol::records::{
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{
-    BoundedList, BoundedText, DynamicJson, Page, Probability, RelativePath,
+    BoundedList, BoundedText, DynamicJson, Label, Page, Probability, RelativePath,
 };
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState, ProjectId};
 use crate::registry::SchemaRevision;
@@ -101,6 +101,20 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub use model::{TAG_KNOWLEDGE, TAG_LESSON, TAG_MEMORY};
+
+fn cleanup_source<'a>(
+    id: Option<&'a Id>,
+    label: Option<&'a Label>,
+) -> Result<Option<&'a str>, Failure> {
+    match (id, label) {
+        (Some(_), Some(_)) => {
+            Err(Refusal::new(DomainErrorCode::InvalidArgument, "source", None).into())
+        }
+        (Some(id), None) => Ok(Some(id.as_str())),
+        (None, Some(label)) => Ok(Some(&label.0)),
+        (None, None) => Ok(None),
+    }
+}
 
 /// The operations [`KnowledgeService`] is registered for.
 pub const OPERATIONS: [&str; 17] = [
@@ -415,6 +429,23 @@ pub(crate) fn claim_wire(
         _ if c.body.verified_at_ms.is_some() && !stale => KnowledgeState::Verified,
         _ => KnowledgeState::Active,
     };
+    let challenge_records = challenges
+        .iter()
+        .take(128)
+        .map(|ch| {
+            Ok(LessonChallenge {
+                id: ch.id.clone(),
+                state: model::parse::<ChallengeState>(&ch.state)
+                    .ok_or_else(|| corrupt("challenge state"))?,
+                reason: content(&ch.reason),
+                evidence_ids: id_list(&ch.evidence_ids),
+                author_id: ch.author.clone(),
+                opened_at_ms: counter(ch.opened_at_ms),
+                resolved_at_ms: ch.resolved_at_ms.map(counter),
+                resolution: ch.resolution.as_deref().map(content),
+            })
+        })
+        .collect::<Result<Vec<_>, StorageError>>()?;
     let lesson = match &c.lesson {
         None => None,
         Some(l) => {
@@ -449,25 +480,7 @@ pub(crate) fn claim_wire(
                 applicability,
                 recurrence: counter(events),
                 recurrence_threshold: counter(threshold),
-                challenges: BoundedList(
-                    challenges
-                        .iter()
-                        .take(128)
-                        .map(|ch| {
-                            Ok(LessonChallenge {
-                                id: ch.id.clone(),
-                                state: model::parse::<ChallengeState>(&ch.state)
-                                    .ok_or_else(|| corrupt("challenge state"))?,
-                                reason: content(&ch.reason),
-                                evidence_ids: id_list(&ch.evidence_ids),
-                                author_id: ch.author.clone(),
-                                opened_at_ms: counter(ch.opened_at_ms),
-                                resolved_at_ms: ch.resolved_at_ms.map(counter),
-                                resolution: ch.resolution.as_deref().map(content),
-                            })
-                        })
-                        .collect::<Result<_, StorageError>>()?,
-                ),
+                challenges: BoundedList(challenge_records.clone()),
                 addressed_by: BoundedList(
                     addresses
                         .iter()
@@ -525,6 +538,7 @@ pub(crate) fn claim_wire(
         stale: Some(stale),
         superseded_by: c.body.superseded_by.clone(),
         lesson,
+        challenges: Some(BoundedList(challenge_records)),
     })
 }
 
@@ -1004,11 +1018,12 @@ impl KnowledgeService {
                 ),
             ));
         }
-        if i.source_id.is_some() && i.import_source.is_some() {
+        let source = cleanup_source(i.source_id.as_ref(), i.source_label.as_ref())?;
+        if source.is_some() && i.import_source.is_some() {
             return Err(Refusal::new(DomainErrorCode::InvalidArgument, PREVIEW, None).into());
         }
-        if let Some(source) = &i.source_id {
-            let plan = writes::deletion_plan(k, &scoped.exact, source.as_str(), exact_revision)?;
+        if let Some(source) = source {
+            let plan = writes::deletion_plan(k, &scoped.exact, source, exact_revision)?;
             items.push(diagnostic(
                 &plan.digest,
                 Severity::Info,
@@ -1018,7 +1033,7 @@ impl KnowledgeService {
                     "Deleting source {} at scope revision {exact_revision} tombstones {} claims, \
                      {} entities and {} evidence records{}{}. Confirm with this diagnostic's id \
                      as previewDigest.",
-                    source.as_str(),
+                    source,
                     plan.claims,
                     plan.entities,
                     plan.evidence,
@@ -1343,7 +1358,15 @@ pub(crate) fn bundle_of(
         });
     }
     let mut evidence = Vec::new();
-    for id in &wire.evidence_ids.0 {
+    let mut cited = wire.evidence_ids.0.clone();
+    for challenge in wire.challenges.iter().flat_map(|list| &list.0) {
+        for id in &challenge.evidence_ids.0 {
+            if !cited.contains(id) {
+                cited.push(id.clone());
+            }
+        }
+    }
+    for id in &cited {
         if let Some(e) = k.knowledge_evidence(id)?
             && e.deleted_at_ms.is_none()
             && scoped.sees(&e.scope)
@@ -1598,13 +1621,20 @@ impl CommandHandler for KnowledgeService {
                 DataScope::Workspace => KnowledgeScope::Workspace,
                 DataScope::Project { project_id } => KnowledgeScope::Project(project_id.clone()),
             };
+            let Some(source) = cleanup_source(i.source_id.as_ref(), i.source_label.as_ref())
+                .ok()
+                .flatten()
+            else {
+                // Admission records the precise semantic refusal; no planning is needed.
+                return Ok(None);
+            };
             let prepared = env.read(|snapshot| {
                 let k = knowledge_read(snapshot);
                 let scope_revision = k.knowledge_scope_revision(&scope)?.max(1);
-                let plan = writes::deletion_plan(k, &scope, i.source_id.as_str(), scope_revision)?;
+                let plan = writes::deletion_plan(k, &scope, source, scope_revision)?;
                 Ok(writes::PreparedDeletion {
                     scope_key: scope.key(),
-                    source: i.source_id.as_str().to_owned(),
+                    source: source.to_owned(),
                     scope_revision,
                     plan,
                 })

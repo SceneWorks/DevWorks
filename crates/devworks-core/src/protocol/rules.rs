@@ -224,6 +224,18 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
     ] {
         require(unique(v, k), "duplicate identity in set")?
     }
+    if op == "knowledge.delete_by_source" {
+        require(
+            present(v, "sourceId") != present(v, "sourceLabel"),
+            "cleanup names exactly one source selector",
+        )?;
+    }
+    if op == "knowledge.diagnostics" {
+        require(
+            !(present(v, "sourceId") && present(v, "sourceLabel")),
+            "cleanup names at most one source selector",
+        )?;
+    }
     if op == "history.tool_usage" {
         // Exactly one scope: a root, or (revision 2) a project or the workspace spelled `true`.
         let named = ["rootId", "projectId", "workspace"]

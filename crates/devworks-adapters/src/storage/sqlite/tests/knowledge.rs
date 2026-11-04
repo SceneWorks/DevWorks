@@ -4568,3 +4568,152 @@ fn a_challenge_resolution_keeps_the_evidence_it_cites() {
     let f = refused(challenge(&one, json!({"outcome": "Retire"})));
     assert_eq!(f.code, DomainErrorCode::InvalidArgument);
 }
+
+#[test]
+fn resolving_a_second_challenge_on_a_retired_lesson_advances_history() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let claim = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Rule",
+        with(
+            draft("Lesson", "rule"),
+            json!({"lesson": lesson_draft("Prompt", Some("p1"), None)}),
+        ),
+    );
+    for why in ["first doubt", "second doubt"] {
+        receipt(fx.cmd(
+            &user,
+            "knowledge.challenge",
+            json!({"scope": proj("project-a"),
+            "claimId": claim, "expectedRevision": fx.revision(&claim).to_string(),
+            "reason": why, "evidenceIds": []}),
+        ));
+    }
+    let c = claim.clone();
+    let challenges = fx.read(move |s| s.knowledge().knowledge_challenges(&c, 10));
+    for (n, ch) in challenges.iter().enumerate() {
+        let before = fx.revision(&claim);
+        let r = receipt(fx.cmd(
+            &user,
+            "knowledge.challenge",
+            json!({"scope": proj("project-a"),
+            "claimId": claim, "expectedRevision": before.to_string(), "resolveChallengeId": ch.id,
+            "outcome": "Retire", "reason": format!("resolved {n}"), "evidenceIds": []}),
+        ));
+        assert!(r.claim_ids.0.contains(&claim));
+        assert_eq!(fx.revision(&claim), before + 1);
+        let bundle = fx.read_claim(&user, proj("project-a"), &claim);
+        let history = bundle.revisions.unwrap();
+        assert!(history.0.iter().any(|h| h.revision.get() == before + 1));
+        let wire = &bundle.claims.0[0];
+        assert_eq!(
+            wire.challenges
+                .as_ref()
+                .unwrap()
+                .0
+                .iter()
+                .filter(|c| c.resolution.is_some())
+                .count(),
+            n + 1
+        );
+    }
+}
+
+#[test]
+fn entity_reuse_keys_keep_distinct_delimited_type_name_pairs() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let r = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"evidence": [], "entities": [
+        {"clientId": "a", "entityType": "service|http", "label": "router", "aliases": []},
+        {"clientId": "b", "entityType": "service", "label": "http|router", "aliases": []}],
+        "claims": [with(draft("Fact", "first"), json!({"subjectId": "a"})),
+            with(draft("Fact", "second"), json!({"subjectId": "b"}))]}),
+    ));
+    assert_eq!(r.entity_ids.0.len(), 2);
+    assert_ne!(r.entity_ids.0[0], r.entity_ids.0[1]);
+    let a = fx.claim(&user, proj("project-a"), &r.claim_ids.0[0]);
+    let b = fx.claim(&user, proj("project-a"), &r.claim_ids.0[1]);
+    assert_ne!(a.subject_id, b.subject_id);
+}
+
+#[test]
+fn source_label_cleanup_accepts_every_recorded_label_and_preserves_old_selectors() {
+    for source in [
+        "test-run.json".to_owned(),
+        " résumé source ".to_owned(),
+        "長".repeat(256),
+    ] {
+        let fx = Fx::new();
+        let user = fx.user();
+        let r = receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"evidence": [], "entities":[
+            {"clientId":"s","entityType":"module","label":"subject","aliases":[],"source":source}],
+            "claims":[with(draft("Fact","contribution"),json!({"source":source}))]}),
+        ));
+        let (d, revision) = fx.diagnostics(
+            &user,
+            json!({"scope":proj("project-a"),"sourceLabel":source}),
+        );
+        let digest = &d
+            .iter()
+            .find(|d| d.component.0 == "knowledge.preview")
+            .unwrap()
+            .id;
+        summary(fx.cmd(&user,"knowledge.delete_by_source",json!({"scope":proj("project-a"),
+            "sourceLabel":source,"expectedScopeRevision":revision.to_string(),"previewDigest":digest})));
+        assert_eq!(
+            wire(
+                fx.claim(&user, proj("project-a"), &r.claim_ids.0[0])
+                    .lifecycle
+                    .as_ref()
+                    .unwrap()
+            ),
+            "Deleted"
+        );
+    }
+}
+
+#[test]
+fn non_lesson_challenges_are_readable_with_their_citations_and_old_projections_stay_valid() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let r=receipt(fx.record(&user,proj("project-a"),json!({"entities":[
+        {"clientId":"s","entityType":"module","label":"subject","aliases":[]}],
+        "evidence":[{"id":"e","source":{"kind":"Observation","sourceRef":"log:fact"},"snippet":"dispute evidence"}],
+        "claims":[draft("Fact","a disputed fact"),
+            with(draft("Fact","evidence carrier"),json!({"evidenceIds":["e"]}))]})));
+    let claim = &r.claim_ids.0[0];
+    let ev = fx
+        .read_claim(&user, proj("project-a"), &r.claim_ids.0[1])
+        .evidence
+        .0[0]
+        .id
+        .clone();
+    receipt(fx.cmd(&user,"knowledge.challenge",json!({"scope":proj("project-a"),"claimId":claim,
+        "expectedRevision":fx.revision(claim).to_string(),"reason":"disputed fact reason","evidenceIds":[ev]})));
+    let bundle = fx.read_claim(&user, proj("project-a"), claim);
+    let ch = &bundle.claims.0[0].challenges.as_ref().unwrap().0[0];
+    assert_eq!(ch.reason.0, "disputed fact reason");
+    assert!(ch.evidence_ids.0.contains(&ev));
+    assert!(bundle.evidence.0.iter().any(|e| e.id == ev));
+    for revision in [1, 2] {
+        match result(fx.query_at(
+            &user,
+            "knowledge.read",
+            json!({"scope":proj("project-a"),"claimId":claim}),
+            Some(revision),
+        )) {
+            OperationResult::KnowledgeRead { value } => {
+                assert!(value.claims.0[0].challenges.is_none())
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}

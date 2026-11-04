@@ -307,6 +307,13 @@ pub struct DiagnosticsInput {
     )]
     #[schemars(with = "SchemaRef", extend("x-since" = 2))]
     pub import_schema: Option<SchemaRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub source_label: Option<Label>,
 }
 impl Check for DiagnosticsInput {
     fn check(&self) -> Result<(), String> {
@@ -314,6 +321,7 @@ impl Check for DiagnosticsInput {
         self.source_id.check()?;
         self.import_source.check()?;
         self.import_schema.check()?;
+        self.source_label.check()?;
         Ok(())
     }
 }
@@ -328,19 +336,32 @@ impl Revisioned for DiagnosticsInput {
         if revision < 2 {
             self.import_schema = None;
         }
+        if revision < 3 {
+            self.source_label = None;
+        }
     }
 }
 
 /// `knowledge.delete_by_source` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["scope", "sourceId", "expectedScopeRevision", "previewDigest"]}, {"required": ["scope", "expectedScopeRevision", "previewDigest", "sourceLabel"], "x-since": 3}]))]
 pub struct DeleteBySourceInput {
     pub scope: DataScope,
-    pub source_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Id")]
+    pub source_id: Option<Id>,
     pub expected_scope_revision: Revision,
     pub preview_digest: Digest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub source_label: Option<Label>,
 }
 impl Check for DeleteBySourceInput {
     fn check(&self) -> Result<(), String> {
@@ -349,11 +370,16 @@ impl Check for DeleteBySourceInput {
         self.expected_scope_revision.check()?;
         self.preview_digest.check()?;
         self.proposal_id.check()?;
+        self.source_label.check()?;
         Ok(())
     }
 }
 impl Revisioned for DeleteBySourceInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.source_label = None;
+        }
+    }
 }
 
 /// `knowledge.delete_selected` Command input.

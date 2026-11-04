@@ -641,5 +641,30 @@ case('reject-r1-result-web-document-provenance','operation-result',{'kind':'web.
 case('reject-r2-result-web-document-not-2xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'status':404}},False,True)
 case('reject-r2-result-web-redirect-not-3xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'redirects':[{'url':'https://fixture.invalid/old','status':200}]}},False,True)
 case('reject-r2-result-web-document-unknown-trust','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'trust':'Verified'}},False,False)
+# Revision 3 preserves earlier contracts and exposes disputes on every claim.
+for name in ['knowledge.search','knowledge.read','knowledge.subgraph','knowledge.entity_bundle',
+             'knowledge.entity_graph','knowledge.claim_bundle','knowledge.expand_frontier',
+             'knowledge.query','knowledge.tagged_lessons']:
+ case('r3-input-'+name,'domain-request.r3',domain(name,revision=3))
+for label in ['test-run.json',' résumé source ','長'*256]:
+ tag=str(len(label))+'-'+str(len(CASES))
+ preview=domain('knowledge.diagnostics',revision=3,sourceLabel=label)
+ cleanup=command_at('knowledge.delete_by_source',revision=3,sourceLabel=label)
+ cleanup['body'].pop('sourceId',None)
+ case('r3-preview-source-'+tag,'domain-request.r3',preview)
+ case('r3-delete-source-'+tag,'domain-request.r3',cleanup)
+case('reject-r2-source-label','domain-request.r2',domain('knowledge.diagnostics',sourceLabel='test.json'),False,False)
+both=command_at('knowledge.delete_by_source',revision=3,sourceId='source-a',sourceLabel='source.json')
+case('reject-r3-two-source-selectors','domain-request.r3',both,False,False)
+claim3={**sample('KnowledgeClaim'),'challenges':[{**sample('LessonChallenge'),'reason':'A disputed fact','evidenceIds':['evidence-a']}]}
+case('r3-result-nonlesson-challenge','operation-result.r3',{'kind':'knowledge.search','value':{'items':[claim3],'hasMore':False}})
+case('reject-r2-independent-challenges','operation-result.r2',{'kind':'knowledge.search','value':{'items':[claim3],'hasMore':False}},False,False)
+for name in ['knowledge.search','knowledge.read','knowledge.diagnostics','knowledge.delete_by_source',
+             'knowledge.subgraph','knowledge.entity_bundle','knowledge.entity_graph','knowledge.claim_bundle',
+             'knowledge.expand_frontier','knowledge.query','knowledge.tagged_lessons']:
+ case('r3-result-'+name,'operation-result.r3',result(name,OPS[name]['result']))
+# The shared r3 result document also binds the existing artifact r3 operations.
+for name in ['artifacts.save','artifacts.list']:
+ case('r3-result-'+name,'operation-result.r3',result(name,LEGACY_RESULTS[name]))
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

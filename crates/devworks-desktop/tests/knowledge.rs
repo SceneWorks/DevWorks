@@ -216,6 +216,19 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     assert!(has_text(&h, "Revisions"));
     assert!(has_text(&h, "No source evidence recorded."));
 
+    // A Fact can be challenged too: its reason is readable without lesson metadata.
+    type_into(
+        &mut h,
+        "Change reason",
+        "The claim needs current measurements",
+    );
+    click(&mut h, Role::Button, Change::Challenge.label());
+    assert!(has_text(
+        &h,
+        "Challenge (Open): The claim needs current measurements"
+    ));
+    h.state_mut().knowledge.reason.clear();
+
     // A lifecycle change needs a reason, and is applied only when recorded.
     click(&mut h, Role::Button, Change::Retract.label());
     assert!(has_text(&h, "Retract needs a reason."));
@@ -818,4 +831,37 @@ fn the_lessons_filter_keeps_the_search_text_and_lifecycles() {
         .map(|c| c.id.clone())
         .collect();
     assert_eq!(listed, vec![ids[1].clone()]);
+}
+
+#[test]
+fn cleanup_previews_and_deletes_an_exact_source_label_through_the_native_screen() {
+    let root = Root::new("knowledge-source-label");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let source = " résumé test-run.json ";
+    let frame = knowledge_screen::command(
+        &*backend,
+        "knowledge.record",
+        json!({
+        "scope": {"kind":"Workspace"}, "batch": {
+            "entities":[{"clientId":"s","label":"Run","entityType":"test","aliases":[],"source":source}],
+            "evidence":[], "claims":[{"kind":"Fact","subjectId":"s","predicate":"states",
+                "value":"A source contribution","confidence":0.7,"evidenceIds":[],"tags":[],"source":source}]}}),
+    );
+    backend.command("knowledge.record", &frame).unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    assert_eq!(h.state().knowledge.items.len(), 1);
+    h.get_by_label("Clean up by source").click();
+    settle(&mut h);
+    type_into(&mut h, "Cleanup source", source);
+    click(&mut h, Role::Button, "Preview deletion");
+    assert_eq!(
+        h.state().knowledge.source_preview.as_ref().unwrap().source,
+        source
+    );
+    click(&mut h, Role::Button, "Delete previewed entries");
+    assert!(h.state().knowledge.items.is_empty());
 }

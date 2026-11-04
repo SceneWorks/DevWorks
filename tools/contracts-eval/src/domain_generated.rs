@@ -2069,6 +2069,13 @@ pub struct KnowledgeClaim {
     )]
     #[schemars(with = "LessonRecord", extend("x-since" = 2))]
     pub lesson: Option<LessonRecord>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<LessonChallenge>", extend("x-since" = 3))]
+    pub challenges: Option<Items<LessonChallenge>>,
 }
 impl Check for KnowledgeClaim {
     fn check(&self) -> Result<(), String> {
@@ -2103,6 +2110,7 @@ impl Check for KnowledgeClaim {
         self.stale.check()?;
         self.superseded_by.check()?;
         self.lesson.check()?;
+        self.challenges.check()?;
         super::domain_rules::record(
             "KnowledgeClaim",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -2154,6 +2162,9 @@ impl Revisioned for KnowledgeClaim {
         }
         if revision < 2 {
             self.lesson = None;
+        }
+        if revision < 3 {
+            self.challenges = None;
         }
     }
 }
@@ -8812,6 +8823,13 @@ pub enum DomainQuery {
         )]
         #[schemars(with = "SchemaRef", extend("x-since" = 2))]
         import_schema: Option<SchemaRef>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 3))]
+        source_label: Option<Label>,
     },
     #[serde(rename = "knowledge.write_status")]
     KnowledgeWriteStatus {
@@ -9941,11 +9959,13 @@ impl Check for DomainQuery {
                 source_id,
                 import_source,
                 import_schema,
+                source_label,
             } => {
                 scope.check()?;
                 source_id.check()?;
                 import_source.check()?;
                 import_schema.check()?;
+                source_label.check()?;
             }
             Self::KnowledgeWriteStatus { write_id, cursor } => {
                 write_id.check()?;
@@ -10632,6 +10652,7 @@ impl Revisioned for DomainQuery {
                 source_id,
                 import_source,
                 import_schema,
+                source_label,
                 ..
             } => {
                 if revision < 2 {
@@ -10642,6 +10663,9 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *import_schema = None;
+                }
+                if revision < 3 {
+                    *source_label = None;
                 }
             }
             Self::KnowledgeWriteStatus { cursor, .. } => {
@@ -11241,13 +11265,23 @@ pub enum DomainCommand {
         destination: DataScope,
     },
     #[serde(rename = "knowledge.delete_by_source")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "scope", "sourceId", "expectedScopeRevision", "previewDigest"]}, {"required": ["kind", "scope", "expectedScopeRevision", "previewDigest", "sourceLabel"], "x-since": 3}]))]
     KnowledgeDeleteBySource {
         scope: DataScope,
-        source_id: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Id")]
+        source_id: Option<Id>,
         expected_scope_revision: Revision,
         preview_digest: Digest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proposal_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 3))]
+        source_label: Option<Label>,
     },
     #[serde(rename = "knowledge.delete_selected")]
     KnowledgeDeleteSelected {
@@ -12949,12 +12983,14 @@ impl Check for DomainCommand {
                 expected_scope_revision,
                 preview_digest,
                 proposal_id,
+                source_label,
             } => {
                 scope.check()?;
                 source_id.check()?;
                 expected_scope_revision.check()?;
                 preview_digest.check()?;
                 proposal_id.check()?;
+                source_label.check()?;
             }
             Self::KnowledgeDeleteSelected {
                 scope,
@@ -14017,6 +14053,11 @@ impl Revisioned for DomainCommand {
                 }
                 if revision < 2 {
                     *outcome = None;
+                }
+            }
+            Self::KnowledgeDeleteBySource { source_label, .. } => {
+                if revision < 3 {
+                    *source_label = None;
                 }
             }
             Self::KnowledgePromote {

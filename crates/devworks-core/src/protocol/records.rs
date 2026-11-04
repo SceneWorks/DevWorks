@@ -2071,6 +2071,13 @@ pub struct KnowledgeClaim {
     )]
     #[schemars(with = "LessonRecord", extend("x-since" = 2))]
     pub lesson: Option<LessonRecord>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<LessonChallenge>", extend("x-since" = 3))]
+    pub challenges: Option<Items<LessonChallenge>>,
 }
 impl Check for KnowledgeClaim {
     fn check(&self) -> Result<(), String> {
@@ -2105,6 +2112,7 @@ impl Check for KnowledgeClaim {
         self.stale.check()?;
         self.superseded_by.check()?;
         self.lesson.check()?;
+        self.challenges.check()?;
         crate::protocol::rules::record(
             "KnowledgeClaim",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -2156,6 +2164,9 @@ impl Revisioned for KnowledgeClaim {
         }
         if revision < 2 {
             self.lesson = None;
+        }
+        if revision < 3 {
+            self.challenges = None;
         }
     }
 }
