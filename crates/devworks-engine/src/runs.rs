@@ -21,7 +21,7 @@ use devworks_core::ports::Clock;
 use devworks_core::ports::process::NativeIdentity;
 use devworks_core::ports::storage::{
     ActivationOutcome, ActivationPhase, ApplicationStore, QueueEntry, StorageError,
-    StoredActivation, WriteTransaction,
+    StoredActivation, WriteTransaction, is_terminal,
 };
 use devworks_core::protocol::{Id, OperationId, OperationState, ProjectId, RootId};
 use devworks_core::services::process::{OwnedProcess, ProcessSupervisor, StopOutcome, StopScope};
@@ -133,6 +133,8 @@ pub struct RunTick {
     /// Roots whose capacity or rate-limit wait expired and was cleared.
     pub swept: Vec<RootId>,
     pub launched: Vec<Id>,
+    /// Projects whose pending archival stop ran this pass.
+    pub archived: Vec<ProjectId>,
 }
 
 /// One launch, keyed by its activation and claim epoch: a relaunch of the same activation after
@@ -176,6 +178,8 @@ pub struct RunSupervisor {
     stopping: AtomicBool,
     wake: Notify,
     running: Mutex<HashMap<String, Running>>,
+    /// One archival stop at a time per project (keyed by project ID).
+    archive_stops: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl RunSupervisor {
@@ -207,6 +211,7 @@ impl RunSupervisor {
             stopping: AtomicBool::new(false),
             wake: Notify::new(),
             running: Mutex::new(HashMap::new()),
+            archive_stops: Mutex::new(HashMap::new()),
         })
     }
 
@@ -297,6 +302,7 @@ impl RunSupervisor {
         let service = self.service.clone();
         report.swept = store::write(&self.store, move |tx| service.sweep_expired_waits(tx)).await?;
         self.signal_stopping().await?;
+        report.archived = self.finish_archive_stops().await?;
         (report.stops, report.failed) = self.execute_stops().await?;
         // Anything here may have made a root eligible again: restart the dispatcher's scan of
         // root work held awaiting eligibility (it rechecks each root; a needless wake is cheap).
@@ -702,12 +708,140 @@ impl RunSupervisor {
             service.stop_project(tx, &host, &p)
         })
         .await?;
+        self.kill_project(project, None, stopped).await
+    }
+
+    /// The immediate stop after a committed `projects.archive`, whose unit of work already
+    /// fenced the project, started a new archival epoch and journaled one stop per root. A
+    /// replayed or repeated call is harmless: a restored project is left alone, and a stop that
+    /// already ran is not run again.
+    pub async fn stop_archived_project(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Vec<(RootId, OperationState)>, StorageError> {
+        let p = project.clone();
+        let epoch = store::read(&self.store, move |s| {
+            Ok(s.projects().project(&p)?.map(|x| x.archive_epoch))
+        })
+        .await?;
+        match epoch {
+            Some(epoch) => self.stop_archived_epoch(project, epoch).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Runs the stop of the archival of `epoch`, as a caller that read that epoch earlier asks
+    /// for it. The stops of one project are serialized, and under that serialization the
+    /// project is read again: only while it is still closed, still at `epoch` and its stop still
+    /// pending are its owned trees of earlier epochs killed at once (no cooperative grace), its
+    /// unfinished root stops executed and the pending mark of `epoch` cleared. A caller whose
+    /// read went stale (another path finished the stop, the project was restored, or archived
+    /// again) does nothing, and even its kill could never reach a tree launched under `epoch` or
+    /// later.
+    pub async fn stop_archived_epoch(
+        &self,
+        project: &ProjectId,
+        epoch: i64,
+    ) -> Result<Vec<(RootId, OperationState)>, StorageError> {
+        let lock = {
+            let mut map = self.archive_stops.lock().unwrap_or_else(|p| p.into_inner());
+            map.entry(project.0.as_str().to_owned())
+                .or_default()
+                .clone()
+        };
+        let _serialized = lock.lock().await;
+        let p = project.clone();
+        let stops = store::read(&self.store, move |s| {
+            let Some(stored) = s.projects().project(&p)? else {
+                return Ok(None);
+            };
+            let current = devworks_core::services::runs::closed_to_work(&stored.lifecycle)
+                && stored.archive_epoch == epoch
+                && stored.archive_stop_pending;
+            if !current {
+                return Ok(None);
+            }
+            let mut out = Vec::new();
+            let mut after: Option<RootId> = None;
+            loop {
+                let page = s.runs().project_roots(&p, after.as_ref(), 500)?;
+                for root in &page {
+                    let control = devworks_core::services::runs::control_of(s.runs(), root)?;
+                    if let Some(op) = control.stop_operation_id
+                        && s.operations()
+                            .operation(&op)?
+                            .is_some_and(|o| !is_terminal(o.state))
+                    {
+                        out.push((root.clone(), op));
+                    }
+                }
+                if page.len() < 500 {
+                    return Ok(Some(out));
+                }
+                after = page.last().cloned();
+            }
+        })
+        .await?;
+        let Some(stops) = stops else {
+            return Ok(Vec::new());
+        };
+        // No project-wide kill starts once shutdown began (the post-commit task of an archival
+        // committed just before it, or a supervision pass in flight): its blocking stop would
+        // hold the trees shutdown stops within its one bound. The stop stays pending for the next
+        // boot, whose recovery reaps this boot's trees.
+        if self.stopping.load(Ordering::SeqCst) {
+            return Ok(Vec::new());
+        }
+        let out = self.kill_project(project, Some(epoch), stops).await?;
+        // Only now, after the kill of the earlier epochs' live trees, may the project be restored
+        // or deleted. A launch of an earlier epoch that registers after that kill is killed by its
+        // own epoch recheck; the clear is bound to `epoch`, so it never ends a later archival.
+        let p = project.clone();
+        store::write(&self.store, move |tx| {
+            tx.projects().finish_archive_stop(&p, epoch)
+        })
+        .await?;
+        Ok(out)
+    }
+
+    /// Runs every archival stop that has not run yet (its post-commit task never ran: a crash, a
+    /// storage failure, or a shutdown in between). Each project is its own unit of work.
+    async fn finish_archive_stops(&self) -> Result<Vec<ProjectId>, StorageError> {
+        // Shutdown stops every owned tree itself, within its one bound; a pending archival stop
+        // left here is finished by the next boot's first pass (its trees are reaped at boot).
+        if self.stopping.load(Ordering::SeqCst) {
+            return Ok(Vec::new());
+        }
+        let pending = store::read(&self.store, |s| s.projects().pending_archive_stops(100)).await?;
+        let mut done = Vec::new();
+        for p in pending {
+            if self.stopping.load(Ordering::SeqCst) {
+                break;
+            }
+            if self.stop_archived_project(&p).await.is_ok() {
+                done.push(p);
+            }
+        }
+        Ok(done)
+    }
+
+    /// Kills every owned tree of `project` at once (only those launched before archival `epoch`,
+    /// when one is given), then executes and observes each root stop.
+    async fn kill_project(
+        &self,
+        project: &ProjectId,
+        epoch: Option<i64>,
+        stopped: Vec<(RootId, OperationId)>,
+    ) -> Result<Vec<(RootId, OperationState)>, StorageError> {
         // One immediate project-wide kill, whether or not the project has roots: trees the
         // project owns without a root are stopped too.
         let (processes, bound, scope) = (
             self.processes.clone(),
             self.stop_bound,
-            StopScope::Project(project.clone()),
+            match epoch {
+                Some(e) => StopScope::ProjectBefore(project.clone(), e),
+                None => StopScope::Project(project.clone()),
+            },
         );
         // What each tree's stop verified is in its process record; each root's settlement
         // reads its own unsettled trees from there.

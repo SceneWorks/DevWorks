@@ -52,7 +52,8 @@
 //! artifact store records ([`ArtifactRepository`]), the session, transcript and lineage
 //! records ([`SessionRepository`]), the resource reservation and owned-process records
 //! ([`ResourceRepository`]), the run root control records ([`RunRepository`]) and the retained
-//! diagnostic log ([`DiagnosticRepository`]).
+//! diagnostic log ([`DiagnosticRepository`]) and the project and repository registration
+//! records ([`ProjectRepository`]).
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -73,6 +74,7 @@ mod authority;
 mod configuration;
 mod diagnostics;
 mod knowledge;
+mod projects;
 mod resources;
 mod router;
 mod runs;
@@ -82,6 +84,7 @@ pub use authority::*;
 pub use configuration::*;
 pub use diagnostics::*;
 pub use knowledge::*;
+pub use projects::*;
 pub use resources::*;
 pub use router::*;
 pub use runs::*;
@@ -477,6 +480,7 @@ pub trait WriteTransaction {
     fn runs(&mut self) -> &mut dyn RunRepository;
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
+    fn projects(&mut self) -> &mut dyn ProjectRepository;
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
 }
 
@@ -519,6 +523,7 @@ pub trait ReadSnapshot {
     fn runs(&self) -> &dyn RunRead;
     fn diagnostics(&self) -> &dyn DiagnosticRead;
     fn router(&self) -> &dyn RouterRead;
+    fn projects(&self) -> &dyn ProjectRead;
     fn knowledge(&self) -> &dyn KnowledgeRead;
 }
 

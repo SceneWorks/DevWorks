@@ -1217,7 +1217,7 @@ impl SessionRepository for Unit<'_> {
         if let Some(p) = &s.project_id {
             require(
                 self.conn,
-                "SELECT 1 FROM projects WHERE id=?1",
+                "SELECT 1 FROM projects WHERE id=?1 AND lifecycle<>'Deleted'",
                 [p.0.as_str()],
                 "project",
                 p.0.as_str(),

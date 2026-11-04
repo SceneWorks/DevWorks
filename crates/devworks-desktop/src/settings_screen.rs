@@ -313,8 +313,9 @@ impl SettingsScreen {
             chip(ui, "Workspace", Tone::Accent);
             ui.add_enabled(false, egui::Button::new("Project…"))
                 .on_disabled_hover_text(
-                    "Project overrides need projects, which arrive with DW-11. Project-scope \
-                     inheritance is already enforced by the settings service.",
+                    "A project's repository base directory override is edited from All \
+                     projects (select the project). Project-scope inheritance is enforced by the \
+                     settings service.",
                 );
             if let Some(v) = &self.view {
                 widgets::caption(ui, format!("Revision {}", v.revision));

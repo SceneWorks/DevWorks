@@ -501,7 +501,7 @@ fn migration_18_is_additive_with_its_recorded_checksum() {
         MIGRATION_0018_SHA256,
         "an applied migration was edited"
     );
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 11));
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 14));
     assert!(!m.rebuilds_tables);
     for statement in m.sql.split(';') {
         let s = statement.to_uppercase();

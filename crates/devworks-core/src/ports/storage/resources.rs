@@ -209,6 +209,8 @@ pub enum OpenLeaseFilter {
     Session(Id),
     /// Open leases of one work root.
     Root(RootId),
+    /// Open leases of one project.
+    Project(ProjectId),
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -57,6 +57,7 @@ pub enum IdKind {
     Diagnostic,
     /// Router session pins.
     RoutePin,
+    Project,
     /// Knowledge entities, claims, evidence, relations, challenges and writes.
     KnowledgeEntity,
     KnowledgeClaim,

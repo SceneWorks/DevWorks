@@ -1651,6 +1651,9 @@ impl WriteTransaction for HandlerTx<'_> {
     fn router(&mut self) -> &mut dyn crate::ports::storage::RouterRepository {
         self.inner.get_mut().router()
     }
+    fn projects(&mut self) -> &mut dyn crate::ports::storage::ProjectRepository {
+        self.inner.get_mut().projects()
+    }
     fn knowledge(&mut self) -> &mut dyn crate::ports::storage::KnowledgeRepository {
         self.inner.get_mut().knowledge()
     }

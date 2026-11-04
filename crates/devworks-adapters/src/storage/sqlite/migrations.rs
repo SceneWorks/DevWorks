@@ -187,20 +187,35 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0013_router.sql"),
         rebuilds_tables: false,
     },
+    // Additive: project and repository side tables, the index view registry and repository
+    // texts, and four indexes; the migration 1 tables keep their shape. The writer floor rises
+    // to 14: a build without this migration (up to and including one with migration 13) treats
+    // only `Archived` as closed to work, so as a writer it would dispatch the work of a project
+    // tombstoned `Deleted`, and it would accept configuration, sessions, artifacts and resources
+    // for such a project. The reader floor stays at 8: no earlier build reads the new tables,
+    // and the indexes leave every query an earlier reader makes unchanged. Both are at least
+    // every earlier floor.
+    Migration {
+        version: 14,
+        minimum_reader: 8,
+        minimum_writer: 14,
+        sql: include_str!("migrations/0014_projects.sql"),
+        rebuilds_tables: false,
+    },
     // Additive: the unified Knowledge tables, their indexes and two FTS5 projections, referencing
     // only actors, projects and sessions (migration 1/7 tables, unchanged). Versions 14-17 are
     // reserved for open work; versions need only increase, and the number is renumbered to the
     // next free version at integration.
-    // The writer floor stays at 11 (the highest so far): applying a migration overwrites the
-    // store's floors, so a lower value would re-admit the build-10 writers migration 11 refuses.
-    // It need not rise: no earlier build writes these tables, so none can break their
+    // The writer floor stays at 14 (the highest so far): applying a migration overwrites the
+    // store's floors, so a lower value would re-admit the writers migration 14 refuses. It
+    // need not rise: no earlier build writes these tables, so none can break their
     // compare-and-set revisions, scope revisions or lexical rows, and every record an earlier
     // writer writes is unchanged here. The reader floor stays at 8: no earlier build reads these
     // tables, and every query an earlier reader makes returns the same results.
     Migration {
         version: 18,
         minimum_reader: 8,
-        minimum_writer: 11,
+        minimum_writer: 14,
         sql: include_str!("migrations/0018_knowledge.sql"),
         rebuilds_tables: false,
     },
@@ -208,6 +223,9 @@ pub const MIGRATIONS: &[Migration] = &[
 /// Recorded checksum of migration 18; a test fails if the shipped text changes.
 pub const MIGRATION_0018_SHA256: &str =
     "5b4b7acfaa4752a299598f30bba12ab8a35d82229a60c6dfd769f435565f2e11";
+/// Recorded checksum of migration 14; a test fails if the shipped text changes.
+pub const MIGRATION_0014_SHA256: &str =
+    "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";
 /// Recorded checksum of migration 13; a test fails if the shipped text changes.
 pub const MIGRATION_0013_SHA256: &str =
     "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";
