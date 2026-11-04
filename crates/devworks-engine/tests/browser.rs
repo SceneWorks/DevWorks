@@ -3818,6 +3818,80 @@ fn recovery_finds_a_tree_launched_before_its_session_recorded_it() {
     assert_eq!(s.phase, BrowserPhase::Uncertain, "{s:?}");
     assert!(root.exists(), "the profile of an unverified tree is kept");
     assert_eq!(fx.app().report().browser.clone().unwrap().uncertain, 1);
+    // The tree recovery found through the create operation is recorded on the session.
+    assert_eq!(s.process_id.as_ref(), Some(&process), "{s:?}");
+
+    // Closing it stops that tree through the process owner; its stop cannot be verified, so
+    // the session stays uncertain with its profile, never closed over a possible browser.
+    let s = fx.close(&user, &session);
+    assert_eq!(s.phase, BrowserPhase::Uncertain, "{s:?}");
+    assert!(s.detail.unwrap().contains("could not be verified stopped"));
+    assert!(root.exists(), "the profile of an unverified tree is kept");
+    assert_eq!(close_requested_state(&fx, &session), "Stopping");
+}
+
+/// The state the session's Close decision recorded.
+fn close_requested_state(fx: &Fx, session: &Id) -> String {
+    let id = session.as_str().to_owned();
+    read(&**fx.app().store(), move |s| {
+        s.history().page(
+            &EventFilter::Aggregate {
+                kind: "browser_session".into(),
+                id,
+            },
+            0,
+            500,
+        )
+    })
+    .events
+    .into_iter()
+    .rev()
+    .find(|e| e.kind == "BrowserSessionCloseRequested")
+    .expect("a close was requested")
+    .payload["state"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// Clears the session's process ID while the application runs: a session whose tree is only
+/// named by its create operation's launch record (a failed or lost write).
+fn forget_process_id(fx: &Fx, session: &Id) {
+    let c = rusqlite::Connection::open(fx.h().root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute(
+        "UPDATE browser_sessions SET process_id=NULL WHERE id=?1",
+        [session.as_str()],
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_uncertain_session_without_a_recorded_tree_is_never_closed_unverified() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let root = fx.profile_root(&session);
+    let process = fx.session(&session).process_id.unwrap();
+    let other = if cfg!(windows) { "unix" } else { "windows" };
+    let fx = fx.restart_with(false, |h| {
+        let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
+        c.execute(
+            "UPDATE owned_processes SET platform=?2 WHERE id=?1",
+            [process.as_str(), other],
+        )
+        .unwrap();
+    });
+    assert_eq!(fx.session(&session).phase, BrowserPhase::Uncertain);
+    // The session no longer names its tree; only the create operation's launch record does.
+    forget_process_id(&fx, &session);
+    let s = fx.close(&user, &session);
+    assert_eq!(close_requested_state(&fx, &session), "Stopping");
+    assert_eq!(s.phase, BrowserPhase::Uncertain, "{s:?}");
+    assert!(root.exists(), "the profile of an unverified tree is kept");
+    // The Close adopted the tree from the launch record.
+    assert!(fx.session(&session).process_id.is_some());
 }
 
 #[test]

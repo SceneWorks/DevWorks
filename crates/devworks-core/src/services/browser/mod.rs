@@ -398,6 +398,32 @@ pub fn wire_state(p: BrowserPhase) -> ItemState {
     }
 }
 
+/// The unsettled launch record of a session's create operation: the tree it launched when the
+/// session itself does not name it.
+fn launch_record<R: crate::ports::storage::ResourceRead + ?Sized>(
+    r: &R,
+    create: &OperationId,
+) -> Result<Option<crate::ports::storage::StoredProcess>, StorageError> {
+    let mut after: Option<Id> = None;
+    loop {
+        let page = r.processes(
+            &crate::ports::storage::ProcessFilter::Unsettled,
+            after.as_ref(),
+            100,
+        )?;
+        if let Some(p) = page
+            .iter()
+            .find(|p| p.operation_id.as_ref() == Some(create))
+        {
+            return Ok(Some(p.clone()));
+        }
+        if page.len() < 100 {
+            return Ok(None);
+        }
+        after = page.last().map(|p| p.id.clone());
+    }
+}
+
 /// The wire record of a session. `processOwnerId` is the owned process tree once launched, and
 /// the journaled Create operation that will own it before that.
 pub fn session_record(s: &StoredBrowserSession) -> BrowserSession {
@@ -1758,6 +1784,25 @@ impl BrowserService {
         }
     }
 
+    /// The owned tree a session launched, if any: the one recorded on the session, or else the
+    /// unsettled launch record of its create operation (a crash or a failed write between the
+    /// launch and recording its tree leaves no process ID on the session, so a missing one is
+    /// never evidence that nothing was launched).
+    fn launched_process(
+        &self,
+        s: &StoredBrowserSession,
+    ) -> Result<Option<crate::ports::storage::StoredProcess>, StorageError> {
+        let (recorded, create) = (s.process_id.clone(), s.create_operation_id.clone());
+        read_snapshot(&*self.store, &ReadOptions::default(), move |r| {
+            if let Some(p) = &recorded
+                && let Some(found) = r.resources().process(p)?
+            {
+                return Ok(Some(found));
+            }
+            launch_record(r.resources(), &create)
+        })
+    }
+
     /// Settles the sessions of earlier boots from what process recovery verified (run after
     /// it): a session whose tree is gone is `Closed` (it was stopping) or `Failed` (interrupted),
     /// with its profile removed; one whose tree could not be verified stays `Uncertain` with its
@@ -1780,43 +1825,7 @@ impl BrowserService {
                     keep.insert(s.id.as_str().to_owned());
                     continue;
                 }
-                let process = match &s.process_id {
-                    Some(p) => {
-                        let p = p.clone();
-                        read_snapshot(&*self.store, &ReadOptions::default(), move |r| {
-                            r.resources().process(&p)
-                        })?
-                    }
-                    None => None,
-                };
-                // A crash between the launch and recording its tree leaves no process ID on the
-                // session: the launch record names the create operation instead.
-                let process = match process {
-                    Some(p) => Some(p),
-                    None => {
-                        let create = s.create_operation_id.clone();
-                        read_snapshot(&*self.store, &ReadOptions::default(), move |r| {
-                            let mut after: Option<Id> = None;
-                            loop {
-                                let page = r.resources().processes(
-                                    &crate::ports::storage::ProcessFilter::Unsettled,
-                                    after.as_ref(),
-                                    100,
-                                )?;
-                                if let Some(p) = page
-                                    .iter()
-                                    .find(|p| p.operation_id.as_ref() == Some(&create))
-                                {
-                                    return Ok(Some(p.clone()));
-                                }
-                                if page.len() < 100 {
-                                    return Ok(None);
-                                }
-                                after = page.last().map(|p| p.id.clone());
-                            }
-                        })?
-                    }
-                };
+                let process = self.launched_process(&s)?;
                 let gone = process.as_ref().is_none_or(|p| {
                     matches!(
                         p.phase,
@@ -1839,13 +1848,32 @@ impl BrowserService {
                     report.settled += 1;
                 } else {
                     keep.insert(s.id.as_str().to_owned());
-                    if s.phase != BrowserPhase::Uncertain {
-                        self.fail_session(
-                            &s.id,
-                            "the browser of an earlier boot could not be verified stopped",
-                            BrowserPhase::Uncertain,
-                        );
-                    }
+                    // The tree found through the create operation is recorded on the session
+                    // with its uncertainty, in one write: a later Close stops that tree before
+                    // anything settles or the profile is removed.
+                    let found = process.as_ref().map(|p| p.id.clone());
+                    let why =
+                        detail("the browser of an earlier boot could not be verified stopped");
+                    self.update(&s.id, move |s| {
+                        let adopt = s.process_id.is_none() && found.is_some();
+                        if !adopt && s.phase == BrowserPhase::Uncertain {
+                            return None;
+                        }
+                        if adopt {
+                            s.process_id = found.clone();
+                        }
+                        if s.phase != BrowserPhase::Uncertain {
+                            s.phase = BrowserPhase::Uncertain;
+                            s.detail = Some(why.clone());
+                        }
+                        Some((
+                            "BrowserSessionUncertain",
+                            json!({
+                                "detail": why,
+                                "processId": s.process_id.as_ref().map(Id::as_str),
+                            }),
+                        ))
+                    })?;
                     report.uncertain += 1;
                 }
             }
@@ -2350,8 +2378,14 @@ impl BrowserService {
         }
         let mut next = s.clone();
         next.revision += 1;
-        // A session whose browser was never launched closes now; one with a tree is stopping
-        // until the process owner verified its stop.
+        // A missing process ID is not evidence that nothing was launched (a crash or a lost
+        // write between the launch and recording its tree leaves none): the create operation's
+        // launch record names the tree then, and it is adopted here.
+        if next.process_id.is_none() {
+            next.process_id = launch_record(tx.resources(), &s.create_operation_id)?.map(|p| p.id);
+        }
+        // A session with no launched tree closes now; one with a tree is stopping until the
+        // process owner verified its stop.
         if next.process_id.is_none() {
             next.phase = BrowserPhase::Closed;
             next.detail = Some("closed before its browser was launched".into());
