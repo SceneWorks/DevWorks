@@ -383,6 +383,49 @@ fn value(reply: DomainCommandReply) -> Value {
         other => panic!("{other:?}"),
     }
 }
+
+/// Quiesce the booted scheduler before driving exact cancellation steps. A command wakes its
+/// loop, and stop alone does not wait for a tick that already passed its stop check.
+fn cancellation_scheduler(
+    rt: &tokio::runtime::Runtime,
+    app: &App,
+    inference: Arc<dyn devworks_core::services::jobs::runner::InferenceJobs>,
+) -> Arc<devworks_engine::Scheduler> {
+    let background = app.runtime.scheduler().clone();
+    background.stop();
+    rt.block_on(within(
+        "the background scheduler stop barrier",
+        async move {
+            background.tick().await.expect("stopped tick barrier");
+            background
+                .drain(tokio::time::Instant::now() + Duration::from_secs(20))
+                .await;
+        },
+    ));
+    struct NoDispatch;
+    impl devworks_core::services::jobs::runner::NativeJobDispatch for NoDispatch {
+        fn command(
+            &self,
+            _: &InvocationContext,
+            _: &str,
+            _: &[u8],
+        ) -> devworks_core::gateway::CommandOutcome {
+            panic!("cancellation cannot dispatch a new operation")
+        }
+    }
+    let mut scheduler = devworks_engine::Scheduler::new(
+        app.store.clone(),
+        app.runtime.jobs().clone(),
+        Arc::new(NoDispatch),
+        inference,
+        app.runtime.processes().clone(),
+    );
+    let config = Arc::get_mut(&mut scheduler).unwrap();
+    config.stop_grace = Duration::ZERO;
+    config.stop_bound = Duration::from_millis(50);
+    scheduler
+}
+
 fn native() -> Value {
     let schema = argument_schema(DOCS, SchemaRevision(1)).unwrap();
     json!({"kind": "Native", "capabilityId": "help-generate_capability_docs", "arguments": {
@@ -557,31 +600,13 @@ fn cancel_failed_inner(prior_tick: bool, uncertain: bool) {
     ));
     let rid = id(run["id"].as_str().unwrap());
     app.tick(&rt);
+    let scheduler = cancellation_scheduler(
+        &rt,
+        &app,
+        Arc::new(devworks_core::services::jobs::runner::NoInferencePipeline),
+    );
     let running = app.run(&rid);
     let inner = running.inner_operation_id.clone().unwrap();
-    // Drive cancellation ticks explicitly: the booted loop also wakes on job commands.
-    app.runtime.scheduler().stop();
-    struct NoDispatch;
-    impl devworks_core::services::jobs::runner::NativeJobDispatch for NoDispatch {
-        fn command(
-            &self,
-            _: &InvocationContext,
-            _: &str,
-            _: &[u8],
-        ) -> devworks_core::gateway::CommandOutcome {
-            panic!("cancellation cannot dispatch a new operation")
-        }
-    }
-    let mut scheduler = devworks_engine::Scheduler::new(
-        app.store.clone(),
-        app.runtime.jobs().clone(),
-        Arc::new(NoDispatch),
-        Arc::new(devworks_core::services::jobs::runner::NoInferencePipeline),
-        app.runtime.processes().clone(),
-    );
-    let config = Arc::get_mut(&mut scheduler).unwrap();
-    config.stop_grace = Duration::ZERO;
-    config.stop_bound = Duration::from_millis(50);
     // The accepted operation launched an owned tree.
     let fs = NativeFilesystem::default();
     let roots = ProtectedRoots::new(vec![], vec![], None);
@@ -974,6 +999,7 @@ fn a_cancellation_still_stopping_is_asked_again_never_settled_as_lost() {
     ));
     let rid = id(run["id"].as_str().unwrap());
     app.tick(&rt);
+    let scheduler = cancellation_scheduler(&rt, &app, pipeline.clone());
     let running = app.run(&rid);
     assert!(running.status == "Running" && running.session_id.is_some());
     let reply = app.command(
@@ -981,15 +1007,17 @@ fn a_cancellation_still_stopping_is_asked_again_never_settled_as_lost() {
         json!({"jobId": jid.as_str(), "runId": rid.as_str(), "expectedRevision": running.revision.to_string()}),
     );
     assert!(matches!(reply, CommandReply::Recorded { .. }), "{reply:?}");
-    app.tick(&rt);
+    let report = rt.block_on(scheduler.tick()).unwrap();
+    assert!(report.cancelled.is_empty());
     let stopping = app.run(&rid);
     assert_eq!(
         (stopping.status.as_str(), stopping.cancel_requested),
         ("Running", true),
         "still stopping: not settled"
     );
-    app.tick(&rt);
+    let report = rt.block_on(scheduler.tick()).unwrap();
+    assert_eq!(report.cancelled, vec![rid.clone()]);
     assert_eq!(app.run(&rid).status, "Cancelled");
-    assert!(pipeline.asked.load(Ordering::SeqCst) >= 2);
+    assert_eq!(pipeline.asked.load(Ordering::SeqCst), 2);
     rt.block_on(app.runtime.shutdown());
 }
