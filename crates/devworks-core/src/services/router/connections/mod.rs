@@ -1022,6 +1022,13 @@ impl ConnectionService {
     /// a new key retired the handle just read) is read again from the new row, a bounded
     /// number of times: only a credential that is still referenced is reported as needing a
     /// new sign-in.
+    ///
+    /// Reading a credential may wait (the secret store, the per-connection refresh lock, a token
+    /// exchange), and the user may withdraw the risk acceptance, turn the connection off or
+    /// remove it meanwhile without changing its credential revision. So an [`Access`] is only
+    /// returned once the [`ConnectionService::usable`] gate holds on a row read after all of
+    /// that, for the same credential revision, profile and endpoint; a rotated token is
+    /// persisted either way.
     fn access_with(
         &self,
         connection_id: &Id,
@@ -1030,13 +1037,35 @@ impl ConnectionService {
         testing: bool,
     ) -> Result<Access, AccessError> {
         for _ in 0..CREDENTIAL_READ_ATTEMPTS {
-            if let Some(a) = self.access_once(connection_id, rejected, force, testing)? {
+            let Some(a) = self.access_once(connection_id, rejected, force, testing)? else {
+                continue;
+            };
+            let now = self
+                .read(|s| s.router().connection(connection_id))
+                .map_err(|e| AccessError::Unavailable(format!("{e:?}")))?
+                .ok_or(AccessError::NotFound)?;
+            self.usable(&now, testing)?;
+            if CheckBasis::from_access(&a).matches(&now) {
                 return Ok(a);
             }
         }
         Err(AccessError::Unavailable(
             "the connection's credential kept changing while it was read".into(),
         ))
+    }
+
+    /// The gate every use of `c`'s credential passes, on the latest row read: a known profile,
+    /// an effective risk acceptance for a risk-gated profile and, except for the user's own
+    /// test (`testing`), the connection turned on.
+    fn usable(&self, c: &StoredConnection, testing: bool) -> Result<&'static Profile, AccessError> {
+        let p = profile(&c.profile).ok_or(AccessError::NotFound)?;
+        if p.risk_gated && !risk_effective(c, self.restore_epoch()) {
+            return Err(AccessError::Disabled);
+        }
+        if !c.enabled && !testing {
+            return Err(AccessError::Disabled);
+        }
+        Ok(p)
     }
 
     /// One read of the connection and its credential; `None` when the credential was replaced
@@ -1054,13 +1083,7 @@ impl ConnectionService {
             .read(|s| s.router().connection(connection_id))
             .map_err(unavailable)?
             .ok_or(AccessError::NotFound)?;
-        let p = profile(&c.profile).ok_or(AccessError::NotFound)?;
-        if p.risk_gated && !risk_effective(&c, restore) {
-            return Err(AccessError::Disabled);
-        }
-        if !c.enabled && !testing {
-            return Err(AccessError::Disabled);
-        }
+        let p = self.usable(&c, testing)?;
         // Profile, destination and credential all come from this one read.
         let base = |credential| Access {
             connection_id: c.id.clone(),
@@ -1122,7 +1145,7 @@ impl ConnectionService {
                     })));
                 }
                 drop(t);
-                self.refresh_tokens(&c, rejected, force)
+                self.refresh_tokens(&c, rejected, force, testing)
             }
         }
     }
@@ -1185,14 +1208,17 @@ impl ConnectionService {
         seen: &StoredConnection,
         rejected: Option<&Secret>,
         force: bool,
+        testing: bool,
     ) -> Result<Option<Access>, AccessError> {
         let lock = self.refresh_lock(&seen.id);
         let _serialized = lock.lock().unwrap_or_else(|p| p.into_inner());
-        // Another caller may have refreshed while this one waited.
+        // Another caller may have refreshed while this one waited, and the connection may have
+        // been disabled meanwhile: nothing is sent for a connection that no longer passes.
         let c = self
             .read(|s| s.router().connection(&seen.id))
             .map_err(|e| AccessError::Unavailable(format!("{e:?}")))?
             .ok_or(AccessError::NotFound)?;
+        self.usable(&c, testing)?;
         let Some(handle) = c.credential_ref.clone() else {
             return Err(AccessError::Disconnected);
         };

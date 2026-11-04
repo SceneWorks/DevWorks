@@ -2465,3 +2465,134 @@ fn a_refused_key_that_becomes_valid_again_recovers_through_an_explicit_test() {
         assert!(cx.svc.access(&id("anthropic"), None).is_ok());
     }
 }
+
+/// Accepts (or withdraws) the risk notice of `claude` at its current revision.
+fn set_risk(cx: &Cx, accepted: bool) {
+    let c = cx.connection("claude");
+    let (_, _, changed) = summary(cx.configure(json!({"kind": "SubscriptionRisk",
+        "connectionId": "claude", "expectedRevision": c.revision.get().to_string(),
+        "noticeSha256": risk_notice_sha256(), "accepted": accepted})));
+    assert!(changed);
+}
+
+/// A Claude subscription signed in with a token inside the refresh skew (every use refreshes),
+/// and the rotated tokens its next refresh receives. Returns the signed-in row.
+fn claude_due_for_refresh(cx: &Cx) -> StoredConnection {
+    cx.add("claude", "ClaudeSubscriptionMessages", ANTHROPIC, None);
+    set_risk(cx, true);
+    claude_sign_in(cx, "at-old", 60);
+    cx.http.reset(
+        Method::Post,
+        CLAUDE_TOKEN,
+        200,
+        json!({"access_token": "at-rotated",
+        "refresh_token": "rt-rotated", "expires_in": 3600}),
+    );
+    cx.row("claude")
+}
+
+/// The rotation was published (and the replaced handle deleted) although nothing used it.
+fn assert_rotation_kept(cx: &Cx, before: &StoredConnection) {
+    let after = cx.row("claude");
+    assert_eq!(after.credential_revision, before.credential_revision + 1);
+    let handle = after.credential_ref.expect("a credential");
+    assert_ne!(Some(&handle), before.credential_ref.as_ref());
+    let stored = cx.secret(&handle).expect("the rotated tokens are stored");
+    assert!(stored.expose().contains("rt-rotated"));
+    assert!(cx.secret(before.credential_ref.as_ref().unwrap()).is_none());
+}
+
+#[test]
+fn withdrawing_the_risk_acceptance_during_a_test_refresh_sends_no_model_list() {
+    for action in ["Inspect", "Refresh"] {
+        let cx = Arc::new(Cx::new());
+        let before = claude_due_for_refresh(&cx);
+        let (tokens, lists) = (
+            cx.http.requests(CLAUDE_TOKEN).len(),
+            cx.http.requests(ANTHROPIC).len(),
+        );
+        // The user withdraws the acceptance (no sign-in is pending, so the credential revision
+        // stays) while the token exchange is in flight.
+        let inner = cx.clone();
+        cx.http
+            .during(CLAUDE_TOKEN, move || set_risk(&inner, false));
+        let _ = cx.configure(json!({"kind": "SignIn", "connectionId": "claude",
+            "action": action}));
+        assert_eq!(cx.http.requests(CLAUDE_TOKEN).len(), tokens + 1, "{action}");
+        assert_eq!(
+            cx.http.requests(ANTHROPIC).len(),
+            lists,
+            "{action}: nothing is sent with the refreshed token of a disabled connection"
+        );
+        assert!(cx.row("claude").risk.is_none());
+        assert_rotation_kept(&cx, &before);
+        assert_eq!(
+            cx.svc.access(&id("claude"), None).err(),
+            Some(AccessError::Disabled)
+        );
+    }
+}
+
+#[test]
+fn a_connection_turned_off_during_a_routed_refresh_gets_no_credential() {
+    let cx = Arc::new(Cx::new());
+    let before = claude_due_for_refresh(&cx);
+    let tokens = cx.http.requests(CLAUDE_TOKEN).len();
+    let inner = cx.clone();
+    cx.http.during(CLAUDE_TOKEN, move || {
+        assert!(
+            summary(edit_connection(
+                &inner,
+                "claude",
+                "ClaudeSubscriptionMessages",
+                ANTHROPIC,
+                json!({"enabled": false})
+            ))
+            .2
+        );
+    });
+    assert_eq!(
+        cx.svc.access(&id("claude"), None).err(),
+        Some(AccessError::Disabled)
+    );
+    assert_eq!(cx.http.requests(CLAUDE_TOKEN).len(), tokens + 1);
+    assert!(!cx.row("claude").enabled);
+    assert_rotation_kept(&cx, &before);
+}
+
+#[test]
+fn risk_withdrawn_while_a_refresh_waits_for_another_sends_no_second_refresh() {
+    let cx = Arc::new(Cx::new());
+    let before = claude_due_for_refresh(&cx);
+    let handle = before.credential_ref.clone().unwrap();
+    // The first refresh fails with an availability error (no new sign-in is required).
+    cx.http.reset(Method::Post, CLAUDE_TOKEN, 503, json!({}));
+    let tokens = cx.http.requests(CLAUDE_TOKEN).len();
+    type Waiting = std::thread::JoinHandle<Result<(), AccessError>>;
+    let waiting: Arc<Mutex<Option<Waiting>>> = Arc::default();
+    let (inner, slot) = (cx.clone(), waiting.clone());
+    cx.http.during(CLAUDE_TOKEN, move || {
+        // A second request passes the gate and reads the credential while this refresh holds
+        // the connection's refresh lock; then the user withdraws the acceptance.
+        let (passed, gate) = std::sync::mpsc::channel();
+        inner
+            .hooked
+            .during_get(&handle, move || passed.send(()).unwrap());
+        let second = inner.clone();
+        let t = std::thread::spawn(move || second.svc.access(&id("claude"), None).map(|_| ()));
+        gate.recv().unwrap();
+        set_risk(&inner, false);
+        *slot.lock().unwrap() = Some(t);
+    });
+    assert!(matches!(
+        cx.svc.access(&id("claude"), None),
+        Err(AccessError::Unavailable(_))
+    ));
+    let second = waiting.lock().unwrap().take().unwrap().join().unwrap();
+    assert_eq!(second, Err(AccessError::Disabled));
+    assert_eq!(
+        cx.http.requests(CLAUDE_TOKEN).len(),
+        tokens + 1,
+        "the waiting request does not refresh a disabled connection's token"
+    );
+}
