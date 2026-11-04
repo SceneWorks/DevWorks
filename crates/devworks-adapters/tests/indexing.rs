@@ -3003,3 +3003,103 @@ fn a_capped_candidate_lookup_never_yields_a_unique_target() {
     assert_eq!(call.payload["candidatesTruncated"], json!(true));
     assert!(call.payload.get("targetUnit").is_none());
 }
+
+#[test]
+fn adding_or_removing_a_dependency_manifest_reconciles_the_files_it_governs() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let pods = "Pods/Lib/A.swift";
+    let pod_fn = "#function:pod_a()";
+    // X has no Podfile at its baseline (its Pods/ files are indexed); Y has one (excluded).
+    let x = src.join("x");
+    let y = src.join("y");
+    let base_x = repo(
+        &x,
+        &[
+            (pods, "func pod_a() {}\n"),
+            ("App.swift", "func app() {}\n"),
+        ],
+    );
+    let base_y = repo(
+        &y,
+        &[
+            ("Podfile", "pod 'Lib'\n"),
+            (pods, "func pod_a() {}\n"),
+            ("App.swift", "func app() {}\n"),
+        ],
+    );
+    // Each gets a topic branch that adds or removes the Podfile.
+    git(&x, &["checkout", "-q", "-b", "topic"]);
+    write(&x, "Podfile", "pod 'Lib'\n");
+    let topic_x = commit(&x, "add a Podfile");
+    git(&x, &["checkout", "-q", "main"]);
+    git(&y, &["checkout", "-q", "-b", "topic"]);
+    git(&y, &["rm", "-q", "Podfile"]);
+    let topic_y = commit(&y, "remove the Podfile");
+    git(&y, &["checkout", "-q", "main"]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let (rx, ry) = (fx.repository_at(&x), fx.repository_at(&y));
+    for r in [&rx, &ry] {
+        run_of(decision(fx.index(r, false, "1")));
+    }
+    fx.drain();
+    let has_pod = |view: &views::ViewLayers| has_node(&fx.nodes(view, pods), "Function", pod_fn);
+    assert!(
+        has_pod(&fx.published(&rx)),
+        "X indexes Pods/ without a Podfile"
+    );
+    assert!(fx.unit(&fx.published(&ry), pods).is_none(), "Y excludes it");
+    let _ = (base_x, base_y);
+
+    // Branch layer: the topic commit adds (X) or removes (Y) the Podfile; Pods/ itself is
+    // unchanged between the baseline and the topic.
+    for r in [&rx, &ry] {
+        run_of(decision(refresh_ref(&fx, r, "topic")));
+    }
+    assert_eq!(fx.drain(), 2);
+    let ref_view = |r: &Id, commit: &str| {
+        let o = overlay_at(&fx, r, commit);
+        assert_eq!(o.state, OVERLAY_READY, "{o:?}");
+        exact_view(&fx, o.view_id.as_ref().unwrap())
+    };
+    let vx = ref_view(&rx, &topic_x);
+    assert!(fx.unit(&vx, pods).is_none(), "an added Podfile masks Pods/");
+    assert!(has_node(
+        &fx.nodes(&vx, "App.swift"),
+        "Function",
+        "#function:app()"
+    ));
+    let vy = ref_view(&ry, &topic_y);
+    assert!(
+        has_pod(&vy),
+        "a removed Podfile makes Pods/ eligible: staged"
+    );
+
+    // Worktree layer: the same changes made locally in the primary checkouts (at main).
+    write(&x, "Podfile", "pod 'Lib'\n");
+    std::fs::remove_file(y.join("Podfile")).unwrap();
+    let worktree_view = |r: &Id, dir: &Path| {
+        let w = worktree_id(r, &fx.identity(dir));
+        run_of(decision(fx.index_command(
+            "indexing.refresh_overlay",
+            json!({"kind": "RefreshOverlay", "repositoryId": r, "worktreeId": w,
+                "expectedSourceRevision": "1"}),
+        )));
+        assert_eq!(fx.drain(), 1);
+        let (r2, w2) = (r.clone(), w.clone());
+        let o = fx
+            .read(move |s| s.indexing().overlay_for(&r2, &w2))
+            .expect("the overlay");
+        assert_eq!(o.state, OVERLAY_READY, "{o:?}");
+        exact_view(&fx, o.view_id.as_ref().unwrap())
+    };
+    let wx = worktree_view(&rx, &x);
+    assert!(fx.unit(&wx, pods).is_none(), "a local Podfile masks Pods/");
+    let wy = worktree_view(&ry, &y);
+    assert!(
+        has_pod(&wy),
+        "a locally deleted Podfile makes Pods/ eligible"
+    );
+}

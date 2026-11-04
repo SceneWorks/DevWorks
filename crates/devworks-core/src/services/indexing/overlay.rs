@@ -36,7 +36,7 @@
 //! retention passes (its view and layers go; the record stays), and `Unavailable` when retired
 //! or when its index is removed. Only the run an overlay names can change its state. An ended
 //! ref overlay's record is pruned by record retention ([`prune_ref_overlays`]).
-use super::config::EffectiveConfig;
+use super::config::{EffectiveConfig, MANIFEST_DIRECTORIES};
 use super::git::{Change, EMPTY_TREE_SHA1, EMPTY_TREE_SHA256, TreeEntry};
 use super::worker::{
     Exec, PlanUnit, Stop, build_unit, coverage_of, dir_key, link_generation, plan, push_warning,
@@ -1027,16 +1027,28 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         let (entries, _) = git.tree(&root, h).map_err(Stop::git)?;
         head_entries = entries;
     }
-    // A baseline built under another configuration (or extractor) is reconciled in the branch
-    // layer, even at the baseline commit: units the effective configuration plans differently
-    // (newly selected or deselected languages, size limits) are staged again from the commit
-    // and units it now excludes are masked, so the overlay never shows the earlier
-    // configuration's definitions.
-    let reconciled = configuration_changes(
+    let diff: Vec<Change> = match &head {
+        Some(h) if *h != snap.base_oid => match git.diff(&root, &snap.base_oid, h) {
+            Ok((c, _)) => c,
+            Err(e) if e.cancelled() => return Err(Stop::Cancelled),
+            Err(e) => {
+                return Err(Stop::det(
+                    "base_unavailable",
+                    format!("the baseline commit cannot be compared: {e}"),
+                ));
+            }
+        },
+        _ => Vec::new(),
+    };
+    // Unchanged files the commit plans differently from the baseline (another configuration or
+    // extractor, a dependency manifest added or removed) are reconciled in the branch layer,
+    // even at the baseline commit, so the overlay never shows the baseline's plan for them.
+    let reconciled = plan_changes(
         &env,
         &cfg,
-        &snap.base_generation,
+        &layers,
         &head_entries,
+        &diff,
         env.source.case_insensitive(&root),
     )
     .map_err(Stop::storage)?;
@@ -1045,17 +1057,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         .filter(|h| **h != snap.base_oid || ref_overlay || !reconciled.is_empty())
     {
         exec.stage("branch")?;
-        let git = exec.git(&stop);
-        let (mut changes, _) = match git.diff(&root, &snap.base_oid, h) {
-            Ok(c) => c,
-            Err(e) if e.cancelled() => return Err(Stop::Cancelled),
-            Err(e) => {
-                return Err(Stop::det(
-                    "base_unavailable",
-                    format!("the baseline commit cannot be compared: {e}"),
-                ));
-            }
-        };
+        let mut changes = diff;
         changes.extend(reconciled.iter().cloned());
         let (units, groups) = layer_units(
             &env,
@@ -1085,7 +1087,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         None
     } else {
         exec.stage("worktree")?;
-        let local_changes: Vec<Change> = snap
+        let mut local_changes: Vec<Change> = snap
             .local
             .iter()
             .flat_map(|l| match (&l.content, &l.previous) {
@@ -1125,6 +1127,18 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             }
         }
         let composed: Vec<TreeEntry> = composed.into_values().collect();
+        // Unchanged files the worktree's changes plan differently (a dependency manifest added
+        // or removed locally) are reconciled in this layer.
+        let reconciled = plan_changes(
+            &env,
+            &cfg,
+            &layers,
+            &composed,
+            &local_changes,
+            env.source.case_insensitive(&root),
+        )
+        .map_err(Stop::storage)?;
+        local_changes.extend(reconciled);
         let (units, groups) = layer_units(
             &env,
             &cfg,
@@ -1281,36 +1295,59 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
     }
 }
 
-/// The file units an overlay over `base` must reconcile because the baseline was built under
-/// another configuration digest or extractor version: under another extractor every planned
-/// file; otherwise each file `tree` plans with another mode or language than the baseline unit
-/// (or that the baseline lacks), as modified, and each baseline file the plan no longer has
-/// (excluded now), as deleted. Empty when the baseline was built under this configuration.
-fn configuration_changes(
+/// The files whose plan changed although their content did not, relative to the layers below
+/// (`lower`, highest first, the baseline last): every planned file as modified when a lower
+/// layer was built by another extractor; otherwise, when the baseline was built under another
+/// configuration or `changes` add, remove or rename a dependency-directory manifest
+/// (`Podfile`, `Cargo.toml`, ...: [`MANIFEST_DIRECTORIES`]), each file `tree` plans with
+/// another mode or language than the lower layers show (or that they lack) as modified, and
+/// each lower file the plan no longer has (excluded now) as deleted. Nothing else changes the
+/// plan of an unchanged file (`.gitignore` governs only untracked capture, and repository-level
+/// groups are regrouped by their own changed members), so otherwise the comparison is skipped.
+fn plan_changes(
     env: &IndexEnv,
     cfg: &EffectiveConfig,
-    base: &Id,
+    lower: &[Id],
     tree: &[TreeEntry],
+    changes: &[Change],
     case_insensitive: bool,
 ) -> Result<Vec<Change>, StorageError> {
-    let manifest = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
-        s.indexing().generation(base)
-    })?
-    .map(|g| g.manifest)
-    .unwrap_or_default();
-    let same_extractor = manifest
-        .get("extractorVersion")
-        .and_then(serde_json::Value::as_i64)
-        == Some(super::config::EXTRACTOR_VERSION);
-    if same_extractor
-        && manifest
-            .get("configDigest")
-            .and_then(serde_json::Value::as_str)
-            == Some(cfg.digest.as_str())
-    {
+    let manifests = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        let mut out = Vec::new();
+        for g in lower {
+            out.push(
+                s.indexing()
+                    .generation(g)?
+                    .map(|g| g.manifest)
+                    .unwrap_or_default(),
+            );
+        }
+        Ok(out)
+    })?;
+    let same_extractor = manifests.iter().all(|m| {
+        m.get("extractorVersion")
+            .and_then(serde_json::Value::as_i64)
+            == Some(super::config::EXTRACTOR_VERSION)
+    });
+    let same_config = manifests
+        .last()
+        .and_then(|m| m.get("configDigest"))
+        .and_then(serde_json::Value::as_str)
+        == Some(cfg.digest.as_str());
+    let manifest_name = |p: &str| {
+        let name = p.rsplit('/').next().unwrap_or(p);
+        MANIFEST_DIRECTORIES
+            .iter()
+            .any(|(_, ms)| ms.contains(&name))
+    };
+    let manifest_moved = changes.iter().any(|c| match c {
+        Change::Added(p) | Change::Modified(p) | Change::Deleted(p) => manifest_name(p),
+        Change::Renamed { from, to } => manifest_name(from) || manifest_name(to),
+    });
+    if same_extractor && same_config && !manifest_moved {
         return Ok(Vec::new());
     }
-    let base_units = super::worker::unit_index(env, base)?;
+    let lower_units = composed_inventory(env, lower)?;
     let mut ignored = Vec::new();
     let (planned, _) = plan(
         env,
@@ -1325,19 +1362,56 @@ fn configuration_changes(
     for u in planned.iter().filter(|u| !u.key.starts_with('/')) {
         seen.insert(u.key.as_str());
         let same = same_extractor
-            && base_units.get(&u.key).is_some_and(|(_, mode, language)| {
+            && lower_units.get(&u.key).is_some_and(|(mode, language)| {
                 mode == u.mode && language.as_deref() == u.language
             });
         if !same {
             out.push(Change::Modified(u.key.clone()));
         }
     }
-    for key in base_units.keys() {
-        if !key.starts_with('/') && !seen.contains(key.as_str()) {
+    for key in lower_units.keys() {
+        if !seen.contains(key.as_str()) {
             out.push(Change::Deleted(key.clone()));
         }
     }
     Ok(out)
+}
+
+/// The file units `layers` (highest first) compose, with their mode and language: a unit a
+/// higher layer replaces or deletes is the higher layer's (a deletion hides it).
+fn composed_inventory(
+    env: &IndexEnv,
+    layers: &[Id],
+) -> Result<BTreeMap<String, (String, Option<String>)>, StorageError> {
+    let mut seen: BTreeMap<String, Option<(String, Option<String>)>> = BTreeMap::new();
+    for g in layers {
+        let mut after: Option<String> = None;
+        loop {
+            let page = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+                s.indexing().units(g, after.as_deref(), MAX_PAGE)
+            })?;
+            for u in &page {
+                if u.unit_key.starts_with('/') || seen.contains_key(&u.unit_key) {
+                    continue;
+                }
+                let facts = (u.action == UNIT_REPLACE).then(|| {
+                    (
+                        u.payload["mode"].as_str().unwrap_or("").to_owned(),
+                        u.payload["language"].as_str().map(str::to_owned),
+                    )
+                });
+                seen.insert(u.unit_key.clone(), facts);
+            }
+            if page.len() < usize::from(MAX_PAGE) {
+                break;
+            }
+            after = page.last().map(|u| u.unit_key.clone());
+        }
+    }
+    Ok(seen
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k, v)))
+        .collect())
 }
 
 /// The units of one layer: changed files (replaced or deleted) and the directories they affect,
