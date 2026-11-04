@@ -1426,7 +1426,9 @@ fn sync_plan_replans_by_reference_and_never_deletes_or_completes() {
         OperationResult::TasksSyncPlan { value } => value.items.0,
         other => panic!("{other:?}"),
     };
-    let a = cards.iter().find(|c| c.title.0 == "A").expect("kept");
+    // The answer is the cards the plan names; the closed card is kept and read through lists.
+    assert_eq!(ids(&cards), ["B renamed", "C"]);
+    let a = fx.fresh(&a_card);
     assert_eq!(a.status_id.as_str(), Fx::status(&p, "closed"));
     let b2 = cards.iter().find(|c| c.title.0 == "B renamed").unwrap();
     assert_eq!(b2.id, b.id);
@@ -1902,4 +1904,236 @@ fn plan_revisions_keep_criterion_state_requirements_and_acceptance_tests() {
     fx.write(move |tx| tx.work().bump_queue(&p2, WORKFLOW_QUEUE));
     let fault = refused(fx.edit(&fx.user(), &t, json!({"statusId": Fx::status(&p, "ready")})));
     assert_eq!(kind_of(&fault), "use_tasks_move");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Round 2: hierarchy gates, fresh results, complete pages
+
+/// A worker assignment of `work` under the root `root` (as delegation records it).
+fn assign(fx: &Fx, root: &Id, work: &Id, n: u32) -> devworks_core::protocol::AssignmentId {
+    let (root, work) = (root.clone(), work.clone());
+    fx.write(move |tx| {
+        let session = id(&format!("session-{n}"));
+        tx.sessions().insert_session(&StoredSession {
+            id: session.clone(),
+            conversation_id: id(&format!("conversation-{n}")),
+            agent_id: actor("agent-w"),
+            project_id: None,
+            root_id: Some(RootId(root.clone())),
+            title: "worker".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("agent-w"),
+            created_at_ms: super::T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })?;
+        let a = StoredAssignment {
+            id: devworks_core::protocol::AssignmentId(id(&format!("assignment-{n}"))),
+            root_id: RootId(root),
+            work_id: RootId(work),
+            parent_id: None,
+            session_id: session,
+            execution_id: None,
+            state: AssignmentState::Ready,
+            generation: 0,
+            slot_held: false,
+            revision: 1,
+            checkpoint: None,
+            scope_key: None,
+            scope_digest: None,
+            plan_revision: None,
+            instruction_revision: 0,
+            created_at_ms: super::T0,
+        };
+        tx.runs().insert_assignment(&a)?;
+        Ok(a.id)
+    })
+}
+
+#[test]
+fn a_features_prerequisites_hold_the_feature_its_cards_and_its_linked_cards() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let first = fx.feature(&p, "Payments", &[]);
+    let second = fx.feature(&p, "Refunds", &[]);
+    // Payments blocks Refunds (features.dependencies).
+    applied(fx.command(
+        &fx.agent(),
+        "features.dependencies",
+        json!({"featureId": second.id.as_str(), "expectedRevision": second.revision.as_str(),
+            "replacement": {"edges": [{"predecessor": first.id.as_str(),
+                "successor": second.id.as_str()}]}}),
+    ));
+    let doc = fx.artifact(&p, 1);
+    let second = fx.plan(&fx.fresh(&second), &doc, &[("E1", "refund")]);
+    let card = fx.task(&fx.user(), &p, Some(&second), "Refund API", 0);
+    let second = fx.approve(&second);
+    let blocked_by_first =
+        |reasons: &[String]| reasons.iter().any(|r| r.contains(first.id.as_str()));
+    // The feature itself, and every assignment of its work, through the root.
+    assert!(blocked_by_first(&fx.eligible(&second.id, Target::Root)));
+    let a = assign(&fx, &second.id, &card.id, 1);
+    assert!(blocked_by_first(
+        &fx.eligible(&second.id, Target::Assignment(a))
+    ));
+    // A card linked to the feature that keeps controls of its own (it was unlinked, then
+    // linked again) is held by its feature's prerequisites and plan gate as well.
+    let other = fx.task(&fx.user(), &p, None, "Standalone", 0);
+    let unlink = |w: &WorkRecord, f: Option<&WorkRecord>| {
+        let mut body = json!({"taskId": w.id.as_str(), "expectedRevision": w.revision.as_str(),
+            "clearFeature": f.is_none()});
+        if let Some(f) = f {
+            body["featureId"] = json!(f.id.as_str());
+        }
+        work_of(applied(fx.command(&fx.user(), "tasks.set_feature", body)))
+    };
+    let other = unlink(&other, Some(&second));
+    let other = unlink(&other, None);
+    unlink(&other, Some(&second));
+    let reasons = fx.eligible(&other.id, Target::Root);
+    assert!(blocked_by_first(&reasons), "{reasons:?}");
+    assert!(
+        reasons.iter().any(|r| r.contains("readiness")),
+        "the feature's readiness gate applies: {reasons:?}"
+    );
+}
+
+#[test]
+fn atomic_results_are_read_after_their_links_and_replans_answer_one_complete_page() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let doc = fx.artifact(&p, 1);
+    let feature = |r: &str, t: &str| {
+        json!({"callerRef": r, "title": t, "description": "", "repositoryIds": [],
+            "plan": draft(&doc, &[("E1", "x")], &[]), "tasks": []})
+    };
+    // Feature A blocks feature B: writing that link advances B's revision.
+    let plan = json!({"callerRef": "plan-1",
+        "features": [feature("feat-a", "A"), feature("feat-b", "B")],
+        "dependencyEdges": [{"predecessor": "feat-a", "successor": "feat-b"}]});
+    let created = match applied(fx.command(
+        &fx.agent(),
+        "features.create",
+        json!({"projectId": p.0.as_str(), "creation": {"kind": "AtomicPlan", "plan": plan}}),
+    )) {
+        OperationResult::FeaturesCreate { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert!(!created.has_more && created.next_cursor.is_none());
+    let b = created.items.0.iter().find(|f| f.title.0 == "B").unwrap();
+    assert_eq!(b.revision, fx.fresh(b).revision);
+    assert_eq!(b.dependency_ids.0.len(), 1);
+    // The returned revision is the one the next edit names.
+    applied(fx.command(
+        &fx.user(),
+        "features.edit",
+        json!({"workId": b.id.as_str(), "expectedRevision": b.revision.as_str(),
+            "changes": {"title": "B renamed"}}),
+    ));
+    // A feature with more than 500 (closed, historical) cards: its re-plan answers the cards
+    // the plan names, one complete page.
+    let f = fx.feature(&p, "Busy", &[]);
+    let (pid, fid) = (p.clone(), f.id.clone());
+    let closed = Fx::status(&p, "closed");
+    fx.write(move |tx| {
+        for n in 0..501 {
+            tx.work().insert_work(&StoredWork {
+                id: id(&format!("old-{n}")),
+                project_id: pid.clone(),
+                kind: TASK.into(),
+                parent_feature_id: Some(fid.clone()),
+                status_id: Some(id(&closed)),
+                title: format!("Old {n}"),
+                priority: 0,
+                manual_order: n,
+                revision: 1,
+                scope_revision: 1,
+                created_at_ms: super::T0,
+                updated_at_ms: super::T0,
+                created_by: None,
+                updated_by: None,
+                search_key: String::new(),
+                caller_ref: None,
+                completion: None,
+                brief: json!({}),
+            })?;
+        }
+        Ok(())
+    });
+    let slot = {
+        let fid = f.id.clone();
+        fx.read(move |s| s.work().feature_plan(&fid))
+            .unwrap()
+            .revision
+    };
+    let page = match applied(fx.command(
+        &fx.agent(),
+        "tasks.sync_plan",
+        json!({"featureId": f.id.as_str(), "expectedPlanRevision": slot.to_string(),
+            "expectedTaskSetRevision": fx.queue(&p, &feature_queue(&f.id)).to_string(),
+            "tasks": [{"clientKey": "new", "title": "New card", "description": "",
+                "repositoryIds": [], "dependencyKeys": [], "acceptance": []}]}),
+    )) {
+        OperationResult::TasksSyncPlan { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(ids(&page.items.0), ["New card"]);
+    assert!(!page.has_more && page.next_cursor.is_none());
+}
+
+#[test]
+fn full_detail_in_a_list_never_claims_more_without_a_cursor() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let t = fx.task(&fx.user(), &p, None, "Chatty", 0);
+    // 501 comments recorded on the card.
+    let tid = t.id.clone();
+    fx.write(move |tx| {
+        let mut w = tx.work().work(&tid)?.unwrap();
+        let comments: Vec<Value> = (0..501)
+            .map(|n| {
+                json!({"item": {"id": format!("c{n}"), "content": "note", "evidence": []},
+                "actor": "user-a", "atMs": 1})
+            })
+            .collect();
+        w.brief["comments"] = json!(comments);
+        let before = w.revision;
+        w.revision = before + 1;
+        tx.work().update_work(&w, before)
+    });
+    let listed = match fx.query(
+        &fx.user(),
+        "tasks.list",
+        json!({"projectId": p.0.as_str(), "page": {"limit": 10}, "statusIds": [],
+            "repositoryIds": [], "detailLevel": "Full"}),
+    ) {
+        DomainQueryReply::Result {
+            result: OperationResult::TasksList { value },
+            ..
+        } => value.items.0.into_iter().next().unwrap(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(listed.comments.0.len(), 500);
+    let cursor = listed
+        .detail_cursor
+        .clone()
+        .expect("a continuation for the rest");
+    // The cursor continues through tasks.get.
+    let rest = match fx.query(
+        &fx.user(),
+        "tasks.get",
+        json!({"workId": t.id.as_str(), "detailLevel": "Full",
+            "detailPage": {"limit": 500, "cursor": cursor.0}}),
+    ) {
+        DomainQueryReply::Result {
+            result: OperationResult::TasksGet { value },
+            ..
+        } => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(rest.comments.0.len(), 1);
+    assert!(rest.detail_cursor.is_none());
 }

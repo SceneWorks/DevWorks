@@ -26,7 +26,7 @@ use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{EventId, Id, ProjectId, RevisionDimension, RootId};
 use crate::services::cursor::CursorBinding;
 use crate::services::runs::{control_of, ensure_control};
-use crate::services::sessions::rev;
+use crate::services::sessions::{Failure, rev};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -185,6 +185,33 @@ fn position_text(p: &WorkPosition) -> String {
         p.created_at_ms,
         p.id.as_str()
     )
+}
+
+/// A full-detail page of `w`'s comments and handoffs from `cursor`. The cursor is bound to
+/// the item and its revision (a change between pages expires it) and to its family's `get`.
+fn detail_page(
+    ctx: &InvocationContext,
+    family: Family,
+    w: &StoredWork,
+    cursor: Option<&str>,
+    limit: usize,
+) -> R<Detail> {
+    let binding = CursorBinding::new(ctx, &family.op("get"), &[w.id.as_str()], w.revision);
+    let offset = match cursor {
+        None => 0,
+        Some(c) => binding
+            .decode(c)?
+            .parse::<usize>()
+            .map_err(|_| StorageError::CursorExpired)?,
+    };
+    let brief = WorkBrief::of(w)?;
+    let total = brief.comments.len().max(brief.handoffs.len());
+    let end = offset.saturating_add(limit);
+    Ok(Detail::Full {
+        offset,
+        limit,
+        next: (end < total).then(|| binding.encode(&end.to_string())),
+    })
 }
 
 /// The completion a card records in a status of `semantic` with `acceptance`.
@@ -346,22 +373,22 @@ impl WorkService {
         let next = has_more.then(|| {
             BoundedText(binding.encode(&position_text(&WorkPosition::of(&rows[limit - 1]))))
         });
-        let detail = if i.full {
-            Detail::Full {
-                offset: 0,
-                limit: 500,
-                next: None,
-            }
-        } else {
-            Detail::Summary
-        };
         let items = rows
             .iter()
             .map(|w| {
-                snapshot_record(read, w, detail.clone()).map(|r| match family {
-                    Family::Issues => issue_view(r),
-                    _ => r,
-                })
+                // At full detail an item whose comments or handoffs exceed one page carries the
+                // detail cursor its family's `get` continues from (never "more" without one).
+                let detail = if i.full {
+                    detail_page(ctx, family, w, None, 500)?
+                } else {
+                    Detail::Summary
+                };
+                snapshot_record(read, w, detail)
+                    .map(|r| match family {
+                        Family::Issues => issue_view(r),
+                        _ => r,
+                    })
+                    .map_err(Failure::from)
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok((
@@ -389,29 +416,15 @@ impl WorkService {
         let detail = match (&i.detail_page, i.full) {
             (None, false) => Detail::Summary,
             (page, _) => {
-                // The detail page is bound to the item and its revision: a change between pages
-                // expires the cursor.
-                let binding =
-                    CursorBinding::new(ctx, &family.op("get"), &[w.id.as_str()], w.revision);
                 let limit = page
                     .as_ref()
                     .map_or(500, |p| p.limit.get() as usize)
                     .min(500);
-                let offset = match page.as_ref().and_then(|p| p.cursor.as_ref()) {
-                    None => 0,
-                    Some(c) => binding
-                        .decode(&c.0)?
-                        .parse::<usize>()
-                        .map_err(|_| StorageError::CursorExpired)?,
-                };
-                let brief = WorkBrief::of(&w)?;
-                let total = brief.comments.len().max(brief.handoffs.len());
-                let end = offset.saturating_add(limit);
-                Detail::Full {
-                    offset,
-                    limit,
-                    next: (end < total).then(|| binding.encode(&end.to_string())),
-                }
+                let cursor = page
+                    .as_ref()
+                    .and_then(|p| p.cursor.as_ref())
+                    .map(|c| c.0.clone());
+                detail_page(ctx, family, &w, cursor.as_deref(), limit)?
             }
         };
         let record = snapshot_record(read, &w, detail)?;

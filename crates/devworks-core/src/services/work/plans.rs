@@ -363,12 +363,17 @@ impl WorkService {
             }
         };
         // The result lists the features (the recorded result carries only features); their
-        // cards are read through tasks.list.
-        let items = created
-            .iter()
-            .filter(|w| w.kind == FEATURE)
-            .map(|w| tx_record(tx, w))
-            .collect::<Result<Vec<_>, _>>()?;
+        // cards are read through tasks.list. Each is read again now that every write of the unit
+        // of work is done (a link write advances its target's revision), so the next edit can
+        // name the revision it is given.
+        let mut items = Vec::new();
+        for w in created.iter().filter(|w| w.kind == FEATURE) {
+            let current = tx
+                .work()
+                .work(&w.id)?
+                .ok_or_else(|| not_found("work", &w.id))?;
+            items.push(tx_record(tx, &current)?);
+        }
         Ok(DomainDecision::Applied {
             result: OperationResult::FeaturesCreate { value: page(items) },
         })
@@ -846,15 +851,20 @@ impl WorkService {
                 "projectPlan": project_plan.is_some(),
             }),
         )?;
-        let cards = feature_cards(tx, &feature)?;
-        let more = cards.len() > 500;
-        let items = cards
-            .iter()
-            .take(500)
-            .map(|w| tx_record(tx, w))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut value = page(items);
-        value.has_more = more;
+        // The result is the cards the plan names, created or updated, in plan order (at most
+        // 200, so one complete page), each read again after every write of the unit of work.
+        // Cards the re-plan closed are recorded in history (ClosedByReplan) and listed by
+        // tasks.list; the feature's other cards are not part of this answer, so the page never
+        // claims more without a cursor.
+        let mut items = Vec::with_capacity(planned.len());
+        for p in &planned {
+            let current = tx
+                .work()
+                .work(&p.work.id)?
+                .ok_or_else(|| not_found("work", &p.work.id))?;
+            items.push(tx_record(tx, &current)?);
+        }
+        let value = page(items);
         Ok(DomainDecision::Applied {
             result: OperationResult::TasksSyncPlan { value },
         })
@@ -1061,12 +1071,14 @@ pub fn decide_plan_approval(
     tx_record(tx, &after)
 }
 
+/// A complete result page (callers bound it: at most 20 features or 200 cards). It never claims
+/// another page, because these results have no continuation.
 fn page(items: Vec<WorkRecord>) -> Page<WorkRecord> {
-    let more = items.len() > 500;
+    debug_assert!(items.len() <= 500);
     Page {
         items: BoundedList(items.into_iter().take(500).collect()),
         next_cursor: None,
-        has_more: more,
+        has_more: false,
     }
 }
 

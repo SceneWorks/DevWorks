@@ -506,6 +506,29 @@ fn stored(b: &StoredBlocker) -> Condition {
         stored: true,
     }
 }
+/// Holds implementation of `work` while it has a prerequisite not completed with verified
+/// acceptance.
+fn prerequisite_gate(
+    runs: &dyn RunRead,
+    work: &RootId,
+    subject: Subject,
+    c: &mut Vec<Condition>,
+) -> Result<(), StorageError> {
+    let open = runs.open_prerequisites(work)?;
+    if let Some(p) = open.first() {
+        c.push(derived(
+            &format!("prerequisites-{}", work.0.as_str()),
+            subject,
+            open.len() as i64,
+            HoldCause::Dependency,
+            &format!(
+                "prerequisite {} is not complete with verified acceptance",
+                p.0.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
 fn derived(
     kind: &str,
     subject: Subject,
@@ -584,23 +607,57 @@ impl ControlService {
                 ));
             }
             c.extend(feature_level.iter().map(stored));
-        }
-        // A standalone card's unsatisfied prerequisites hold its implementation (a manual Done
-        // label is not verified completion).
-        if purpose == ActivationPurpose::Implementation && !is_feature(root) {
-            let open = runs.open_prerequisites(&root.id)?;
-            if let Some(p) = open.first() {
-                c.push(derived(
-                    "prerequisites",
-                    root_subject.clone(),
-                    open.len() as i64,
-                    HoldCause::Dependency,
-                    &format!(
-                        "prerequisite {} is not complete with verified acceptance",
-                        p.0.as_str()
-                    ),
-                ));
+            // Its implementation is the feature's: the feature's prerequisites, approved plan,
+            // readiness and the findings that gate this card hold it as they hold the feature's
+            // own assignments.
+            if purpose == ActivationPurpose::Implementation {
+                let feature = WorkRoot {
+                    id: f.clone(),
+                    project_id: root.project_id.clone(),
+                    kind: "feature".into(),
+                    title: String::new(),
+                    revision: 1,
+                    scope_revision: 1,
+                    parent_feature_id: None,
+                    created_at_ms: 0,
+                };
+                prerequisite_gate(runs, f, Subject::Root(f.clone()), &mut c)?;
+                match self.scope.plan(runs, &feature)? {
+                    PlanState::Approved { feature: unit, .. } if unit.readiness.is_current() => {}
+                    PlanState::Approved { feature: unit, revision, .. } => c.push(derived(
+                        "feature-readiness",
+                        Subject::Root(f.clone()),
+                        unit.readiness.revision().unwrap_or(revision),
+                        HoldCause::Policy,
+                        &unit.readiness.describe(),
+                    )),
+                    other => c.push(derived(
+                        "feature-plan",
+                        Subject::Root(f.clone()),
+                        other.pending_revision().unwrap_or(1),
+                        HoldCause::Approval,
+                        "its feature has no approved plan; a pending revision cannot authorize implementation",
+                    )),
+                }
+                if let Some((_, readiness)) = runs.feature_plan(f)?.and_then(|p| p.readiness)
+                    && let Some(x) =
+                        crate::services::work::readiness::gating_finding(&readiness, &root.id.0)
+                {
+                    c.push(derived(
+                        "finding-gate",
+                        root_subject.clone(),
+                        control.revision,
+                        HoldCause::Policy,
+                        &format!("readiness finding {x} gates this work"),
+                    ));
+                }
             }
+        }
+        // A root's unsatisfied prerequisites (a feature's `features.dependencies`, a standalone
+        // card's blockers) hold its implementation and, through the root, every assignment of
+        // its work: a manual Done label is not verified completion.
+        if purpose == ActivationPurpose::Implementation {
+            prerequisite_gate(runs, &root.id, root_subject.clone(), &mut c)?;
         }
         let mut readiness_revision = None;
         let assignment = match target {
