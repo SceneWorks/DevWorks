@@ -6,6 +6,8 @@
 //! anything outside its repository on any platform. On case-insensitive file systems two keys
 //! that differ only by case name the same file; [`fold`] detects that collision.
 use crate::fingerprint::sha256_hex;
+use crate::ports::indexing::SourceTree;
+use std::path::Path;
 
 /// Longest unit key (bytes); longer paths are reported and skipped.
 pub const MAX_KEY_BYTES: usize = 4096;
@@ -104,9 +106,92 @@ pub fn native_location(raw: &str, windows: bool) -> String {
     s
 }
 
+/// The stored identity of a directory (a registration location or a worktree path), the one
+/// form every registration and worktree is recorded in and every lookup by location uses: the
+/// directory canonical through the source tree when it exists (links, `..`, Windows 8.3 short
+/// names such as `RUNNER~1` and the verbatim prefix resolved by the file system), otherwise its
+/// spelling; either in [`native_location`] form (separators, drive-letter case, trailing
+/// separator).
+pub fn location_identity(source: &dyn SourceTree, path: &Path) -> String {
+    location_identity_on(source, path, cfg!(windows))
+}
+
+/// [`location_identity`] under the rules of `windows` (a parameter so every platform tests the
+/// Windows rules).
+pub fn location_identity_on(source: &dyn SourceTree, path: &Path, windows: bool) -> String {
+    let raw = match source.canonical_dir(path) {
+        Ok(c) => c.display().to_string(),
+        Err(_) => path.display().to_string(),
+    };
+    native_location(&raw, windows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::indexing::{DirEntry, GitMarker, SourceFault};
+    use std::path::PathBuf;
+
+    /// A Windows file system as `canonicalize` reports it: 8.3 short names expanded, a verbatim
+    /// prefix and the drive letter as stored; `gone` does not exist.
+    struct WindowsTree;
+    impl SourceTree for WindowsTree {
+        fn canonical_dir(&self, path: &Path) -> Result<PathBuf, SourceFault> {
+            let s = path.display().to_string();
+            if s.contains("gone") {
+                return Err(SourceFault::Missing);
+            }
+            let long = s
+                .replace('/', "\\")
+                .replace("RUNNER~1", "runneradmin")
+                .replace("PROGRA~1", "Program Files");
+            let long = long.trim_start_matches(r"\\?\").trim_end_matches('\\');
+            Ok(PathBuf::from(format!("\\\\?\\{long}")))
+        }
+        fn list_dir(&self, _: &Path, _: usize) -> Result<Vec<DirEntry>, SourceFault> {
+            Ok(Vec::new())
+        }
+        fn git_marker(&self, _: &Path) -> Result<Option<GitMarker>, SourceFault> {
+            Ok(None)
+        }
+        fn read_file(&self, _: &Path, _: &str, _: u64) -> Result<Vec<u8>, SourceFault> {
+            Err(SourceFault::Missing)
+        }
+        fn case_insensitive(&self, _: &Path) -> bool {
+            true
+        }
+        fn home(&self) -> Option<PathBuf> {
+            None
+        }
+    }
+
+    #[test]
+    fn location_identities_resolve_short_names_separators_prefixes_and_drive_case() {
+        let want = r"C:\Users\runneradmin\AppData\Local\Temp\src\team\app";
+        for spelling in [
+            // `std::env::temp_dir()` on a GitHub runner (8.3), joined with a `/` segment.
+            r"C:\Users\RUNNER~1\AppData\Local\Temp\src\team/app",
+            r"c:\Users\RUNNER~1\AppData\Local\Temp\src\team\app\",
+            "C:/Users/runneradmin/AppData/Local/Temp/src/team/app",
+            r"\\?\C:\Users\runneradmin\AppData\Local\Temp\src\team\app",
+            want,
+        ] {
+            assert_eq!(
+                location_identity_on(&WindowsTree, Path::new(spelling), true),
+                want,
+                "{spelling}"
+            );
+        }
+        // A directory that no longer exists keeps its spelling, in the native form.
+        assert_eq!(
+            location_identity_on(&WindowsTree, Path::new("c:/src/gone/"), true),
+            r"C:\src\gone"
+        );
+        assert_eq!(
+            location_identity_on(&WindowsTree, Path::new(r"D:\PROGRA~1\x"), true),
+            r"D:\Program Files\x"
+        );
+    }
 
     #[test]
     fn only_contained_relative_paths_are_units() {

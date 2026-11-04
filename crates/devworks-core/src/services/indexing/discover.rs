@@ -15,6 +15,7 @@
 //! advances the source revision. Registration never adds project membership: that is the
 //! user's `projects.membership` decision.
 use super::git::Git;
+use super::paths::location_identity;
 use super::{IndexEnv, section_config};
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
@@ -414,12 +415,9 @@ fn reconcile(
     // possibly an 8.3 short name): each is recorded in the same identity form as registrations,
     // canonical when it exists.
     for w in &mut observed.worktrees {
-        w.0 = match env.source.canonical_dir(Path::new(&w.0)) {
-            Ok(c) => c.display().to_string(),
-            Err(_) => super::paths::native_location(&w.0, cfg!(windows)),
-        };
+        w.0 = location_identity(&*env.source, Path::new(&w.0));
     }
-    let location = dir.display().to_string();
+    let location = location_identity(&*env.source, dir);
     let root = root.display().to_string();
     let section = section.to_owned();
     let name: String = name.chars().take(256).collect();

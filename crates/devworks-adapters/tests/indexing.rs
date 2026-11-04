@@ -34,6 +34,7 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::indexing::discover::{self, worktree_id};
 use devworks_core::services::indexing::helper::SupervisedHelpers;
+use devworks_core::services::indexing::paths::location_identity;
 use devworks_core::services::indexing::worker::IndexWorker;
 use devworks_core::services::indexing::{IndexCoordinator, IndexEnv, IndexSettings, views};
 use devworks_core::services::process::ProcessSupervisor;
@@ -425,8 +426,12 @@ impl Fx {
     fn scan(&self) -> discover::DiscoveryReport {
         discover::scan(&self.env, &self.user(), None, &|| false).expect("scan")
     }
+    /// The stored identity of a directory (the product's form for every lookup by location).
+    fn identity(&self, dir: &Path) -> String {
+        location_identity(&*self.env.source, dir)
+    }
     fn repository_at(&self, dir: &Path) -> Id {
-        let loc = dir.display().to_string();
+        let loc = self.identity(dir);
         self.read(|s| s.indexing().repository_at(&loc))
             .expect("registered")
     }
@@ -594,7 +599,7 @@ fn discovery_registers_checkouts_with_exact_identity_without_following_links() {
     let source = source.unwrap();
     assert_eq!(
         source.location,
-        a.display().to_string(),
+        fx.identity(&a),
         "the exact canonical location"
     );
     assert_eq!(source.head_oid.as_deref(), Some(head.as_str()));
@@ -1734,8 +1739,8 @@ fn overlays_compose_branch_and_worktree_changes_isolated_per_worktree() {
     );
     write(&wt2, "g.rs", "fn other_g() {}\n");
     fx.scan();
-    let w1 = worktree_id(&repo_id, &wt1.display().to_string());
-    let w2 = worktree_id(&repo_id, &wt2.display().to_string());
+    let w1 = worktree_id(&repo_id, &fx.identity(&wt1));
+    let w2 = worktree_id(&repo_id, &fx.identity(&wt2));
     let section_revision = std::cell::Cell::new("1");
     let refresh = |w: &Id| {
         decision(fx.index_command(
@@ -2026,7 +2031,7 @@ fn links_in_a_repository_or_worktree_are_recorded_never_followed() {
     // An untracked link in the worktree is captured as a link, not read.
     #[cfg(unix)]
     std::os::unix::fs::symlink(outside.join("secret.rs"), dir.join("escape2.rs")).unwrap();
-    let main = worktree_id(&repo_id, &dir.display().to_string());
+    let main = worktree_id(&repo_id, &fx.identity(&dir));
     run_of(decision(fx.index_command(
         "indexing.refresh_overlay",
         json!({"kind": "RefreshOverlay", "repositoryId": repo_id, "worktreeId": main, "expectedSourceRevision": "1"}),
