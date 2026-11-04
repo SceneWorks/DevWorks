@@ -132,6 +132,12 @@ impl Redactor {
     }
 }
 
+/// Whether a field, parameter or header name marks its value as a secret (the same rule the
+/// JSON and `key=value` redaction applies).
+pub fn sensitive_name(name: &str) -> bool {
+    sensitive(name)
+}
+
 fn sensitive(field: &str) -> bool {
     let norm: String = field
         .chars()

@@ -157,6 +157,15 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
             v["requestedEffort"] == "Default" || v["requestedEffort"] == v["effectiveEffort"],
             "explicit effort cannot silently change",
         )?,
+        // A recorded redirect is a 3xx answer; a fetched document's final answer is 2xx.
+        "WebRedirect" => require(
+            v["status"].as_i64().is_some_and(|s| (300..=399).contains(&s)),
+            "a redirect hop is a 3xx answer",
+        )?,
+        "WebDocument" => require(
+            v.get("status").is_none_or(|s| s.as_i64().is_some_and(|s| (200..=299).contains(&s))),
+            "a fetched document is a 2xx answer",
+        )?,
         "DecisionQuestion" => {}
         _ => {}
     }

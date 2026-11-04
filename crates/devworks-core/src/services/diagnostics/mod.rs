@@ -135,7 +135,7 @@ pub mod channels {
 
 /// Component prefixes only the host writes: a reported diagnostic naming one of them is refused
 /// (`PermissionDenied`, target kind [`RESERVED_TARGET`]).
-pub const RESERVED: [&str; 11] = [
+pub const RESERVED: [&str; 12] = [
     "host",
     "health",
     "storage",
@@ -147,6 +147,8 @@ pub const RESERVED: [&str; 11] = [
     "artifacts",
     "indexing",
     "provider",
+    // The web tools' egress and activity records (`web.fetch`, `web.search`).
+    "web",
 ];
 /// Fault target kind of a reported diagnostic naming a host-reserved component.
 pub const RESERVED_TARGET: &str = "diagnostic_component";

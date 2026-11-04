@@ -23,16 +23,23 @@ use crate::settings::model::{chain, current_chain, scope_of};
 pub const ACCESS_PROFILE_KEY: &str = "safety.accessProfile";
 /// Setting that allows the authorized process execution tools.
 pub const SHELL_TOOLS_KEY: &str = "tools.shell";
-/// Setting that allows the shared web search and fetch tools.
+/// Setting that allows the shared web search tool.
 pub const WEB_TOOLS_KEY: &str = "tools.webSearch";
+/// Setting that allows the shared web fetch tool.
+pub use crate::settings::catalog::WEB_FETCH_TOOLS_KEY;
 
 /// Refs no principal may force-push, under any profile or approval.
 pub const PROTECTED_REFS: [&str; 2] = ["refs/heads/main", "refs/heads/master"];
 
 /// Families whose reads are not verified reads (opaque remote tools, package code, unqualified
-/// database query surfaces, live browser pages and network fetches): never in a reviewer's
-/// read set, whatever the profile or tool selection.
-pub const UNVERIFIED_READ_FAMILIES: [&str; 5] = ["mcp", "addons", "database", "browser", "web"];
+/// database query surfaces and live browser pages): never in a reviewer's read set, whatever the
+/// profile or tool selection.
+///
+/// The shared web tools are not among them (TOOL-04/05/08): `web.search` and `web.fetch` are
+/// host-native bounded reads that change nothing the reviewer owns. The host performs them under
+/// its own egress policy, sends none of the user's credentials and records what it observed as
+/// untrusted evidence, so a read-only reviewer keeps the same selected read tools as every agent.
+pub const UNVERIFIED_READ_FAMILIES: [&str; 4] = ["mcp", "addons", "database", "browser"];
 
 /// Commands that run arbitrary native code with the desktop user's rights. Under Project scope
 /// they need a reviewed native grant, because no confined launcher is qualified; there is no
@@ -104,17 +111,21 @@ pub struct EffectivePolicy {
     pub profile: Option<AccessProfile>,
     pub profile_source: Option<Provenance>,
     pub shell_tools: bool,
+    /// The shared web search tool.
     pub web_tools: bool,
+    /// The shared web fetch tool.
+    pub web_fetch: bool,
 }
 impl EffectivePolicy {
     /// Stable digest of every value that changes an authorization; a fence compares it.
     pub fn digest(&self) -> String {
         sha256_hex(
             format!(
-                "{}|{}|{}",
+                "{}|{}|{}|{}",
                 self.profile.map_or("unsupported", AccessProfile::as_str),
                 self.shell_tools,
-                self.web_tools
+                self.web_tools,
+                self.web_fetch
             )
             .as_bytes(),
         )
@@ -154,6 +165,7 @@ pub fn resolve_policy(
         profile_source,
         shell_tools: flag(SHELL_TOOLS_KEY),
         web_tools: flag(WEB_TOOLS_KEY),
+        web_fetch: flag(WEB_FETCH_TOOLS_KEY),
     })
 }
 
@@ -184,6 +196,8 @@ pub enum DenialReason {
     ToolNotSelected,
     ShellToolsDisabled,
     WebToolsDisabled,
+    /// The shared web fetch tool is turned off.
+    WebFetchDisabled,
     /// The invocation is outside the principal's bound project.
     OutOfProjectScope,
     /// Project scope has no qualified confined launcher for native execution.
@@ -212,6 +226,7 @@ impl DenialReason {
             Self::ToolNotSelected => "ToolNotSelected",
             Self::ShellToolsDisabled => "ShellToolsDisabled",
             Self::WebToolsDisabled => "WebToolsDisabled",
+            Self::WebFetchDisabled => "WebFetchDisabled",
             Self::OutOfProjectScope => "OutOfProjectScope",
             Self::EnforcementUnavailable => "EnforcementUnavailable",
             Self::ProtectedBranch => "ProtectedBranch",
@@ -242,6 +257,7 @@ impl DenialReason {
             Self::ToolNotSelected => "This tool is not selected for this agent.",
             Self::ShellToolsDisabled => "Shell commands are turned off in Agent tools settings.",
             Self::WebToolsDisabled => "Web search is turned off in Agent tools settings.",
+            Self::WebFetchDisabled => "Web page fetching is turned off in Agent tools settings.",
             Self::OutOfProjectScope => "The request is outside the agent's project.",
             Self::EnforcementUnavailable => {
                 "Project scope cannot confine native execution here; grant a bounded native exception to run it with your user rights."
@@ -390,8 +406,14 @@ pub fn evaluate(
         if fam == "process" && !policy.shell_tools {
             return Verdict::Deny(DenialReason::ShellToolsDisabled);
         }
-        if fam == "web" && !policy.web_tools {
-            return Verdict::Deny(DenialReason::WebToolsDisabled);
+        // Each web tool has its own switch; no other web operation is allowed by them.
+        if fam == "web" {
+            match op {
+                "web.search" if policy.web_tools => {}
+                "web.fetch" if policy.web_fetch => {}
+                "web.fetch" => return Verdict::Deny(DenialReason::WebFetchDisabled),
+                _ => return Verdict::Deny(DenialReason::WebToolsDisabled),
+            }
         }
     }
     // An unsupported stored profile fails closed for reads and commands alike.
