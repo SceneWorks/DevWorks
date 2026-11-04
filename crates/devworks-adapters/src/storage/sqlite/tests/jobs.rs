@@ -813,6 +813,24 @@ fn calendar_occurrences_are_timezone_correct_across_dst_gap_and_fold() {
     assert_eq!(folded_runs[0].occurrence_at_ms, ms("2026-11-01T05:30:00Z"));
 }
 
+#[test]
+fn a_calendar_job_keeps_a_valid_occurrence_across_a_forty_year_gap() {
+    let fx = Fx::new();
+    fx.set_now(ms("2072-03-01T00:00:00Z"));
+    let job = fx.job(
+        &fx.user(),
+        body(
+            "Leap-day Mondays",
+            calendar("0 0 29 FEB MON", "UTC"),
+            native(),
+            true,
+        ),
+    );
+    let next = ms("2112-02-29T00:00:00Z");
+    assert_eq!(s(&job, "nextRunAtMs"), next.to_string());
+    assert_eq!(fx.stored(&s(&job, "id")).next_at_ms, Some(next));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Native runs through the gateway
 

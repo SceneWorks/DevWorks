@@ -33,9 +33,10 @@ const DAY_MS: i64 = 86_400_000;
 /// 2 h): the local wall time of any later instant is at least the local time of `after` minus
 /// this, and a local time more than this past the best candidate names a later instant.
 const SHIFT_BOUND_MS: i64 = 3 * 3_600_000;
-/// Days searched for a next occurrence before an expression is declared to have none (Feb 30,
-/// or a combination that recurs less often than this).
-const HORIZON_DAYS: i64 = 366 * 30;
+/// A complete Gregorian date/weekday cycle, plus the boundary days of the UTC/local search.
+/// A valid leap-day/weekday combination can be forty years away across a non-leap century;
+/// searching a full cycle distinguishes it from impossible dates such as February 30.
+const HORIZON_DAYS: i64 = 146_097 + 2;
 /// The shortest fixed interval a schedule may use (a resource bound: a schedule cannot hammer
 /// the store or a provider).
 pub const MIN_INTERVAL_SECONDS: i64 = 60;
@@ -658,6 +659,14 @@ mod tests {
                 "2026-11-03 22:45+00:00",
                 "2026-11-03 23:05+00:00"
             ]
+        );
+    }
+
+    #[test]
+    fn a_leap_day_weekday_after_a_non_leap_century_is_not_lost() {
+        assert_eq!(
+            after("0 0 29 FEB MON", &TimeZone::UTC, "2072-03-01T00:00:00Z", 1),
+            ["2112-02-29 00:00+00:00"]
         );
     }
 
