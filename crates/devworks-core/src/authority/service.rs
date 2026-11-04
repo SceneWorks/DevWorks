@@ -796,9 +796,15 @@ pub fn mint_resume_grant(
     if tx.actors().actor_kind(&holder)?.is_none() {
         return Err(AdminError::Invalid("the grant holder is not registered"));
     }
-    match tx.sessions().work_root(&root)? {
-        Some(w) if crate::services::runs::is_run_root(&w) => {}
-        _ => return Err(AdminError::Invalid("a resume grant names a run root")),
+    // A run root, or a linked card with controls of its own (its unlink pause, or the
+    // activation it kept): its own holds are resumable under a grant like a root's.
+    let controlled = match tx.sessions().work_root(&root)? {
+        Some(w) if crate::services::runs::is_run_root(&w) => true,
+        Some(w) => tx.runs().root_control(&w.id)?.is_some(),
+        None => false,
+    };
+    if !controlled {
+        return Err(AdminError::Invalid("a resume grant names a run root"));
     }
     if binding.holds.is_empty() == binding.causes.is_empty() {
         return Err(AdminError::Invalid(

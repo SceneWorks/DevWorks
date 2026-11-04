@@ -3,6 +3,7 @@
 //! from `settings.read_effective` / `.explain_source`; local checks reuse core validation through
 //! the view; saving submits the view's exact `settings.save_revision` input. Configured values,
 //! drafts, validation and runtime health are kept apart.
+use crate::connections_screen::{ConnectionAction, ConnectionsPanel};
 use crate::memory::SettingsMemory;
 use crate::theme;
 use crate::web_panel::{WebAction, WebPanel, WebSettings};
@@ -43,6 +44,10 @@ pub struct SettingsScreen {
     pub explained: BTreeSet<String>,
     pub scrolls: crate::virtual_list::Scrolls,
     buffers: HashMap<&'static str, String>,
+    /// Settings → Provider connections (DW-18).
+    pub connections: ConnectionsPanel,
+    /// The provider-connections topic is selected instead of a settings category.
+    pub show_connections: bool,
     /// The web search and fetch section of Agent tools.
     pub web: WebPanel,
 }
@@ -56,6 +61,11 @@ pub enum SettingsAction {
     Explain(String),
     ChooseDirectory(String),
     OpenAddOns,
+    /// Scheduled jobs (schedules and their controls, JOB-01).
+    OpenJobs,
+    /// The provider-connections topic was opened (load connections and the catalog).
+    OpenConnections,
+    Connection(ConnectionAction),
     /// A web search, fetch or activity load from the Agent tools section.
     Web(WebAction),
 }
@@ -158,7 +168,15 @@ impl SettingsScreen {
     }
 
     /// The whole screen: categories and search on the left, the selected category on the right.
-    pub fn ui(&mut self, ui: &mut Ui, online: Result<(), &str>, actions: &mut Vec<SettingsAction>) {
+    /// `general` renders host sections that belong with the repository paths (repository
+    /// indexing sources) after the General settings, in the same scrolled list.
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        online: Result<(), &str>,
+        actions: &mut Vec<SettingsAction>,
+        general: &mut dyn FnMut(&mut Ui),
+    ) {
         let full = ui.available_rect_before_wrap();
         let nav_width = 230.0_f32.min(full.width() * 0.35);
         let gap = 16.0;
@@ -168,8 +186,45 @@ impl SettingsScreen {
             full.max,
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
-            widgets::secondary_pane(ui, "Settings topics", |ui| self.nav(ui));
+            widgets::secondary_pane(ui, "Settings topics", |ui| self.nav(ui, actions));
         });
+        if self.show_connections {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
+                let mut st = (&mut *self, &mut *actions);
+                widgets::pane(
+                    ui,
+                    widgets::Header {
+                        title: "Provider connections",
+                        summary: "Subscriptions, API keys and compatible endpoints the router \
+                                  uses. Credentials are kept in the OS secret store, never in \
+                                  the workspace.",
+                        tabs: &[],
+                        tab: 0,
+                    },
+                    &mut st,
+                    |_, _| {},
+                    |ui, st, _| {
+                        if let Err(reason) = online {
+                            widgets::state_block(
+                                ui,
+                                &ViewState::Offline {
+                                    reason: reason.to_owned(),
+                                },
+                            );
+                            return;
+                        }
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_millis() as i64);
+                        let mut out = Vec::new();
+                        st.0.connections.ui(ui, now, &mut out);
+                        st.1.extend(out.into_iter().map(SettingsAction::Connection));
+                    },
+                );
+            });
+            ui.allocate_rect(full, egui::Sense::hover());
+            return;
+        }
         ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
             let title = self.category.map_or("All settings", Category::label);
             let summary = "Workspace scope · configured values, effective values and runtime health are shown separately.";
@@ -187,14 +242,26 @@ impl SettingsScreen {
                     if widgets::secondary_button(ui, "Add-ons").clicked() {
                         st.1.push(SettingsAction::OpenAddOns);
                     }
+                    if widgets::secondary_button(ui, "Scheduled jobs").clicked() {
+                        st.1.push(SettingsAction::OpenJobs);
+                    }
                 },
-                |ui, st, _| st.0.body(ui, online, st.1),
+                |ui, st, _| st.0.body(ui, online, st.1, general),
             );
         });
         ui.allocate_rect(full, egui::Sense::hover());
     }
 
-    fn nav(&mut self, ui: &mut Ui) {
+    fn nav(&mut self, ui: &mut Ui, actions: &mut Vec<SettingsAction>) {
+        if ui
+            .selectable_label(self.show_connections, "Provider connections")
+            .clicked()
+            && !self.show_connections
+        {
+            self.show_connections = true;
+            actions.push(SettingsAction::OpenConnections);
+        }
+        ui.add_space(4.0);
         let r = ui.add(
             egui::TextEdit::singleline(&mut self.query)
                 .hint_text("Search settings")
@@ -214,7 +281,10 @@ impl SettingsScreen {
             .unwrap_or_default();
         let mut pick = None;
         if ui
-            .selectable_label(self.category.is_none(), "All settings")
+            .selectable_label(
+                !self.show_connections && self.category.is_none(),
+                "All settings",
+            )
             .clicked()
         {
             pick = Some(None);
@@ -230,13 +300,14 @@ impl SettingsScreen {
                 _ => c.label().to_owned(),
             };
             if ui
-                .selectable_label(self.category == Some(c), text)
+                .selectable_label(!self.show_connections && self.category == Some(c), text)
                 .clicked()
             {
                 pick = Some(Some(c));
             }
         }
         if let Some(c) = pick {
+            self.show_connections = false;
             self.category = c;
             if let Some(v) = &mut self.view {
                 v.set_category(c);
@@ -244,7 +315,13 @@ impl SettingsScreen {
         }
     }
 
-    fn body(&mut self, ui: &mut Ui, online: Result<(), &str>, actions: &mut Vec<SettingsAction>) {
+    fn body(
+        &mut self,
+        ui: &mut Ui,
+        online: Result<(), &str>,
+        actions: &mut Vec<SettingsAction>,
+        general: &mut dyn FnMut(&mut Ui),
+    ) {
         if let Err(reason) = online {
             widgets::state_block(
                 ui,
@@ -309,6 +386,11 @@ impl SettingsScreen {
             for key in keys {
                 self.item_ui(ui, key, actions);
                 ui.add_space(8.0);
+            }
+            if matches!(self.category, None | Some(Category::General))
+                && self.query.trim().is_empty()
+            {
+                general(ui);
             }
             if self.category == Some(Category::Tools) {
                 let settings = self.web_settings();

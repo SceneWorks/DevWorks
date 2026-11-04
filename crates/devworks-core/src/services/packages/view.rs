@@ -10,7 +10,7 @@ use crate::operations::addons as ops;
 use crate::ports::packages::{HostPlatform, Inspection, RuntimeProbe};
 use crate::ports::storage::{
     DiagnosticFilter, PackageRegistryRead, ReadSnapshot, StorageError, StoredPackage,
-    StoredPackageVersion, StoredProposal,
+    StoredPackageProposal, StoredPackageVersion,
 };
 use crate::protocol::Id;
 use crate::protocol::provider::{ArtifactRef, Digest, SchemaRef};
@@ -339,7 +339,11 @@ pub fn offered_record(
 }
 
 /// The wire record of a proposal.
-pub fn proposal_record(pr: &StoredProposal, package_revision: i64, update: bool) -> ProposalRecord {
+pub fn proposal_record(
+    pr: &StoredPackageProposal,
+    package_revision: i64,
+    update: bool,
+) -> ProposalRecord {
     let state = match pr.state.as_str() {
         "Approved" => ApprovalState::Approved,
         "Rejected" => ApprovalState::Rejected,

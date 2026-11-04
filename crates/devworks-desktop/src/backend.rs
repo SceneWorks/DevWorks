@@ -10,6 +10,7 @@
 //! overwrites fresher state. [`Client::wait_idle`] is the synchronization point tests use
 //! (a condition variable, never a sleep).
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
+use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::Id;
 use devworks_core::settings::view::Health;
@@ -32,6 +33,14 @@ pub trait Backend: Send + Sync {
     /// Mints a workspace upload ticket for a file the user picked, dropped or pasted (user
     /// ingress only; the artifact service resolves and verifies it at `artifacts.save`).
     fn mint_workspace_upload(&self, file: &Path) -> Result<Id, String>;
+    /// Mints an upload ticket bound to `project` for a file the app wrote for the user (a
+    /// feature's plan text): it resolves only for an `artifacts.save` into that project, so
+    /// the project's agents can read the artifact.
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &Path,
+    ) -> Result<Id, String>;
     /// Keep-awake runtime health, distinct from the configured value (SET-02).
     fn keep_awake_health(&self) -> Health;
     /// "Queue state may have changed" hints.
@@ -55,6 +64,61 @@ pub trait Backend: Send + Sync {
     fn fetch_index_bundle(&self, _package: &str, _digest: &str) -> Result<PathBuf, String> {
         Err("packages are not available here".into())
     }
+    /// The index source configuration of the workspace (or a project) section, read for the
+    /// form that edits it through `indexing.configure_sources` (none without indexing).
+    fn index_sources(
+        &self,
+        _project: Option<&str>,
+    ) -> Result<devworks_core::ports::storage::StoredSourceConfig, String> {
+        Err("repository indexing is not available".into())
+    }
+    /// The native maintenance capabilities a scheduled job may run in this build (only those
+    /// with a registered use case; none are advertised otherwise).
+    fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
+        Vec::new()
+    }
+    /// Writes an API key the user typed into the OS secret store and returns its opaque handle
+    /// for the user's `router.configure` `Connection` action (user ingress only; DW-18). The
+    /// key never passes through a frame, receipt or log.
+    fn stage_api_key(&self, _key: Secret) -> Result<Id, String> {
+        Err("credential entry is not available".into())
+    }
+    /// Attaches the `code#state` value the user pasted to their open browser sign-in, for the
+    /// `CompleteSignIn` command that follows (user ingress only; kept in memory).
+    fn submit_sign_in_code(&self, _flow: &Id, _pasted: Secret) -> Result<(), String> {
+        Err("sign-in is not available".into())
+    }
+    /// Writes a settings credential the user typed (a `{"secretRef": ...}` setting such as the web
+    /// search key) into the OS secret store and returns its reference (user ingress only).
+    fn stage_setting_secret(&self, _value: Secret) -> Result<String, String> {
+        Err("credential entry is not available".into())
+    }
+    /// The secret facility in use, whether credentials are kept for this session only, and
+    /// whether it refused its last request (structured, never parsed from a message).
+    fn secret_store(&self) -> SecretStoreStatus {
+        SecretStoreStatus {
+            name: "unavailable".into(),
+            session_only: false,
+            unavailable: None,
+        }
+    }
+    /// The user's explicit choice to keep credentials in memory for this session only (when
+    /// the OS facility is unavailable). Never a silent plaintext disk fallback.
+    fn use_session_only_secrets(&self) -> Result<(), String> {
+        Err("session-only credentials are not available".into())
+    }
+}
+
+/// The secret facility as Settings shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SecretStoreStatus {
+    /// The facility's name (for example "macOS Keychain").
+    pub name: String,
+    /// Credentials are kept in memory for this session only.
+    pub session_only: bool,
+    /// Why the facility refused its last request (locked, missing or denied), until a request
+    /// succeeds: staging a key, a sign-in exchange, a refresh or a credential read.
+    pub unavailable: Option<String>,
 }
 
 /// Who is waiting for a reply. Equal slots supersede each other.
@@ -121,6 +185,88 @@ pub enum Slot {
     /// The artifact content of a repository's README (`true`) or summary.
     RepositoryContent(String, bool),
     RemoveIndex(String),
+    /// A repository's index status (repository ID).
+    IndexStatus(String),
+    /// Index runs (repository ID, or `*` for the selected scope).
+    IndexRuns(String),
+    /// An index, rebuild or overlay command of one repository (repository ID).
+    IndexCommand(String),
+    /// A run cancellation (run ID).
+    IndexCancel(String),
+    /// An overlay retirement (overlay ID).
+    IndexRetire(String),
+    /// The section configuration save.
+    IndexSourcesSave,
+    /// A discovery scan.
+    IndexDiscover,
+    /// A Knowledge listing page (its request generation).
+    KnowledgeList(u64),
+    /// One Knowledge entry with its evidence and history (claim ID).
+    KnowledgeRead(String),
+    /// Knowledge counts and retrieval mode.
+    KnowledgeDiagnostics,
+    /// The preview of a delete by source (the source).
+    KnowledgePreview(String),
+    /// Storing an import file as the user's artifact.
+    KnowledgeImportSave,
+    /// The exact preview of an import.
+    KnowledgeImportPreview,
+    /// The confirmed import.
+    KnowledgeImport,
+    /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
+    KnowledgeWrite,
+    /// The jobs of the selected scope, and a further page of them.
+    JobsList,
+    /// A further page of the shown jobs list (that list's generation).
+    JobsMore(u64),
+    /// A further page re-read by a refresh of the shown jobs list (the refresh's generation).
+    JobsRefresh(u64),
+    /// The jobs of one project, for its run status on All projects.
+    ProjectJobs(String),
+    /// One job's inspection (its first run-history page) and an older history page (job ID).
+    JobInspect(String),
+    JobHistory(String),
+    /// The job's active run, inspected by its ID (job ID): the latest occurrence may be a
+    /// skipped one while the active run continues.
+    JobActiveRun(String),
+    /// A project's artifacts, as prompt candidates of a job form (project ID).
+    JobPrompts(String),
+    JobCreate,
+    /// A command of one job or its run (one at a time per job).
+    JobCommand(String),
+    /// Every feature of a project (all pages, read in order).
+    WorkFeatures(String),
+    /// Every card (feature task or standalone issue) of a project.
+    WorkCards(String),
+    /// The project change feed (Activity) of a project.
+    WorkActivity(String),
+    /// One work item's current record (readiness included).
+    WorkDetail(String),
+    /// A change of one work item (one at a time per item).
+    WorkCommand(String),
+    /// A new feature, task or issue in a project.
+    WorkCreate(String),
+    /// A prioritization of one queue (`<project>/<queue>`).
+    WorkOrder(String),
+    /// A plan text stored as an artifact for a feature's pending plan.
+    WorkPlanText(String),
+    /// Project-owned decisions for requirements dropped by a plan save.
+    WorkPlanDrop(String),
+    /// A feature's plan draft save (`features.edit_plan`).
+    WorkPlan(String),
+    /// A root's run controls (inspect) and one Start/Pause/Continue.
+    WorkInspect(String),
+    WorkRun(String),
+    /// The roots and running work of a project an archival would stop (features, issues).
+    ArchiveCount(String, bool),
+    /// Work opened from elsewhere (a completion card): read as a card (`false`) or a feature.
+    WorkOpen(String, bool),
+    /// A page of `router.connections` for Settings → Provider connections (load generation).
+    Connections(u64),
+    /// A page of the full catalog (disabled models included) for the connections panel.
+    ConnectionCatalog(u64),
+    /// One `router.configure` submission from the connections panel (its sequence number).
+    Configure(u64),
 }
 
 /// A finished request.
@@ -185,7 +331,7 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 20] = [
+pub const COMMANDS: &[&str] = &[
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
@@ -206,6 +352,47 @@ pub const COMMANDS: [&str; 20] = [
     "projects.restore",
     "projects.delete",
     "repositories.remove_index",
+    "indexing.index",
+    "indexing.reindex",
+    "indexing.cancel",
+    "indexing.refresh_overlay",
+    "indexing.retire_view",
+    "indexing.configure_sources",
+    "knowledge.record",
+    "knowledge.revise",
+    "knowledge.tag",
+    "knowledge.verify",
+    "knowledge.retract",
+    "knowledge.challenge",
+    "knowledge.promote",
+    "knowledge.scope",
+    "knowledge.delete_selected",
+    "knowledge.relate",
+    "knowledge.delete_by_source",
+    "knowledge.import_user_data",
+    "jobs.create",
+    "jobs.edit",
+    "jobs.enable",
+    "jobs.disable",
+    "jobs.delete",
+    "jobs.run_now",
+    "jobs.cancel",
+    "features.create",
+    "features.edit",
+    "features.edit_plan",
+    "features.prioritize",
+    "features.request_plan_approval",
+    "issues.create",
+    "issues.prioritize",
+    "tasks.create",
+    "tasks.edit",
+    "tasks.move",
+    "tasks.prioritize",
+    "tasks.dependency_links",
+    "tasks.set_feature",
+    "runs.start",
+    "runs.pause",
+    "runs.continue",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.
@@ -225,7 +412,7 @@ impl Unresolved {
     }
     /// One kept across a restart; `None` for an operation the shell does not admit.
     pub fn restored(slot: Slot, label: String, operation: &str, frame: Vec<u8>) -> Option<Self> {
-        let operation = COMMANDS.into_iter().find(|c| *c == operation)?;
+        let operation = COMMANDS.iter().copied().find(|c| *c == operation)?;
         Some(Self {
             slot,
             label,
@@ -448,6 +635,11 @@ impl Client {
         operation: &'static str,
         frame: Vec<u8>,
     ) -> bool {
+        // A slot holding an unresolved command keeps it until `resubmit_unresolved` settles
+        // that exact frame: a new request would replace it, and could commit a second time.
+        if self.unresolved.iter().any(|u| u.slot == slot) {
+            return false;
+        }
         let kept = frame.clone();
         let job: Job = Box::new(move |b| Reply::Command(resolve_command(b, operation, &frame)));
         if self
@@ -617,6 +809,70 @@ impl Drop for Client {
         } else {
             // A stuck worker is detached; it holds its backend until the process exits.
             self.workers.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every command operation the shell builds a frame for survives a relaunch: an operation
+    /// left out of [`COMMANDS`] would be dropped from the unresolved list it was kept in.
+    #[test]
+    fn every_command_the_shell_sends_is_restorable() {
+        let sources = [
+            include_str!("shell.rs"),
+            include_str!("shell/projects.rs"),
+            include_str!("shell/indexing.rs"),
+            include_str!("ops.rs"),
+        ];
+        let mut found = std::collections::BTreeSet::new();
+        for text in sources {
+            for (i, _) in text.match_indices('"') {
+                let rest = &text[i + 1..];
+                let Some(end) = rest.find('"') else { continue };
+                let name = &rest[..end];
+                let shaped = name.split_once('.').is_some_and(|(f, o)| {
+                    !f.is_empty()
+                        && !o.is_empty()
+                        && name
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b == b'.' || b == b'_')
+                });
+                if !shaped {
+                    continue;
+                }
+                if let Some(d) = devworks_core::registry::find(name)
+                    && d.modes
+                        .iter()
+                        .all(|m| m.mode == devworks_core::registry::Mode::Command)
+                {
+                    found.insert(name.to_owned());
+                }
+            }
+        }
+        for indexing in [
+            "indexing.index",
+            "indexing.reindex",
+            "indexing.cancel",
+            "indexing.refresh_overlay",
+            "indexing.retire_view",
+            "indexing.configure_sources",
+        ] {
+            assert!(found.contains(indexing), "{indexing} is sent by the shell");
+        }
+        // Kept across a relaunch by its own record (an attachment's exact frame in the pending
+        // memory, see `memory.rs`), not by the unresolved-command list.
+        let own_restore = ["artifacts.save"];
+        for op in found
+            .iter()
+            .filter(|op| !own_restore.contains(&op.as_str()))
+        {
+            assert!(
+                Unresolved::restored(Slot::SettingsSave, "l".into(), op, Vec::new()).is_some(),
+                "{op} is sent by the shell but would be dropped at relaunch"
+            );
         }
     }
 }

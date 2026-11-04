@@ -957,12 +957,12 @@ fn resolve(source: &str, location: &str) -> Option<String> {
 /// Fetches index documents and bundles: `https://` with ureq (rustls, bundled roots, a
 /// bounded body, no redirects to plain http), or a regular file under a local directory.
 pub struct NativeIndexTransport {
-    agent: ureq::Agent,
+    agent: package_ureq::Agent,
 }
 impl Default for NativeIndexTransport {
     fn default() -> Self {
         Self {
-            agent: ureq::AgentBuilder::new()
+            agent: package_ureq::AgentBuilder::new()
                 .timeout(Duration::from_secs(60))
                 .redirects(5)
                 .https_only(true)

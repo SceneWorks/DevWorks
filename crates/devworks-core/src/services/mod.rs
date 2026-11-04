@@ -9,6 +9,9 @@ pub mod artifacts;
 pub mod cursor;
 pub mod diagnostics;
 pub mod history;
+pub mod indexing;
+pub mod jobs;
+pub mod knowledge;
 pub mod packages;
 pub mod power;
 pub mod process;
@@ -19,6 +22,7 @@ pub mod router;
 pub mod runs;
 pub mod sessions;
 pub mod web;
+pub mod work;
 
 use crate::context::InvocationContext;
 use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, QueryOutcome};
@@ -153,6 +157,36 @@ impl UseCases {
         self
     }
 
+    /// Registers the jobs family (`Scheduler`).
+    pub fn with_jobs(mut self, service: Arc<jobs::JobService>) -> Self {
+        for op in jobs::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the provider-connection operations of the router family (`router.connections`,
+    /// `router.configure`: `ConnectionService`).
+    pub fn with_connections(
+        mut self,
+        service: Arc<router::connections::ConnectionService>,
+    ) -> Self {
+        for op in router::connections::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the unified Knowledge operations of the slice that manages claims, entities,
+    /// evidence and lessons (`KnowledgeService`). The bundle, graph and summary reads keep no
+    /// use case here (DW-31).
+    pub fn with_knowledge(mut self, service: Arc<knowledge::KnowledgeService>) -> Self {
+        for op in knowledge::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     /// Registers the diagnostics operations of the workspace family (`DiagnosticService`).
     pub fn with_diagnostics(mut self, service: Arc<diagnostics::DiagnosticService>) -> Self {
         for op in diagnostics::OPERATIONS {
@@ -188,6 +222,21 @@ impl UseCases {
     /// Registers the repository registration operations (`RepositoryService`).
     pub fn with_repositories(mut self, service: Arc<projects::RepositoryService>) -> Self {
         for op in projects::REPOSITORY_OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the indexing family (`IndexCoordinator`).
+    pub fn with_indexing(mut self, service: Arc<indexing::IndexCoordinator>) -> Self {
+        for op in indexing::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    pub fn with_work(mut self, service: Arc<work::WorkService>) -> Self {
+        for op in work::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

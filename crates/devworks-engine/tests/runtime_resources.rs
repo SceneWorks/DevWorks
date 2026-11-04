@@ -181,6 +181,7 @@ fn composition(
             ids: h.ids.clone(),
         })),
         consumers: Vec::new(),
+        indexing: None,
         config,
     }
 }

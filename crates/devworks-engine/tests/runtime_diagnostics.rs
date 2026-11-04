@@ -104,6 +104,7 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
             packages: None,
             use_cases: UseCases::new().with_queue(),
             consumers,
+            indexing: None,
             config,
         },
         Parts {

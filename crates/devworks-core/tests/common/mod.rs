@@ -381,6 +381,18 @@ impl ReadSnapshot for MemSnapshot {
     fn projects(&self) -> &dyn ProjectRead {
         &self.unsupported
     }
+    fn indexing(&self) -> &dyn IndexRead {
+        &self.unsupported
+    }
+    fn knowledge(&self) -> &dyn KnowledgeRead {
+        &self.unsupported
+    }
+    fn jobs(&self) -> &dyn JobRead {
+        &self.unsupported
+    }
+    fn work(&self) -> &dyn WorkRead {
+        &self.unsupported
+    }
 }
 
 impl WriteTransaction for MemTx<'_> {
@@ -458,6 +470,18 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn projects(&mut self) -> &mut dyn ProjectRepository {
+        &mut self.unsupported
+    }
+    fn indexing(&mut self) -> &mut dyn IndexRepository {
+        &mut self.unsupported
+    }
+    fn knowledge(&mut self) -> &mut dyn KnowledgeRepository {
+        &mut self.unsupported
+    }
+    fn jobs(&mut self) -> &mut dyn JobRepository {
+        &mut self.unsupported
+    }
+    fn work(&mut self) -> &mut dyn WorkRepository {
         &mut self.unsupported
     }
 }
@@ -762,10 +786,14 @@ impl PackageRegistryRead for Unsupported {
     fn package_versions(&self, _: &str) -> Result<Vec<StoredPackageVersion>, StorageError> {
         nope()
     }
-    fn proposal(&self, _: &Id) -> Result<Option<StoredProposal>, StorageError> {
+    fn proposal(&self, _: &Id) -> Result<Option<StoredPackageProposal>, StorageError> {
         nope()
     }
-    fn proposal_for(&self, _: &str, _: &str) -> Result<Option<StoredProposal>, StorageError> {
+    fn proposal_for(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<StoredPackageProposal>, StorageError> {
         nope()
     }
     fn state_generation(
@@ -812,14 +840,14 @@ impl PackageRegistry for Unsupported {
     ) -> Result<(), StorageError> {
         nope()
     }
-    fn insert_proposal(&mut self, _: &StoredProposal) -> Result<(), StorageError> {
+    fn insert_proposal(&mut self, _: &StoredPackageProposal) -> Result<(), StorageError> {
         nope()
     }
     fn update_proposal(
         &mut self,
-        _: &StoredProposal,
+        _: &StoredPackageProposal,
         _: i64,
-    ) -> Result<StoredProposal, StorageError> {
+    ) -> Result<StoredPackageProposal, StorageError> {
         nope()
     }
     fn publish_generation(
@@ -1193,6 +1221,9 @@ impl ArtifactRead for Unsupported {
     fn shares(&self, _: &Id) -> Result<Vec<ProjectId>, StorageError> {
         nope()
     }
+    fn repository_text_readers(&self, _: &Id) -> Result<Vec<ProjectId>, StorageError> {
+        nope()
+    }
     fn links(&self, _: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
         nope()
     }
@@ -1502,6 +1533,122 @@ impl ResourceRead for Unsupported {
         nope()
     }
 }
+impl JobRead for Unsupported {
+    fn job(&self, _: &Id) -> Result<Option<StoredJob>, StorageError> {
+        nope()
+    }
+    fn jobs(
+        &self,
+        _: &JobScope,
+        _: Option<bool>,
+        _: Option<(&str, &str)>,
+        _: u16,
+    ) -> Result<Vec<StoredJob>, StorageError> {
+        nope()
+    }
+    fn job_titled(
+        &self,
+        _: Option<&ProjectId>,
+        _: &str,
+    ) -> Result<Option<StoredJob>, StorageError> {
+        nope()
+    }
+    fn due_jobs(&self, _: i64, _: u16) -> Result<Vec<StoredJob>, StorageError> {
+        nope()
+    }
+    fn all_jobs(&self, _: Option<&Id>, _: u16) -> Result<Vec<StoredJob>, StorageError> {
+        nope()
+    }
+    fn job_run(&self, _: &Id) -> Result<Option<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn job_runs(&self, _: &Id, _: Option<i64>, _: u16) -> Result<Vec<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn active_run(&self, _: &Id) -> Result<Option<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn runs_where(
+        &self,
+        _: &RunFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredJobRun>, StorageError> {
+        nope()
+    }
+    fn run_links(&self, _: &Id) -> Result<Vec<RootId>, StorageError> {
+        nope()
+    }
+    fn checkpoint(&self, _: &Id, _: &str) -> Result<Option<StoredJobCheckpoint>, StorageError> {
+        nope()
+    }
+    fn action(&self, _: &Id, _: &str) -> Result<Option<StoredJobAction>, StorageError> {
+        nope()
+    }
+    fn unsettled_actions(&self, _: &Id) -> Result<Vec<StoredJobAction>, StorageError> {
+        nope()
+    }
+    fn run_usage(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<StoredJobUsage>, StorageError> {
+        nope()
+    }
+    fn usage_totals(&self, _: &Id) -> Result<JobUsageTotals, StorageError> {
+        nope()
+    }
+}
+impl JobRepository for Unsupported {
+    fn insert_job(&mut self, _: &StoredJob) -> Result<StoredJob, StorageError> {
+        nope()
+    }
+    fn update_job(&mut self, _: &StoredJob, _: i64) -> Result<StoredJob, StorageError> {
+        nope()
+    }
+    fn set_job_schedule(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: Option<i64>,
+        _: Option<&Id>,
+    ) -> Result<StoredJob, StorageError> {
+        nope()
+    }
+    fn insert_run(&mut self, _: &StoredJobRun) -> Result<StoredJobRun, StorageError> {
+        nope()
+    }
+    fn update_run(&mut self, _: &StoredJobRun, _: i64) -> Result<StoredJobRun, StorageError> {
+        nope()
+    }
+    fn set_run_checkpoint(&mut self, _: &Id, _: &str) -> Result<(), StorageError> {
+        nope()
+    }
+    fn link_root(&mut self, _: &Id, _: &RootId) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_checkpoint(
+        &mut self,
+        _: &StoredJobCheckpoint,
+        _: Option<i64>,
+    ) -> Result<StoredJobCheckpoint, StorageError> {
+        nope()
+    }
+    fn insert_action(&mut self, _: &StoredJobAction) -> Result<StoredJobAction, StorageError> {
+        nope()
+    }
+    fn update_action(
+        &mut self,
+        _: &StoredJobAction,
+        _: i64,
+    ) -> Result<StoredJobAction, StorageError> {
+        nope()
+    }
+    fn record_usage(&mut self, _: &StoredJobUsage) -> Result<StoredJobUsage, StorageError> {
+        nope()
+    }
+}
 impl RouterRead for Unsupported {
     fn route_model(&self, _: &Id) -> Result<Option<StoredRouteModel>, StorageError> {
         nope()
@@ -1525,8 +1672,41 @@ impl RouterRead for Unsupported {
     fn route_request(&self, _: &Id) -> Result<Option<StoredRouteRequest>, StorageError> {
         nope()
     }
+    fn connection(&self, _: &Id) -> Result<Option<StoredConnection>, StorageError> {
+        nope()
+    }
+    fn connections(&self, _: Option<&str>, _: u16) -> Result<Vec<StoredConnection>, StorageError> {
+        nope()
+    }
+    fn decision_model(&self, _: &Id) -> Result<Option<StoredDecisionModel>, StorageError> {
+        nope()
+    }
+    fn decision_models(
+        &self,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<StoredDecisionModel>, StorageError> {
+        nope()
+    }
 }
 impl RouterRepository for Unsupported {
+    fn put_connection(
+        &mut self,
+        _: &StoredConnection,
+        _: Option<i64>,
+    ) -> Result<StoredConnection, StorageError> {
+        nope()
+    }
+    fn delete_connection(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_decision_model(
+        &mut self,
+        _: &StoredDecisionModel,
+        _: Option<i64>,
+    ) -> Result<StoredDecisionModel, StorageError> {
+        nope()
+    }
     fn put_route_model(
         &mut self,
         _: &StoredRouteModel,
@@ -1603,6 +1783,91 @@ impl ProjectRead for Unsupported {
         nope()
     }
 }
+impl WorkRead for Unsupported {
+    fn work(&self, _: &Id) -> Result<Option<StoredWork>, StorageError> {
+        nope()
+    }
+    fn works(
+        &self,
+        _: &WorkFilter,
+        _: Option<&WorkPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredWork>, StorageError> {
+        nope()
+    }
+    fn work_repositories(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn prerequisites(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn dependents(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn open_prerequisites(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn queue_revision(&self, _: &ProjectId, _: &str) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn next_rank(&self, _: &ProjectId, _: &str) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn statuses(&self, _: &ProjectId) -> Result<Vec<StoredStatus>, StorageError> {
+        nope()
+    }
+    fn by_caller_ref(&self, _: &ProjectId, _: &Id) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
+    fn feature_plan(&self, _: &Id) -> Result<Option<StoredFeaturePlan>, StorageError> {
+        nope()
+    }
+    fn proposal(&self, _: &Id) -> Result<Option<StoredProposal>, StorageError> {
+        nope()
+    }
+    fn latest_proposal(&self, _: &Id) -> Result<Option<StoredProposal>, StorageError> {
+        nope()
+    }
+    fn readiness(&self, _: &Id) -> Result<Option<StoredReadiness>, StorageError> {
+        nope()
+    }
+}
+impl WorkRepository for Unsupported {
+    fn insert_work(&mut self, _: &StoredWork) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_work(&mut self, _: &StoredWork, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_rank(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_work_repositories(&mut self, _: &Id, _: &[Id]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_prerequisites(&mut self, _: &Id, _: &[Id]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn bump_queue(&mut self, _: &ProjectId, _: &str) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn insert_status(&mut self, _: &StoredStatus) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_feature_plan(
+        &mut self,
+        _: &StoredFeaturePlan,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_proposal(&mut self, _: &StoredProposal, _: Option<i64>) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_readiness(&mut self, _: &StoredReadiness, _: Option<i64>) -> Result<(), StorageError> {
+        nope()
+    }
+}
 impl ProjectRepository for Unsupported {
     fn insert_project(&mut self, _: &StoredProject) -> Result<(), StorageError> {
         nope()
@@ -1629,6 +1894,163 @@ impl ProjectRepository for Unsupported {
         nope()
     }
     fn finish_archive_stop(&mut self, _: &ProjectId, _: i64) -> Result<bool, StorageError> {
+        nope()
+    }
+}
+impl IndexRead for Unsupported {
+    fn source_config(&self, _: &str) -> Result<Option<StoredSourceConfig>, StorageError> {
+        nope()
+    }
+    fn repository_source(&self, _: &Id) -> Result<Option<StoredRepositorySource>, StorageError> {
+        nope()
+    }
+    fn repository_at(&self, _: &str) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
+    fn worktrees(&self, _: &Id) -> Result<Vec<StoredWorktree>, StorageError> {
+        nope()
+    }
+    fn run(&self, _: &Id) -> Result<Option<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn runs(
+        &self,
+        _: &IndexRunFilter,
+        _: Option<&RunPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn active_run(&self, _: &Id, _: Option<&Id>) -> Result<Option<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn batch_runs(&self, _: &Id) -> Result<Vec<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn latest_run(&self, _: &Id, _: Option<&Id>) -> Result<Option<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn claimable_runs(&self, _: i64, _: u16) -> Result<Vec<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn running_runs(&self, _: u16) -> Result<Vec<StoredIndexRun>, StorageError> {
+        nope()
+    }
+    fn generation(&self, _: &Id) -> Result<Option<StoredGeneration>, StorageError> {
+        nope()
+    }
+    fn generations(&self, _: &Id) -> Result<Vec<StoredGeneration>, StorageError> {
+        nope()
+    }
+    fn generation_in_view(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn generations_in_state(&self, _: &str, _: u16) -> Result<Vec<StoredGeneration>, StorageError> {
+        nope()
+    }
+    fn units(&self, _: &Id, _: Option<&str>, _: u16) -> Result<Vec<StoredUnit>, StorageError> {
+        nope()
+    }
+    fn unit(&self, _: &Id, _: &str) -> Result<Option<StoredUnit>, StorageError> {
+        nope()
+    }
+    fn nodes(&self, _: &Id, _: &str) -> Result<Vec<StoredNode>, StorageError> {
+        nope()
+    }
+    fn edges(&self, _: &Id, _: &str) -> Result<Vec<StoredEdge>, StorageError> {
+        nope()
+    }
+    fn nodes_named(&self, _: &Id, _: &str, _: u16) -> Result<Vec<StoredNode>, StorageError> {
+        nope()
+    }
+    fn nodes_qualified(&self, _: &Id, _: &str, _: u16) -> Result<Vec<StoredNode>, StorageError> {
+        nope()
+    }
+    fn published(&self, _: &Id) -> Result<Option<StoredPublished>, StorageError> {
+        nope()
+    }
+    fn view(&self, _: &Id) -> Result<Option<StoredView>, StorageError> {
+        nope()
+    }
+    fn live_pins(&self, _: &Id, _: i64) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn overlay(&self, _: &Id) -> Result<Option<StoredOverlay>, StorageError> {
+        nope()
+    }
+    fn overlay_for(&self, _: &Id, _: &Id) -> Result<Option<StoredOverlay>, StorageError> {
+        nope()
+    }
+    fn overlay_at(&self, _: &Id, _: &str) -> Result<Option<StoredOverlay>, StorageError> {
+        nope()
+    }
+    fn overlays(&self, _: &Id) -> Result<Vec<StoredOverlay>, StorageError> {
+        nope()
+    }
+    fn overlays_due(&self, _: i64, _: u16) -> Result<Vec<StoredOverlay>, StorageError> {
+        nope()
+    }
+    fn prunable_ref_overlays(
+        &self,
+        _: i64,
+        _: u32,
+        _: u16,
+    ) -> Result<Vec<StoredOverlay>, StorageError> {
+        nope()
+    }
+}
+impl IndexRepository for Unsupported {
+    fn put_source_config(&mut self, _: &StoredSourceConfig, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_repository_source(&mut self, _: &StoredRepositorySource) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_worktrees(&mut self, _: &Id, _: &[StoredWorktree]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_run(&mut self, _: &StoredIndexRun) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_run(&mut self, _: &StoredIndexRun, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_generation(&mut self, _: &StoredGeneration) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_generation(&mut self, _: &StoredGeneration) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_unit(
+        &mut self,
+        _: &StoredUnit,
+        _: &[StoredNode],
+        _: &[StoredEdge],
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn inherit_units(&mut self, _: &Id, _: &Id, _: &[String]) -> Result<u64, StorageError> {
+        nope()
+    }
+    fn set_edge_targets(&mut self, _: &Id, _: &[EdgeTargetUpdate]) -> Result<(), StorageError> {
+        nope()
+    }
+    fn reclaim_generation(&mut self, _: &Id, _: u32) -> Result<u64, StorageError> {
+        nope()
+    }
+    fn insert_view(&mut self, _: &StoredView) -> Result<(), StorageError> {
+        nope()
+    }
+    fn publish(&mut self, _: &Id, _: &Id, _: i64) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn remove_view(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_overlay(&mut self, _: &StoredOverlay, _: Option<i64>) -> Result<(), StorageError> {
+        nope()
+    }
+    fn remove_overlay(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
         nope()
     }
 }
@@ -1782,6 +2204,15 @@ impl RunRead for Unsupported {
     fn feature_plan(&self, _: &RootId) -> Result<Option<StoredPlanState>, StorageError> {
         nope()
     }
+    fn work_parent(&self, _: &RootId) -> Result<Option<Option<RootId>>, StorageError> {
+        nope()
+    }
+    fn work_repository_ids(&self, _: &RootId) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn open_prerequisites(&self, _: &RootId) -> Result<Vec<RootId>, StorageError> {
+        nope()
+    }
     fn project_lifecycle(&self, _: &ProjectId) -> Result<Option<String>, StorageError> {
         nope()
     }
@@ -1794,6 +2225,14 @@ impl RunRead for Unsupported {
         nope()
     }
     fn root_deliveries(&self, _: &RootId, _: Option<&Id>, _: u16) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn stop_coverage(
+        &self,
+        _: &OperationId,
+        _: Option<&RootId>,
+        _: u16,
+    ) -> Result<Vec<StoredStopCoverage>, StorageError> {
         nope()
     }
 }
@@ -1832,6 +2271,319 @@ impl RunRepository for Unsupported {
         nope()
     }
     fn delete_turn(&mut self, _: &Id, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn cover_stop(&mut self, _: &StoredStopCoverage) -> Result<(), StorageError> {
+        nope()
+    }
+}
+
+impl KnowledgeRead for Unsupported {
+    fn knowledge_scope_revision(&self, _: &KnowledgeScope) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn knowledge_entity(&self, _: &Id) -> Result<Option<StoredEntity>, StorageError> {
+        nope()
+    }
+    fn knowledge_entity_by_key(
+        &self,
+        _: &KnowledgeScope,
+        _: &str,
+    ) -> Result<Option<StoredEntity>, StorageError> {
+        nope()
+    }
+    fn knowledge_claim(&self, _: &Id) -> Result<Option<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_claims(
+        &self,
+        _: &ClaimQuery,
+        _: Option<(i64, &str)>,
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_claims_about(
+        &self,
+        _: &[String],
+        _: &Id,
+        _: &str,
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_entity_users(&self, _: &Id, _: u16) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_evidence(&self, _: &Id) -> Result<Option<StoredEvidence>, StorageError> {
+        nope()
+    }
+    fn knowledge_evidence_users(&self, _: &Id, _: u16) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn knowledge_relations(
+        &self,
+        _: &Id,
+        _: &[String],
+        _: u16,
+    ) -> Result<Vec<StoredRelation>, StorageError> {
+        nope()
+    }
+    fn knowledge_history(&self, _: &Id, _: u16) -> Result<Vec<StoredHistory>, StorageError> {
+        nope()
+    }
+    fn knowledge_history_at(&self, _: &Id, _: i64) -> Result<Option<StoredHistory>, StorageError> {
+        nope()
+    }
+    fn knowledge_write(&self, _: &Id) -> Result<Option<StoredWrite>, StorageError> {
+        nope()
+    }
+    fn knowledge_recent_writes(
+        &self,
+        _: &KnowledgeScope,
+        _: u16,
+    ) -> Result<Vec<StoredWrite>, StorageError> {
+        nope()
+    }
+    fn knowledge_lesson_event_count(&self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn knowledge_lesson_events(
+        &self,
+        _: &Id,
+        _: u16,
+    ) -> Result<Vec<StoredLessonEvent>, StorageError> {
+        nope()
+    }
+    fn knowledge_merged_events(
+        &self,
+        _: &Id,
+        _: u16,
+    ) -> Result<Vec<StoredLessonEvent>, StorageError> {
+        nope()
+    }
+    fn knowledge_challenges(&self, _: &Id, _: u16) -> Result<Vec<StoredChallenge>, StorageError> {
+        nope()
+    }
+    fn knowledge_challenge(&self, _: &Id) -> Result<Option<StoredChallenge>, StorageError> {
+        nope()
+    }
+    fn knowledge_open_challenges(&self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn knowledge_addresses(&self, _: &Id) -> Result<Vec<StoredAddress>, StorageError> {
+        nope()
+    }
+    fn knowledge_deliveries(&self, _: &Id) -> Result<DeliverySummary, StorageError> {
+        nope()
+    }
+    fn knowledge_claim_stale(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn knowledge_source_head(&self, _: &str) -> Result<Option<String>, StorageError> {
+        nope()
+    }
+    fn knowledge_source_claims(
+        &self,
+        _: &KnowledgeScope,
+        _: &str,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_source_entities(
+        &self,
+        _: &KnowledgeScope,
+        _: &str,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<StoredEntity>, StorageError> {
+        nope()
+    }
+    fn knowledge_source_deletion(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredSourceDeletion>, StorageError> {
+        nope()
+    }
+    fn knowledge_running_source_deletion(
+        &self,
+        _: &KnowledgeScope,
+        _: &str,
+    ) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
+    fn knowledge_relations_touching(&self, _: &[Id]) -> Result<Vec<StoredRelation>, StorageError> {
+        nope()
+    }
+    fn knowledge_entity_used_beyond(
+        &self,
+        _: &Id,
+        _: &DeletedClaims<'_>,
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn knowledge_claim_referrer_outside(
+        &self,
+        _: &Id,
+        _: &[Id],
+        _: &KnowledgeScope,
+    ) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
+    fn knowledge_evidence_cited_beyond(
+        &self,
+        _: &Id,
+        _: &DeletedClaims<'_>,
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn knowledge_counts(&self, _: &[String]) -> Result<KnowledgeCounts, StorageError> {
+        nope()
+    }
+    fn knowledge_imported(&self, _: &Id, _: i64) -> Result<Option<Id>, StorageError> {
+        nope()
+    }
+}
+impl KnowledgeRepository for Unsupported {
+    fn bump_scope(&mut self, _: &KnowledgeScope) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn put_knowledge_entity(
+        &mut self,
+        _: &StoredEntity,
+        _: Option<i64>,
+    ) -> Result<StoredEntity, StorageError> {
+        nope()
+    }
+    fn put_knowledge_claim(
+        &mut self,
+        _: &StoredClaim,
+        _: Option<i64>,
+    ) -> Result<StoredClaim, StorageError> {
+        nope()
+    }
+    fn put_knowledge_evidence(&mut self, _: &StoredEvidence, _: bool) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_knowledge_relation(&mut self, _: &StoredRelation) -> Result<(), StorageError> {
+        nope()
+    }
+    fn remove_knowledge_relation(&mut self, _: &Id, _: i64) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn set_knowledge_relation_ownership(
+        &mut self,
+        _: &Id,
+        _: &[Id],
+        _: &[(String, String)],
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn put_knowledge_history(&mut self, _: &StoredHistory) -> Result<(), StorageError> {
+        nope()
+    }
+    fn purge_knowledge_history(
+        &mut self,
+        _: &Id,
+        _: &dyn Fn(&serde_json::Value) -> serde_json::Value,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_knowledge_write(&mut self, _: &StoredWrite) -> Result<(), StorageError> {
+        nope()
+    }
+    fn extend_knowledge_write(
+        &mut self,
+        _: &Id,
+        _: &[Id],
+        _: &[Id],
+        _: i64,
+        _: &[serde_json::Value],
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_knowledge_source_deletion(
+        &mut self,
+        _: &StoredSourceDeletion,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn rescope_knowledge_relation(
+        &mut self,
+        _: &Id,
+        _: &KnowledgeScope,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn add_knowledge_lesson_event(&mut self, _: &StoredLessonEvent) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn merge_knowledge_lesson_events(&mut self, _: &Id, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn unmerge_knowledge_lesson_events(&mut self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn settle_knowledge_lesson_events(
+        &mut self,
+        _: &Id,
+        _: &Id,
+        _: &[Id],
+    ) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn restore_merged_lesson_events(&mut self, _: &Id, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn refill_knowledge_lesson_events(
+        &mut self,
+        _: &Id,
+        _: &[Vec<Id>],
+    ) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn put_knowledge_challenge(&mut self, _: &StoredChallenge) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_knowledge_address(&mut self, _: &StoredAddress) -> Result<(), StorageError> {
+        nope()
+    }
+    fn record_knowledge_delivery(
+        &mut self,
+        _: &Id,
+        _: &Id,
+        _: i64,
+        _: i64,
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn remove_knowledge_relations_of(&mut self, _: &Id, _: i64) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn observe_knowledge_source(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: i64,
+    ) -> Result<Vec<(Id, KnowledgeScope)>, StorageError> {
+        nope()
+    }
+    fn purge_knowledge_lesson_records(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn remove_live_knowledge_relation(
+        &mut self,
+        _: &KnowledgeScope,
+        _: &Id,
+        _: &str,
+        _: &Id,
+        _: i64,
+    ) -> Result<Option<StoredRelation>, StorageError> {
+        nope()
+    }
+    fn map_knowledge_import(&mut self, _: &Id, _: i64, _: &Id, _: &Id) -> Result<(), StorageError> {
         nope()
     }
 }

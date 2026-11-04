@@ -27,14 +27,14 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `features.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel` | `Page<WorkRecord>` |
-| `features.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest` | `WorkRecord` |
-| `features.create` | **Command**<br>`projectId`: `ProjectId`<br>`creation`: `FeatureCreation` | `Page<WorkRecord>` |
-| `features.edit_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`plan`: `PlanDraft` | `WorkRecord` |
-| `features.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `NonEmpty<Id>` | `MutationSummary` |
-| `features.dependencies` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement` | `WorkRecord` |
+| `features.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `features.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `features.create` | **Command**<br>`projectId`: `ProjectId`<br>`creation`: `FeatureCreation`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `features.edit_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`plan`: `PlanDraft`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `features.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `?NonEmpty<Id>`<br>`placement`: `?QueuePlacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
+| `features.dependencies` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 | `features.request_plan_approval` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`planRevision`: `Revision`<br>`planDigest`: `Digest` | `ProposalRecord` |
-| `features.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `FeaturePatch` | `WorkRecord` |
+| `features.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `FeaturePatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 
 ### Issues
 
@@ -42,11 +42,11 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `issues.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel` | `Page<WorkRecord>` |
-| `issues.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest` | `WorkRecord` |
-| `issues.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`statusId`: `Id`<br>`priority`: `i32`<br>`featureId`: `?RootId` | `WorkRecord` |
-| `issues.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `IssuePatch` | `WorkRecord` |
-| `issues.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `NonEmpty<Id>` | `MutationSummary` |
+| `issues.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `issues.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `issues.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`statusId`: `Id`<br>`priority`: `i32`<br>`featureId`: `?RootId`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `issues.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `IssuePatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `issues.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `?NonEmpty<Id>`<br>`placement`: `?QueuePlacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
 | `issues.publish` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`expectedRemoteRevision`: `?Text` | `GitLink` |
 | `issues.link` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`remoteIssueNumber`: `PositiveCounter` | `GitLink` |
 
@@ -56,17 +56,17 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `tasks.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel` | `Page<WorkRecord>` |
-| `tasks.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest` | `WorkRecord` |
-| `tasks.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`parentId`: `?RootId`<br>`statusId`: `Id`<br>`priority`: `i32` | `WorkRecord` |
-| `tasks.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `TaskPatch` | `WorkRecord` |
-| `tasks.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`featureId`: `?RootId`<br>`expectedQueueRevision`: `Revision`<br>`priority`: `i32`<br>`orderedTaskIds`: `NonEmpty<Id>` | `MutationSummary` |
-| `tasks.move` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`statusId`: `Id`<br>`expectedWorkflowRevision`: `Revision` | `WorkRecord` |
-| `tasks.assign` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`assignmentId`: `?AssignmentId`<br>`clearAssignment`: `bool` | `WorkRecord` |
-| `tasks.dependency_links` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement` | `WorkRecord` |
-| `tasks.acceptance_evidence` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`criteria`: `NonEmpty<AcceptanceCriterion>` | `WorkRecord` |
-| `tasks.sync_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedPlanRevision`: `Revision`<br>`expectedTaskSetRevision`: `Revision`<br>`tasks`: `PlanItems<TaskPlanEntry>`<br>`projectPlan`: `?AtomicWorkPlan`<br>`stagedProjectPlan`: `?ArtifactRef` | `Page<WorkRecord>` |
-| `tasks.set_feature` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`featureId`: `?RootId`<br>`clearFeature`: `bool` | `WorkRecord` |
+| `tasks.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `tasks.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`parentId`: `?RootId`<br>`statusId`: `Id`<br>`priority`: `i32`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `TaskPatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`featureId`: `?RootId`<br>`expectedQueueRevision`: `Revision`<br>`priority`: `i32`<br>`orderedTaskIds`: `?NonEmpty<Id>`<br>`placement`: `?QueuePlacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
+| `tasks.move` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`statusId`: `Id`<br>`expectedWorkflowRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.assign` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`assignmentId`: `?AssignmentId`<br>`clearAssignment`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.dependency_links` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.acceptance_evidence` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`criteria`: `NonEmpty<AcceptanceCriterion>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
+| `tasks.sync_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedPlanRevision`: `Revision`<br>`expectedTaskSetRevision`: `Revision`<br>`tasks`: `PlanItems<TaskPlanEntry>`<br>`projectPlan`: `?AtomicWorkPlan`<br>`stagedProjectPlan`: `?ArtifactRef`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WorkRecord>` |
+| `tasks.set_feature` | **Command**<br>`taskId`: `Id`<br>`expectedRevision`: `Revision`<br>`featureId`: `?RootId`<br>`clearFeature`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WorkRecord` |
 
 ### Workflows
 
@@ -190,11 +190,11 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `indexing.discover` | **Query**<br>`scope`: `DataScope`<br>`roots`: `Items<Id>`<br>`page`: `PageRequest` | `Page<RepositoryRecord>` |
 | `indexing.index` | **Command**<br>`scope`: `DataScope`<br>`repositoryIds`: `NonEmpty<Id>`<br>`expectedSourceRevision`: `Revision`<br>`views`: `ViewSelection` | `IndexRunRecord` |
 | `indexing.reindex` | **Command**<br>`scope`: `DataScope`<br>`repositoryIds`: `NonEmpty<Id>`<br>`expectedSourceRevision`: `Revision`<br>`views`: `ViewSelection` | `IndexRunRecord` |
-| `indexing.refresh_overlay` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'RefreshOverlay'} | `IndexRunRecord` |
+| `indexing.refresh_overlay` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'RefreshOverlay'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/index-command-request.r2.schema.json)) | `IndexRunRecord` |
 | `indexing.retire_view` | **Command**<br>`viewId`: `Id`<br>`expectedRevision`: `Revision` | `MutationSummary` |
 | `indexing.cancel` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Cancel'} | `IndexRunRecord` |
-| `indexing.status` | **Query**<br>`repositoryId`: `Id` | `RepositoryIndexStatus` |
-| `indexing.runs` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`page`: `PageRequest` | `Page<IndexRunRecord>` |
+| `indexing.status` | **Query**<br>`repositoryId`: `?Id`<br>`overlayId`: `?Id`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `RepositoryIndexStatus` |
+| `indexing.runs` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`states`: `?NonEmpty<IndexRunState>`<br>`kinds`: `?NonEmpty<IndexRunKind>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<IndexRunRecord>` |
 | `indexing.configure_sources` | **Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`config`: `IndexSourceConfig` | `MutationSummary` |
 
 ### Analysis
@@ -252,30 +252,30 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `knowledge.search` | **Query**<br>`scope`: `DataScope`<br>`text`: `Text`<br>`tags`: `Items<Label>`<br>`kinds`: `Items<KnowledgeKind>`<br>`page`: `PageRequest`<br>`entityLimit`: `Limit`<br>`claimLimit`: `Limit` | `Page<KnowledgeClaim>` |
-| `knowledge.read` | **Query**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`revision`: `?Revision` | `KnowledgeBundle` |
-| `knowledge.record` | **Command**<br>`scope`: `DataScope`<br>`batch`: `KnowledgeBatch` | `KnowledgeWriteReceipt` |
-| `knowledge.revise` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `ClaimDraft` | `KnowledgeWriteReceipt` |
-| `knowledge.relate` | **Command**<br>`scope`: `DataScope`<br>`subjectId`: `Id`<br>`predicate`: `Label`<br>`objectId`: `Id`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.tag` | **Command**<br>`scope`: `DataScope`<br>`claimIds`: `NonEmpty<Id>`<br>`expectedRevisions`: `NonEmpty<RevisionedRef>`<br>`tags`: `Items<Label>` | `KnowledgeWriteReceipt` |
-| `knowledge.verify` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.retract` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.scope` | **Command**<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`destination`: `DataScope` | `KnowledgeWriteReceipt` |
-| `knowledge.diagnostics` | **Query**<br>`scope`: `DataScope` | `Page<Diagnostic>` |
+| `knowledge.search` | **Query**<br>`scope`: `DataScope`<br>`text`: `Text`<br>`tags`: `Items<Label>`<br>`kinds`: `Items<KnowledgeKind>`<br>`page`: `PageRequest`<br>`entityLimit`: `Limit`<br>`claimLimit`: `Limit`<br>`states`: `?Items<KnowledgeLifecycle>`<br>`entryKinds`: `?Items<KnowledgeEntryKind>`<br>`source`: `?Label`<br>`stale`: `?bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<KnowledgeClaim>` |
+| `knowledge.read` | **Query**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`revision`: `?Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
+| `knowledge.record` | **Command**<br>`scope`: `DataScope`<br>`batch`: `KnowledgeBatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.revise` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `ClaimDraft`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.relate` | **Command**<br>`scope`: `DataScope`<br>`subjectId`: `Id`<br>`predicate`: `Label`<br>`objectId`: `Id`<br>`evidenceIds`: `Items<Id>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.tag` | **Command**<br>`scope`: `DataScope`<br>`claimIds`: `NonEmpty<Id>`<br>`expectedRevisions`: `NonEmpty<RevisionedRef>`<br>`tags`: `Items<Label>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.verify` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>`<br>`sourceRevision`: `?Text`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.retract` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.scope` | **Command**<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`destination`: `DataScope`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.diagnostics` | **Query**<br>`scope`: `DataScope`<br>`sourceId`: `?Id`<br>`importSource`: `?ArtifactRef`<br>`importSchema`: `?SchemaRef`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<Diagnostic>` |
 | `knowledge.delete_by_source` | **Command**<br>`scope`: `DataScope`<br>`sourceId`: `Id`<br>`expectedScopeRevision`: `Revision`<br>`previewDigest`: `Digest`<br>`proposalId`: `?Id` | `MutationSummary` |
 | `knowledge.delete_selected` | **Command**<br>`scope`: `DataScope`<br>`claims`: `NonEmpty<RevisionedRef>`<br>`proposalId`: `?Id` | `MutationSummary` |
-| `knowledge.write_status` | **Query**<br>`writeId`: `Id` | `KnowledgeWriteReceipt` |
-| `knowledge.subgraph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.entity_bundle` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.entity_graph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.claim_bundle` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.expand_frontier` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
+| `knowledge.write_status` | **Query**<br>`writeId`: `Id`<br>`cursor`: `?Cursor`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.subgraph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
+| `knowledge.entity_bundle` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
+| `knowledge.entity_graph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
+| `knowledge.claim_bundle` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
+| `knowledge.expand_frontier` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
 | `knowledge.render_summary` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `ArtifactRef` |
-| `knowledge.query` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.import_user_data` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`schema`: `SchemaRef`<br>`previewDigest`: `Digest` | `KnowledgeWriteReceipt` |
-| `knowledge.promote` | **Command**<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`destination`: `DataScope`<br>`proposalId`: `?Id` | `KnowledgeWriteReceipt` |
-| `knowledge.challenge` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.tagged_lessons` | **Query**<br>`scope`: `DataScope`<br>`tags`: `NonEmpty<Label>`<br>`page`: `PageRequest` | `Page<KnowledgeClaim>` |
+| `knowledge.query` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeBundle` |
+| `knowledge.import_user_data` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`schema`: `SchemaRef`<br>`previewDigest`: `Digest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.promote` | **Command**<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`destination`: `DataScope`<br>`proposalId`: `?Id`<br>`action`: `?PromoteAction`<br>`address`: `?LessonAddress`<br>`reason`: `?Content`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.challenge` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>`<br>`resolveChallengeId`: `?Id`<br>`outcome`: `?ChallengeOutcome`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.tagged_lessons` | **Query**<br>`scope`: `DataScope`<br>`tags`: `NonEmpty<Label>`<br>`page`: `PageRequest`<br>`ruleStates`: `?Items<RuleState>`<br>`activity`: `?Label`<br>`view`: `?LessonView`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<KnowledgeClaim>` |
 
 ### Dreaming
 
@@ -289,7 +289,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `dreaming.settings` | **Query**<br>`scope`: `DataScope`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`config`: `DreamConfig` | `DreamSettingsRecord` |
 | `dreaming.instructions` | **Query**<br>`scope`: `DataScope`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`content`: `ArtifactRef` | `Page<InstructionRecord>` |
 | `dreaming.propose` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`content`: `ArtifactRef` | `ProposalRecord` |
-| `dreaming.revert` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`proposalId`: `Id`<br>`expectedChangeDigest`: `Digest` | `KnowledgeWriteReceipt` |
+| `dreaming.revert` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`proposalId`: `Id`<br>`expectedChangeDigest`: `Digest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `dreaming.review` | **Command**<br>`proposalId`: `Id`<br>`expectedRevision`: `Revision`<br>`decision`: `ProposalDecision`<br>`rationale`: `Content` | `ProposalRecord` |
 
 ### Documents
@@ -528,15 +528,15 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `jobs.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`enabled`: `?bool` | `Page<JobRecord>` |
-| `jobs.create` | **Command**<br>`scope`: `DataScope`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition`<br>`enabled`: `bool` | `JobRecord` |
-| `jobs.edit` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition` | `JobRecord` |
-| `jobs.enable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRecord` |
-| `jobs.run_now` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRun` |
-| `jobs.inspect` | **Query**<br>`jobId`: `Id`<br>`runId`: `?Id` | `JobInspection` |
-| `jobs.cancel` | **Command**<br>`jobId`: `Id`<br>`runId`: `Id`<br>`expectedRevision`: `Revision` | `JobRun` |
-| `jobs.delete` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRecord` |
-| `jobs.disable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRecord` |
+| `jobs.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`enabled`: `?bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<JobRecord>` |
+| `jobs.create` | **Command**<br>`scope`: `DataScope`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition`<br>`enabled`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.edit` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.enable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.run_now` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRun` |
+| `jobs.inspect` | **Query**<br>`jobId`: `Id`<br>`runId`: `?Id`<br>`history`: `?PageRequest`<br>`usage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobInspection` |
+| `jobs.cancel` | **Command**<br>`jobId`: `Id`<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRun` |
+| `jobs.delete` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.disable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
 
 ### Settings
 
@@ -555,8 +555,8 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `router.catalog` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool` | `Page<RouteModel>` |
-| `router.connections` | **Query**<br>`page`: `PageRequest` | `Page<ConnectionRecord>` |
+| `router.catalog` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<RouteModel>` |
+| `router.connections` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ConnectionRecord>` |
 | `router.route` | **Command**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>` | `RouteChoice` |
 | `router.pin` | **Command**<br>`sessionId`: `Id`<br>`expectedPinRevision`: `Revision`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName` | `RouteChoice` |
 | `router.availability` | **Query**<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>`<br>`sessionId`: `?Id`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `RouteAvailability` |
@@ -565,7 +565,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `router.price_status` | **Query**<br>`modelIds`: `Items<Id>`<br>`page`: `PageRequest` | `Page<ModelPriceStatus>` |
 | `router.price_refresh` | **Command**<br>`providerIds`: `NonEmpty<Id>`<br>`expectedPriceRevision`: `Revision` | `OperationRef` |
 | `router.price_override` | **Command**<br>`modelId`: `Id`<br>`expectedRevision`: `Revision`<br>`price`: `PriceInput` | `PriceRecord` |
-| `router.configure` | **Command**<br>`action`: `RouterConfigAction` | `MutationSummary` |
+| `router.configure` | **Command**<br>`action`: `RouterConfigAction`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
 | `router.decision_models` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool` | `Page<DecisionModel>` |
 | `router.decide` | **Command**<br>`modelId`: `Id`<br>`expectedModelRevision`: `Revision`<br>`state`: `DynamicJson`<br>`questions`: `NonEmpty<NamedQuestion>`<br>`images`: `Items<MediaRef>`<br>`videos`: `Items<MediaRef>`<br>`timeoutMs`: `PositiveCounter` | `DecisionResult` |
 
@@ -959,6 +959,11 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `dependentIds` | `Items<Id>` |
 | `manualOrder` | `?Counter` |
 | `githubIssue` | `?GithubIssueTracking` |
+| `readiness` | `?ReadinessAssessment` · *revision 2+* |
+| `queueRevision` | `?Revision` · *revision 2+* |
+| `workflowRevision` | `?Revision` · *revision 2+* |
+| `acceptanceTests` | `?Items<AcceptanceCriterion>` · *revision 2+* |
+| `pendingReadiness` | `?ReadinessAssessment` · *revision 2+* |
 
 ### PlanDraft
 
@@ -1308,6 +1313,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `source` | `EvidenceLocator` |
 | `snippet` | `Content` |
 | `metadata` | `?SchemaValue` |
+| `sourceRevision` | `?Text` · *revision 2+* |
 
 ### KnowledgeEntity
 
@@ -1319,6 +1325,13 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `entityType` | `Label` |
 | `aliases` | `Items<Label>` |
 | `scope` | `DataScope` |
+| `canonicalName` | `?Label` · *revision 2+* |
+| `externalId` | `?Text` · *revision 2+* |
+| `source` | `?Label` · *revision 2+* |
+| `authorId` | `?ActorId` · *revision 2+* |
+| `createdAtMs` | `?Counter` · *revision 2+* |
+| `updatedAtMs` | `?Counter` · *revision 2+* |
+| `deleted` | `?bool` · *revision 2+* |
 
 ### KnowledgeClaim
 
@@ -1341,6 +1354,20 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `effectiveAtMs` | `?Counter` |
 | `supersedes` | `?Id` |
 | `source` | `?Label` |
+| `entryKind` | `?KnowledgeEntryKind` · *revision 2+* |
+| `lifecycle` | `?KnowledgeLifecycle` · *revision 2+* |
+| `origin` | `?KnowledgeOrigin` · *revision 2+* |
+| `originRef` | `?Text` · *revision 2+* |
+| `autonomous` | `?bool` · *revision 2+* |
+| `authorId` | `?ActorId` · *revision 2+* |
+| `sessionId` | `?Id` · *revision 2+* |
+| `createdAtMs` | `?Counter` · *revision 2+* |
+| `updatedAtMs` | `?Counter` · *revision 2+* |
+| `verifiedAtMs` | `?Counter` · *revision 2+* |
+| `verifiedSourceRevision` | `?Text` · *revision 2+* |
+| `stale` | `?bool` · *revision 2+* |
+| `supersededBy` | `?Id` · *revision 2+* |
+| `lesson` | `?LessonRecord` · *revision 2+* |
 
 ### ClaimDraft
 
@@ -1359,6 +1386,11 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `effectiveAtMs` | `?Counter` |
 | `supersedes` | `?Id` |
 | `source` | `?Label` |
+| `entryKind` | `?KnowledgeEntryKind` · *revision 2+* |
+| `origin` | `?KnowledgeOrigin` · *revision 2+* |
+| `originRef` | `?Text` · *revision 2+* |
+| `lesson` | `?LessonDraft` · *revision 2+* |
+| `sourceRevision` | `?Text` · *revision 2+* |
 
 ### KnowledgeBatch
 
@@ -1393,6 +1425,9 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `conflicts` | `Rows<KnowledgeConflict>` |
 | `supersessionIds` | `Items<Id>` |
 | `summary` | `?Content` |
+| `relations` | `?Rows<KnowledgeRelation>` · *revision 2+* |
+| `revisions` | `?Rows<KnowledgeRevisionEntry>` · *revision 2+* |
+| `scopeRevision` | `?Revision` · *revision 2+* |
 
 ### KnowledgeQuery
 
@@ -1426,6 +1461,9 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `claimIds` | `Items<Id>` |
 | `revision` | `Revision` |
 | `diagnostics` | `Items<Diagnostic>` |
+| `entityCount` | `?Counter` · *revision 2+* |
+| `claimCount` | `?Counter` · *revision 2+* |
+| `nextCursor` | `?Cursor` · *revision 2+* |
 
 ### DreamRun
 
@@ -1896,6 +1934,18 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `enabled` | `bool` |
 | `interruptedRunId` | `?Id` |
 | `lastRunId` | `?Id` |
+| `scope` | `?DataScope` · *revision 2+* |
+| `nextRunAtMs` | `?Counter` · *revision 2+* |
+| `lastRunStartedAtMs` | `?Counter` · *revision 2+* |
+| `lastRunFinishedAtMs` | `?Counter` · *revision 2+* |
+| `lastRunStatus` | `?JobRunStatus` · *revision 2+* |
+| `lastError` | `?Text` · *revision 2+* |
+| `activeRunId` | `?Id` · *revision 2+* |
+| `hold` | `?JobHold` · *revision 2+* |
+| `authorized` | `?bool` · *revision 2+* |
+| `createdAtMs` | `?Counter` · *revision 2+* |
+| `updatedAtMs` | `?Counter` · *revision 2+* |
+| `deletedAtMs` | `?Counter` · *revision 2+* |
 
 ### JobRun
 
@@ -1908,6 +1958,18 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `state` | `OperationState` |
 | `operationId` | `?OperationId` |
 | `usage` | `UsageReport` |
+| `status` | `?JobRunStatus` · *revision 2+* |
+| `trigger` | `?JobTrigger` · *revision 2+* |
+| `occurrenceAtMs` | `?Counter` · *revision 2+* |
+| `startedAtMs` | `?Counter` · *revision 2+* |
+| `finishedAtMs` | `?Counter` · *revision 2+* |
+| `reason` | `?Text` · *revision 2+* |
+| `hold` | `?Label` · *revision 2+* |
+| `cancelRequested` | `?bool` · *revision 2+* |
+| `resumptions` | `?Counter` · *revision 2+* |
+| `sessionId` | `?Id` · *revision 2+* |
+| `linkedRootIds` | `?Items<RootId>` · *revision 2+* |
+| `skippedForRunId` | `?Id` · *revision 2+* |
 
 ### SchemaValue
 
@@ -1962,6 +2024,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `imageInput` | `bool` |
 | `tools` | `bool` |
 | `revision` | `Revision` |
+| `contextTokens` | `?PositiveCounter` · *revision 2+* |
+| `connectionId` | `?Id` · *revision 2+* |
 
 ### ConnectionRecord
 
@@ -1975,6 +2039,19 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `credentialRef` | `?Id` |
 | `subscriptionRiskAccepted` | `bool` |
 | `riskNoticeSha256` | `?Digest` |
+| `endpoint` | `?Url` · *revision 2+* |
+| `lifecycle` | `?ConnectionLifecycle` · *revision 2+* |
+| `stateReason` | `?Text` · *revision 2+* |
+| `credentialRevision` | `?Counter` · *revision 2+* |
+| `healthy` | `?bool` · *revision 2+* |
+| `checkedAtMs` | `?Counter` · *revision 2+* |
+| `discoveredAtMs` | `?Counter` · *revision 2+* |
+| `discoveredModelCount` | `?Counter` · *revision 2+* |
+| `discoveredModelIds` | `?Items<Text>` · *revision 2+* |
+| `accessExpiresAtMs` | `?Counter` · *revision 2+* |
+| `signIn` | `?SignInChallenge` · *revision 2+* |
+| `enabled` | `?bool` · *revision 2+* |
+| `openRouter` | `?OpenRouterConstraints` · *revision 2+* |
 
 ### RouteChoice
 
@@ -2394,7 +2471,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 
 | Kind | Fields |
 | --- | --- |
-| `Connection` | `connectionId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`profile`: `EndpointKind`<br>`endpoint`: `Url`<br>`credentialRef`: `?Id` |
+| `Connection` | `connectionId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`profile`: `EndpointKind`<br>`endpoint`: `Url`<br>`credentialRef`: `?Id`<br>`enabled`: `?bool`<br>`openRouter`: `?OpenRouterConstraints` |
 | `Model` | `model`: `RouteModel`<br>`expectedRevision`: `?Revision` |
 | `Tier` | `tier`: `TierName`<br>`expectedRevision`: `Revision`<br>`memberIds`: `Items<Id>` |
 | `DecisionModel` | `model`: `DecisionModel`<br>`expectedRevision`: `?Revision` |
@@ -2461,6 +2538,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | --- | --- |
 | `job` | `JobRecord` |
 | `run` | `?JobRun` |
+| `runs` | `?Rows<JobRun>` · *revision 2+* |
+| `runsNextCursor` | `?Cursor` · *revision 2+* |
 
 ### RepositoryIndexStatus
 
@@ -2470,6 +2549,10 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `currentViewIds` | `Items<Id>` |
 | `coverage` | `Coverage` |
 | `lastRun` | `?IndexRunRecord` |
+| `freshness` | `?IndexFreshness` · *revision 2+* |
+| `languages` | `?Items<LanguageCoverage>` · *revision 2+* |
+| `semanticPacks` | `?Items<SemanticPackStatus>` · *revision 2+* |
+| `overlays` | `?Items<OverlayStatus>` · *revision 2+* |
 
 ### ConsumerStatus
 
@@ -2725,6 +2808,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `addLinks` | `?Items<WorkLink>` |
 | `removeLinkIds` | `?Items<Id>` |
 | `addComment` | `?WorkComment` |
+| `readiness` | `?ReadinessChange` · *revision 2+* |
+| `acceptanceEvidence` | `?NonEmpty<AcceptanceCriterion>` · *revision 2+* |
 
 ### IssuePatch
 
@@ -2900,6 +2985,396 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `source` | `Label` |
 | `hostTargetSupported` | `bool` |
 | `newer` | `bool` |
+
+### IndexFreshnessState
+
+`Current`, `Stale`, `Indexing`, `NotIndexed`, `Failed`.
+
+### IndexFreshness
+
+| Field | Type |
+| --- | --- |
+| `state` | `IndexFreshnessState` |
+| `indexedCommit` | `?Label` |
+| `headCommit` | `?Label` |
+| `headRef` | `?Label` |
+| `indexedAtMs` | `?Counter` |
+| `observedAtMs` | `?Counter` |
+| `configurationCurrent` | `bool` |
+| `reasons` | `Items<Label>` |
+
+### LanguageCoverageMode
+
+`Structural`, `TextFallback`, `NotSelected`.
+
+### LanguageCoverage
+
+| Field | Type |
+| --- | --- |
+| `languageId` | `Label` |
+| `name` | `Label` |
+| `mode` | `LanguageCoverageMode` |
+| `grammar` | `?Label` |
+| `files` | `Counter` |
+| `structuralFiles` | `Counter` |
+| `textFiles` | `Counter` |
+| `parseErrorFiles` | `Counter` |
+| `skippedFiles` | `Counter` |
+| `note` | `?Content` |
+
+### SemanticPackState
+
+`NotInstalled`, `Unavailable`, `Enabled`, `Applied`, `Disabled`.
+
+### SemanticPackStatus
+
+| Field | Type |
+| --- | --- |
+| `packId` | `Id` |
+| `state` | `SemanticPackState` |
+| `languages` | `Items<Label>` |
+| `note` | `?Content` |
+
+### OverlayState
+
+`Queued`, `Indexing`, `Ready`, `Failed`, `Stale`, `Expired`, `Unavailable`.
+
+### OverlayStatus
+
+| Field | Type |
+| --- | --- |
+| `overlayId` | `Id` |
+| `revision` | `Revision` |
+| `worktreeId` | `?Id` |
+| `state` | `OverlayState` |
+| `viewId` | `?Id` |
+| `baseCommit` | `?Label` |
+| `headCommit` | `?Label` |
+| `headRef` | `?Label` |
+| `captureDigest` | `?Label` |
+| `runId` | `?Id` |
+| `reason` | `?Content` |
+| `updatedAtMs` | `Counter` |
+| `expiresAtMs` | `Counter` |
+
+### IndexRunState
+
+`Queued`, `Running`, `Succeeded`, `Failed`, `Cancelled`.
+
+### IndexRunKind
+
+`Index`, `Reindex`, `Overlay`.
+
+### OpenRouterDataCollection
+
+`allow`, `deny`.
+
+### OpenRouterQuantization
+
+`int4`, `int8`, `fp4`, `mxfp4`, `nvfp4`, `fp6`, `fp8`, `mxfp8`, `fp16`, `bf16`, `fp32`, `unknown`.
+
+### OpenRouterSortBy
+
+`price`, `throughput`, `latency`.
+
+### OpenRouterPartition
+
+`model`, `none`.
+
+### OpenRouterCostTier
+
+`low`, `medium`, `high`, `xhigh`, `max`.
+
+### OpenRouterSort
+
+| Field | Type |
+| --- | --- |
+| `by` | `OpenRouterSortBy` |
+| `partition` | `?OpenRouterPartition` |
+
+### OpenRouterPercentiles
+
+| Field | Type |
+| --- | --- |
+| `p50` | `?Finite` |
+| `p75` | `?Finite` |
+| `p90` | `?Finite` |
+| `p99` | `?Finite` |
+
+### OpenRouterMaxPrice
+
+| Field | Type |
+| --- | --- |
+| `prompt` | `?Money` |
+| `completion` | `?Money` |
+| `request` | `?Money` |
+| `image` | `?Money` |
+
+### OpenRouterProviderRouting
+
+| Field | Type |
+| --- | --- |
+| `order` | `?Items<Label>` |
+| `allowFallbacks` | `?bool` |
+| `requireParameters` | `?bool` |
+| `dataCollection` | `?OpenRouterDataCollection` |
+| `zdr` | `?bool` |
+| `enforceDistillableText` | `?bool` |
+| `only` | `?Items<Label>` |
+| `ignore` | `?Items<Label>` |
+| `quantizations` | `?Items<OpenRouterQuantization>` |
+| `sort` | `?OpenRouterSort` |
+| `preferredMinThroughput` | `?OpenRouterPercentiles` |
+| `preferredMaxLatency` | `?OpenRouterPercentiles` |
+| `maxPrice` | `?OpenRouterMaxPrice` |
+
+### OpenRouterConstraints
+
+| Field | Type |
+| --- | --- |
+| `allowedModels` | `Items<Text>` |
+| `excludedModels` | `Items<Text>` |
+| `costTier` | `?OpenRouterCostTier` |
+| `provider` | `?OpenRouterProviderRouting` |
+
+### ConnectionLifecycle
+
+`Disconnected`, `Authorizing`, `Connected`, `Refreshing`, `ReauthenticationRequired`, `Unavailable`, `Disabled`.
+
+### SignInMethod
+
+`DeviceCode`, `AuthorizationCode`.
+
+### SignInChallenge
+
+| Field | Type |
+| --- | --- |
+| `flowId` | `Id` |
+| `method` | `SignInMethod` |
+| `userCode` | `?Label` |
+| `verificationUrl` | `?Url` |
+| `authorizeUrl` | `?Url` |
+| `expiresAtMs` | `Counter` |
+
+### KnowledgeEntryKind
+
+`Goal`, `Decision`, `Constraint`, `Fact`, `Gotcha`, `Attempt`, `Architecture`, `Lesson`, `Finding`, `Proposal`.
+
+### KnowledgeLifecycle
+
+`Active`, `Superseded`, `Retracted`, `Deleted`.
+
+### KnowledgeOrigin
+
+`User`, `Agent`.
+
+### LessonSource
+
+`Prompt`, `Review`, `RelayedPrompt`, `RelayedReview`, `Agent`, `Subagent`, `BotReview`.
+
+### RuleState
+
+`Candidate`, `Proposed`, `Effective`, `Rejected`, `Retired`.
+
+### RuleEffect
+
+`UserInstruction`, `Recurrence`, `Promoted`.
+
+### LessonAddressKind
+
+`Code`, `Instruction`, `Skill`, `Documentation`, `Test`.
+
+### ChallengeOutcome
+
+`Uphold`, `Retire`.
+
+### ChallengeState
+
+`Open`, `Upheld`, `Retired`.
+
+### PromoteAction
+
+`Effective`, `Propose`, `Reject`, `Address`.
+
+### LessonView
+
+`All`, `RecentlyLearned`, `Recurring`, `Unaddressed`, `Undelivered`.
+
+### Applicability
+
+| Field | Type |
+| --- | --- |
+| `activities` | `Items<Label>` |
+| `paths` | `Items<RelativePath>` |
+| `tools` | `Items<Label>` |
+| `harness` | `?Label` |
+| `repositoryIds` | `Items<Id>` |
+
+### LessonDraft
+
+| Field | Type |
+| --- | --- |
+| `source` | `LessonSource` |
+| `sourceRef` | `?Text` |
+| `quotedWords` | `?Content` |
+| `applicability` | `Applicability` |
+| `sameAs` | `?Id` |
+
+### LessonAddress
+
+| Field | Type |
+| --- | --- |
+| `kind` | `LessonAddressKind` |
+| `name` | `Label` |
+| `reference` | `?Text` |
+
+### LessonChallenge
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `state` | `ChallengeState` |
+| `reason` | `Content` |
+| `evidenceIds` | `Items<Id>` |
+| `authorId` | `ActorId` |
+| `openedAtMs` | `Counter` |
+| `resolvedAtMs` | `?Counter` |
+| `resolution` | `?Content` |
+
+### LessonRecord
+
+| Field | Type |
+| --- | --- |
+| `ruleState` | `RuleState` |
+| `effect` | `?RuleEffect` |
+| `effectiveAtMs` | `?Counter` |
+| `source` | `LessonSource` |
+| `sourceRef` | `?Text` |
+| `quotedWords` | `?Content` |
+| `applicability` | `Applicability` |
+| `recurrence` | `Counter` |
+| `recurrenceThreshold` | `Counter` |
+| `challenges` | `Items<LessonChallenge>` |
+| `addressedBy` | `Items<LessonAddress>` |
+| `deliveredSessions` | `Counter` |
+| `lastDeliveredAtMs` | `?Counter` |
+| `reason` | `?Content` |
+
+### KnowledgeRelation
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `subjectId` | `Id` |
+| `predicate` | `Label` |
+| `objectId` | `Id` |
+| `evidenceIds` | `Items<Id>` |
+| `authorId` | `ActorId` |
+| `createdAtMs` | `Counter` |
+
+### KnowledgeRevisionEntry
+
+| Field | Type |
+| --- | --- |
+| `revision` | `Revision` |
+| `change` | `Label` |
+| `authorId` | `ActorId` |
+| `atMs` | `Counter` |
+| `lifecycle` | `KnowledgeLifecycle` |
+| `writeId` | `?Id` |
+| `value` | `?Content` |
+
+### JobRunStatus
+
+`Queued`, `Running`, `Holding`, `Succeeded`, `Failed`, `Skipped`, `Cancelled`, `OutcomeUnknown`.
+
+### JobTrigger
+
+`Scheduled`, `Manual`.
+
+### JobHold
+
+`ReactivationRequired`, `AuthorizationRequired`, `ProjectClosed`.
+
+### ReadinessDisposition
+
+`ResolvedDecision`, `BoundedInvestigation`, `NeedsUserDecision`.
+
+### FindingState
+
+`Open`, `Resolved`, `RiskAccepted`.
+
+### ConfidenceLevel
+
+`High`, `Medium`, `Low`.
+
+### ReadinessFreshness
+
+`Current`, `Stale`.
+
+### ReadinessFinding
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `disposition` | `ReadinessDisposition` |
+| `blocking` | `bool` |
+| `prerequisite` | `bool` |
+| `state` | `FindingState` |
+| `requirementIds` | `Items<Id>` |
+| `scopeKey` | `?Id` |
+| `affectedWorkIds` | `Items<Id>` |
+| `summary` | `Content` |
+| `missing` | `Content` |
+| `consequence` | `Content` |
+| `attempts` | `Items<Content>` |
+| `insufficiency` | `Content` |
+| `closureCondition` | `Content` |
+| `decision` | `?Content` |
+| `confidence` | `?ConfidenceLevel` |
+| `evidence` | `Items<ArtifactRef>` |
+| `objective` | `?Content` |
+| `limits` | `?Content` |
+| `question` | `?Content` |
+| `recommendation` | `?Content` |
+| `closureNote` | `?Content` |
+| `closureEvidence` | `Items<ArtifactRef>` |
+
+### ReadinessAssessment
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `planRevision` | `Revision` |
+| `planDigest` | `Digest` |
+| `reviewedPending` | `bool` |
+| `freshness` | `ReadinessFreshness` |
+| `staleScopeKeys` | `Items<Id>` |
+| `ready` | `bool` |
+| `summary` | `Content` |
+| `findings` | `Items<ReadinessFinding>` |
+| `assessedBy` | `ActorId` |
+| `assessedAtMs` | `Counter` |
+
+### ReadinessChange
+
+| Kind | Fields |
+| --- | --- |
+| `Assess` | `expectedAssessmentRevision`: `?Revision`<br>`planRevision`: `Revision`<br>`planDigest`: `Digest`<br>`summary`: `Content`<br>`findings`: `Items<ReadinessFinding>` |
+| `CloseFinding` | `expectedAssessmentRevision`: `Revision`<br>`findingId`: `Id`<br>`note`: `Content`<br>`evidence`: `Items<ArtifactRef>` |
+
+### QueuePlacement
+
+| Field | Type |
+| --- | --- |
+| `workId` | `Id` |
+| `anchorId` | `Id` |
+| `side` | `QueueSide` |
+
+### QueueSide
+
+`Before`, `After`.
 
 ## Machine sources
 

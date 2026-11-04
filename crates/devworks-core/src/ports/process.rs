@@ -28,6 +28,9 @@ pub struct ProcessSpec {
     /// Give the child a stdin pipe ([`ProcessTree::take_input`]); otherwise stdin is null. A
     /// package helper's control channel is its stdin and stdout.
     pub pipe_stdin: bool,
+    /// Bytes written to the child's stdin and then closed (a request list such as
+    /// `git cat-file --batch` reads); `None` gives the child no stdin.
+    pub stdin: Option<Vec<u8>>,
 }
 impl ProcessSpec {
     pub fn new(argv: &[String]) -> Option<Self> {
@@ -40,6 +43,7 @@ impl ProcessSpec {
             clear_env: false,
             capture_output: false,
             pipe_stdin: false,
+            stdin: None,
         })
     }
     /// The program followed by its arguments.

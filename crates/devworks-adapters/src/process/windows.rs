@@ -115,7 +115,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     if let Some(dir) = &spec.cwd {
         cmd.current_dir(dir);
     }
-    cmd.stdin(if spec.pipe_stdin {
+    cmd.stdin(if spec.pipe_stdin || spec.stdin.is_some() {
         Stdio::piped()
     } else {
         Stdio::null()
@@ -132,6 +132,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     let mut child = cmd
         .spawn()
         .map_err(|e| ProcessError::Spawn(e.to_string()))?;
+    super::feed_stdin(&mut child, spec);
     let process = child.as_raw_handle() as HANDLE;
     let pid = child.id();
     let fail = |child: &mut Child, e: String| {

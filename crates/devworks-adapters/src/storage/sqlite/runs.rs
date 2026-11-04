@@ -1,7 +1,7 @@
 //! SQLite run root control records: `root_controls`, `executions` (activations), `assignments`
 //! and `blockers` (migration 1, extended by migration 11), `run_instructions` and
-//! `session_turns` (migration 11), plus the read-only views run control needs of
-//! `feature_plans`, `projects`, `work_items` and `queue_entries`.
+//! `session_turns` (migration 11), `stop_coverage` (migration 16), plus the read-only views run
+//! control needs of `feature_plans`, `projects`, `work_items` and `queue_entries`.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
@@ -767,20 +767,64 @@ macro_rules! run_reads {
                 &self,
                 feature: &RootId,
             ) -> Result<Option<StoredPlanState>, StorageError> {
-                db(self
+                let raw: Option<(i64, Option<String>, Option<i64>)> = db(self
                     .conn
                     .query_row(
-                        "SELECT revision,approved_plan_json IS NOT NULL,pending_revision FROM feature_plans WHERE feature_id=?1",
+                        "SELECT revision,approved_plan_json,pending_revision FROM feature_plans WHERE feature_id=?1",
                         [feature.0.as_str()],
-                        |r| {
-                            Ok(StoredPlanState {
-                                revision: r.get(0)?,
-                                approved: r.get(1)?,
-                                pending_revision: r.get(2)?,
-                            })
-                        },
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                     )
-                    .optional())
+                    .optional())?;
+                let Some((revision, approved, pending_revision)) = raw else {
+                    return Ok(None);
+                };
+                let approved_plan = approved
+                    .as_deref()
+                    .map(serde_json::from_str::<serde_json::Value>)
+                    .transpose()
+                    .map_err(|e| {
+                        StorageError::unavailable(Unavailable::Corrupt, format!("stored plan: {e}"))
+                    })?;
+                let readiness = super::work::readiness_of(self.conn, &feature.0)?
+                    .map(|r| (r.revision, r.body));
+                Ok(Some(StoredPlanState {
+                    revision,
+                    approved: approved_plan.is_some(),
+                    pending_revision,
+                    approved_plan,
+                    readiness,
+                }))
+            }
+            fn work_parent(
+                &self,
+                work: &RootId,
+            ) -> Result<Option<Option<RootId>>, StorageError> {
+                let raw: Option<Option<String>> = db(self
+                    .conn
+                    .query_row(
+                        "SELECT parent_feature_id FROM work_items WHERE id=?1",
+                        [work.0.as_str()],
+                        |r| r.get(0),
+                    )
+                    .optional())?;
+                raw.map(|p| {
+                    p.map(|p| {
+                        Id::new(p).map(RootId).map_err(|_| {
+                            StorageError::unavailable(Unavailable::Corrupt, "stored identifier")
+                        })
+                    })
+                    .transpose()
+                })
+                .transpose()
+            }
+            fn work_repository_ids(&self, work: &RootId) -> Result<Vec<Id>, StorageError> {
+                WorkRead::work_repositories(self, &work.0)
+            }
+            fn open_prerequisites(&self, work: &RootId) -> Result<Vec<RootId>, StorageError> {
+                Ok(super::work::open_prerequisites(self.conn, &work.0)?
+                    .into_iter()
+                    .map(RootId)
+                    .collect())
             }
             fn project_lifecycle(
                 &self,
@@ -804,7 +848,7 @@ macro_rules! run_reads {
                 let n = limit(n)?;
                 Ok(ids(
                     self.conn,
-                    "SELECT id FROM work_items WHERE project_id=?1 AND (kind='feature' OR parent_feature_id IS NULL) AND id>?2 ORDER BY id LIMIT ?3",
+                    "SELECT id FROM work_items WHERE project_id=?1 AND (kind='feature' OR parent_feature_id IS NULL OR EXISTS(SELECT 1 FROM root_controls rc WHERE rc.root_id=work_items.id)) AND id>?2 ORDER BY id LIMIT ?3",
                     params![project.0.as_str(), after.map_or("", |r| r.0.as_str()), n],
                 )?
                 .into_iter()
@@ -824,8 +868,46 @@ macro_rules! run_reads {
                     params![root.0.as_str(), after.map_or("", Id::as_str), n],
                 )
             }
+            fn stop_coverage(
+                &self,
+                op: &OperationId,
+                after: Option<&RootId>,
+                n: u16,
+            ) -> Result<Vec<StoredStopCoverage>, StorageError> {
+                coverage(
+                    self.conn,
+                    op,
+                    after.map_or("", |r| r.0.as_str()),
+                    limit(n)?,
+                )
+            }
         }
     };
+}
+fn coverage(
+    conn: &Connection,
+    op: &OperationId,
+    after: &str,
+    n: i64,
+) -> Result<Vec<StoredStopCoverage>, StorageError> {
+    let mut s = db(conn.prepare_cached(
+        "SELECT root_id,generation,reactivate FROM stop_coverage WHERE operation_id=?1 AND root_id>?2 ORDER BY root_id LIMIT ?3",
+    ))?;
+    let raw: Vec<(String, i64, bool)> = db(db(s
+        .query_map(params![op.0.as_str(), after, n], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        }))?
+    .collect::<rusqlite::Result<Vec<_>>>())?;
+    raw.into_iter()
+        .map(|(root, generation, reactivate)| {
+            Ok(StoredStopCoverage {
+                operation_id: op.clone(),
+                root_id: RootId(id_of(root)?),
+                generation,
+                reactivate,
+            })
+        })
+        .collect()
 }
 run_reads!(Snapshot<'_>);
 run_reads!(Unit<'_>);
@@ -1229,6 +1311,35 @@ impl RunRepository for Unit<'_> {
         ))
         .map(|_| ())
         .map_err(|e| unique(e, "session_turn", t.session_id.as_str()))
+    }
+    fn cover_stop(&mut self, c: &StoredStopCoverage) -> Result<(), StorageError> {
+        if c.generation < 0 {
+            return Err(invalid("stop coverage generation out of range"));
+        }
+        root_exists(self.conn, &c.root_id)?;
+        let current: Option<i64> = db(self
+            .conn
+            .query_row(
+                "SELECT generation FROM stop_coverage WHERE operation_id=?1 AND root_id=?2",
+                params![c.operation_id.0.as_str(), c.root_id.0.as_str()],
+                |r| r.get(0),
+            )
+            .optional())?;
+        if current.is_some_and(|g| g > c.generation) {
+            return Err(invalid(
+                "a stop's coverage of a card never moves to an older generation",
+            ));
+        }
+        db(self.conn.execute(
+            "INSERT INTO stop_coverage(operation_id,root_id,generation,reactivate) VALUES(?1,?2,?3,?4) ON CONFLICT(operation_id,root_id) DO UPDATE SET generation=excluded.generation,reactivate=excluded.reactivate",
+            params![
+                c.operation_id.0.as_str(),
+                c.root_id.0.as_str(),
+                c.generation,
+                c.reactivate,
+            ],
+        ))
+        .map(|_| ())
     }
     fn delete_turn(&mut self, session: &Id, turn: &Id) -> Result<(), StorageError> {
         let n = db(self.conn.execute(

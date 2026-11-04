@@ -107,7 +107,7 @@ pub struct StoredPackage {
 /// One exact-version approval proposal (EXT-02). Its decision is recorded once; a pending
 /// proposal leaves the active version unchanged.
 #[derive(Clone, Debug, PartialEq)]
-pub struct StoredProposal {
+pub struct StoredPackageProposal {
     pub id: Id,
     pub revision: i64,
     pub package_id: String,
@@ -189,13 +189,13 @@ pub trait PackageRegistryRead {
     /// first.
     fn package_versions(&self, package_id: &str)
     -> Result<Vec<StoredPackageVersion>, StorageError>;
-    fn proposal(&self, id: &Id) -> Result<Option<StoredProposal>, StorageError>;
+    fn proposal(&self, id: &Id) -> Result<Option<StoredPackageProposal>, StorageError>;
     /// The newest proposal for exactly these contents, if any.
     fn proposal_for(
         &self,
         package_id: &str,
         manifest_digest: &str,
-    ) -> Result<Option<StoredProposal>, StorageError>;
+    ) -> Result<Option<StoredPackageProposal>, StorageError>;
     fn state_generation(
         &self,
         package_id: &str,
@@ -235,13 +235,13 @@ pub trait PackageRegistry: PackageRegistryRead {
         waits: &[String],
         approval: Option<&Value>,
     ) -> Result<(), StorageError>;
-    fn insert_proposal(&mut self, proposal: &StoredProposal) -> Result<(), StorageError>;
+    fn insert_proposal(&mut self, proposal: &StoredPackageProposal) -> Result<(), StorageError>;
     /// Records a proposal's state on `expected_revision` (the revision becomes one higher).
     fn update_proposal(
         &mut self,
-        proposal: &StoredProposal,
+        proposal: &StoredPackageProposal,
         expected_revision: i64,
-    ) -> Result<StoredProposal, StorageError>;
+    ) -> Result<StoredPackageProposal, StorageError>;
     /// Publishes a new state generation (strictly above every earlier one of the package) with
     /// `state` at revision `revision` (0: empty), and points the package handler state at it, so
     /// a handler pinned to an older generation is fenced (`broker.commit_event`).

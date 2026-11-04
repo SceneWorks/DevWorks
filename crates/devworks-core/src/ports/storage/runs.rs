@@ -480,11 +480,27 @@ pub struct StoredTurn {
 
 /// A feature's plan slot as stored by the planning service (`feature_plans`): only the active
 /// approved plan authorizes implementation; a pending revision never does.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StoredPlanState {
     pub revision: i64,
     pub approved: bool,
     pub pending_revision: Option<i64>,
+    /// The active approved plan as the planning service stored it.
+    pub approved_plan: Option<Value>,
+    /// The feature's readiness assessment (its revision and body), if one was recorded.
+    pub readiness: Option<(i64, Value)>,
+}
+
+/// A linked card a pending feature stop came to cover after it was decided (the card was
+/// linked while the stop was pending, or a reapply reached it at a newer generation), fenced
+/// like the cards the stop's journaled intent names: the card's activation generation then, and
+/// whether a reactivation was already pending.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredStopCoverage {
+    pub operation_id: OperationId,
+    pub root_id: RootId,
+    pub generation: i64,
+    pub reactivate: bool,
 }
 
 pub trait RunRead {
@@ -535,9 +551,17 @@ pub trait RunRead {
     /// Turns recorded by any boot but `boot`.
     fn turns_prior_boots(&self, boot: &Id, limit: u16) -> Result<Vec<StoredTurn>, StorageError>;
     fn feature_plan(&self, feature: &RootId) -> Result<Option<StoredPlanState>, StorageError>;
+    /// The work item's current feature membership (`None`: no such item; `Some(None)`: it has
+    /// no feature).
+    fn work_parent(&self, work: &RootId) -> Result<Option<Option<RootId>>, StorageError>;
+    /// The repositories currently named by a work item (checked against active plan scope).
+    fn work_repository_ids(&self, work: &RootId) -> Result<Vec<Id>, StorageError>;
+    /// The work item's prerequisites that are not completed with verified acceptance.
+    fn open_prerequisites(&self, work: &RootId) -> Result<Vec<RootId>, StorageError>;
     /// The project's lifecycle label (`None` for an unknown project).
     fn project_lifecycle(&self, project: &ProjectId) -> Result<Option<String>, StorageError>;
-    /// Root work items (features and standalone issues/tasks) of a project in ID order.
+    /// Root work items of a project in ID order: features, standalone issues/tasks, and cards
+    /// linked to a feature that keep run controls of their own (an archival stops them too).
     fn project_roots(
         &self,
         project: &ProjectId,
@@ -551,6 +575,14 @@ pub trait RunRead {
         after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<Id>, StorageError>;
+    /// The cards the stop `op` came to cover after it was decided, in root order after `after`,
+    /// at most `limit` (1..=500).
+    fn stop_coverage(
+        &self,
+        op: &OperationId,
+        after: Option<&RootId>,
+        limit: u16,
+    ) -> Result<Vec<StoredStopCoverage>, StorageError>;
 }
 
 pub trait RunRepository: RunRead {
@@ -597,6 +629,9 @@ pub trait RunRepository: RunRead {
     fn insert_turn(&mut self, turn: &StoredTurn) -> Result<(), StorageError>;
     /// Ends the session's turn `turn`; another (or no) turn is [`StorageError::LeaseLost`].
     fn delete_turn(&mut self, session: &Id, turn: &Id) -> Result<(), StorageError>;
+    /// Records (or moves forward) the stop's coverage of one card. A coverage never moves to an
+    /// older generation ([`StorageError::InvalidRecord`]).
+    fn cover_stop(&mut self, coverage: &StoredStopCoverage) -> Result<(), StorageError>;
 }
 
 /// The page bound every listing of this repository honours.

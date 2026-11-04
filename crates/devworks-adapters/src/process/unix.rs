@@ -25,7 +25,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     if let Some(dir) = &spec.cwd {
         cmd.current_dir(dir);
     }
-    cmd.stdin(if spec.pipe_stdin {
+    cmd.stdin(if spec.pipe_stdin || spec.stdin.is_some() {
         Stdio::piped()
     } else {
         Stdio::null()
@@ -43,6 +43,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     let mut child = cmd
         .spawn()
         .map_err(|e| ProcessError::Spawn(e.to_string()))?;
+    super::feed_stdin(&mut child, spec);
     let pid = child.id();
     let birth = start_time(pid as i32, true).unwrap_or_else(|| UNAVAILABLE.into());
     let input = child

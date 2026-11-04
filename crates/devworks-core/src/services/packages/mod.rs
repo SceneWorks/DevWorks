@@ -132,7 +132,7 @@ use crate::ports::packages::{
 };
 use crate::ports::storage::{
     ApplicationStore, NewEvent, PackageRegistryRead, ReadSnapshot, StorageError, StoredPackage,
-    StoredPackageVersion, StoredProposal, StoredStateGeneration, VersionPhase, WriteOptions,
+    StoredPackageProposal, StoredPackageVersion, StoredStateGeneration, VersionPhase, WriteOptions,
     WriteTransaction, run_write,
 };
 use crate::ports::{
@@ -1687,7 +1687,7 @@ impl PackageService {
         p.pending_digest = Some(candidate.manifest_digest.clone());
         Self::save(tx, &mut p, false)?;
         let changes = view::changes(base.as_ref(), &candidate);
-        let proposal = StoredProposal {
+        let proposal = StoredPackageProposal {
             id: id.clone(),
             revision: 1,
             package_id: candidate.package_id.clone(),
@@ -2179,7 +2179,7 @@ impl PackageService {
         manifest_digest: &str,
         approve: bool,
         rationale: &str,
-    ) -> Result<Result<StoredProposal, Refusal>, StorageError> {
+    ) -> Result<Result<StoredPackageProposal, Refusal>, StorageError> {
         if ctx.principal_kind() != PrincipalKind::Human {
             return Ok(Err(Refusal::new(
                 DomainErrorCode::PermissionDenied,

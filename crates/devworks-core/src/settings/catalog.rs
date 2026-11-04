@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 5;
+pub const CATALOG_REVISION: i64 = 7;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -702,6 +702,16 @@ fn build() -> Vec<SettingDescriptor> {
             NextAdmission
         ),
         setting!(
+            "knowledge.lessonRecurrenceThreshold",
+            "Lesson recurrence threshold",
+            "Distinct source events after which a lesson an agent or reviewer inferred takes effect as a rule, without approval. A rule from your own words takes effect at once. Engineering default.",
+            Knowledge,
+            INHERITED,
+            ValueKind::Integer { min: 2, max: 20 },
+            3,
+            NextAdmission
+        ),
+        setting!(
             "power.keepAwake",
             "Keep the computer awake while DevWorks is open",
             "While DevWorks is open, ask the operating system not to sleep when idle, even with no active work; the display may still turn off. It does not prevent explicit sleep, closing the lid, shutdown or every power policy. Closing DevWorks or turning this off releases the request.",
@@ -793,6 +803,26 @@ fn build() -> Vec<SettingDescriptor> {
             50_000,
             NextAdmission
         ),
+        setting!(
+            OVERLAY_RECORD_RETENTION_DAYS_KEY,
+            "Ended ref overlay retention (days)",
+            "An ended ref overlay (expired, retired or failed) is pruned once it ended longer ago than this and is beyond the newest records kept per repository: its record, layers and graph data go, while its runs, history and logs stay. Live overlays and any still named by a view are never pruned. Separate from artifact retention. Engineering default.",
+            Storage,
+            WORKSPACE,
+            ValueKind::Integer { min: 1, max: 365 },
+            14,
+            NextAdmission
+        ),
+        setting!(
+            OVERLAY_RECORDS_KEPT_KEY,
+            "Ended ref overlays kept per repository",
+            "The most recently ended ref overlays each repository keeps whatever their age; older ones past the retention window are pruned. Engineering default.",
+            Storage,
+            WORKSPACE,
+            ValueKind::Integer { min: 0, max: 10_000 },
+            32,
+            NextAdmission
+        ),
     ]);
     all
 }
@@ -811,6 +841,10 @@ pub const PACKAGE_INDEX_SOURCES_KEY: &str = "packages.indexSources";
 pub const LOG_RETENTION_DAYS_KEY: &str = "diagnostics.logRetentionDays";
 /// Most diagnostic log records retained.
 pub const LOG_MAX_RECORDS_KEY: &str = "diagnostics.logMaxRecords";
+/// Days an ended ref overlay's record is kept before record retention may prune it.
+pub const OVERLAY_RECORD_RETENTION_DAYS_KEY: &str = "indexing.overlayRecordRetentionDays";
+/// Ended ref overlays each repository keeps regardless of age.
+pub const OVERLAY_RECORDS_KEPT_KEY: &str = "indexing.overlayRecordsKept";
 /// Whether agents may use the shared web fetch tool.
 pub const WEB_FETCH_TOOLS_KEY: &str = "tools.webFetch";
 /// The configured external search provider (`none` or a provider ID).

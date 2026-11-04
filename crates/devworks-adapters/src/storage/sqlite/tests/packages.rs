@@ -1,9 +1,9 @@
-//! The package registry records of migration 15 on the real SQLite store: the registry head and
+//! The package registry records of migration 20 on the real SQLite store: the registry head and
 //! package records are compare-and-set, version identity is immutable, proposals record one
 //! decision, and publishing a state generation fences the previous one while retaining its final
-//! state. Migration 15 applies on a version-12 store.
+//! state. Migration 20 applies on a version-12 store.
 use super::{Harness, through};
-use crate::storage::sqlite::{MIGRATION_0015_SHA256, MIGRATIONS, SqliteStore};
+use crate::storage::sqlite::{MIGRATION_0020_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id};
 use serde_json::json;
@@ -135,7 +135,7 @@ fn proposals_record_one_decision_and_generations_fence_and_retain_state() {
         move |tx| {
             tx.packages().insert_package(&package("demo"))?;
             tx.packages().insert_version(&version("demo", &d))?;
-            let pr = StoredProposal {
+            let pr = StoredPackageProposal {
                 id: Id::new("proposal-1").unwrap(),
                 revision: 1,
                 package_id: "demo".into(),
@@ -212,25 +212,25 @@ fn proposals_record_one_decision_and_generations_fence_and_retain_state() {
 }
 
 #[test]
-fn migration_15_adds_the_package_registry_to_a_version_14_store() {
+fn migration_20_adds_the_package_registry_to_a_version_19_store() {
     let m = MIGRATIONS
         .iter()
-        .find(|m| m.version == 15)
-        .expect("migration 15");
+        .find(|m| m.version == 20)
+        .expect("migration 20");
     assert_eq!(
         m.checksum(),
-        MIGRATION_0015_SHA256,
+        MIGRATION_0020_SHA256,
         "an applied migration was edited"
     );
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 14));
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 19));
     assert!(
         MIGRATIONS
             .iter()
-            .filter(|e| e.version < 15)
+            .filter(|e| e.version < 20)
             .all(|e| e.minimum_reader <= m.minimum_reader && e.minimum_writer <= m.minimum_writer)
     );
     let h = Harness::new();
-    drop(SqliteStore::open_with(h.config(), &through(14)).unwrap());
+    drop(SqliteStore::open_with(h.config(), &through(19)).unwrap());
     let s = h.store();
     let head = run_write(&s, WriteOptions::default(), |tx| {
         tx.packages().registry_revision()

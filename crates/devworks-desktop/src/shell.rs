@@ -4,6 +4,7 @@
 use crate::attachments;
 use crate::backend::{Backend, Client, Reply, Slot, TaskOutput, Unresolved, is_unknown};
 use crate::chat::{self, AttachState, Attachment, Chat, ChatAction, StartReason, Surface};
+use crate::knowledge_screen::{self, KnowledgeAction, KnowledgeScreen};
 use crate::memory::{Memory, RouteMemory};
 use crate::notifications::{CardAction, Completions};
 use crate::ops::{self, Failure};
@@ -15,7 +16,7 @@ use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{ArtifactRecord, ResourceRecord};
+use devworks_core::protocol::records::{ArtifactRecord, ConnectionLifecycle, ResourceRecord};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
 use eframe::egui::{
@@ -27,7 +28,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+pub mod indexing;
+pub mod jobs;
 pub mod projects;
+pub mod work;
 
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
 pub trait Dialogs {
@@ -106,6 +110,8 @@ pub enum Lifecycle {
 
 /// Longest wait for in-flight UI requests before shutdown proceeds anyway.
 pub const QUIESCE_BOUND: Duration = Duration::from_secs(10);
+/// How often Settings → Provider connections reloads while a sign-in is open.
+pub const CONNECTION_POLL: Duration = Duration::from_secs(3);
 /// Height of the global toolbar; the completion overlay anchors just below it.
 pub const TOOLBAR: f32 = 46.0;
 
@@ -149,11 +155,15 @@ pub struct Shell {
     routes: BTreeMap<Route, RouteMemory>,
     pub chat: Chat,
     pub settings: SettingsScreen,
+    pub knowledge: KnowledgeScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
     pub addons: crate::addons::AddonsScreen,
     /// All projects, the project selector and Repositories (DW-11).
     pub projects: projects::ProjectsUi,
+    pub jobs: jobs::JobsUi,
+    /// Features, the board, Issues and Overview of the selected project (DW-12).
+    pub work: work::WorkUi,
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
@@ -288,10 +298,13 @@ impl Shell {
             routes: memory.routes.clone(),
             chat,
             settings,
+            knowledge: KnowledgeScreen::new(),
             artifacts: ListState::default(),
             resources: ListState::default(),
             addons: Default::default(),
             projects: projects::ProjectsUi::default(),
+            jobs: jobs::JobsUi::default(),
+            work: work::WorkUi::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             scrolls: Scrolls::restoring(&memory.scroll),
@@ -424,10 +437,45 @@ impl Shell {
                 self.load_projects();
                 self.load_deleted_projects();
                 self.load_repositories();
+                if let Some(p) = self
+                    .routes
+                    .get(&Route::Portfolio)
+                    .and_then(|m| m.selection.clone())
+                {
+                    self.load_project_jobs(&p);
+                }
             }
             Route::Repositories => {
                 self.load_projects();
                 self.load_repositories();
+                if self.projects.indexing.sources.is_none() {
+                    self.load_index_sources();
+                }
+            }
+            Route::Indexing => {
+                if self.projects.indexing.sources.is_none() {
+                    self.load_index_sources();
+                }
+                self.index_act(vec![indexing::IndexAction::Runs]);
+            }
+            Route::Knowledge => {
+                // Scope choices are the projects the user can see.
+                if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
+                    self.load_projects();
+                }
+                if !self.knowledge.loaded && self.knowledge.listing.is_none() {
+                    self.load_knowledge();
+                }
+            }
+            Route::Jobs => {
+                self.load_jobs();
+                if !self.projects.list.loaded {
+                    self.load_projects();
+                }
+            }
+            Route::Overview | Route::Features | Route::Issues => {
+                self.load_projects();
+                self.load_work();
             }
             _ => {}
         }
@@ -484,6 +532,20 @@ impl Shell {
         frame: impl FnOnce(&dyn Backend) -> Vec<u8>,
     ) -> bool {
         if self.online().is_err() {
+            return false;
+        }
+        // A slot whose earlier command has no definite outcome keeps it until Confirm outcomes
+        // settles that exact frame: a new request there would replace it (and could commit a
+        // second time under a fresh request key).
+        if self
+            .client
+            .as_ref()
+            .is_some_and(|c| c.unresolved().iter().any(|u| u.slot == slot))
+        {
+            self.announce(format!(
+                "{label}: an earlier request here is not confirmed yet. Use Confirm outcomes \
+                 first; nothing is applied twice."
+            ));
             return false;
         }
         let Some(b) = self.backend() else {
@@ -722,6 +784,243 @@ impl Shell {
                 self.command(Slot::AddonsCommand, "Updating the add-on", op, move |b| {
                     a::lifecycle_frame(b, cmd)
                 });
+            }
+        }
+    }
+
+    /// Starts a new Knowledge listing (first page) and refreshes the retrieval mode. A listing
+    /// that could not be submitted is not left in progress.
+    fn load_knowledge(&mut self) {
+        let (op, body) = self.knowledge.begin_listing(false);
+        let generation = self.knowledge.generation;
+        if !self.query(
+            Slot::KnowledgeList(generation),
+            "Loading Knowledge",
+            op,
+            move |b| knowledge_screen::query(b, op, body),
+        ) {
+            self.knowledge.listing = None;
+        }
+        let body = self.knowledge.diagnostics_body();
+        self.query(
+            Slot::KnowledgeDiagnostics,
+            "Checking Knowledge",
+            "knowledge.diagnostics",
+            move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+        );
+    }
+    /// Gives the Knowledge screen the projects the user can see (active and archived, from
+    /// `projects.list`) and follows the navigation's project selection; a changed scope lists
+    /// again.
+    fn sync_knowledge_scope(&mut self, actions: &mut Vec<KnowledgeAction>) {
+        use devworks_core::protocol::records::LifeState;
+        if !self.projects.list.loaded {
+            return;
+        }
+        let projects: Vec<(String, String)> = self
+            .projects
+            .list
+            .items
+            .iter()
+            .filter(|p| matches!(p.lifecycle, LifeState::Active | LifeState::Archived))
+            .map(|p| {
+                let name = match p.lifecycle {
+                    LifeState::Archived => format!("{} (archived)", p.name.0),
+                    _ => p.name.0.clone(),
+                };
+                (p.id.0.as_str().to_owned(), name)
+            })
+            .collect();
+        let mut changed = self.knowledge.set_projects(projects);
+        let nav = self.selected_project().map(str::to_owned);
+        if self.knowledge.followed.as_ref() != Some(&nav) {
+            self.knowledge.followed = Some(nav.clone());
+            changed |= self.knowledge.follow_navigation(nav.as_deref());
+        }
+        if changed && self.knowledge.loaded {
+            actions.push(KnowledgeAction::Search);
+        }
+    }
+    /// Stores the first of `paths` as the user's artifact (like a chat attachment), then
+    /// previews its import. One import at a time; nothing is imported before Confirm.
+    fn import_knowledge_file(&mut self, paths: Vec<PathBuf>) {
+        let Some(path) = paths.into_iter().next() else {
+            return;
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "import.json".into());
+        if !self.knowledge.begin_import(&name) {
+            self.knowledge.message = Some((
+                widgets::Tone::Attention,
+                "An import is already in progress.".into(),
+            ));
+            return;
+        }
+        let media = if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        {
+            "application/json"
+        } else {
+            attachments::media_type(&path)
+        };
+        let submitted = self.online().is_ok()
+            && self.client.as_mut().is_some_and(|c| {
+                c.task(
+                    Slot::KnowledgeImportSave,
+                    "Storing the import file",
+                    move |b| attachments::prepare_file(b, &path, &name, media, "knowledge-import"),
+                )
+            });
+        if !submitted {
+            self.knowledge.import = Some(knowledge_screen::ImportStage::Failed {
+                name: "the file".into(),
+                error: "DevWorks is offline or closing.".into(),
+            });
+        }
+    }
+    fn read_knowledge(&mut self, claim: devworks_core::protocol::Id) {
+        let body = self.knowledge.read_body(&claim);
+        self.query(
+            Slot::KnowledgeRead(claim.as_str().to_owned()),
+            "Loading a Knowledge entry",
+            "knowledge.read",
+            move |b| knowledge_screen::query(b, "knowledge.read", body),
+        );
+    }
+    /// Submits one Knowledge write at a time; what it took from the screen's forms
+    /// (`submitted`) stays until its outcome is recorded.
+    fn knowledge_write(
+        &mut self,
+        label: &str,
+        op: &'static str,
+        body: serde_json::Value,
+        submitted: knowledge_screen::Submitted,
+    ) {
+        if self.knowledge.writing.is_some() {
+            return;
+        }
+        self.knowledge.writing = Some(label.to_owned());
+        self.knowledge.submitted = Some(submitted);
+        if !self.command(Slot::KnowledgeWrite, label, op, move |b| {
+            knowledge_screen::command(b, op, body)
+        }) {
+            // Refused because an earlier write is unresolved: that one stays the write in
+            // flight until Confirm outcomes settles it.
+            let held = self.client.as_ref().and_then(|c| {
+                c.unresolved()
+                    .iter()
+                    .find(|u| u.slot == Slot::KnowledgeWrite)
+                    .map(|u| u.label.clone())
+            });
+            self.knowledge.message = Some((
+                widgets::Tone::Attention,
+                match &held {
+                    Some(earlier) => format!(
+                        "{earlier}: the outcome is not confirmed yet. Use Confirm outcomes \
+                         first; Knowledge changes wait until it is known."
+                    ),
+                    None => format!("{label} was not sent: DevWorks is offline or closing."),
+                },
+            ));
+            self.knowledge.writing = held;
+            self.knowledge.submitted = None;
+        }
+    }
+    fn knowledge_actions(&mut self, actions: Vec<KnowledgeAction>) {
+        for a in actions {
+            match a {
+                KnowledgeAction::Search => self.load_knowledge(),
+                KnowledgeAction::More => {
+                    if self.knowledge.listing.is_some() || self.knowledge.cursor.is_none() {
+                        continue;
+                    }
+                    let (op, body) = self.knowledge.begin_listing(true);
+                    let generation = self.knowledge.generation;
+                    if !self.query(
+                        Slot::KnowledgeList(generation),
+                        "Loading more Knowledge",
+                        op,
+                        move |b| knowledge_screen::query(b, op, body),
+                    ) {
+                        self.knowledge.listing = None;
+                    }
+                }
+                KnowledgeAction::Select(id) => {
+                    self.knowledge.selected = Some(id.clone());
+                    self.knowledge.detail = None;
+                    self.knowledge.detail_error = None;
+                    self.read_knowledge(id);
+                }
+                KnowledgeAction::Save(draft) => match self.knowledge.save_body(&draft) {
+                    Ok((op, body)) => self.knowledge_write(
+                        "Entry",
+                        op,
+                        body,
+                        knowledge_screen::Submitted::Draft(draft),
+                    ),
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::PreviewSource => match self.knowledge.preview_body() {
+                    Ok((source, body)) => {
+                        self.knowledge.source_preview = None;
+                        self.query(
+                            Slot::KnowledgePreview(source),
+                            "Previewing a cleanup",
+                            "knowledge.diagnostics",
+                            move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+                        );
+                    }
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::ImportDialog => {
+                    let picked = self.dialogs.pick_files();
+                    self.import_knowledge_file(picked);
+                }
+                KnowledgeAction::ImportFiles(paths) => self.import_knowledge_file(paths),
+                KnowledgeAction::ConfirmImport => match self.knowledge.import_body() {
+                    Ok(body) => {
+                        if self.command(
+                            Slot::KnowledgeImport,
+                            "Importing Knowledge",
+                            "knowledge.import_user_data",
+                            move |b| {
+                                knowledge_screen::command(b, "knowledge.import_user_data", body)
+                            },
+                        ) {
+                            self.knowledge.import_started();
+                        } else {
+                            self.knowledge.message = Some((
+                                widgets::Tone::Attention,
+                                "The import was not sent: DevWorks is offline or closing.".into(),
+                            ));
+                        }
+                    }
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::CancelImport => {
+                    if !self.knowledge.import.as_ref().is_some_and(|s| s.busy()) {
+                        self.knowledge.import = None;
+                    }
+                }
+                KnowledgeAction::DeleteSource => match self.knowledge.delete_source_body() {
+                    Ok((op, body)) => self.knowledge_write(
+                        "Delete by source",
+                        op,
+                        body,
+                        knowledge_screen::Submitted::Nothing,
+                    ),
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::Change(change) => match self.knowledge.change_body(change) {
+                    Ok((op, body)) => {
+                        let submitted = self.knowledge.change_submission(change);
+                        self.knowledge_write(change.label(), op, body, submitted)
+                    }
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
             }
         }
     }
@@ -1126,6 +1425,17 @@ impl Shell {
         }
     }
 
+    /// Admits a Knowledge import file's exact save frame (prepared, or unconfirmed).
+    fn submit_import_save(&mut self, frame: Vec<u8>) -> bool {
+        self.client.as_mut().is_some_and(|c| {
+            c.task(
+                Slot::KnowledgeImportSave,
+                "Storing the import file",
+                move |b| attachments::save(b, frame, None),
+            )
+        })
+    }
+
     /// Admits an attachment's save frame (prepared, or unconfirmed) under `slot`.
     fn submit_save(
         &mut self,
@@ -1261,6 +1571,15 @@ impl Shell {
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
         let Some((slot, reply)) = self.apply_projects(slot, reply) else {
+            return;
+        };
+        let Some((slot, reply)) = self.apply_indexing(slot, reply) else {
+            return;
+        };
+        let Some((slot, reply)) = self.apply_jobs(slot, reply) else {
+            return;
+        };
+        let Some((slot, reply)) = self.apply_work(slot, reply) else {
             return;
         };
         match (slot, reply) {
@@ -1890,6 +2209,53 @@ impl Shell {
                 });
                 self.load_addons();
             }
+            (Slot::KnowledgeList(generation), Reply::Query(q)) => {
+                if self.knowledge.listed(generation, q) {
+                    self.load_knowledge();
+                }
+            }
+            (Slot::KnowledgeRead(claim), Reply::Query(q)) => self.knowledge.read_reply(&claim, q),
+            (Slot::KnowledgeDiagnostics, Reply::Query(q)) => self.knowledge.diagnostics_reply(q),
+            (Slot::KnowledgeImportSave, Reply::Task(r)) => match self.knowledge.import_saved(r) {
+                knowledge_screen::ImportNext::Store(frame) => {
+                    if !self.submit_import_save(frame) {
+                        // Not admitted: nothing was stored.
+                        self.knowledge.import = Some(knowledge_screen::ImportStage::Failed {
+                            name: "the file".into(),
+                            error: "DevWorks is offline or closing.".into(),
+                        });
+                    }
+                }
+                knowledge_screen::ImportNext::Preview(body) => {
+                    let submitted = self.query(
+                        Slot::KnowledgeImportPreview,
+                        "Previewing an import",
+                        "knowledge.diagnostics",
+                        move |b| knowledge_screen::query(b, "knowledge.diagnostics", body),
+                    );
+                    if !submitted {
+                        self.knowledge.import = None;
+                    }
+                }
+                knowledge_screen::ImportNext::Nothing => {}
+            },
+            (Slot::KnowledgeImportPreview, Reply::Query(q)) => self.knowledge.import_previewed(q),
+            (Slot::KnowledgeImport, Reply::Command(c)) => {
+                if self.knowledge.import_done(c) {
+                    self.load_knowledge();
+                }
+            }
+            (Slot::KnowledgePreview(source), Reply::Query(q)) => {
+                self.knowledge.preview_reply(&source, q)
+            }
+            (Slot::KnowledgeWrite, Reply::Command(c)) => {
+                if self.knowledge.written(c) {
+                    self.load_knowledge();
+                    if let Some(id) = self.knowledge.selected.clone() {
+                        self.read_knowledge(id);
+                    }
+                }
+            }
             (Slot::ResourcesList, Reply::Query(q)) => match ops::resources(q) {
                 Ok((items, more)) => {
                     self.resources = ListState {
@@ -1901,6 +2267,84 @@ impl Shell {
                 }
                 Err(e) => self.resources.error = Some(e.describe()),
             },
+            (Slot::Connections(g), Reply::Query(q)) => {
+                if g != self.settings.connections.generation {
+                    return;
+                }
+                match ops::connection_records(q) {
+                    Ok((items, next)) => {
+                        self.settings.connections.gathering.extend(items);
+                        match next {
+                            Some(cursor) => {
+                                if !self.query(
+                                    Slot::Connections(g),
+                                    "Loading provider connections",
+                                    "router.connections",
+                                    move |b| ops::router_connections(b, Some(&cursor)),
+                                ) {
+                                    self.settings.connections.loading = false;
+                                }
+                            }
+                            None => {
+                                let all = std::mem::take(&mut self.settings.connections.gathering);
+                                self.settings.connections.loaded(all);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.settings.connections.loading = false;
+                        self.settings.connections.error = Some(e.describe());
+                    }
+                }
+            }
+            (Slot::ConnectionCatalog(g), Reply::Query(q)) => {
+                if g != self.settings.connections.catalog_generation {
+                    return;
+                }
+                match ops::route_models(q) {
+                    Ok((items, next)) => {
+                        self.settings.connections.catalog_gathering.extend(items);
+                        match next {
+                            Some(cursor) => {
+                                self.query(
+                                    Slot::ConnectionCatalog(g),
+                                    "Loading models",
+                                    "router.catalog",
+                                    move |b| ops::router_catalog_all(b, Some(&cursor)),
+                                );
+                            }
+                            None => {
+                                let all = std::mem::take(
+                                    &mut self.settings.connections.catalog_gathering,
+                                );
+                                self.settings.connections.catalog_loaded(all);
+                            }
+                        }
+                    }
+                    Err(e) => self.settings.connections.catalog_error = Some(e.describe()),
+                }
+            }
+            (Slot::Configure(n), Reply::Task(t)) => {
+                let p = &mut self.settings.connections;
+                let label = p
+                    .busy
+                    .iter()
+                    .position(|(k, _)| *k == n)
+                    .map(|i| p.busy.remove(i).1)
+                    .unwrap_or_default();
+                p.message = Some(match t {
+                    Ok(TaskOutput::Stored { outcome, .. }) => match ops::configured(outcome) {
+                        Ok(true) => (Tone::Good, format!("{label}: done.")),
+                        Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
+                        Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
+                    },
+                    Ok(_) => (Tone::Bad, format!("{label}: unexpected reply.")),
+                    Err(e) => (Tone::Bad, format!("{label}: {e}")),
+                });
+                // Connections and the catalog changed: reload them, and what the composer shows.
+                self.load_connections();
+                self.invalidate_routing();
+            }
             (slot, Reply::Task(Err(e))) => {
                 self.announce(format!("A request for {slot:?} failed: {e}"));
             }
@@ -2024,6 +2468,23 @@ impl Shell {
             {
                 self.load_route();
             }
+            // Only an unpaged listing is re-read in place: a re-read of a list the user paged
+            // through would drop the pages they loaded.
+            Route::Knowledge
+                if self.knowledge.loaded
+                    && self.knowledge.listing.is_none()
+                    && self.knowledge.items.len() <= knowledge_screen::PAGE as usize =>
+            {
+                self.load_knowledge();
+            }
+            // Run status moves while the screen is open (claims, runs, cancellations).
+            Route::Jobs if !self.pending(&Slot::JobsList) && self.jobs.list_refresh.is_none() => {
+                self.load_jobs();
+            }
+            // Changes an agent made reach the work screens (the lists are read in full again).
+            Route::Overview | Route::Features | Route::Issues if !self.work_loading() => {
+                self.load_work();
+            }
             _ => {}
         }
     }
@@ -2145,6 +2606,9 @@ impl Shell {
                     }
                 }
                 SettingsAction::OpenAddOns => self.navigate(Route::AddOns),
+                SettingsAction::OpenJobs => self.navigate(Route::Jobs),
+                SettingsAction::OpenConnections => self.load_connections(),
+                SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
             }
         }
@@ -2178,6 +2642,124 @@ impl Shell {
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Settings → Provider connections (DW-18)
+
+    /// Loads every connection and the whole catalog, page by page, as new loads.
+    fn load_connections(&mut self) {
+        if let Some(b) = self.backend() {
+            self.settings.connections.secret_store = Some(b.secret_store());
+        }
+        let p = &mut self.settings.connections;
+        p.generation += 1;
+        p.gathering.clear();
+        p.loading = true;
+        p.last_load = Some(Instant::now());
+        p.catalog_generation += 1;
+        p.catalog_gathering.clear();
+        let (g, cg) = (p.generation, p.catalog_generation);
+        if !self.query(
+            Slot::Connections(g),
+            "Loading provider connections",
+            "router.connections",
+            |b| ops::router_connections(b, None),
+        ) {
+            self.settings.connections.loading = false;
+        }
+        self.query(
+            Slot::ConnectionCatalog(cg),
+            "Loading models",
+            "router.catalog",
+            |b| ops::router_catalog_all(b, None),
+        );
+    }
+
+    fn connection_action(&mut self, action: crate::connections_screen::ConnectionAction) {
+        use crate::connections_screen::ConnectionAction as A;
+        match action {
+            A::Reload => self.load_connections(),
+            A::UseSessionOnly => {
+                if let Some(b) = self.backend() {
+                    match b.use_session_only_secrets() {
+                        Ok(()) => {
+                            self.settings.connections.message = Some((
+                                Tone::Attention,
+                                "Credentials are kept in memory for this session only; sign in \
+                                 again after a restart."
+                                    .into(),
+                            ));
+                            self.settings.connections.secret_store = Some(b.secret_store());
+                        }
+                        Err(e) => self.settings.connections.message = Some((Tone::Bad, e)),
+                    }
+                }
+            }
+            A::Configure {
+                label,
+                action,
+                key,
+                code,
+            } => {
+                if self.online().is_err() {
+                    self.settings.connections.message =
+                        Some((Tone::Bad, "DevWorks is offline or closing.".into()));
+                    return;
+                }
+                let p = &mut self.settings.connections;
+                p.sequence += 1;
+                let n = p.sequence;
+                let submitted = self.client.as_mut().is_some_and(|c| {
+                    c.task(Slot::Configure(n), &label, move |b| {
+                        let mut action = action;
+                        // The key goes to the OS secret store first; only its handle travels.
+                        if let Some(key) = key {
+                            let handle = b
+                                .stage_api_key(key)
+                                .map_err(|e| format!("the secret store refused the key: {e}"))?;
+                            action["credentialRef"] =
+                                serde_json::Value::String(handle.as_str().to_owned());
+                        }
+                        if let Some((flow, pasted)) = code {
+                            b.submit_sign_in_code(&flow, pasted)?;
+                        }
+                        let frame = ops::router_configure(b, action);
+                        let outcome =
+                            crate::backend::resolve_command(b, "router.configure", &frame);
+                        Ok(TaskOutput::Stored { outcome, frame })
+                    })
+                });
+                if submitted {
+                    self.settings.connections.busy.push((n, label));
+                } else {
+                    self.settings.connections.message =
+                        Some((Tone::Bad, "The change was not submitted.".into()));
+                }
+            }
+        }
+    }
+
+    /// Reloads the connections panel while a sign-in is open (a device code finishes in the
+    /// background), at most every few seconds.
+    fn poll_connections(&mut self, ctx: &egui::Context) {
+        let p = &self.settings.connections;
+        let signing_in = p.records.iter().any(|r| {
+            r.lifecycle.as_ref().is_some_and(|l| {
+                matches!(
+                    l,
+                    ConnectionLifecycle::Authorizing | ConnectionLifecycle::Refreshing
+                )
+            })
+        });
+        if !self.settings.show_connections || !signing_in {
+            return;
+        }
+        let due = !p.loading && p.last_load.is_none_or(|t| t.elapsed() >= CONNECTION_POLL);
+        if due {
+            self.load_connections();
+        }
+        ctx.request_repaint_after(CONNECTION_POLL);
     }
 
     // -----------------------------------------------------------------------------------------
@@ -2374,18 +2956,36 @@ impl Shell {
                     })
                 })
                 .collect(),
+            knowledge_import: self
+                .knowledge
+                .import_frame(false)
+                .map(|(name, frame)| crate::memory::UnconfirmedImport { name, frame }),
+            plans: self
+                .work
+                .plan_saving
+                .values()
+                .filter_map(|f| serde_json::to_value(f).ok())
+                .collect(),
             commands,
         }
     }
 
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
     fn restore_pending(&mut self, pending: crate::memory::PendingMemory) {
+        if let Some(i) = &pending.knowledge_import {
+            self.knowledge.import = Some(knowledge_screen::ImportStage::Unconfirmed {
+                name: i.name.clone(),
+                frame: i.frame.clone(),
+            });
+        }
+        let mut confirming: Vec<String> = Vec::new();
         for c in pending.commands {
             let slot = c.slot.clone();
             let Some(u) = Unresolved::restored(c.slot, c.label, &c.operation, c.frame) else {
                 continue;
             };
             match &slot {
+                Slot::WorkPlan(id) => confirming.push(id.clone()),
                 Slot::SessionStart => {
                     self.chat.starting = Some(pending.starting.unwrap_or(StartReason::ForDraft));
                 }
@@ -2431,12 +3031,22 @@ impl Shell {
                 Slot::RoutePin(id) => {
                     self.chat.routing.pin_in_flight.insert(id.clone());
                 }
+                // Knowledge changes stay blocked until the earlier write's outcome is known.
+                Slot::KnowledgeWrite => {
+                    self.knowledge.writing = Some(u.label.clone());
+                }
                 _ => {}
             }
             if let Some(client) = &mut self.client {
                 client.keep_unresolved(u);
             }
         }
+        let plans = pending
+            .plans
+            .into_iter()
+            .filter_map(|v| serde_json::from_value(v).ok())
+            .collect();
+        self.restore_plan_saves(plans, &confirming);
         for r in pending.removed {
             let local = self.chat.next_local();
             self.chat.removed.insert(
@@ -2628,6 +3238,9 @@ impl Shell {
         if !dropped.is_empty() {
             if conversation_visible {
                 self.attach(dropped);
+            } else if self.route == Route::Knowledge {
+                // A file dropped on the Knowledge screen is imported (previewed first).
+                self.knowledge_actions(vec![KnowledgeAction::ImportFiles(dropped)]);
             } else {
                 self.announce("Open the workspace coordinator to attach dropped files.");
             }
@@ -2814,6 +3427,7 @@ impl Shell {
             .count();
         self.client.as_ref().map_or(0, |c| c.unresolved().len())
             + attachments
+            + usize::from(self.knowledge.import_frame(true).is_some())
             + self
                 .chat
                 .removed
@@ -2839,6 +3453,13 @@ impl Shell {
             .collect();
         for local in locals {
             self.confirm_attachment(local);
+        }
+        // A Knowledge import file's save: its identical frame (not submitted while closing: it
+        // stays unconfirmed, its frame kept).
+        if let Some((name, frame)) = self.knowledge.import_frame(true)
+            && self.submit_import_save(frame.clone())
+        {
+            self.knowledge.import = Some(knowledge_screen::ImportStage::Storing { name, frame });
         }
         let removed: Vec<(u64, Vec<u8>, Option<PathBuf>)> = self
             .chat
@@ -3073,13 +3694,41 @@ impl Shell {
             Route::Settings => {
                 let online = self.online();
                 let mut actions = Vec::new();
+                // Repository indexing sources sit with the repository paths (General).
+                let mut index_actions = Vec::new();
+                let up = online.is_ok();
+                let indexing = &mut self.projects.indexing;
+                let mut general = |ui: &mut Ui| {
+                    ui.add_space(8.0);
+                    indexing::sources_panel(ui, indexing, up, &mut index_actions);
+                    if widgets::secondary_button(ui, "Open indexing runs").clicked() {
+                        index_actions.push(indexing::IndexAction::Runs);
+                    }
+                };
                 self.settings.ui(
                     ui,
                     online.as_ref().map(|_| ()).map_err(String::as_str),
                     &mut actions,
+                    &mut general,
                 );
                 self.settings_actions(actions);
+                if index_actions
+                    .iter()
+                    .any(|a| matches!(a, indexing::IndexAction::Runs))
+                {
+                    self.route = Route::Indexing;
+                }
+                if self.projects.indexing.sources.is_none()
+                    && self.projects.indexing.sources_error.is_none()
+                    && online.is_ok()
+                {
+                    self.load_index_sources();
+                }
+                self.index_act(index_actions);
+                let ctx = ui.ctx().clone();
+                self.poll_connections(&ctx);
             }
+            Route::Indexing => self.indexing_screen(ui),
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
             Route::AddOns => {
@@ -3094,6 +3743,24 @@ impl Shell {
             }
             Route::Portfolio => self.portfolio_screen(ui),
             Route::Repositories => self.repositories_screen(ui),
+            Route::Knowledge => {
+                let online = self.online();
+                let mut actions = Vec::new();
+                self.sync_knowledge_scope(&mut actions);
+                // The selected subview is route memory, kept across navigation and restarts.
+                self.knowledge.tab = self.routes.entry(Route::Knowledge).or_default().tab;
+                self.knowledge.ui(
+                    ui,
+                    online.as_ref().map(|_| ()).map_err(String::as_str),
+                    &mut actions,
+                );
+                self.routes.entry(Route::Knowledge).or_default().tab = self.knowledge.tab;
+                self.knowledge_actions(actions);
+            }
+            Route::Jobs => self.jobs_screen(ui),
+            Route::Overview => self.overview_screen(ui),
+            Route::Features => self.features_screen(ui),
+            Route::Issues => self.issues_screen(ui),
             _ => self.pending_screen(ui),
         }
     }
@@ -3436,9 +4103,8 @@ impl Shell {
         let card_actions = self.completions.ui(ctx, TOOLBAR + 8.0);
         for a in card_actions {
             if let CardAction::Open(id) = a {
-                self.announce(format!(
-                    "Opening completed work {id} arrives with its work screens (DW-12)."
-                ));
+                // Reading or opening completed work never dismisses its card.
+                self.open_work(&id);
             }
         }
         if let Some(text) = self.completions.take_announcement() {

@@ -239,8 +239,8 @@ fn proposal_row(r: &Row<'_>) -> rusqlite::Result<ProposalRaw> {
 fn actor(s: String) -> Result<ActorId, StorageError> {
     Id::new(s).map(ActorId).map_err(|_| corrupt("stored actor"))
 }
-fn proposal_of(r: ProposalRaw) -> Result<StoredProposal, StorageError> {
-    Ok(StoredProposal {
+fn proposal_of(r: ProposalRaw) -> Result<StoredPackageProposal, StorageError> {
+    Ok(StoredPackageProposal {
         id: Id::new(r.0).map_err(|_| corrupt("stored proposal id"))?,
         revision: r.1,
         package_id: r.2,
@@ -258,7 +258,7 @@ fn proposal_of(r: ProposalRaw) -> Result<StoredProposal, StorageError> {
         created_at_ms: r.14,
     })
 }
-fn proposal(conn: &Connection, id: &str) -> Result<Option<StoredProposal>, StorageError> {
+fn proposal(conn: &Connection, id: &str) -> Result<Option<StoredPackageProposal>, StorageError> {
     db(conn
         .prepare_cached(&format!(
             "SELECT {PROPOSAL} FROM package_proposals WHERE id=?1"
@@ -271,7 +271,7 @@ fn proposal_for(
     conn: &Connection,
     pkg: &str,
     d: &str,
-) -> Result<Option<StoredProposal>, StorageError> {
+) -> Result<Option<StoredPackageProposal>, StorageError> {
     db(conn
         .prepare_cached(&format!(
             "SELECT {PROPOSAL} FROM package_proposals WHERE package_id=?1 AND manifest_digest=?2 ORDER BY created_at DESC, rowid DESC LIMIT 1"
@@ -423,14 +423,14 @@ macro_rules! registry_reads {
             ) -> Result<Vec<StoredPackageVersion>, StorageError> {
                 versions(self.conn, package_id)
             }
-            fn proposal(&self, id: &Id) -> Result<Option<StoredProposal>, StorageError> {
+            fn proposal(&self, id: &Id) -> Result<Option<StoredPackageProposal>, StorageError> {
                 proposal(self.conn, id.as_str())
             }
             fn proposal_for(
                 &self,
                 package_id: &str,
                 manifest_digest: &str,
-            ) -> Result<Option<StoredProposal>, StorageError> {
+            ) -> Result<Option<StoredPackageProposal>, StorageError> {
                 proposal_for(self.conn, package_id, manifest_digest)
             }
             fn state_generation(
@@ -654,7 +654,7 @@ impl PackageRegistry for Unit<'_> {
         Ok(())
     }
 
-    fn insert_proposal(&mut self, p: &StoredProposal) -> Result<(), StorageError> {
+    fn insert_proposal(&mut self, p: &StoredPackageProposal) -> Result<(), StorageError> {
         object("origin", &p.origin)?;
         object("summary", &p.summary)?;
         if proposal(self.conn, p.id.as_str())?.is_some() {
@@ -688,9 +688,9 @@ impl PackageRegistry for Unit<'_> {
 
     fn update_proposal(
         &mut self,
-        p: &StoredProposal,
+        p: &StoredPackageProposal,
         expected_revision: i64,
-    ) -> Result<StoredProposal, StorageError> {
+    ) -> Result<StoredPackageProposal, StorageError> {
         if let Some(d) = &p.decision {
             object("decision", d)?;
         }

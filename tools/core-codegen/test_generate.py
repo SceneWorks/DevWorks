@@ -36,17 +36,42 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.list', 'resources.acquire', 'resources.renew', 'resources.release',
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
-            'workspace.logs', 'workspace.record_diagnostic', 'router.availability',
+            'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
+            'knowledge.search', 'knowledge.read', 'knowledge.record', 'knowledge.revise',
+            'knowledge.verify', 'knowledge.challenge', 'knowledge.diagnostics', 'knowledge.subgraph',
+            'knowledge.entity_bundle', 'knowledge.entity_graph', 'knowledge.claim_bundle', 'knowledge.expand_frontier',
+            'knowledge.query', 'knowledge.promote', 'knowledge.tagged_lessons', 'knowledge.relate',
+            'knowledge.tag', 'knowledge.retract', 'knowledge.scope', 'knowledge.write_status',
+            'knowledge.import_user_data', 'dreaming.revert',
             'addons.catalog', 'addons.install', 'addons.configure', 'addons.enable',
-            'addons.disable', 'addons.update', 'addons.rollback', 'addons.uninstall', 'web.search',
-            'web.fetch'})
+            'addons.disable', 'addons.update', 'addons.rollback', 'addons.uninstall',
+            'router.connections', 'router.configure', 'jobs.list', 'jobs.create', 'jobs.edit',
+            'jobs.enable', 'jobs.run_now', 'jobs.inspect', 'jobs.cancel', 'jobs.delete',
+            'jobs.disable', 'web.search', 'web.fetch',
+            # Feature readiness and queue/workflow revisions on every work record result.
+            'features.list', 'features.get', 'features.create', 'features.edit_plan',
+            'features.dependencies', 'features.edit', 'issues.list', 'issues.get',
+            'issues.create', 'issues.edit', 'tasks.list', 'tasks.get', 'tasks.create',
+            'tasks.edit', 'tasks.move', 'tasks.assign', 'tasks.dependency_links',
+            'tasks.acceptance_evidence', 'tasks.sync_plan', 'tasks.set_feature',
+            # A prioritization's bounded placement (one move, any bucket size).
+            'features.prioritize', 'issues.prioritize', 'tasks.prioritize',
+            'indexing.status', 'indexing.runs', 'indexing.refresh_overlay'})
+        self.assertEqual(carried['features.edit'], {2})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
-        # The specialized lifecycle envelope introduces nothing; only its result record does.
-        self.assertEqual(carried['addons.install'], {2})
-        self.assertEqual(carried['addons.propose'], set())
+        self.assertEqual(carried['router.connections'], {2})
+        self.assertEqual(carried['router.configure'], {2})
+        # Knowledge projections and paged receipts negotiate revision 2; deletions stay at 1.
+        self.assertEqual(carried['knowledge.subgraph'], {2})
+        self.assertEqual(carried['knowledge.tag'], {2})
+        self.assertEqual(carried['dreaming.revert'], {2})
+        self.assertEqual(carried['knowledge.delete_by_source'], set())
+        self.assertEqual(carried['jobs.run_now'], {2})
         self.assertEqual(carried['web.search'], {2})
         self.assertEqual(carried['web.fetch'], {2})
+        self.assertEqual(carried['indexing.runs'], {2})
+        self.assertEqual(carried['indexing.refresh_overlay'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the

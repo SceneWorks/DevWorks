@@ -117,21 +117,36 @@ impl Revisioned for EditInput {
 /// `issues.prioritize` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["projectId", "expectedQueueRevision", "orderedWorkIds"]}, {"required": ["projectId", "expectedQueueRevision", "placement"], "x-since": 2}]))]
 pub struct PrioritizeInput {
     pub project_id: ProjectId,
     pub expected_queue_revision: Revision,
-    pub ordered_work_ids: NonEmpty<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "NonEmpty<Id>")]
+    pub ordered_work_ids: Option<NonEmpty<Id>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "QueuePlacement", extend("x-since" = 2))]
+    pub placement: Option<QueuePlacement>,
 }
 impl Check for PrioritizeInput {
     fn check(&self) -> Result<(), String> {
         self.project_id.check()?;
         self.expected_queue_revision.check()?;
         self.ordered_work_ids.check()?;
+        self.placement.check()?;
         Ok(())
     }
 }
 impl Revisioned for PrioritizeInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.placement = None;
+        }
+    }
 }
 
 /// `issues.publish` Command input.

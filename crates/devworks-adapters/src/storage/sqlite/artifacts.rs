@@ -457,6 +457,21 @@ macro_rules! artifact_reads {
             fn shares(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError> {
                 shares(self.conn, artifact)
             }
+            fn repository_text_readers(
+                &self,
+                artifact: &Id,
+            ) -> Result<Vec<ProjectId>, StorageError> {
+                let mut s = db(self.conn.prepare_cached(
+                    "SELECT DISTINCT pr.project_id FROM repository_texts t
+                     JOIN project_repositories pr ON pr.repository_id=t.repository_id
+                     LEFT JOIN repository_details d ON d.repository_id=t.repository_id
+                     WHERE t.artifact_id=?1 AND COALESCE(d.lifecycle,'Active')<>'Deleted'
+                     ORDER BY pr.project_id",
+                ))?;
+                let rows = db(db(s.query_map([artifact.as_str()], |r| r.get::<_, String>(0)))?
+                    .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter().map(|p| id_of(p).map(ProjectId)).collect()
+            }
             fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
                 links(self.conn, artifact)
             }

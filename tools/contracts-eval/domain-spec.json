@@ -466,7 +466,19 @@
         "pending_plan": "?PendingFeaturePlan",
         "dependent_ids": "Items<Id>",
         "manual_order": "?Counter",
-        "github_issue": "?GithubIssueTracking"
+        "github_issue": "?GithubIssueTracking",
+        "readiness": "?ReadinessAssessment",
+        "queue_revision": "?Revision",
+        "workflow_revision": "?Revision",
+        "acceptance_tests": "?Items<AcceptanceCriterion>",
+        "pending_readiness": "?ReadinessAssessment"
+      },
+      "since": {
+        "readiness": 2,
+        "queue_revision": 2,
+        "workflow_revision": 2,
+        "acceptance_tests": 2,
+        "pending_readiness": 2
       }
     },
     "PlanDraft": {
@@ -841,7 +853,11 @@
         "claim_id": "?Id",
         "source": "EvidenceLocator",
         "snippet": "Content",
-        "metadata": "?SchemaValue"
+        "metadata": "?SchemaValue",
+        "source_revision": "?Text"
+      },
+      "since": {
+        "source_revision": 2
       }
     },
     "KnowledgeEntity": {
@@ -852,7 +868,23 @@
         "label": "Label",
         "entity_type": "Label",
         "aliases": "Items<Label>",
-        "scope": "DataScope"
+        "scope": "DataScope",
+        "canonical_name": "?Label",
+        "external_id": "?Text",
+        "source": "?Label",
+        "author_id": "?ActorId",
+        "created_at_ms": "?Counter",
+        "updated_at_ms": "?Counter",
+        "deleted": "?bool"
+      },
+      "since": {
+        "canonical_name": 2,
+        "external_id": 2,
+        "source": 2,
+        "author_id": 2,
+        "created_at_ms": 2,
+        "updated_at_ms": 2,
+        "deleted": 2
       }
     },
     "KnowledgeClaim": {
@@ -874,7 +906,37 @@
         "normalized_text": "?Content",
         "effective_at_ms": "?Counter",
         "supersedes": "?Id",
-        "source": "?Label"
+        "source": "?Label",
+        "entry_kind": "?KnowledgeEntryKind",
+        "lifecycle": "?KnowledgeLifecycle",
+        "origin": "?KnowledgeOrigin",
+        "origin_ref": "?Text",
+        "autonomous": "?bool",
+        "author_id": "?ActorId",
+        "session_id": "?Id",
+        "created_at_ms": "?Counter",
+        "updated_at_ms": "?Counter",
+        "verified_at_ms": "?Counter",
+        "verified_source_revision": "?Text",
+        "stale": "?bool",
+        "superseded_by": "?Id",
+        "lesson": "?LessonRecord"
+      },
+      "since": {
+        "entry_kind": 2,
+        "lifecycle": 2,
+        "origin": 2,
+        "origin_ref": 2,
+        "autonomous": 2,
+        "author_id": 2,
+        "session_id": 2,
+        "created_at_ms": 2,
+        "updated_at_ms": 2,
+        "verified_at_ms": 2,
+        "verified_source_revision": 2,
+        "stale": 2,
+        "superseded_by": 2,
+        "lesson": 2
       }
     },
     "ClaimDraft": {
@@ -892,7 +954,19 @@
         "normalized_text": "?Content",
         "effective_at_ms": "?Counter",
         "supersedes": "?Id",
-        "source": "?Label"
+        "source": "?Label",
+        "entry_kind": "?KnowledgeEntryKind",
+        "origin": "?KnowledgeOrigin",
+        "origin_ref": "?Text",
+        "lesson": "?LessonDraft",
+        "source_revision": "?Text"
+      },
+      "since": {
+        "entry_kind": 2,
+        "origin": 2,
+        "origin_ref": 2,
+        "lesson": 2,
+        "source_revision": 2
       }
     },
     "KnowledgeBatch": {
@@ -926,7 +1000,15 @@
         "truncated": "bool",
         "conflicts": "Rows<KnowledgeConflict>",
         "supersession_ids": "Items<Id>",
-        "summary": "?Content"
+        "summary": "?Content",
+        "relations": "?Rows<KnowledgeRelation>",
+        "revisions": "?Rows<KnowledgeRevisionEntry>",
+        "scope_revision": "?Revision"
+      },
+      "since": {
+        "relations": 2,
+        "revisions": 2,
+        "scope_revision": 2
       }
     },
     "KnowledgeQuery": {
@@ -959,7 +1041,15 @@
         "entity_ids": "Items<Id>",
         "claim_ids": "Items<Id>",
         "revision": "Revision",
-        "diagnostics": "Items<Diagnostic>"
+        "diagnostics": "Items<Diagnostic>",
+        "entity_count": "?Counter",
+        "claim_count": "?Counter",
+        "next_cursor": "?Cursor"
+      },
+      "since": {
+        "entity_count": 2,
+        "claim_count": 2,
+        "next_cursor": 2
       }
     },
     "DreamRun": {
@@ -1521,7 +1611,33 @@
         "definition": "JobDefinition",
         "enabled": "bool",
         "interrupted_run_id": "?Id",
-        "last_run_id": "?Id"
+        "last_run_id": "?Id",
+        "scope": "?DataScope",
+        "next_run_at_ms": "?Counter",
+        "last_run_started_at_ms": "?Counter",
+        "last_run_finished_at_ms": "?Counter",
+        "last_run_status": "?JobRunStatus",
+        "last_error": "?Text",
+        "active_run_id": "?Id",
+        "hold": "?JobHold",
+        "authorized": "?bool",
+        "created_at_ms": "?Counter",
+        "updated_at_ms": "?Counter",
+        "deleted_at_ms": "?Counter"
+      },
+      "since": {
+        "scope": 2,
+        "next_run_at_ms": 2,
+        "last_run_started_at_ms": 2,
+        "last_run_finished_at_ms": 2,
+        "last_run_status": 2,
+        "last_error": 2,
+        "active_run_id": 2,
+        "hold": 2,
+        "authorized": 2,
+        "created_at_ms": 2,
+        "updated_at_ms": 2,
+        "deleted_at_ms": 2
       }
     },
     "JobRun": {
@@ -1533,7 +1649,33 @@
         "occurrence_key": "Text",
         "state": "OperationState",
         "operation_id": "?OperationId",
-        "usage": "UsageReport"
+        "usage": "UsageReport",
+        "status": "?JobRunStatus",
+        "trigger": "?JobTrigger",
+        "occurrence_at_ms": "?Counter",
+        "started_at_ms": "?Counter",
+        "finished_at_ms": "?Counter",
+        "reason": "?Text",
+        "hold": "?Label",
+        "cancel_requested": "?bool",
+        "resumptions": "?Counter",
+        "session_id": "?Id",
+        "linked_root_ids": "?Items<RootId>",
+        "skipped_for_run_id": "?Id"
+      },
+      "since": {
+        "status": 2,
+        "trigger": 2,
+        "occurrence_at_ms": 2,
+        "started_at_ms": 2,
+        "finished_at_ms": 2,
+        "reason": 2,
+        "hold": 2,
+        "cancel_requested": 2,
+        "resumptions": 2,
+        "session_id": 2,
+        "linked_root_ids": 2,
+        "skipped_for_run_id": 2
       }
     },
     "SchemaValue": {
@@ -1591,7 +1733,13 @@
         "efforts": "Items<EffortName>",
         "image_input": "bool",
         "tools": "bool",
-        "revision": "Revision"
+        "revision": "Revision",
+        "context_tokens": "?PositiveCounter",
+        "connection_id": "?Id"
+      },
+      "since": {
+        "context_tokens": 2,
+        "connection_id": 2
       }
     },
     "ConnectionRecord": {
@@ -1604,7 +1752,35 @@
         "state": "ItemState",
         "credential_ref": "?Id",
         "subscription_risk_accepted": "bool",
-        "risk_notice_sha256": "?Digest"
+        "risk_notice_sha256": "?Digest",
+        "endpoint": "?Url",
+        "lifecycle": "?ConnectionLifecycle",
+        "state_reason": "?Text",
+        "credential_revision": "?Counter",
+        "healthy": "?bool",
+        "checked_at_ms": "?Counter",
+        "discovered_at_ms": "?Counter",
+        "discovered_model_count": "?Counter",
+        "discovered_model_ids": "?Items<Text>",
+        "access_expires_at_ms": "?Counter",
+        "sign_in": "?SignInChallenge",
+        "enabled": "?bool",
+        "open_router": "?OpenRouterConstraints"
+      },
+      "since": {
+        "endpoint": 2,
+        "lifecycle": 2,
+        "state_reason": 2,
+        "credential_revision": 2,
+        "healthy": 2,
+        "checked_at_ms": 2,
+        "discovered_at_ms": 2,
+        "discovered_model_count": 2,
+        "discovered_model_ids": 2,
+        "access_expires_at_ms": 2,
+        "sign_in": 2,
+        "enabled": 2,
+        "open_router": 2
       }
     },
     "RouteChoice": {
@@ -2130,7 +2306,9 @@
           "name": "Label",
           "profile": "EndpointKind",
           "endpoint": "Url",
-          "credential_ref": "?Id"
+          "credential_ref": "?Id",
+          "enabled": "?bool",
+          "open_router": "?OpenRouterConstraints"
         },
         "Model": {
           "model": "RouteModel",
@@ -2159,6 +2337,12 @@
           "expected_revision": "Revision",
           "notice_sha256": "Digest",
           "accepted": "bool"
+        }
+      },
+      "variantSince": {
+        "Connection": {
+          "enabled": 2,
+          "open_router": 2
         }
       }
     },
@@ -2227,7 +2411,13 @@
       "kind": "record",
       "fields": {
         "job": "JobRecord",
-        "run": "?JobRun"
+        "run": "?JobRun",
+        "runs": "?Rows<JobRun>",
+        "runs_next_cursor": "?Cursor"
+      },
+      "since": {
+        "runs": 2,
+        "runs_next_cursor": 2
       }
     },
     "RepositoryIndexStatus": {
@@ -2236,7 +2426,17 @@
         "repository_id": "Id",
         "current_view_ids": "Items<Id>",
         "coverage": "Coverage",
-        "last_run": "?IndexRunRecord"
+        "last_run": "?IndexRunRecord",
+        "freshness": "?IndexFreshness",
+        "languages": "?Items<LanguageCoverage>",
+        "semantic_packs": "?Items<SemanticPackStatus>",
+        "overlays": "?Items<OverlayStatus>"
+      },
+      "since": {
+        "freshness": 2,
+        "languages": 2,
+        "semantic_packs": 2,
+        "overlays": 2
       }
     },
     "ConsumerStatus": {
@@ -2546,7 +2746,13 @@
         "goals": "?Items<Content>",
         "add_links": "?Items<WorkLink>",
         "remove_link_ids": "?Items<Id>",
-        "add_comment": "?WorkComment"
+        "add_comment": "?WorkComment",
+        "readiness": "?ReadinessChange",
+        "acceptance_evidence": "?NonEmpty<AcceptanceCriterion>"
+      },
+      "since": {
+        "readiness": 2,
+        "acceptance_evidence": 2
       }
     },
     "IssuePatch": {
@@ -2784,6 +2990,576 @@
         "host_target_supported": "bool",
         "newer": "bool"
       }
+    },
+    "IndexFreshnessState": {
+      "kind": "enum",
+      "values": [
+        "Current",
+        "Stale",
+        "Indexing",
+        "NotIndexed",
+        "Failed"
+      ]
+    },
+    "IndexFreshness": {
+      "kind": "record",
+      "fields": {
+        "state": "IndexFreshnessState",
+        "indexed_commit": "?Label",
+        "head_commit": "?Label",
+        "head_ref": "?Label",
+        "indexed_at_ms": "?Counter",
+        "observed_at_ms": "?Counter",
+        "configuration_current": "bool",
+        "reasons": "Items<Label>"
+      }
+    },
+    "LanguageCoverageMode": {
+      "kind": "enum",
+      "values": [
+        "Structural",
+        "TextFallback",
+        "NotSelected"
+      ]
+    },
+    "LanguageCoverage": {
+      "kind": "record",
+      "fields": {
+        "language_id": "Label",
+        "name": "Label",
+        "mode": "LanguageCoverageMode",
+        "grammar": "?Label",
+        "files": "Counter",
+        "structural_files": "Counter",
+        "text_files": "Counter",
+        "parse_error_files": "Counter",
+        "skipped_files": "Counter",
+        "note": "?Content"
+      }
+    },
+    "SemanticPackState": {
+      "kind": "enum",
+      "values": [
+        "NotInstalled",
+        "Unavailable",
+        "Enabled",
+        "Applied",
+        "Disabled"
+      ]
+    },
+    "SemanticPackStatus": {
+      "kind": "record",
+      "fields": {
+        "pack_id": "Id",
+        "state": "SemanticPackState",
+        "languages": "Items<Label>",
+        "note": "?Content"
+      }
+    },
+    "OverlayState": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Indexing",
+        "Ready",
+        "Failed",
+        "Stale",
+        "Expired",
+        "Unavailable"
+      ]
+    },
+    "OverlayStatus": {
+      "kind": "record",
+      "fields": {
+        "overlay_id": "Id",
+        "revision": "Revision",
+        "worktree_id": "?Id",
+        "state": "OverlayState",
+        "view_id": "?Id",
+        "base_commit": "?Label",
+        "head_commit": "?Label",
+        "head_ref": "?Label",
+        "capture_digest": "?Label",
+        "run_id": "?Id",
+        "reason": "?Content",
+        "updated_at_ms": "Counter",
+        "expires_at_ms": "Counter"
+      }
+    },
+    "IndexRunState": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Running",
+        "Succeeded",
+        "Failed",
+        "Cancelled"
+      ]
+    },
+    "IndexRunKind": {
+      "kind": "enum",
+      "values": [
+        "Index",
+        "Reindex",
+        "Overlay"
+      ]
+    },
+    "OpenRouterDataCollection": {
+      "kind": "enum",
+      "values": [
+        "allow",
+        "deny"
+      ]
+    },
+    "OpenRouterQuantization": {
+      "kind": "enum",
+      "values": [
+        "int4",
+        "int8",
+        "fp4",
+        "mxfp4",
+        "nvfp4",
+        "fp6",
+        "fp8",
+        "mxfp8",
+        "fp16",
+        "bf16",
+        "fp32",
+        "unknown"
+      ]
+    },
+    "OpenRouterSortBy": {
+      "kind": "enum",
+      "values": [
+        "price",
+        "throughput",
+        "latency"
+      ]
+    },
+    "OpenRouterPartition": {
+      "kind": "enum",
+      "values": [
+        "model",
+        "none"
+      ]
+    },
+    "OpenRouterCostTier": {
+      "kind": "enum",
+      "values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "OpenRouterSort": {
+      "kind": "record",
+      "fields": {
+        "by": "OpenRouterSortBy",
+        "partition": "?OpenRouterPartition"
+      }
+    },
+    "OpenRouterPercentiles": {
+      "kind": "record",
+      "fields": {
+        "p50": "?Finite",
+        "p75": "?Finite",
+        "p90": "?Finite",
+        "p99": "?Finite"
+      }
+    },
+    "OpenRouterMaxPrice": {
+      "kind": "record",
+      "fields": {
+        "prompt": "?Money",
+        "completion": "?Money",
+        "request": "?Money",
+        "image": "?Money"
+      }
+    },
+    "OpenRouterProviderRouting": {
+      "kind": "record",
+      "fields": {
+        "order": "?Items<Label>",
+        "allow_fallbacks": "?bool",
+        "require_parameters": "?bool",
+        "data_collection": "?OpenRouterDataCollection",
+        "zdr": "?bool",
+        "enforce_distillable_text": "?bool",
+        "only": "?Items<Label>",
+        "ignore": "?Items<Label>",
+        "quantizations": "?Items<OpenRouterQuantization>",
+        "sort": "?OpenRouterSort",
+        "preferred_min_throughput": "?OpenRouterPercentiles",
+        "preferred_max_latency": "?OpenRouterPercentiles",
+        "max_price": "?OpenRouterMaxPrice"
+      }
+    },
+    "OpenRouterConstraints": {
+      "kind": "record",
+      "fields": {
+        "allowed_models": "Items<Text>",
+        "excluded_models": "Items<Text>",
+        "cost_tier": "?OpenRouterCostTier",
+        "provider": "?OpenRouterProviderRouting"
+      }
+    },
+    "ConnectionLifecycle": {
+      "kind": "enum",
+      "values": [
+        "Disconnected",
+        "Authorizing",
+        "Connected",
+        "Refreshing",
+        "ReauthenticationRequired",
+        "Unavailable",
+        "Disabled"
+      ]
+    },
+    "SignInMethod": {
+      "kind": "enum",
+      "values": [
+        "DeviceCode",
+        "AuthorizationCode"
+      ]
+    },
+    "SignInChallenge": {
+      "kind": "record",
+      "fields": {
+        "flow_id": "Id",
+        "method": "SignInMethod",
+        "user_code": "?Label",
+        "verification_url": "?Url",
+        "authorize_url": "?Url",
+        "expires_at_ms": "Counter"
+      }
+    },
+    "KnowledgeEntryKind": {
+      "kind": "enum",
+      "values": [
+        "Goal",
+        "Decision",
+        "Constraint",
+        "Fact",
+        "Gotcha",
+        "Attempt",
+        "Architecture",
+        "Lesson",
+        "Finding",
+        "Proposal"
+      ]
+    },
+    "KnowledgeLifecycle": {
+      "kind": "enum",
+      "values": [
+        "Active",
+        "Superseded",
+        "Retracted",
+        "Deleted"
+      ]
+    },
+    "KnowledgeOrigin": {
+      "kind": "enum",
+      "values": [
+        "User",
+        "Agent"
+      ]
+    },
+    "LessonSource": {
+      "kind": "enum",
+      "values": [
+        "Prompt",
+        "Review",
+        "RelayedPrompt",
+        "RelayedReview",
+        "Agent",
+        "Subagent",
+        "BotReview"
+      ]
+    },
+    "RuleState": {
+      "kind": "enum",
+      "values": [
+        "Candidate",
+        "Proposed",
+        "Effective",
+        "Rejected",
+        "Retired"
+      ]
+    },
+    "RuleEffect": {
+      "kind": "enum",
+      "values": [
+        "UserInstruction",
+        "Recurrence",
+        "Promoted"
+      ]
+    },
+    "LessonAddressKind": {
+      "kind": "enum",
+      "values": [
+        "Code",
+        "Instruction",
+        "Skill",
+        "Documentation",
+        "Test"
+      ]
+    },
+    "ChallengeOutcome": {
+      "kind": "enum",
+      "values": [
+        "Uphold",
+        "Retire"
+      ]
+    },
+    "ChallengeState": {
+      "kind": "enum",
+      "values": [
+        "Open",
+        "Upheld",
+        "Retired"
+      ]
+    },
+    "PromoteAction": {
+      "kind": "enum",
+      "values": [
+        "Effective",
+        "Propose",
+        "Reject",
+        "Address"
+      ]
+    },
+    "LessonView": {
+      "kind": "enum",
+      "values": [
+        "All",
+        "RecentlyLearned",
+        "Recurring",
+        "Unaddressed",
+        "Undelivered"
+      ]
+    },
+    "Applicability": {
+      "kind": "record",
+      "fields": {
+        "activities": "Items<Label>",
+        "paths": "Items<RelativePath>",
+        "tools": "Items<Label>",
+        "harness": "?Label",
+        "repository_ids": "Items<Id>"
+      }
+    },
+    "LessonDraft": {
+      "kind": "record",
+      "fields": {
+        "source": "LessonSource",
+        "source_ref": "?Text",
+        "quoted_words": "?Content",
+        "applicability": "Applicability",
+        "same_as": "?Id"
+      }
+    },
+    "LessonAddress": {
+      "kind": "record",
+      "fields": {
+        "kind": "LessonAddressKind",
+        "name": "Label",
+        "reference": "?Text"
+      }
+    },
+    "LessonChallenge": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "state": "ChallengeState",
+        "reason": "Content",
+        "evidence_ids": "Items<Id>",
+        "author_id": "ActorId",
+        "opened_at_ms": "Counter",
+        "resolved_at_ms": "?Counter",
+        "resolution": "?Content"
+      }
+    },
+    "LessonRecord": {
+      "kind": "record",
+      "fields": {
+        "rule_state": "RuleState",
+        "effect": "?RuleEffect",
+        "effective_at_ms": "?Counter",
+        "source": "LessonSource",
+        "source_ref": "?Text",
+        "quoted_words": "?Content",
+        "applicability": "Applicability",
+        "recurrence": "Counter",
+        "recurrence_threshold": "Counter",
+        "challenges": "Items<LessonChallenge>",
+        "addressed_by": "Items<LessonAddress>",
+        "delivered_sessions": "Counter",
+        "last_delivered_at_ms": "?Counter",
+        "reason": "?Content"
+      }
+    },
+    "KnowledgeRelation": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "subject_id": "Id",
+        "predicate": "Label",
+        "object_id": "Id",
+        "evidence_ids": "Items<Id>",
+        "author_id": "ActorId",
+        "created_at_ms": "Counter"
+      }
+    },
+    "KnowledgeRevisionEntry": {
+      "kind": "record",
+      "fields": {
+        "revision": "Revision",
+        "change": "Label",
+        "author_id": "ActorId",
+        "at_ms": "Counter",
+        "lifecycle": "KnowledgeLifecycle",
+        "write_id": "?Id",
+        "value": "?Content"
+      }
+    },
+    "JobRunStatus": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Running",
+        "Holding",
+        "Succeeded",
+        "Failed",
+        "Skipped",
+        "Cancelled",
+        "OutcomeUnknown"
+      ]
+    },
+    "JobTrigger": {
+      "kind": "enum",
+      "values": [
+        "Scheduled",
+        "Manual"
+      ]
+    },
+    "JobHold": {
+      "kind": "enum",
+      "values": [
+        "ReactivationRequired",
+        "AuthorizationRequired",
+        "ProjectClosed"
+      ]
+    },
+    "ReadinessDisposition": {
+      "kind": "enum",
+      "values": [
+        "ResolvedDecision",
+        "BoundedInvestigation",
+        "NeedsUserDecision"
+      ]
+    },
+    "FindingState": {
+      "kind": "enum",
+      "values": [
+        "Open",
+        "Resolved",
+        "RiskAccepted"
+      ]
+    },
+    "ConfidenceLevel": {
+      "kind": "enum",
+      "values": [
+        "High",
+        "Medium",
+        "Low"
+      ]
+    },
+    "ReadinessFreshness": {
+      "kind": "enum",
+      "values": [
+        "Current",
+        "Stale"
+      ]
+    },
+    "ReadinessFinding": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "disposition": "ReadinessDisposition",
+        "blocking": "bool",
+        "prerequisite": "bool",
+        "state": "FindingState",
+        "requirement_ids": "Items<Id>",
+        "scope_key": "?Id",
+        "affected_work_ids": "Items<Id>",
+        "summary": "Content",
+        "missing": "Content",
+        "consequence": "Content",
+        "attempts": "Items<Content>",
+        "insufficiency": "Content",
+        "closure_condition": "Content",
+        "decision": "?Content",
+        "confidence": "?ConfidenceLevel",
+        "evidence": "Items<ArtifactRef>",
+        "objective": "?Content",
+        "limits": "?Content",
+        "question": "?Content",
+        "recommendation": "?Content",
+        "closure_note": "?Content",
+        "closure_evidence": "Items<ArtifactRef>"
+      }
+    },
+    "ReadinessAssessment": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "plan_revision": "Revision",
+        "plan_digest": "Digest",
+        "reviewed_pending": "bool",
+        "freshness": "ReadinessFreshness",
+        "stale_scope_keys": "Items<Id>",
+        "ready": "bool",
+        "summary": "Content",
+        "findings": "Items<ReadinessFinding>",
+        "assessed_by": "ActorId",
+        "assessed_at_ms": "Counter"
+      }
+    },
+    "ReadinessChange": {
+      "kind": "union",
+      "variants": {
+        "Assess": {
+          "expected_assessment_revision": "?Revision",
+          "plan_revision": "Revision",
+          "plan_digest": "Digest",
+          "summary": "Content",
+          "findings": "Items<ReadinessFinding>"
+        },
+        "CloseFinding": {
+          "expected_assessment_revision": "Revision",
+          "finding_id": "Id",
+          "note": "Content",
+          "evidence": "Items<ArtifactRef>"
+        }
+      }
+    },
+    "QueuePlacement": {
+      "kind": "record",
+      "fields": {
+        "work_id": "Id",
+        "anchor_id": "Id",
+        "side": "QueueSide"
+      }
+    },
+    "QueueSide": {
+      "kind": "enum",
+      "values": [
+        "Before",
+        "After"
+      ]
     }
   },
   "operations": {
@@ -2917,7 +3693,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read one feature at its work revision. Schema revision 2: the record carries the feature's current execution-readiness assessment (AGENT-12, AGENT-18-20): the reviewed plan revision and digest, freshness against the active approved plan (stale scope units by requirement ID; the absent key is feature-wide), whether it is ready (current with no open blocking finding) and every finding with its requirement links, disposition, affected work, attempts, closure condition, decision with confidence and evidence, investigation objective/limits, question/recommendation and closure evidence. Readiness is reported separately from plan approval. Every work record at revision 2 also carries the revision of the queue it is ranked in (queueRevision: the project queue for features and standalone issues, its feature queue for a card) and of its project workflow (workflowRevision), the expected revisions of prioritization and workflow moves. A feature record at revision 2 also carries its active plan's acceptance tests (acceptanceTests), so a client revising the plan keeps them."
     },
     "features.create": {
       "operation": "features.create",
@@ -2942,7 +3718,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority."
+      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents."
     },
     "issues.list": {
       "operation": "issues.list",
@@ -3068,12 +3844,20 @@
       "fields": {
         "project_id": "ProjectId",
         "expected_queue_revision": "Revision",
-        "ordered_work_ids": "NonEmpty<Id>"
+        "ordered_work_ids": "?NonEmpty<Id>",
+        "placement": "?QueuePlacement"
       },
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue."
+      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
+      "since": {
+        "placement": 2
+      },
+      "exactlyOne": [
+        "ordered_work_ids",
+        "placement"
+      ]
     },
     "issues.prioritize": {
       "operation": "issues.prioritize",
@@ -3081,12 +3865,20 @@
       "fields": {
         "project_id": "ProjectId",
         "expected_queue_revision": "Revision",
-        "ordered_work_ids": "NonEmpty<Id>"
+        "ordered_work_ids": "?NonEmpty<Id>",
+        "placement": "?QueuePlacement"
       },
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue."
+      "rules": "IDs unique and scoped; preserve omitted work relative order. Feature and issue priorities share one project queue. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
+      "since": {
+        "placement": 2
+      },
+      "exactlyOne": [
+        "ordered_work_ids",
+        "placement"
+      ]
     },
     "features.edit_plan": {
       "operation": "features.edit_plan",
@@ -3664,12 +4456,20 @@
       "operation": "indexing.status",
       "mode": "Query",
       "fields": {
-        "repository_id": "Id"
+        "repository_id": "?Id",
+        "overlay_id": "?Id"
       },
       "result": "RepositoryIndexStatus",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Exactly one of repositoryId and overlayId (revision 2). Schema revision 2: freshness (the indexed and observed HEAD commits, configuration currency and stale reasons), per-language structural/text coverage with grammar identity, semantic pack state, and every overlay of the repository with its lifecycle state (Queued, Indexing, Ready, Failed, Stale, Expired, Unavailable) and snapshot provenance. With overlayId (an overlay of a repository the caller may see), the result is that repository's status whose overlays member holds exactly that overlay. An overlay requested by ref has no worktreeId.",
+      "since": {
+        "overlay_id": 2
+      },
+      "exactlyOne": [
+        "repository_id",
+        "overlay_id"
+      ]
     },
     "indexing.runs": {
       "operation": "indexing.runs",
@@ -3677,12 +4477,18 @@
       "fields": {
         "scope": "DataScope",
         "repository_id": "?Id",
+        "states": "?NonEmpty<IndexRunState>",
+        "kinds": "?NonEmpty<IndexRunKind>",
         "page": "PageRequest"
       },
       "result": "Page<IndexRunRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: states keeps only runs in one of the listed run states (Queued, Running, Succeeded, Failed, Cancelled; a record reports Queued as IntentRecorded or RetryPending, Running as Dispatching, Succeeded as ObservedComplete and Cancelled as CancelledBeforeDispatch) and kinds only runs of one of the listed kinds (Index, Reindex, Overlay); both are optional and combine, and a continuation cursor is bound to them.",
+      "since": {
+        "states": 2,
+        "kinds": 2
+      }
     },
     "indexing.configure_sources": {
       "operation": "indexing.configure_sources",
@@ -4113,12 +4919,22 @@
         "kinds": "Items<KnowledgeKind>",
         "page": "PageRequest",
         "entity_limit": "Limit",
-        "claim_limit": "Limit"
+        "claim_limit": "Limit",
+        "states": "?Items<KnowledgeLifecycle>",
+        "entry_kinds": "?Items<KnowledgeEntryKind>",
+        "source": "?Label",
+        "stale": "?bool"
       },
       "result": "Page<KnowledgeClaim>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Scoped lexical search, newest first: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies before any candidate is materialized. Every word of text must appear (Unicode case-folded) in the claim or its subject entity. Lifecycle Active by default (revision 1: Active only). Cursors bind the query and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state.",
+      "since": {
+        "states": 2,
+        "entry_kinds": 2,
+        "source": 2,
+        "stale": 2
+      }
     },
     "knowledge.read": {
       "operation": "knowledge.read",
@@ -4131,7 +4947,7 @@
       "result": "KnowledgeBundle",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "One visible claim with its subject/object entities, evidence, open conflicts (active claims of the same subject and predicate with another value) and supersession chain; revision reads a recorded past revision. Schema revision 2: relations, revision history and the scope revision."
     },
     "knowledge.record": {
       "operation": "knowledge.record",
@@ -4157,7 +4973,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "A new revision of an active claim at its exact revision."
     },
     "knowledge.relate": {
       "operation": "knowledge.relate",
@@ -4172,7 +4988,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Typed attributed relation between visible entities or claims of the scope. Lessons: same_as merges the subject into the object as recurrence, contradicts keeps both with an open conflict, unmerge reverses a same_as merge."
     },
     "knowledge.tag": {
       "operation": "knowledge.tag",
@@ -4186,7 +5002,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Replace each selected claim's tag set (Unicode case-folded, sorted, unique) at its exact revision."
     },
     "knowledge.verify": {
       "operation": "knowledge.verify",
@@ -4196,12 +5012,16 @@
         "claim_id": "Id",
         "expected_revision": "Revision",
         "reason": "Content",
-        "evidence_ids": "Items<Id>"
+        "evidence_ids": "Items<Id>",
+        "source_revision": "?Text"
       },
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision."
+      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: the source revision verified against; a later observed source revision marks the claim stale until verified again.",
+      "since": {
+        "source_revision": 2
+      }
     },
     "knowledge.retract": {
       "operation": "knowledge.retract",
@@ -4216,7 +5036,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision."
+      "rules": "Mark an active claim wrong at its exact revision; it stays readable as Retracted."
     },
     "knowledge.challenge": {
       "operation": "knowledge.challenge",
@@ -4226,12 +5046,18 @@
         "claim_id": "Id",
         "expected_revision": "Revision",
         "reason": "Content",
-        "evidence_ids": "Items<Id>"
+        "evidence_ids": "Items<Id>",
+        "resolve_challenge_id": "?Id",
+        "outcome": "?ChallengeOutcome"
       },
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision."
+      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: resolve an open challenge (Uphold or Retire) or, with outcome Retire and no challenge, retire the rule; a resolution is the user's and nothing waits on a challenge.",
+      "since": {
+        "resolve_challenge_id": 2,
+        "outcome": 2
+      }
     },
     "knowledge.scope": {
       "operation": "knowledge.scope",
@@ -4249,12 +5075,20 @@
       "operation": "knowledge.diagnostics",
       "mode": "Query",
       "fields": {
-        "scope": "DataScope"
+        "scope": "DataScope",
+        "source_id": "?Id",
+        "import_source": "?ArtifactRef",
+        "import_schema": "?SchemaRef"
       },
       "result": "Page<Diagnostic>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Counts, retrieval mode and recent write outcomes of a visible scope; the reply stamp carries the scope revision. Diagnostic codes: component knowledge.retrieval code LexicalOnly while no embedding route exists (vector search is never claimed); component knowledge.counts per lifecycle and lesson state; component knowledge.writes for recent writes. Schema revision 2: sourceId previews a delete by source and importSource with importSchema previews a user data import, each as a component knowledge.preview diagnostic whose id is the exact preview digest, plus one knowledge.import diagnostic per candidate with its outcome.",
+      "since": {
+        "source_id": 2,
+        "import_source": 2,
+        "import_schema": 2
+      }
     },
     "knowledge.delete_by_source": {
       "operation": "knowledge.delete_by_source",
@@ -4269,7 +5103,7 @@
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact preview match; tombstone selected source contributions, preserve independent surviving evidence and journal count."
+      "rules": "Exact preview match; tombstone selected source contributions, preserve independent surviving evidence and journal count. Any size of source is deleted whole: past one batch it continues as a durable job (each batch its own transaction, resumed at boot), the source of the scope is read-only until it finishes, and knowledge.write_status of the summary id reports Dispatching, then ObservedComplete with every ID."
     },
     "knowledge.delete_selected": {
       "operation": "knowledge.delete_selected",
@@ -4282,18 +5116,22 @@
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "The user or host only. Exact revisions; tombstone the selected claims (provenance kept, content purged) and evidence no surviving claim uses; journal counts."
     },
     "knowledge.write_status": {
       "operation": "knowledge.write_status",
       "mode": "Query",
       "fields": {
-        "write_id": "Id"
+        "write_id": "Id",
+        "cursor": "?Cursor"
       },
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "The durable receipt of a committed Knowledge write. Schema revision 2: entityCount and claimCount are the totals the write changed; a receipt names at most 128 entity IDs, claim IDs and diagnostics, and nextCursor (when any list has more) continues through write_status with cursor, so every ID and note of a bulk write is readable and none is dropped.",
+      "since": {
+        "cursor": 2
+      }
     },
     "knowledge.subgraph": {
       "operation": "knowledge.subgraph",
@@ -4400,12 +5238,20 @@
         "claim_id": "Id",
         "expected_revision": "Revision",
         "destination": "DataScope",
-        "proposal_id": "?Id"
+        "proposal_id": "?Id",
+        "action": "?PromoteAction",
+        "address": "?LessonAddress",
+        "reason": "?Content"
       },
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Authorize both scopes and preserve original provenance/version. Promotion grants no instruction or execution authority."
+      "rules": "Authorize both scopes and preserve original provenance/version. Promotion grants no instruction or execution authority. Schema revision 2: action Effective (default; the user makes a lesson an effective rule early), Propose, Reject (the user, with reason) or Address (a lesson addressed in code, instructions, a skill, documentation or a test). No rule waits for approval.",
+      "since": {
+        "action": 2,
+        "address": 2,
+        "reason": 2
+      }
     },
     "knowledge.tagged_lessons": {
       "operation": "knowledge.tagged_lessons",
@@ -4413,12 +5259,20 @@
       "fields": {
         "scope": "DataScope",
         "tags": "NonEmpty<Label>",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "rule_states": "?Items<RuleState>",
+        "activity": "?Label",
+        "view": "?LessonView"
       },
       "result": "Page<KnowledgeClaim>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Lessons carrying every tag, newest first: a project scope reads its own and general lessons. Schema revision 2: rule states, activity and views (recently learned, recurring, unaddressed, undelivered).",
+      "since": {
+        "rule_states": 2,
+        "activity": 2,
+        "view": 2
+      }
     },
     "dreaming.run": {
       "operation": "dreaming.run",
@@ -5708,7 +6562,7 @@
       "result": "Page<JobRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Bounded page of the visible jobs of one scope (Workspace: app-level jobs; Project: that project's) in title then ID order, optionally filtered by enabled; deleted jobs are omitted; cursors bind the scope, filter and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.create": {
       "operation": "jobs.create",
@@ -5723,7 +6577,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization."
+      "rules": "Native capability arguments bound to declared schema. No job spending cap; linked feature remains budgeted. Creating enabled schedule requires current schedule authorization (a person); other principals create disabled drafts. Titles are unique per scope; a calendar schedule is a standard five-field cron expression (Cronos semantics) in an IANA time zone and must produce a future occurrence. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.edit": {
       "operation": "jobs.edit",
@@ -5738,7 +6592,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Replaces title, schedule and definition at the expected revision and recomputes the next future occurrence (no catch-up). Only a person may edit an enabled or authorized job; another principal's edit of a draft leaves it unauthorized. A run already claimed keeps its own definition snapshot. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.enable": {
       "operation": "jobs.enable",
@@ -5750,7 +6604,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects."
+      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Enabling (a person only) authorizes the current definition, clears a restore or project hold of an open project and computes the next future occurrence without replaying missed ones. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.disable": {
       "operation": "jobs.disable",
@@ -5762,7 +6616,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects."
+      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Disabling stops future occurrences; a run already active continues to its outcome. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.delete": {
       "operation": "jobs.delete",
@@ -5774,7 +6628,7 @@
       "result": "JobRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects."
+      "rules": "Explicit activation after restore; deletion fences new runs and reconciles active outcome, never silently discards external effects. Delete tombstones the job (history kept, no longer listed or inspectable) and requests cancellation of its active run. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.run_now": {
       "operation": "jobs.run_now",
@@ -5786,19 +6640,25 @@
       "result": "JobRun",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature."
+      "rules": "Host creates occurrence identity; skip overlap. Reopen interrupted saved run with normal authority, never implicitly Continue a paused feature. A run while another run of the job is active is recorded Skipped and nothing is queued; another principal may run only an authorized job; a closed project refuses. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "jobs.inspect": {
       "operation": "jobs.inspect",
       "mode": "Query",
       "fields": {
         "job_id": "Id",
-        "run_id": "?Id"
+        "run_id": "?Id",
+        "history": "?PageRequest",
+        "usage": "?PageRequest"
       },
       "result": "JobInspection",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "The job and its selected (or latest) run. Schema revision 2: a newest-first page of the job's run history (history) and of the selected run's usage items (usage), each continued by a cursor bound to the job, run and caller. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for.",
+      "since": {
+        "history": 2,
+        "usage": 2
+      }
     },
     "jobs.cancel": {
       "operation": "jobs.cancel",
@@ -5811,7 +6671,7 @@
       "result": "JobRun",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Cancels the named run only (never a later run of the job): a run not yet dispatched is cancelled at once; a dispatched run is asked to stop through the process owner and its outcome is recorded when known (Accepted). A finished run answers unchanged. Schema revision 2: records carry their scope, next and last run times, last run status and error, the active run, why an enabled schedule is held (ReactivationRequired, AuthorizationRequired, ProjectClosed), whether a person authorized the current definition, and created/updated/deleted times; runs carry their status (Queued, Running, Holding, Succeeded, Failed, Skipped, Cancelled, OutcomeUnknown), trigger, occurrence instant, start/finish times, reason, preserved hold, cancellation request, resumption count, agent session, linked work roots and the run an overlap was skipped for."
     },
     "settings.read_effective": {
       "operation": "settings.read_effective",
@@ -5874,7 +6734,7 @@
       "result": "Page<RouteModel>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it)."
     },
     "router.connections": {
       "operation": "router.connections",
@@ -5885,7 +6745,7 @@
       "result": "Page<ConnectionRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read-only provider connections in ID order; never a credential value, token or key (credentialRef is an opaque handle). subscriptionRiskAccepted is the effective acceptance: false once the notice, profile, endpoint, account or restore epoch changed. Schema revision 2: the endpoint, the authentication lifecycle (Disconnected, Authorizing, Connected, Refreshing, ReauthenticationRequired, Unavailable, Disabled) with a safe reason, the credential revision, the last connection test (healthy, checkedAtMs), the last successful model discovery (discoveredAtMs, discoveredModelCount and, for at most 128 models, discoveredModelIds), the access-token expiry and, for a human caller only, the open sign-in challenge (device user code and verification URL, or browser authorization URL). Revision 2 also reports whether the connection is enabled (a disabled connection keeps its credential and is never routed through) and, for an OpenRouter connection, its constraints: allowed and excluded model patterns (applied to discovery and routing eligibility), the auto-router cost tier and the OpenRouter provider-routing object sent with its requests."
     },
     "router.route": {
       "operation": "router.route",
@@ -6004,7 +6864,7 @@
       "result": "MutationSummary",
       "effect": "External",
       "authority": "HumanConfiguration",
-      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound."
+      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value)."
     },
     "router.decision_models": {
       "operation": "router.decision_models",
@@ -6756,12 +7616,20 @@
         "feature_id": "?RootId",
         "expected_queue_revision": "Revision",
         "priority": "i32",
-        "ordered_task_ids": "NonEmpty<Id>"
+        "ordered_task_ids": "?NonEmpty<Id>",
+        "placement": "?QueuePlacement"
       },
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order."
+      "rules": "Shared UI/agent operation. Set the selected tasks to the given numeric priority and place them first in that priority bucket in the supplied order; preserve omitted tasks relative order and all other buckets. featureId selects that feature task queue; omitted/null selects standalone project tasks/issues, never promotes feature children into the project root queue. IDs must be unique current members of the same project/queue. Compare queue revision and commit priorities/ranks, task revisions, owner queue revision, history/receipt/wakeup atomically. Priority is descending, manual rank ascending, then creation sequence/ID; it never clears blockers or preempts active work. Direct priority patches use the same use case and advance the owner queue revision. Reviewer writes remain denied. In the standalone case, update the same mixed project feature/issue queue used by existing root prioritization; unselected features retain relative order as ranks are adjusted. Do not maintain a second conflicting issue-only scheduler order. Schema revision 2: placement instead moves one item immediately before or after an anchor of the same queue and priority bucket (one bounded request for any bucket size); exactly one of the ordered IDs and placement.",
+      "since": {
+        "placement": 2
+      },
+      "exactlyOne": [
+        "ordered_task_ids",
+        "placement"
+      ]
     },
     "tasks.set_feature": {
       "operation": "tasks.set_feature",
@@ -6983,6 +7851,246 @@
       2
     ],
     "web.fetch": [
+      1,
+      2
+    ],
+    "indexing.status": [
+      1,
+      2
+    ],
+    "indexing.runs": [
+      1,
+      2
+    ],
+    "indexing.refresh_overlay": [
+      1,
+      2
+    ],
+    "router.catalog": [
+      1,
+      2
+    ],
+    "router.connections": [
+      1,
+      2
+    ],
+    "router.configure": [
+      1,
+      2
+    ],
+    "knowledge.search": [
+      1,
+      2
+    ],
+    "knowledge.read": [
+      1,
+      2
+    ],
+    "knowledge.record": [
+      1,
+      2
+    ],
+    "knowledge.revise": [
+      1,
+      2
+    ],
+    "knowledge.verify": [
+      1,
+      2
+    ],
+    "knowledge.challenge": [
+      1,
+      2
+    ],
+    "knowledge.diagnostics": [
+      1,
+      2
+    ],
+    "knowledge.subgraph": [
+      1,
+      2
+    ],
+    "knowledge.entity_bundle": [
+      1,
+      2
+    ],
+    "knowledge.entity_graph": [
+      1,
+      2
+    ],
+    "knowledge.claim_bundle": [
+      1,
+      2
+    ],
+    "knowledge.expand_frontier": [
+      1,
+      2
+    ],
+    "knowledge.query": [
+      1,
+      2
+    ],
+    "knowledge.promote": [
+      1,
+      2
+    ],
+    "knowledge.tagged_lessons": [
+      1,
+      2
+    ],
+    "knowledge.relate": [
+      1,
+      2
+    ],
+    "knowledge.tag": [
+      1,
+      2
+    ],
+    "knowledge.retract": [
+      1,
+      2
+    ],
+    "knowledge.scope": [
+      1,
+      2
+    ],
+    "knowledge.write_status": [
+      1,
+      2
+    ],
+    "knowledge.import_user_data": [
+      1,
+      2
+    ],
+    "dreaming.revert": [
+      1,
+      2
+    ],
+    "features.get": [
+      1,
+      2
+    ],
+    "features.edit": [
+      1,
+      2
+    ],
+    "features.list": [
+      1,
+      2
+    ],
+    "features.create": [
+      1,
+      2
+    ],
+    "issues.list": [
+      1,
+      2
+    ],
+    "issues.get": [
+      1,
+      2
+    ],
+    "issues.create": [
+      1,
+      2
+    ],
+    "issues.edit": [
+      1,
+      2
+    ],
+    "tasks.list": [
+      1,
+      2
+    ],
+    "tasks.get": [
+      1,
+      2
+    ],
+    "tasks.create": [
+      1,
+      2
+    ],
+    "tasks.edit": [
+      1,
+      2
+    ],
+    "features.edit_plan": [
+      1,
+      2
+    ],
+    "features.dependencies": [
+      1,
+      2
+    ],
+    "tasks.move": [
+      1,
+      2
+    ],
+    "tasks.assign": [
+      1,
+      2
+    ],
+    "tasks.dependency_links": [
+      1,
+      2
+    ],
+    "tasks.acceptance_evidence": [
+      1,
+      2
+    ],
+    "tasks.sync_plan": [
+      1,
+      2
+    ],
+    "tasks.set_feature": [
+      1,
+      2
+    ],
+    "tasks.prioritize": [
+      1,
+      2
+    ],
+    "features.prioritize": [
+      1,
+      2
+    ],
+    "issues.prioritize": [
+      1,
+      2
+    ],
+    "jobs.list": [
+      1,
+      2
+    ],
+    "jobs.create": [
+      1,
+      2
+    ],
+    "jobs.edit": [
+      1,
+      2
+    ],
+    "jobs.enable": [
+      1,
+      2
+    ],
+    "jobs.disable": [
+      1,
+      2
+    ],
+    "jobs.delete": [
+      1,
+      2
+    ],
+    "jobs.run_now": [
+      1,
+      2
+    ],
+    "jobs.inspect": [
+      1,
+      2
+    ],
+    "jobs.cancel": [
       1,
       2
     ]

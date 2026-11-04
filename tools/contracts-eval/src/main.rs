@@ -326,7 +326,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "index-command-request" => {
                             serde_json::from_str::<IndexCommandRequest>(&raw)
                                 .map_err(|e| e.to_string())
-                                .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string()))
+                                .and_then(|v| {
+                                    at_revision(&v, revision)?;
+                                    v.validate().map_err(str::to_owned)?;
+                                    serde_json::to_value(v).map_err(|e| e.to_string())
+                                })
                         }
                         "publication-request" => serde_json::from_str::<PublicationRequest>(&raw)
                             .map_err(|e| e.to_string())

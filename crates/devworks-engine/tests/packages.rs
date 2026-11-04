@@ -587,6 +587,7 @@ impl App {
         config_rt.collect_interval = Duration::from_secs(3600);
         config_rt.shutdown_bound = self.shutdown_bound.unwrap_or(Duration::from_secs(10));
         Composition {
+            indexing: None,
             store: store.clone(),
             clock: h.clock(),
             // The package host allocates its invocation identifiers from these.

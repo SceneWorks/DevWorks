@@ -131,10 +131,7 @@ pub static SCREENS: [Screen; 19] = [
         subviews: &["Summary", "Activity"],
         inner_sidebar: None,
         summary_strip: &["Features", "Issues", "Working", "Needs you"],
-        pending: pending(
-            "project summary and Activity with filters and full history",
-            "DW-12",
-        ),
+        pending: None,
         link: None,
     },
     Screen {
@@ -145,9 +142,9 @@ pub static SCREENS: [Screen; 19] = [
         group: NavGroup::Project,
         help_topic: "features",
         subviews: &["List", "Board"],
-        inner_sidebar: None,
+        inner_sidebar: Some("Feature"),
         summary_strip: &["Planned", "In progress", "In review", "Complete"],
-        pending: pending("features, task cards and the board", "DW-12"),
+        pending: None,
         link: None,
     },
     Screen {
@@ -158,9 +155,9 @@ pub static SCREENS: [Screen; 19] = [
         group: NavGroup::Project,
         help_topic: "issues",
         subviews: &["List", "History"],
-        inner_sidebar: None,
+        inner_sidebar: Some("Issue"),
         summary_strip: &[],
-        pending: pending("standalone issues and their workspaces", "DW-12"),
+        pending: None,
         link: None,
     },
     Screen {
@@ -217,7 +214,7 @@ pub static SCREENS: [Screen; 19] = [
         subviews: &["Entries", "Documents"],
         inner_sidebar: Some("Entry"),
         summary_strip: &[],
-        pending: pending("Knowledge entries and retained documents", "DW-30, DW-35"),
+        pending: None,
         link: None,
     },
     Screen {
@@ -256,7 +253,7 @@ pub static SCREENS: [Screen; 19] = [
         subviews: &["Schedules", "Runs"],
         inner_sidebar: None,
         summary_strip: &[],
-        pending: pending("schedules, manual jobs and their runs", "DW-50"),
+        pending: None,
         link: None,
     },
     Screen {
@@ -321,7 +318,8 @@ pub static SCREENS: [Screen; 19] = [
         subviews: &["Runs", "Logs"],
         inner_sidebar: None,
         summary_strip: &[],
-        pending: pending("repository discovery and index publication", "DW-23"),
+        // Runs, their diagnostics and the indexing sources (DW-23).
+        pending: None,
         link: None,
     },
     Screen {
